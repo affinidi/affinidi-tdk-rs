@@ -1,0 +1,15 @@
+[package]
+name = "affinidi-tdk"
+description = "Affinidi Trust Development Kit. A Rust library for building secure, privacy-preserving, and interoperable applications."
+version = "0.1.0"
+edition = "2024"
+authors = ["Glenn Gore <glenn@affinidi.com>"]
+readme = "README.md"
+homepage = "https://affinidi.com/"
+license = "Apache-2.0"
+keywords = ["ssi", "affinidi"]
+repository = "https://github.com/affinidi/affinidi-tdk-rs"
+publish = true
+resolver = "3"
+
+[dependencies]
