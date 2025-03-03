@@ -1,0 +1,64 @@
+[advisories]
+version = 2
+ignore = [
+    { id = "RUSTSEC-2022-0092", reason = "askalono always provides valid utf-8 files from a cache, this is not relevant" },
+]
+
+[bans]
+multiple-versions = "allow"
+
+[licenses]
+# We want really high confidence when inferring licenses from text
+confidence-threshold = 0.93
+allow = [
+    "Apache-1.1",
+    "Apache-2.0",
+    "BSL-1.0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "CC0-1.0",
+    "WTFPL",
+    "Fair",
+    "Intel",
+    "ISC",
+    "MIT-0",
+    "MIT",
+    "MIT-Modern-Variant",
+    "MulanPSL-2.0",
+    "Multics",
+    "Naumen",
+    "PHP-3.01",
+    "PostgreSQL",
+    "Python-2.0",
+    "OFL-1.1",
+    "MirOS",
+    "Unlicense",
+    "Unicode-DFS-2016",
+    "UPL-1.0",
+    "NCSA",
+    "Zlib",
+    "AFL-2.1",
+    "OpenSSL",
+    "ISC",
+    "MPL-2.0",
+    "W3C-20150513",
+]
+
+exceptions = [
+    { allow = ["OpenSSL"], crate = "ring" },
+]
+
+# Sigh
+[[licenses.clarify]]
+crate = "ring"
+# SPDX considers OpenSSL to encompass both the OpenSSL and SSLeay licenses
+# https://spdx.org/licenses/OpenSSL.html
+# ISC - Both BoringSSL and ring use this for their new files
+# MIT - "Files in third_party/ have their own licenses, as described therein. The MIT
+# license, for third_party/fiat, which, unlike other third_party directories, is
+# compiled into non-test libraries, is included below."
+# OpenSSL - Obviously
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
