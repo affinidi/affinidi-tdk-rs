@@ -1,5 +1,10 @@
 [workspace]
-members = ["affinidi-tdk-common", "affinidi-tdk", "affinidi-meeting-place"]
+members = [
+    "affinidi-tdk-common",
+    "affinidi-tdk-common/affinidi-secrets-resolver",
+    "affinidi-tdk",
+    "affinidi-meeting-place",
+]
 resolver = "3"
 
 [workspace.package]
@@ -15,3 +20,15 @@ repository = "https://github.com/affinidi/affinidi-tdk-rs"
 publish = true
 
 [workspace.dependencies]
+affinidi-messaging-sdk = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-did-resolver-cache-sdk = { version = "~0.3", features = ["network"] }
+affinidi-tdk-common = { path = "affinidi-tdk-common" }
+affinidi-secrets-resolver = { path = "affinidi-tdk-common/affinidi-secrets-manager" }
+reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+    "release_max_level_info",
+] }
