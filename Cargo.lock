@@ -3,5 +3,13 @@
 version = 4
 
 [[package]]
+name = "affinidi-meeting-place"
+version = "0.1.0"
+
+[[package]]
 name = "affinidi-tdk"
+version = "0.1.0"
+
+[[package]]
+name = "affinidi-tdk-common"
 version = "0.1.0"
