@@ -4,7 +4,6 @@ Handles Secrets - mainly used for internal representation and for saving to file
 */
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Secret {
     /// A key ID identifying a secret (private key).

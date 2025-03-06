@@ -40,9 +40,18 @@ impl SecretsResolver {
         }
     }
 
+    /// Insert a single Secret
     pub fn insert(&self, secret: Secret) {
-        debug!("Adding secret ({})", secret.id);
-        self.known_secrets.lock().unwrap().push(secret);
+        self.insert_vec(&[secret]);
+    }
+
+    /// Insert multiple Secrets
+    pub fn insert_vec(&self, secrets: &[Secret]) {
+        let mut lock = self.known_secrets.lock().unwrap();
+        for secret in secrets {
+            debug!("Adding secret ({})", secret.id);
+            lock.push(secret.to_owned());
+        }
     }
 
     pub async fn get_secret(&self, secret_id: &str) -> Result<Option<Secret>> {
@@ -67,5 +76,15 @@ impl SecretsResolver {
             })
             .cloned()
             .collect())
+    }
+
+    /// Returns the number of known secrets
+    pub fn len(&self) -> usize {
+        self.known_secrets.lock().unwrap().len()
+    }
+
+    /// Returns true if there are no known secrets
+    pub fn is_empty(&self) -> bool {
+        self.known_secrets.lock().unwrap().is_empty()
     }
 }

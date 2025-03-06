@@ -10,5 +10,6 @@ license.workspace = true
 keywords = ["ssi", "ATM", "affinidi", "DIDComm"]
 repository = "https://github.com/affinidi/affinidi-tdk-rs/affinidi-meeting-place"
 publish.workspace = true
+rust-version.workspace = true
 
 [dependencies]

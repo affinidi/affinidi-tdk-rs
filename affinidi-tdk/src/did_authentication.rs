@@ -7,10 +7,19 @@
  * Step 4. Receive the tokens from the authentication service
  */
 
+use std::time::SystemTime;
+use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use affinidi_tdk_common::{
+    errors::{Result, TDKError},
+    profiles::TDKProfile,
+};
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tracing::{Level, debug, span};
-
-use crate::errors::TDKError;
+use serde_json::json;
+use tracing::{Instrument, Level, debug, info, span};
+use uuid::Uuid;
+use crate::TDK;
 
 /// The challenge received in the first step of the DID authentication process
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -21,69 +30,62 @@ struct DidChallenge {
 
 /// The authorization tokens received in the fourth step of the DID authentication process
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct AuthorizationTokens {
+pub struct AuthorizationTokens {
     pub access_token: String,
     pub access_expires_at: Option<String>,
     pub refresh_token: String,
     pub refresh_expires_at: Option<String>,
 }
 
-// Where the bulk of the authentication logic is actually done
-async fn _authenticate(client: &mut Client) -> Result<AuthorizationTokens, TDKError> {
-    let _span = span!(Level::DEBUG, "authenticate",);
-    async move {
-        debug!("Retrieving authentication challenge...");
-
-        let profile_did = "did:key:zQ3shX5rNyeLJXqiBoYq9UFGPpi8sSoBqB5VgDS1LA4CyFAZs";
-        let mediator_did = "did:web:mediator-nlb.storm.ws:mediator:v1:.well-known";
-        let mediator_endpoint =
-            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/authenticate";
-
-        // Step 1. Get the challenge
-        let step1_response = _http_post::<AdamChallenge>(
-            &client,
-            &[&mediator_endpoint, "/challenge"].concat(),
-            &format!("{{\"did\": \"{}\"}}", profile_did).to_string(),
-        )
-        .await?;
-
-        debug!("Challenge received:\n{:#?}", step1_response);
-
-        // Step 2. Sign the challenge
-
-        let auth_response =
-            _create_auth_challenge_response(profile_did, mediator_did, &step1_response)?;
-        debug!(
-            "Auth response message:\n{}",
-            serde_json::to_string_pretty(&auth_response).unwrap()
-        );
-
-        let (auth_msg, _) = atm
-            .pack_encrypted(
-                &auth_response,
-                "did:web:meetingplace.world",
-                Some(profile_did),
-                Some(&profile_did),
+impl TDK {
+    /// Authenticate with the Affinidi services
+    pub async fn authenticate(&mut self, profile: &TDKProfile, ) -> Result<AuthorizationTokens> {
+        let _span = span!(Level::DEBUG, "authenticate",);
+        async move {
+            debug!("Retrieving authentication challenge...");
+    
+            let mediator_endpoint =
+                "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/authenticate";
+    
+            // Step 1. Get the challenge
+            let step1_response = _http_post::<DidChallenge>(
+                &self.inner.client,
+                &[mediator_endpoint, "/challenge"].concat(),
+                &format!("{{\"did\": \"{}\"}}", profile.did).to_string(),
             )
             .await?;
-
-        debug!("Successfully packed auth message\n{:#?}", auth_msg);
-
-        let step2_response = _http_post::<AuthorizationResponse>(
-            &client,
-            &[mediator_endpoint, ""].concat(),
-            &json!({"challenge_response": BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)}).to_string(),
-        )
-        .await?;
-
-        debug!("Tokens received:\n{:#?}", step2_response);
-
-        debug!("Successfully authenticated");
-
-        Ok(step2_response.clone())
+    
+            debug!("Challenge received:\n{:#?}", step1_response);
+    
+            // Step 2. Sign the challenge
+    
+            let auth_response =
+                _create_auth_challenge_response(&profile.did,  &step1_response)?;
+            debug!(
+                "Auth response message:\n{}",
+                serde_json::to_string_pretty(&auth_response).unwrap()
+            );
+    
+            let (auth_msg, _) = auth_response.pack_encrypted("did:web:meetingplace.world", Some(&profile.did), Some(&profile.did), &self.inner.did_resolver, &self.inner.secrets_resolver, &PackEncryptedOptions::default()).await?;
+    
+            debug!("Successfully packed auth message\n{:#?}", auth_msg);
+    
+            let step2_response = _http_post::<AuthorizationTokens>(
+                &self.inner.client,
+                &[mediator_endpoint, ""].concat(),
+                &json!({"challenge_response": BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)}).to_string(),
+            )
+            .await?;
+    
+            debug!("Tokens received:\n{:#?}", step2_response);
+    
+            debug!("Successfully authenticated");
+    
+            Ok(step2_response.clone())
+        }
+        .instrument(_span)
+        .await
     }
-    .instrument(_span)
-    .await
 }
 
 /// Creates an Affinidi Trusted Messaging Authentication Challenge Response Message
@@ -97,9 +99,8 @@ async fn _authenticate(client: &mut Client) -> Result<AuthorizationTokens, TDKEr
 /// - This message will expire after 60 seconds
 fn _create_auth_challenge_response(
     profile_did: &str,
-    mediator_did: &str,
-    body: &AdamChallenge,
-) -> Result<Message, ATMError> {
+    body: &DidChallenge,
+) -> Result<Message> {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -116,11 +117,10 @@ fn _create_auth_challenge_response(
     .finalize())
 }
 
-async fn _http_post<T: GenericDataStruct>(
-    client: &Client,
-    url: &str,
-    body: &str,
-) -> Result<T, ATMError> {
+async fn _http_post<T>(client: &Client, url: &str, body: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
     debug!("POSTing to {}", url);
     debug!("Body: {}", body);
     let response = client
@@ -129,19 +129,19 @@ async fn _http_post<T: GenericDataStruct>(
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| ATMError::TransportError(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+        .map_err(|e| TDKError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e)))?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+        .map_err(|e| TDKError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
 
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
-            return Err(ATMError::ACLDenied("Authentication Denied".into()));
+            return Err(TDKError::PermissionDenied("Authentication Denied".into()));
         } else {
-            return Err(ATMError::AuthenticationError(format!(
+            return Err(TDKError::Authentication(format!(
                 "Failed to get authentication response. url: {}, status: {}",
                 url, response_status
             )));
@@ -150,16 +150,11 @@ async fn _http_post<T: GenericDataStruct>(
 
     debug!("response body: {}", response_body);
     serde_json::from_str::<T>(&response_body).map_err(|e| {
-        ATMError::AuthenticationError(format!("Couldn't deserialize AuthorizationResponse: {}", e))
+        TDKError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
     })
 }
 
-async fn _http_check(
-    client: &Client,
-    url: &str,
-    body: &str,
-    authorization: &str,
-) -> Result<(), ATMError> {
+async fn _http_check(client: &Client, url: &str, body: &str, authorization: &str) -> Result<()> {
     debug!("POSTing to {}", url);
     debug!("Body: {}", body);
     let response = client
@@ -169,19 +164,19 @@ async fn _http_check(
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| ATMError::TransportError(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+        .map_err(|e| TDKError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e)))?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+        .map_err(|e| TDKError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
 
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
-            return Err(ATMError::ACLDenied("Authentication Denied".into()));
+            return Err(TDKError::PermissionDenied("Authentication Denied".into()));
         } else {
-            return Err(ATMError::AuthenticationError(format!(
+            return Err(TDKError::Authentication(format!(
                 "Failed to get authentication response. url: {}, status: {}",
                 url, response_status
             )));

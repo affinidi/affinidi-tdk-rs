@@ -10,9 +10,24 @@ license.workspace = true
 keywords.workspace = true
 repository.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["messaging"]
+messaging = ["dep:affinidi-messaging-sdk"]
 
 [dependencies]
 affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-messaging-sdk.workspace = true
+affinidi-messaging-sdk = { workspace = true, optional = true }
+affinidi-messaging-didcomm.workspace = true
 affinidi-tdk-common.workspace = true
+affinidi-secrets-resolver.workspace = true
+base64.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
