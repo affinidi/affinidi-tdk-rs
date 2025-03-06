@@ -168,6 +168,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "ssi",
  "thiserror 2.0.12",
  "tracing",
 ]
@@ -182,11 +183,13 @@ dependencies = [
  "affinidi-secrets-resolver",
  "affinidi-tdk-common",
  "base64 0.22.1",
+ "did-peer",
  "reqwest 0.12.12",
  "rustls 0.23.23",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "ssi",
  "thiserror 2.0.12",
  "tracing",
  "uuid",
@@ -198,6 +201,7 @@ version = "0.1.0"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-secrets-resolver",
+ "did-peer",
  "reqwest 0.12.12",
  "serde",
  "serde_json",

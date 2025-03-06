@@ -3,6 +3,8 @@
  */
 
 use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
+use affinidi_secrets_resolver::errors::SecretsResolverError;
+use did_peer::DIDPeerError;
 use thiserror::Error;
 
 /// Affinidi Trust Development Kit Errors
@@ -25,6 +27,12 @@ pub enum TDKError {
 
     #[error("ATM Error: {0}")]
     ATM(String),
+
+    #[error("Secrets Error: {0}")]
+    Secrets(String),
+
+    #[error("DID Method Error: {0}")]
+    DIDMethod(String),
 }
 
 pub type Result<T> = std::result::Result<T, TDKError>;
@@ -32,5 +40,17 @@ pub type Result<T> = std::result::Result<T, TDKError>;
 impl From<DIDCacheError> for TDKError {
     fn from(error: DIDCacheError) -> Self {
         TDKError::DIDResolver(error.to_string())
+    }
+}
+
+impl From<SecretsResolverError> for TDKError {
+    fn from(error: SecretsResolverError) -> Self {
+        TDKError::Secrets(error.to_string())
+    }
+}
+
+impl From<DIDPeerError> for TDKError {
+    fn from(error: DIDPeerError) -> Self {
+        TDKError::DIDMethod(error.to_string())
     }
 }

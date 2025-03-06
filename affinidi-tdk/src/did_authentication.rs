@@ -7,7 +7,7 @@
  * Step 4. Receive the tokens from the authentication service
  */
 
-use std::time::SystemTime;
+use crate::TDK;
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
 use affinidi_tdk_common::{
     errors::{Result, TDKError},
@@ -17,9 +17,9 @@ use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, info, span};
 use uuid::Uuid;
-use crate::TDK;
 
 /// The challenge received in the first step of the DID authentication process
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -39,48 +39,62 @@ pub struct AuthorizationTokens {
 
 impl TDK {
     /// Authenticate with the Affinidi services
-    pub async fn authenticate(&mut self, profile: &TDKProfile, ) -> Result<AuthorizationTokens> {
+    /// # Arguments
+    /// * `profile` - The TDKProfile to use for authentication
+    /// * `endpoint` - The endpoint to authenticate with (https://example.com/path/v1/authenticate)
+    // "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/authenticate";
+    pub async fn authenticate(
+        &mut self,
+        profile: &TDKProfile,
+        endpoint: &str,
+    ) -> Result<AuthorizationTokens> {
         let _span = span!(Level::DEBUG, "authenticate",);
         async move {
             debug!("Retrieving authentication challenge...");
-    
-            let mediator_endpoint =
-                "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/authenticate";
-    
+
             // Step 1. Get the challenge
             let step1_response = _http_post::<DidChallenge>(
                 &self.inner.client,
-                &[mediator_endpoint, "/challenge"].concat(),
+                &[endpoint, "/challenge"].concat(),
                 &format!("{{\"did\": \"{}\"}}", profile.did).to_string(),
             )
             .await?;
-    
+
             debug!("Challenge received:\n{:#?}", step1_response);
-    
+
             // Step 2. Sign the challenge
-    
-            let auth_response =
-                _create_auth_challenge_response(&profile.did,  &step1_response)?;
+
+            let auth_response = _create_auth_challenge_response(&profile.did, &step1_response)?;
             debug!(
                 "Auth response message:\n{}",
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
-    
-            let (auth_msg, _) = auth_response.pack_encrypted("did:web:meetingplace.world", Some(&profile.did), Some(&profile.did), &self.inner.did_resolver, &self.inner.secrets_resolver, &PackEncryptedOptions::default()).await?;
-    
+
+            let (auth_msg, _) = auth_response
+                .pack_encrypted(
+                    "did:web:meetingplace.world",
+                    Some(&profile.did),
+                    Some(&profile.did),
+                    &self.inner.did_resolver,
+                    &self.inner.secrets_resolver,
+                    &PackEncryptedOptions::default(),
+                )
+                .await?;
+
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
-    
+
             let step2_response = _http_post::<AuthorizationTokens>(
                 &self.inner.client,
-                &[mediator_endpoint, ""].concat(),
-                &json!({"challenge_response": BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)}).to_string(),
+                &[endpoint, ""].concat(),
+                &json!({"challenge_response": BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)})
+                    .to_string(),
             )
             .await?;
-    
+
             debug!("Tokens received:\n{:#?}", step2_response);
-    
+
             debug!("Successfully authenticated");
-    
+
             Ok(step2_response.clone())
         }
         .instrument(_span)
@@ -97,10 +111,7 @@ impl TDK {
 ///
 /// Notes:
 /// - This message will expire after 60 seconds
-fn _create_auth_challenge_response(
-    profile_did: &str,
-    body: &DidChallenge,
-) -> Result<Message> {
+fn _create_auth_challenge_response(profile_did: &str, body: &DidChallenge) -> Result<Message> {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()

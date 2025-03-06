@@ -3,7 +3,10 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
+use ssi::{JWK, jwk::Params};
+
+use crate::errors::{Result, SecretsResolverError};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Secret {
     /// A key ID identifying a secret (private key).
@@ -16,6 +19,50 @@ pub struct Secret {
     /// Value of the secret (private key)
     #[serde(flatten)]
     pub secret_material: SecretMaterial,
+}
+
+impl Secret {
+    pub fn from_jwk(jwk: &JWK) -> Result<Self> {
+        match &jwk.params {
+            Params::EC(params) => {
+                if let Some(curve) = &params.curve {
+                    Ok(Secret {
+                        id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
+                        type_: SecretType::JsonWebKey2020,
+                        secret_material: SecretMaterial::JWK {
+                            private_key_jwk: json!({
+                                "crv": curve,
+                                "d":  params.ecc_private_key,
+                                "kty": "EC",
+                                "x": params.x_coordinate,
+                                "y": params.y_coordinate
+                            }),
+                        },
+                    })
+                } else {
+                    Err(SecretsResolverError::KeyError(
+                        "EC Curve not defined".into(),
+                    ))
+                }
+            }
+            Params::OKP(params) => Ok(Secret {
+                id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
+                type_: SecretType::JsonWebKey2020,
+                secret_material: SecretMaterial::JWK {
+                    private_key_jwk: json!({
+                        "crv": params.curve,
+                        "d":  params.private_key,
+                        "kty": "OKP",
+                        "x": params.public_key
+                    }),
+                },
+            }),
+            _ => Err(SecretsResolverError::KeyError(format!(
+                "Unsupported key type: {:?}",
+                jwk.params
+            ))),
+        }
+    }
 }
 
 /// Must have the same semantics as type ('type' field) of the corresponding method in DID Doc containing a public key.

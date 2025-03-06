@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+did-peer.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

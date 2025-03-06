@@ -20,6 +20,8 @@ use std::{collections::HashMap, sync::Arc};
 
 pub mod config;
 pub mod did_authentication;
+pub mod dids;
+pub mod profile;
 
 /// TDK instance that can be used to interact with Affinidi services
 #[derive(Clone)]
