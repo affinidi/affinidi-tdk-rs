@@ -9,9 +9,10 @@ use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuil
 use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::{
+    environments::{TDKEnvironments, TDKProfile},
     errors::Result,
-    profiles::{TDKEnvironments, TDKProfile},
 };
+use common::environments::TDKEnvironment;
 use config::TDKConfig;
 use reqwest::Client;
 use rustls::ClientConfig;
@@ -41,7 +42,7 @@ pub(crate) struct SharedState {
     pub(crate) client: Client,
     #[cfg(feature = "messaging")]
     pub(crate) atm: Option<ATM>,
-    pub(crate) profiles: HashMap<String, TDKProfile>,
+    pub(crate) environment: TDKEnvironment,
 }
 
 /// Affinidi Trusted Development Kit (TDK)
@@ -111,22 +112,22 @@ impl TDK {
         };
 
         // Load Environment
-        let profiles = if config.load_environment {
-            let profiles = TDKEnvironments::load_from_file(
-                &config.environment_path,
+        // Adds secrets to the secrets resolver
+        // Removes secrets from the environment itself
+        let environment = if config.load_environment {
+            let mut environment = TDKEnvironments::fetch_from_file(
+                Some(&config.environment_path),
                 &config.environment_name,
             )?;
-            let mut map = HashMap::new();
-            for mut profile in profiles {
+            for (_, profile) in environment.profiles.iter_mut() {
                 secrets_resolver.insert_vec(profile.secrets.as_slice());
 
                 // Remove secrets from profile after adding them to the secrets resolver
                 profile.secrets.clear();
-                map.insert(profile.alias.clone(), profile);
             }
-            map
+            environment
         } else {
-            HashMap::new()
+            TDKEnvironment::default()
         };
 
         let shared_state = SharedState {
@@ -136,7 +137,7 @@ impl TDK {
             client,
             #[cfg(feature = "messaging")]
             atm,
-            profiles,
+            environment,
         };
 
         Ok(TDK {

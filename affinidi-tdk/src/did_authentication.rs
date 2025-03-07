@@ -10,8 +10,8 @@
 use crate::TDK;
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
 use affinidi_tdk_common::{
+    environments::TDKProfile,
     errors::{Result, TDKError},
-    profiles::TDKProfile,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use reqwest::Client;
