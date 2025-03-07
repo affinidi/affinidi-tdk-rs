@@ -8,16 +8,13 @@ use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuil
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder};
 use affinidi_secrets_resolver::SecretsResolver;
-use affinidi_tdk_common::{
-    environments::{TDKEnvironments, TDKProfile},
-    errors::Result,
-};
+use affinidi_tdk_common::{environments::TDKEnvironments, errors::Result};
 use common::environments::TDKEnvironment;
 use config::TDKConfig;
 use reqwest::Client;
 use rustls::ClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 pub mod config;
 pub mod did_authentication;

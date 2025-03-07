@@ -66,7 +66,7 @@ pub struct TDKEnvironment {
 
     /// An Admin DID for this environment to configure services if required
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub admin_did: Option<String>,
+    pub admin_did: Option<TDKProfile>,
 
     /// Custom Client SSL certificates for this environment if needed
     pub ssl_certificates: Vec<String>,
@@ -199,5 +199,10 @@ impl TDKEnvironments {
     /// Returns true if there are no environments
     pub fn is_empty(&self) -> bool {
         self.environments.is_empty()
+    }
+
+    /// Returns a list of environment names
+    pub fn environments(&self) -> Vec<String> {
+        self.environments.keys().cloned().collect()
     }
 }
