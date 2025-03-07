@@ -23,6 +23,10 @@ pub mod did_authentication;
 pub mod dids;
 pub mod profile;
 
+// Re-export required crates for convenience to applications
+pub extern crate affinidi_secrets_resolver as secrets_resolver;
+pub extern crate affinidi_tdk_common as common;
+
 /// TDK instance that can be used to interact with Affinidi services
 #[derive(Clone)]
 pub struct TDK {

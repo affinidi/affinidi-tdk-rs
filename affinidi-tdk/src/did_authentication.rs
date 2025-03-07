@@ -42,7 +42,6 @@ impl TDK {
     /// # Arguments
     /// * `profile` - The TDKProfile to use for authentication
     /// * `endpoint` - The endpoint to authenticate with (https://example.com/path/v1/authenticate)
-    // "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/authenticate";
     pub async fn authenticate(
         &mut self,
         profile: &TDKProfile,
