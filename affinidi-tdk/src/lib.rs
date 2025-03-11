@@ -6,7 +6,7 @@
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
-use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder};
+use affinidi_messaging_sdk::ATM;
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::{environments::TDKEnvironments, errors::Result};
 use common::{config::TDKConfig, environments::TDKEnvironment};
