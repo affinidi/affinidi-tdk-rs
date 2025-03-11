@@ -10,8 +10,17 @@ use thiserror::Error;
 /// Affinidi Trust Development Kit Errors
 #[derive(Error, Debug)]
 pub enum TDKError {
+    /// Authentication error, can be retried
     #[error("Authentication failed: {0}")]
     Authentication(String),
+
+    /// Authentication error, cannot be retried
+    #[error("Authentication Aborted: {0}")]
+    AuthenticationAbort(String),
+
+    /// Access Control Denied
+    #[error("ACL Denied: {0}")]
+    ACLDenied(String),
 
     #[error("Profile error: {0}")]
     Profile(String),

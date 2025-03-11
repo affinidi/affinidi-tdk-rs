@@ -9,19 +9,21 @@ use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuil
 use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::{environments::TDKEnvironments, errors::Result};
-use common::environments::TDKEnvironment;
-use config::TDKConfig;
+use common::{config::TDKConfig, environments::TDKEnvironment};
 use reqwest::Client;
 use rustls::ClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
 use std::sync::Arc;
 
-pub mod config;
-pub mod did_authentication;
 pub mod dids;
 pub mod profile;
 
 // Re-export required crates for convenience to applications
+#[cfg(feature = "meeting-place")]
+pub extern crate affinidi_meeting_place as meeting_place;
+pub extern crate affinidi_messaging_didcomm as didcomm;
+#[cfg(feature = "messaging")]
+pub extern crate affinidi_messaging_sdk as messaging;
 pub extern crate affinidi_secrets_resolver as secrets_resolver;
 pub extern crate affinidi_tdk_common as common;
 
@@ -86,6 +88,7 @@ impl TDK {
             SecretsResolver::new(vec![])
         };
 
+        /*
         #[cfg(feature = "messaging")]
         // Instantiate Affinidi Messaging
         let atm = if config.use_atm {
@@ -107,6 +110,7 @@ impl TDK {
         } else {
             None
         };
+        */
 
         // Load Environment
         // Adds secrets to the secrets resolver
@@ -133,7 +137,7 @@ impl TDK {
             secrets_resolver,
             client,
             #[cfg(feature = "messaging")]
-            atm,
+            atm: None,
             environment,
         };
 

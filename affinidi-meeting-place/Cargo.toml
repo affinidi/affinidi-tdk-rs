@@ -13,3 +13,5 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+affinidi-did-authentication.workspace = true
+tracing.workspace = true
