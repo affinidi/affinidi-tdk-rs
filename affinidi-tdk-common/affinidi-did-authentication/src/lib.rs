@@ -127,8 +127,30 @@ pub struct AuthorizationTokens {
     pub refresh_expires_at: u64,
 }
 
+/// Refresh tokens response from the authentication service
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct AuthRefreshResponse {
+    pub access_token: String,
+    pub access_expires_at: u64,
+}
+
+enum AuthenticationType {
+    AffinidiMessaging,
+    MeetingPlace,
+    Unknown,
+}
+
+impl AuthenticationType {
+    fn is_affinidi_messaging(&self) -> bool {
+        matches!(self, AuthenticationType::AffinidiMessaging)
+    }
+}
 /// The DID Authentication struct
 pub struct DIDAuthentication {
+    /// There are two different DID authentication methods that need to be supported for now
+    /// Set to true if
+    type_: AuthenticationType,
+
     /// Authorization tokens received from the authentication service
     pub tokens: Option<AuthorizationTokens>,
 
@@ -142,6 +164,7 @@ pub struct DIDAuthentication {
 impl DIDAuthentication {
     pub fn new(endpoint: &str) -> Self {
         Self {
+            type_: AuthenticationType::Unknown,
             tokens: None,
             authenticated: false,
             endpoint_did: endpoint.to_string(),
@@ -223,9 +246,20 @@ impl DIDAuthentication {
     async fn _authenticate(&mut self, state: &TDKSharedState, profile: &TDKProfile) -> Result<()> {
         let _span = span!(Level::DEBUG, "authenticate",);
         async move {
-            let endpoint = self
-                ._get_endpoint_address(state.did_resolver.clone())
-                .await?;
+            if self.authenticated && self.type_.is_affinidi_messaging() {
+                // Check if we need to refresh the token
+                match self._refresh_authentication(state, profile).await {
+                    Ok(_) => {
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        error!("Error refreshing token: {:?}", err);
+                        info!("Attempting to re-authenticate");
+                    }
+                }
+            }
+
+            let endpoint = self._get_endpoint_address(&state.did_resolver).await?;
 
             debug!("Retrieving authentication challenge...");
 
@@ -236,6 +270,15 @@ impl DIDAuthentication {
                 &format!("{{\"did\": \"{}\"}}", profile.did).to_string(),
             )
             .await?;
+
+            match step1_response {
+                DidChallenge::Simple(_) => {
+                    self.type_ = AuthenticationType::MeetingPlace;
+                }
+                DidChallenge::Complex(_) => {
+                    self.type_ = AuthenticationType::AffinidiMessaging;
+                }
+            }
 
             debug!("Challenge received:\n{:#?}", step1_response);
 
@@ -290,7 +333,7 @@ impl DIDAuthentication {
     /// Returns the endpoint if it's a URL, or resolves the DID to get the endpoint
     /// # Returns
     /// The endpoint address or a AuthenticationAbort error (hard abort)
-    async fn _get_endpoint_address(&self, did_resolver: DIDCacheClient) -> Result<String> {
+    async fn _get_endpoint_address(&self, did_resolver: &DIDCacheClient) -> Result<String> {
         if self.endpoint_did.starts_with("did:") {
             let doc = did_resolver.resolve(&self.endpoint_did).await?;
             if let Some(endpoint) = DIDAuthentication::find_service_endpoint(&doc.doc) {
@@ -302,6 +345,116 @@ impl DIDAuthentication {
             }
         } else {
             Ok(self.endpoint_did.clone())
+        }
+    }
+
+    /// Refresh the JWT access token
+    /// # Arguments
+    ///   * `refresh_token` - The refresh token to be used
+    /// # Returns
+    /// A packed DIDComm message to be sent
+    async fn _create_refresh_request(
+        &self,
+        shared_state: &TDKSharedState,
+        profile: &TDKProfile,
+    ) -> Result<String> {
+        let endpoint = self
+            ._get_endpoint_address(&shared_state.did_resolver)
+            .await?;
+
+        let refresh_token = if let Some(tokens) = &self.tokens {
+            &tokens.refresh_token
+        } else {
+            return Err(TDKError::Authentication(
+                "No tokens found to refresh".to_owned(),
+            ));
+        };
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let refresh_message = Message::build(
+            Uuid::new_v4().into(),
+            [&endpoint, "/refresh"].concat(),
+            json!({"refresh_token": refresh_token}),
+        )
+        .to(self.endpoint_did.to_string())
+        .from(profile.did.to_owned())
+        .created_time(now)
+        .expires_time(now + 60)
+        .finalize();
+
+        match refresh_message
+            .pack_encrypted(
+                &self.endpoint_did,
+                Some(&profile.did),
+                Some(&profile.did),
+                &shared_state.did_resolver,
+                &shared_state.secrets_resolver,
+                &PackEncryptedOptions::default(),
+            )
+            .await
+        {
+            Ok((refresh_msg, _)) => Ok(refresh_msg),
+            Err(err) => Err(TDKError::Authentication(format!(
+                "Couldn't pack authentication refresh message: {:?}",
+                err
+            ))),
+        }
+    }
+
+    /// Refresh the access tokens as required
+    async fn _refresh_authentication(
+        &mut self,
+        shared_state: &TDKSharedState,
+        profile: &TDKProfile,
+    ) -> Result<()> {
+        let Some(tokens) = &self.tokens else {
+            return Err(TDKError::Authentication(
+                "No tokens found to refresh".to_owned(),
+            ));
+        };
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Check if the access token has or is going to expire in next 5 seconds
+        if tokens.access_expires_at - 5 <= now {
+            // Need to refresh the token
+            if tokens.refresh_expires_at <= now {
+                // Refresh token has also expired
+                Err(TDKError::Authentication(
+                    "Refresh token has expired".to_owned(),
+                ))
+            } else {
+                // Refresh the token
+
+                let refresh_msg = self._create_refresh_request(shared_state, profile).await?;
+                let new_tokens = _http_post::<AuthRefreshResponse>(
+                    &shared_state.client,
+                    &[&self.endpoint_did, "/refresh"].concat(),
+                    &refresh_msg,
+                )
+                .await?;
+
+                let Some(tokens) = &mut self.tokens else {
+                    return Err(TDKError::Authentication(
+                        "No tokens found to refresh".to_owned(),
+                    ));
+                };
+
+                tokens.access_token = new_tokens.access_token;
+                tokens.access_expires_at = new_tokens.access_expires_at;
+
+                debug!("JWT successfully refreshed");
+                Ok(())
+            }
+        } else {
+            Ok(())
         }
     }
 }
