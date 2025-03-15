@@ -1,11 +1,5 @@
 [workspace]
-members = [
-    "affinidi-tdk-common",
-    "affinidi-tdk-common/affinidi-secrets-resolver",
-    "affinidi-tdk-common/affinidi-did-authentication",
-    "affinidi-tdk",
-    "affinidi-meeting-place",
-]
+members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
@@ -22,13 +16,18 @@ publish = true
 rust-version = "1.85.0"
 
 [workspace.dependencies]
+# Local Crates
+affinidi-tdk = { version = "0.1", path = "./crates/affinidi-tdk" }
+affinidi-tdk-common = { version = "0.1", path = "./crates/affinidi-tdk-common" }
+affinidi-secrets-resolver = { version = "0.1", path = "./crates/affinidi-secrets-resolver" }
+affinidi-did-authentication = { version = "0.1", path = "./crates/affinidi-did-authentication" }
+affinidi-meeting-place = { version = "0.1", path = "./crates/affinidi-meeting-place" }
+
+# Affinidi External Crates
 affinidi-messaging-sdk = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-did-resolver-cache-sdk = { version = "~0.4", features = ["network"] }
-affinidi-tdk-common = { version = "0.1", path = "affinidi-tdk-common" }
-affinidi-secrets-resolver = { version = "0.1", path = "affinidi-tdk-common/affinidi-secrets-resolver" }
-affinidi-did-authentication = { version = "0.1", path = "affinidi-tdk-common/affinidi-did-authentication" }
-affinidi-meeting-place = { version = "0.1", path = "affinidi-meeting-place" }
+
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 chrono = "0.4"
@@ -53,4 +52,4 @@ tracing-subscriber = { version = "0.3", features = [
     "fmt",
     "json",
 ] }
-uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }

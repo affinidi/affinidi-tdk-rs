@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-authentication.workspace = true
 did-peer.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

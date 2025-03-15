@@ -16,16 +16,15 @@ use rustls_platform_verifier::ConfigVerifierExt;
 use std::sync::Arc;
 
 pub mod dids;
-pub mod profile;
 
 // Re-export required crates for convenience to applications
 #[cfg(feature = "meeting-place")]
-pub extern crate affinidi_meeting_place as meeting_place;
-pub extern crate affinidi_messaging_didcomm as didcomm;
+pub use affinidi_meeting_place as meeting_place;
+pub use affinidi_messaging_didcomm as didcomm;
 #[cfg(feature = "messaging")]
-pub extern crate affinidi_messaging_sdk as messaging;
-pub extern crate affinidi_secrets_resolver as secrets_resolver;
-pub extern crate affinidi_tdk_common as common;
+pub use affinidi_messaging_sdk as messaging;
+pub use affinidi_secrets_resolver as secrets_resolver;
+pub use affinidi_tdk_common as common;
 
 /// TDK instance that can be used to interact with Affinidi services
 #[derive(Clone)]

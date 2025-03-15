@@ -15,13 +15,10 @@
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
-use affinidi_tdk_common::{
-    TDKSharedState,
-    environments::TDKProfile,
-    errors::{Result, TDKError},
-};
+use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
+use errors::{DIDAuthError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,6 +26,8 @@ use ssi::dids::{Document, document::service::Endpoint};
 use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, error, info, span};
 use uuid::Uuid;
+
+pub mod errors;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
@@ -80,7 +79,7 @@ impl TokensType {
                     access_token: m.access_token.clone(),
                     access_expires_at: DateTime::parse_from_rfc3339(&m.access_expires_at)
                         .map_err(|err| {
-                            TDKError::Authentication(format!(
+                            DIDAuthError::Authentication(format!(
                                 "Invalid access_expires_at timestamp ({}): {}",
                                 m.access_expires_at, err
                             ))
@@ -89,7 +88,7 @@ impl TokensType {
                     refresh_token: m.refresh_token.clone(),
                     refresh_expires_at: DateTime::parse_from_rfc3339(&m.refresh_expires_at)
                         .map_err(|err| {
-                            TDKError::Authentication(format!(
+                            DIDAuthError::Authentication(format!(
                                 "Invalid refresh_expires_at timestamp ({}): {}",
                                 m.access_expires_at, err
                             ))
@@ -146,7 +145,7 @@ impl AuthenticationType {
     }
 }
 /// The DID Authentication struct
-pub struct DIDAuthentication {
+pub struct DIDAuthentication<'a> {
     /// There are two different DID authentication methods that need to be supported for now
     /// Set to true if
     type_: AuthenticationType,
@@ -158,16 +157,20 @@ pub struct DIDAuthentication {
     pub authenticated: bool,
 
     /// The endpoint DID to authenticate with
-    pub endpoint_did: String,
+    endpoint_did: &'a str,
+
+    /// Profile DID to authenticate
+    profile_did: &'a str,
 }
 
-impl DIDAuthentication {
-    pub fn new(endpoint: &str) -> Self {
+impl<'a> DIDAuthentication<'a> {
+    pub fn new(endpoint: &'a str, profile_did: &'a str) -> Self {
         Self {
             type_: AuthenticationType::Unknown,
             tokens: None,
             authenticated: false,
-            endpoint_did: endpoint.to_string(),
+            endpoint_did: endpoint,
+            profile_did,
         }
     }
 
@@ -199,8 +202,6 @@ impl DIDAuthentication {
     /// If already authenticated, short-circuits and returns immediately
     ///
     /// # Arguments
-    /// * `state` - The TDKSharedState to use for authentication
-    /// * `profile` - The TDKProfile to use for authentication
     /// * `retry_limit` - The number of times to retry authentication (-1 = unlimited)
     ///
     /// # Returns
@@ -208,31 +209,35 @@ impl DIDAuthentication {
     /// AuthorizationTokens are contained in self
     pub async fn authenticate(
         &mut self,
-        state: &TDKSharedState,
-        profile: &TDKProfile,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &SecretsResolver,
+        client: &Client,
         retry_limit: i32,
     ) -> Result<()> {
         let mut retry_count = 0;
         let mut timer = 1;
         loop {
-            match self._authenticate(state, profile).await {
+            match self
+                ._authenticate(did_resolver, secrets_resolver, client)
+                .await
+            {
                 Ok(_) => {
                     return Ok(());
                 }
-                Err(TDKError::ACLDenied(err)) => {
-                    return Err(TDKError::ACLDenied(err));
+                Err(DIDAuthError::ACLDenied(err)) => {
+                    return Err(DIDAuthError::ACLDenied(err));
                 }
                 Err(err) => {
                     retry_count += 1;
                     if retry_limit != -1 && retry_count >= retry_limit {
-                        return Err(TDKError::AuthenticationAbort(
+                        return Err(DIDAuthError::AuthenticationAbort(
                             "Maximum number of authentication retries reached".into(),
                         ));
                     }
 
                     error!(
-                        "Profile ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({}) seconds",
-                        profile.alias, retry_count, err, timer
+                        "DID ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({}) seconds",
+                        self.profile_did, retry_count, err, timer
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(timer)).await;
                     if timer < 10 {
@@ -243,12 +248,20 @@ impl DIDAuthentication {
         }
     }
 
-    async fn _authenticate(&mut self, state: &TDKSharedState, profile: &TDKProfile) -> Result<()> {
+    async fn _authenticate(
+        &mut self,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &SecretsResolver,
+        client: &Client,
+    ) -> Result<()> {
         let _span = span!(Level::DEBUG, "authenticate",);
         async move {
             if self.authenticated && self.type_.is_affinidi_messaging() {
                 // Check if we need to refresh the token
-                match self._refresh_authentication(state, profile).await {
+                match self
+                    ._refresh_authentication(did_resolver, secrets_resolver, client)
+                    .await
+                {
                     Ok(_) => {
                         return Ok(());
                     }
@@ -259,15 +272,15 @@ impl DIDAuthentication {
                 }
             }
 
-            let endpoint = self._get_endpoint_address(&state.did_resolver).await?;
+            let endpoint = self._get_endpoint_address(did_resolver).await?;
 
             debug!("Retrieving authentication challenge...");
 
             // Step 1. Get the challenge
             let step1_response = _http_post::<DidChallenge>(
-                &state.client,
+                client,
                 &[&endpoint, "/challenge"].concat(),
-                &format!("{{\"did\": \"{}\"}}", profile.did).to_string(),
+                &format!("{{\"did\": \"{}\"}}", self.profile_did).to_string(),
             )
             .await?;
 
@@ -284,8 +297,7 @@ impl DIDAuthentication {
 
             // Step 2. Sign the challenge
 
-            let auth_response =
-                _create_auth_challenge_response(&self.endpoint_did, &profile.did, &step1_response)?;
+            let auth_response = self._create_auth_challenge_response(&step1_response)?;
             debug!(
                 "Auth response message:\n{}",
                 serde_json::to_string_pretty(&auth_response).unwrap()
@@ -293,11 +305,11 @@ impl DIDAuthentication {
 
             let (auth_msg, _) = auth_response
                 .pack_encrypted(
-                    &self.endpoint_did,
-                    Some(&profile.did),
-                    Some(&profile.did),
-                    &state.did_resolver,
-                    &state.secrets_resolver,
+                    self.endpoint_did,
+                    Some(self.profile_did),
+                    Some(self.profile_did),
+                    did_resolver,
+                    secrets_resolver,
                     &PackEncryptedOptions::default(),
                 )
                 .await?;
@@ -314,8 +326,7 @@ impl DIDAuthentication {
             };
 
             let step2_response =
-                _http_post::<TokensType>(&state.client, &[&endpoint, ""].concat(), &step2_body)
-                    .await?;
+                _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
 
             debug!("Tokens received:\n{:#?}", step2_response);
 
@@ -335,16 +346,16 @@ impl DIDAuthentication {
     /// The endpoint address or a AuthenticationAbort error (hard abort)
     async fn _get_endpoint_address(&self, did_resolver: &DIDCacheClient) -> Result<String> {
         if self.endpoint_did.starts_with("did:") {
-            let doc = did_resolver.resolve(&self.endpoint_did).await?;
+            let doc = did_resolver.resolve(self.endpoint_did).await?;
             if let Some(endpoint) = DIDAuthentication::find_service_endpoint(&doc.doc) {
                 Ok(endpoint)
             } else {
-                Err(TDKError::AuthenticationAbort(
+                Err(DIDAuthError::AuthenticationAbort(
                     "No service endpoint found".into(),
                 ))
             }
         } else {
-            Ok(self.endpoint_did.clone())
+            Ok(self.endpoint_did.to_string())
         }
     }
 
@@ -355,17 +366,15 @@ impl DIDAuthentication {
     /// A packed DIDComm message to be sent
     async fn _create_refresh_request(
         &self,
-        shared_state: &TDKSharedState,
-        profile: &TDKProfile,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &SecretsResolver,
     ) -> Result<String> {
-        let endpoint = self
-            ._get_endpoint_address(&shared_state.did_resolver)
-            .await?;
+        let endpoint = self._get_endpoint_address(did_resolver).await?;
 
         let refresh_token = if let Some(tokens) = &self.tokens {
             &tokens.refresh_token
         } else {
-            return Err(TDKError::Authentication(
+            return Err(DIDAuthError::Authentication(
                 "No tokens found to refresh".to_owned(),
             ));
         };
@@ -381,24 +390,24 @@ impl DIDAuthentication {
             json!({"refresh_token": refresh_token}),
         )
         .to(self.endpoint_did.to_string())
-        .from(profile.did.to_owned())
+        .from(self.profile_did.to_owned())
         .created_time(now)
         .expires_time(now + 60)
         .finalize();
 
         match refresh_message
             .pack_encrypted(
-                &self.endpoint_did,
-                Some(&profile.did),
-                Some(&profile.did),
-                &shared_state.did_resolver,
-                &shared_state.secrets_resolver,
+                self.endpoint_did,
+                Some(self.profile_did),
+                Some(self.profile_did),
+                did_resolver,
+                secrets_resolver,
                 &PackEncryptedOptions::default(),
             )
             .await
         {
             Ok((refresh_msg, _)) => Ok(refresh_msg),
-            Err(err) => Err(TDKError::Authentication(format!(
+            Err(err) => Err(DIDAuthError::Authentication(format!(
                 "Couldn't pack authentication refresh message: {:?}",
                 err
             ))),
@@ -408,11 +417,12 @@ impl DIDAuthentication {
     /// Refresh the access tokens as required
     async fn _refresh_authentication(
         &mut self,
-        shared_state: &TDKSharedState,
-        profile: &TDKProfile,
+        did_resolver: &DIDCacheClient,
+        secrets_resolver: &SecretsResolver,
+        client: &Client,
     ) -> Result<()> {
         let Some(tokens) = &self.tokens else {
-            return Err(TDKError::Authentication(
+            return Err(DIDAuthError::Authentication(
                 "No tokens found to refresh".to_owned(),
             ));
         };
@@ -427,22 +437,24 @@ impl DIDAuthentication {
             // Need to refresh the token
             if tokens.refresh_expires_at <= now {
                 // Refresh token has also expired
-                Err(TDKError::Authentication(
+                Err(DIDAuthError::Authentication(
                     "Refresh token has expired".to_owned(),
                 ))
             } else {
                 // Refresh the token
 
-                let refresh_msg = self._create_refresh_request(shared_state, profile).await?;
+                let refresh_msg = self
+                    ._create_refresh_request(did_resolver, secrets_resolver)
+                    .await?;
                 let new_tokens = _http_post::<AuthRefreshResponse>(
-                    &shared_state.client,
-                    &[&self.endpoint_did, "/refresh"].concat(),
+                    client,
+                    &[self.endpoint_did, "/refresh"].concat(),
                     &refresh_msg,
                 )
                 .await?;
 
                 let Some(tokens) = &mut self.tokens else {
-                    return Err(TDKError::Authentication(
+                    return Err(DIDAuthError::Authentication(
                         "No tokens found to refresh".to_owned(),
                     ));
                 };
@@ -457,44 +469,38 @@ impl DIDAuthentication {
             Ok(())
         }
     }
-}
 
-/// Creates an Affinidi Trusted Messaging Authentication Challenge Response Message
-/// # Arguments
-/// * `to_did` - Destination for the DID
-/// * `from_did` - The DID that is being authenticated
-/// * `body` - The challenge body
-/// # Returns
-/// A DIDComm message to be sent
-///
-/// Notes:
-/// - This message will expire after 60 seconds
-fn _create_auth_challenge_response(
-    to_did: &str,
-    from_did: &str,
-    body: &DidChallenge,
-) -> Result<Message> {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    /// Creates an Affinidi Trusted Messaging Authentication Challenge Response Message
+    /// # Arguments
+    /// * `body` - The challenge body
+    /// # Returns
+    /// A DIDComm message to be sent
+    ///
+    /// Notes:
+    /// - This message will expire after 60 seconds
+    fn _create_auth_challenge_response(&self, body: &DidChallenge) -> Result<Message> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
-    let body = if let DidChallenge::Complex(c) = body {
-        json!({"challenge": c.data.challenge, "session_id": c.session_id})
-    } else {
-        json!({"challenge": body.challenge()})
-    };
+        let body = if let DidChallenge::Complex(c) = body {
+            json!({"challenge": c.data.challenge, "session_id": c.session_id})
+        } else {
+            json!({"challenge": body.challenge()})
+        };
 
-    Ok(Message::build(
-        Uuid::new_v4().into(),
-        "https://affinidi.com/atm/1.0/authenticate".to_owned(),
-        body,
-    )
-    .to(to_did.to_string())
-    .from(from_did.to_owned())
-    .created_time(now)
-    .expires_time(now + 60)
-    .finalize())
+        Ok(Message::build(
+            Uuid::new_v4().into(),
+            "https://affinidi.com/atm/1.0/authenticate".to_owned(),
+            body,
+        )
+        .to(self.endpoint_did.to_string())
+        .from(self.profile_did.to_owned())
+        .created_time(now)
+        .expires_time(now + 60)
+        .finalize())
+    }
 }
 
 async fn _http_post<T>(client: &Client, url: &str, body: &str) -> Result<T>
@@ -509,19 +515,21 @@ where
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| TDKError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+        .map_err(|e| {
+            DIDAuthError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e))
+        })?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| TDKError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
+        .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
 
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
-            return Err(TDKError::PermissionDenied("Authentication Denied".into()));
+            return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
         } else {
-            return Err(TDKError::Authentication(format!(
+            return Err(DIDAuthError::Authentication(format!(
                 "Failed to get authentication response. url: {}, status: {}",
                 url, response_status
             )));
@@ -530,7 +538,7 @@ where
 
     debug!("response body: {}", response_body);
     serde_json::from_str::<T>(&response_body).map_err(|e| {
-        TDKError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
+        DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
     })
 }
 
@@ -544,19 +552,21 @@ async fn _http_check(client: &Client, url: &str, body: &str, authorization: &str
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| TDKError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+        .map_err(|e| {
+            DIDAuthError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e))
+        })?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| TDKError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
+        .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
 
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
-            return Err(TDKError::PermissionDenied("Authentication Denied".into()));
+            return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
         } else {
-            return Err(TDKError::Authentication(format!(
+            return Err(DIDAuthError::Authentication(format!(
                 "Failed to get authentication response. url: {}, status: {}",
                 url, response_status
             )));

@@ -7,14 +7,14 @@ use affinidi_secrets_resolver::SecretsResolver;
 use config::TDKConfig;
 use environments::TDKEnvironment;
 use reqwest::Client;
+use rustls::ClientConfig;
+use rustls_platform_verifier::ConfigVerifierExt;
 
 pub mod config;
 pub mod environments;
 pub mod errors;
 
-pub use affinidi_secrets_resolver;
-use rustls::ClientConfig;
-use rustls_platform_verifier::ConfigVerifierExt;
+pub use affinidi_secrets_resolver as secrets_resolver;
 
 /// Private SharedState struct for the TDK to use internally
 pub struct TDKSharedState {

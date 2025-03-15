@@ -15,6 +15,8 @@ Affinidi DID Authentication enables basic authentication using a DID and proof t
 
 You can run Affinidi DID Authentication as a binary, this allows for simple testing and/or using the binary in other applications.
 
+***NOTE: The Binary for did_auth is located in the [affinidi-tdk](https://github.com/affinidi/affinidi-tdk-rs/crates/affinidi-tdk/examples/did_auth.rs) crate***
+
 There are two operating modes for the binary:
 
 1. Use the environments pre-configured profiles

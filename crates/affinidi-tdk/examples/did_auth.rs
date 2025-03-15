@@ -2,22 +2,19 @@
  * Utility to test or incorporate the DID Authentication flow into your application.
  */
 
+use affinidi_did_authentication::DIDAuthentication;
+use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_secrets_resolver::{SecretsResolver, secrets::Secret};
+use affinidi_tdk_common::{
+    create_http_client,
+    environments::{TDKEnvironments, TDKProfile},
+    errors::{Result, TDKError},
+};
+use clap::{Parser, Subcommand};
 use std::{
     env,
     io::{self, Read},
 };
-
-use affinidi_did_authentication::DIDAuthentication;
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_tdk_common::{
-    TDKSharedState,
-    affinidi_secrets_resolver::{SecretsResolver, secrets::Secret},
-    config::TDKConfigBuilder,
-    create_http_client,
-    environments::{TDKEnvironment, TDKEnvironments, TDKProfile},
-    errors::{Result, TDKError},
-};
-use clap::{Parser, Subcommand};
 use tracing_subscriber::filter;
 
 /// Affinidi DID Authentication Tool
@@ -123,19 +120,20 @@ async fn main() -> Result<()> {
         }
     };
 
-    let tdk = TDKSharedState {
-        did_resolver: DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?,
-        config: TDKConfigBuilder::default().build()?,
-        environment: TDKEnvironment::default(),
-        secrets_resolver: SecretsResolver::new(secrets),
-        client: create_http_client(),
-    };
+    let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?;
+    let secrets_resolver = SecretsResolver::new(secrets);
+    let client = create_http_client();
 
     // Attempt Authentication
-    let mut did_auth = DIDAuthentication::new(&args.service_did);
+    let mut did_auth = DIDAuthentication::new(&args.service_did, &profile.did);
 
     match did_auth
-        .authenticate(&tdk, &profile, args.retry_limit as i32)
+        .authenticate(
+            &did_resolver,
+            &secrets_resolver,
+            &client,
+            args.retry_limit as i32,
+        )
         .await
     {
         Ok(_) => {
