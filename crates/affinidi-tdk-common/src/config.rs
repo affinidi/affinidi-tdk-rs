@@ -3,7 +3,7 @@
  */
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfig};
-use affinidi_secrets_resolver::SecretsResolver;
+use affinidi_secrets_resolver::ThreadedSecretsResolver;
 
 use crate::errors::TDKError;
 
@@ -12,7 +12,7 @@ const DEFAULT_ENVIRONMENT_PATH: &str = "environment.json";
 pub struct TDKConfig {
     pub did_resolver: Option<DIDCacheClient>,
     pub did_resolver_config: Option<DIDCacheConfig>,
-    pub secrets_resolver: Option<SecretsResolver>,
+    pub secrets_resolver: Option<ThreadedSecretsResolver>,
     pub environment_path: String,
     pub load_environment: bool,
     pub environment_name: String,
@@ -50,7 +50,7 @@ pub struct TDKConfigBuilder {
 
     /// Affinidi Secrets Resolver
     /// Allows for a custom secrets resolver to be provided
-    secrets_resolver: Option<SecretsResolver>,
+    secrets_resolver: Option<ThreadedSecretsResolver>,
 
     /// Path to load a profile environment from
     environment_path: Option<String>,
@@ -117,14 +117,14 @@ impl TDKConfigBuilder {
     /// Example:
     /// ```
     /// use affinidi_tdk::config::TDKConfig;
-    /// use affinidi_secrets_resolver::SecretsResolver;
+    /// use affinidi_secrets_resolver::ThreadedSecretsResolver;
     ///
-    /// let secrets_resolver = SecretsResolver::new(vec![]);
+    /// let secrets_resolver = ThreadedSecretsResolver::new(None);
     /// let tdk_config = TDKConfig::builder().with_secrets_resolver(secrets_resolver).build();
     ///
     /// let tdk = TDK::new(tdk_config);
     /// ```
-    pub fn with_secrets_resolver(mut self, secrets_resolver: SecretsResolver) -> Self {
+    pub fn with_secrets_resolver(mut self, secrets_resolver: ThreadedSecretsResolver) -> Self {
         self.secrets_resolver = Some(secrets_resolver);
         self
     }

@@ -3,7 +3,7 @@
  */
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_secrets_resolver::SecretsResolver;
+use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use config::TDKConfig;
 use environments::TDKEnvironment;
 use reqwest::Client;
@@ -13,16 +13,21 @@ use rustls_platform_verifier::ConfigVerifierExt;
 pub mod config;
 pub mod environments;
 pub mod errors;
+pub mod profiles;
+pub mod tasks;
 
+//pub use affinidi_did_authentication as did_authentication;
 pub use affinidi_secrets_resolver as secrets_resolver;
+use tasks::authentication::AuthenticationCache;
 
 /// Private SharedState struct for the TDK to use internally
 pub struct TDKSharedState {
     pub config: TDKConfig,
     pub did_resolver: DIDCacheClient,
-    pub secrets_resolver: SecretsResolver,
+    pub secrets_resolver: ThreadedSecretsResolver,
     pub client: Client,
     pub environment: TDKEnvironment,
+    pub authentication: AuthenticationCache,
 }
 
 /// Creates a reusable HTTP/HTTPS Client that can be used

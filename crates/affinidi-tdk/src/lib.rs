@@ -7,7 +7,7 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
-use affinidi_secrets_resolver::SecretsResolver;
+use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{environments::TDKEnvironments, errors::Result};
 use common::{config::TDKConfig, environments::TDKEnvironment};
 use reqwest::Client;
@@ -36,7 +36,7 @@ pub struct TDK {
 pub(crate) struct SharedState {
     pub(crate) config: TDKConfig,
     pub(crate) did_resolver: DIDCacheClient,
-    pub(crate) secrets_resolver: SecretsResolver,
+    pub(crate) secrets_resolver: ThreadedSecretsResolver,
     pub(crate) client: Client,
     #[cfg(feature = "messaging")]
     pub(crate) atm: Option<ATM>,
@@ -84,7 +84,7 @@ impl TDK {
         let secrets_resolver = if let Some(secrets_resolver) = &config.secrets_resolver {
             secrets_resolver.to_owned()
         } else {
-            SecretsResolver::new(vec![])
+            ThreadedSecretsResolver::new(None).await.0
         };
 
         /*
@@ -120,7 +120,9 @@ impl TDK {
                 &config.environment_name,
             )?;
             for (_, profile) in environment.profiles.iter_mut() {
-                secrets_resolver.insert_vec(profile.secrets.as_slice());
+                secrets_resolver
+                    .insert_vec(profile.secrets.as_slice())
+                    .await;
 
                 // Remove secrets from profile after adding them to the secrets resolver
                 profile.secrets.clear();

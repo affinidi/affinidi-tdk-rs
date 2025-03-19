@@ -1,6 +1,7 @@
 /*!
- * Authentication services based on using the DID to authenticate with other services
+ * DID Authentication Library
  *
+ * **DID Authentication steps:**
  * Step 1. Get the challenge from a authentication service
  * Step 2. Create a DIDComm message with the challenge in the body
  * Step 3. Sign and Encrypt the DIDComm message, send to the authentication service
@@ -28,6 +29,15 @@ use tracing::{Instrument, Level, debug, error, info, span};
 use uuid::Uuid;
 
 pub mod errors;
+
+/// The authorization tokens received in the fourth step of the DID authentication process
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct AuthorizationTokens {
+    pub access_token: String,
+    pub access_expires_at: u64,
+    pub refresh_token: String,
+    pub refresh_expires_at: u64,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
@@ -117,15 +127,6 @@ pub struct MPAuthorizationTokens {
     pub refresh_expires_at: String,
 }
 
-/// The authorization tokens received in the fourth step of the DID authentication process
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct AuthorizationTokens {
-    pub access_token: String,
-    pub access_expires_at: u64,
-    pub refresh_token: String,
-    pub refresh_expires_at: u64,
-}
-
 /// Refresh tokens response from the authentication service
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthRefreshResponse {
@@ -133,6 +134,7 @@ pub struct AuthRefreshResponse {
     pub access_expires_at: u64,
 }
 
+#[derive(Clone, Debug)]
 enum AuthenticationType {
     AffinidiMessaging,
     MeetingPlace,
@@ -144,7 +146,9 @@ impl AuthenticationType {
         matches!(self, AuthenticationType::AffinidiMessaging)
     }
 }
+
 /// The DID Authentication struct
+#[derive(Clone, Debug)]
 pub struct DIDAuthentication<'a> {
     /// There are two different DID authentication methods that need to be supported for now
     /// Set to true if
@@ -161,6 +165,18 @@ pub struct DIDAuthentication<'a> {
 
     /// Profile DID to authenticate
     profile_did: &'a str,
+}
+
+impl Default for DIDAuthentication<'_> {
+    fn default() -> Self {
+        Self {
+            type_: AuthenticationType::Unknown,
+            tokens: None,
+            authenticated: false,
+            endpoint_did: "",
+            profile_did: "",
+        }
+    }
 }
 
 impl<'a> DIDAuthentication<'a> {
@@ -207,13 +223,16 @@ impl<'a> DIDAuthentication<'a> {
     /// # Returns
     /// Ok if successful, Err if failed
     /// AuthorizationTokens are contained in self
-    pub async fn authenticate(
+    pub async fn authenticate<S>(
         &mut self,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &SecretsResolver,
+        secrets_resolver: &S,
         client: &Client,
         retry_limit: i32,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        S: SecretsResolver,
+    {
         let mut retry_count = 0;
         let mut timer = 1;
         loop {
@@ -248,12 +267,15 @@ impl<'a> DIDAuthentication<'a> {
         }
     }
 
-    async fn _authenticate(
+    async fn _authenticate<S>(
         &mut self,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &SecretsResolver,
+        secrets_resolver: &S,
         client: &Client,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        S: SecretsResolver,
+    {
         let _span = span!(Level::DEBUG, "authenticate",);
         async move {
             if self.authenticated && self.type_.is_affinidi_messaging() {
@@ -364,11 +386,14 @@ impl<'a> DIDAuthentication<'a> {
     ///   * `refresh_token` - The refresh token to be used
     /// # Returns
     /// A packed DIDComm message to be sent
-    async fn _create_refresh_request(
+    async fn _create_refresh_request<S>(
         &self,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &SecretsResolver,
-    ) -> Result<String> {
+        secrets_resolver: &S,
+    ) -> Result<String>
+    where
+        S: SecretsResolver,
+    {
         let endpoint = self._get_endpoint_address(did_resolver).await?;
 
         let refresh_token = if let Some(tokens) = &self.tokens {
@@ -415,12 +440,15 @@ impl<'a> DIDAuthentication<'a> {
     }
 
     /// Refresh the access tokens as required
-    async fn _refresh_authentication(
+    async fn _refresh_authentication<S>(
         &mut self,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &SecretsResolver,
+        secrets_resolver: &S,
         client: &Client,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        S: SecretsResolver,
+    {
         let Some(tokens) = &self.tokens else {
             return Err(DIDAuthError::Authentication(
                 "No tokens found to refresh".to_owned(),

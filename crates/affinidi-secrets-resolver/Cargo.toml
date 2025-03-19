@@ -13,8 +13,10 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ahash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ssi.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true

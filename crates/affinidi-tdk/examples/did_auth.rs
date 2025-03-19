@@ -4,11 +4,12 @@
 
 use affinidi_did_authentication::DIDAuthentication;
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_secrets_resolver::{SecretsResolver, secrets::Secret};
+use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use affinidi_tdk_common::{
     create_http_client,
-    environments::{TDKEnvironments, TDKProfile},
+    environments::TDKEnvironments,
     errors::{Result, TDKError},
+    profiles::TDKProfile,
 };
 use clap::{Parser, Subcommand};
 use std::{
@@ -121,7 +122,8 @@ async fn main() -> Result<()> {
     };
 
     let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?;
-    let secrets_resolver = SecretsResolver::new(secrets);
+    let secrets_resolver = ThreadedSecretsResolver::new(None).await.0;
+    secrets_resolver.insert_vec(&secrets).await;
     let client = create_http_client();
 
     // Attempt Authentication

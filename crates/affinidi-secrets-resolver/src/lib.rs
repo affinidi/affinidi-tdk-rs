@@ -2,25 +2,68 @@
  * Affinidi Secrets Resolver
  *
  * Handles everything and anything to do with DID Secrets
+ *
+ * SecretsResolver is the main struct
+ * You can instantiate SecretsResolver in one of two ways:
+ * 1. A simple cache of Secrets used directly (not thread-safe)
+ *   - SimpleSecretsResolver
+ * 2. A task-based cache of Secrets used in a multi-threaded environment
+ *   - ThreadedSecretsResolver
  */
 
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
 
-use errors::Result;
+use ahash::AHashMap;
 use secrets::Secret;
+use task::{SecretTaskCommand, SecretsTask};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
 use tracing::debug;
+
 pub mod errors;
 pub mod secrets;
+pub mod task;
+
+/// Affinidi Secrets Resolver
+#[allow(async_fn_in_trait)]
+pub trait SecretsResolver {
+    /// Insert a single Secret
+    async fn insert(&self, secret: Secret);
+
+    /// Insert multiple Secrets
+    async fn insert_vec(&self, secrets: &[Secret]);
+
+    /// Get a Secret by its ID
+    async fn get_secret(&self, secret_id: &str) -> Option<Secret>;
+
+    /// Find secrets by their key IDs
+    /// # Arguments
+    /// * `secret_ids` - A list of secret IDs to find
+    ///
+    /// # Returns
+    /// A list of secret IDs that were found
+    async fn find_secrets(&self, secret_ids: &[String]) -> Vec<String>;
+
+    /// Removes the secret with the given ID
+    async fn remove_secret(&self, secret_id: &str) -> Option<Secret>;
+
+    /// Returns the number of known secrets
+    async fn len(&self) -> usize;
+
+    /// Returns true if there are no known secrets
+    async fn is_empty(&self) -> bool;
+}
 
 /// Affinidi Secrets Resolver
 ///
 /// Helps with loading and working with DID Secrets
-#[derive(Clone, Debug)]
-pub struct SecretsResolver {
-    known_secrets: Arc<Mutex<Vec<Secret>>>,
+pub struct SimpleSecretsResolver {
+    known_secrets: RefCell<AHashMap<String, Secret>>,
 }
 
-impl SecretsResolver {
+impl SimpleSecretsResolver {
     /// Instantiate a new SecretsResolver
     ///
     /// # Arguments
@@ -34,57 +77,163 @@ impl SecretsResolver {
     ///
     /// let secrets_resolver = SecretsResolver::new(vec![]);
     /// ```
-    pub fn new(known_secrets: Vec<Secret>) -> Self {
-        SecretsResolver {
-            known_secrets: Arc::new(Mutex::new(known_secrets)),
-        }
+    pub async fn new(known_secrets: &[Secret]) -> Self {
+        let secrets = SimpleSecretsResolver {
+            known_secrets: RefCell::new(AHashMap::new()),
+        };
+
+        secrets.insert_vec(known_secrets).await;
+
+        secrets
+    }
+}
+
+impl SecretsResolver for SimpleSecretsResolver {
+    async fn insert(&self, secret: Secret) {
+        self.insert_vec(&[secret]).await;
     }
 
-    /// Insert a single Secret
-    pub fn insert(&self, secret: Secret) {
-        self.insert_vec(&[secret]);
-    }
-
-    /// Insert multiple Secrets
-    pub fn insert_vec(&self, secrets: &[Secret]) {
-        let mut lock = self.known_secrets.lock().unwrap();
+    async fn insert_vec(&self, secrets: &[Secret]) {
         for secret in secrets {
             debug!("Adding secret ({})", secret.id);
-            lock.push(secret.to_owned());
+            self.known_secrets
+                .borrow_mut()
+                .insert(secret.id.to_owned(), secret.to_owned());
         }
     }
 
-    pub async fn get_secret(&self, secret_id: &str) -> Result<Option<Secret>> {
-        Ok(self
-            .known_secrets
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|s| s.id == secret_id)
-            .cloned())
+    async fn get_secret(&self, secret_id: &str) -> Option<Secret> {
+        self.known_secrets.borrow().get(secret_id).cloned()
     }
 
-    pub async fn find_secrets(&self, secret_ids: &[String]) -> Result<Vec<String>> {
-        Ok(secret_ids
+    async fn find_secrets(&self, secret_ids: &[String]) -> Vec<String> {
+        secret_ids
             .iter()
-            .filter(|sid| {
-                self.known_secrets
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|s| s.id == sid.to_string())
-            })
+            .filter(|sid| self.known_secrets.borrow().contains_key(sid.as_str()))
             .cloned()
-            .collect())
+            .collect()
     }
 
-    /// Returns the number of known secrets
-    pub fn len(&self) -> usize {
-        self.known_secrets.lock().unwrap().len()
+    async fn remove_secret(&self, secret_id: &str) -> Option<Secret> {
+        self.known_secrets.borrow_mut().remove(secret_id)
     }
 
-    /// Returns true if there are no known secrets
-    pub fn is_empty(&self) -> bool {
-        self.known_secrets.lock().unwrap().is_empty()
+    async fn len(&self) -> usize {
+        self.known_secrets.borrow().len()
+    }
+
+    async fn is_empty(&self) -> bool {
+        self.known_secrets.borrow().is_empty()
+    }
+}
+
+// *****************************************************************************************************
+// *****************************************************************************************************
+// *****************************************************************************************************
+
+/// Multithreaded Affinidi Secrets Resolver
+/// Operates as a common task, using channels to communicate without locks
+#[derive(Clone)]
+pub struct ThreadedSecretsResolver {
+    tx: mpsc::Sender<SecretTaskCommand>,
+}
+
+impl ThreadedSecretsResolver {
+    pub async fn new(
+        secrets_task_tx: Option<mpsc::Sender<SecretTaskCommand>>,
+    ) -> (Self, Option<JoinHandle<()>>) {
+        if let Some(tx) = secrets_task_tx {
+            (ThreadedSecretsResolver { tx }, None)
+        } else {
+            let (task, tx) = SecretsTask::new();
+            (ThreadedSecretsResolver { tx }, Some(task.start().await))
+        }
+    }
+
+    /// Stops the Secrets Task
+    pub async fn stop(&self) {
+        let _ = self.tx.send(SecretTaskCommand::Terminate).await;
+    }
+}
+
+impl Drop for ThreadedSecretsResolver {
+    fn drop(&mut self) {
+        let tx = self.tx.clone();
+        tokio::task::spawn(async move {
+            let _ = tx.send(SecretTaskCommand::Terminate).await;
+        });
+    }
+}
+
+impl SecretsResolver for ThreadedSecretsResolver {
+    async fn insert(&self, secret: Secret) {
+        self.insert_vec(&[secret]).await;
+    }
+
+    async fn insert_vec(&self, secrets: &[Secret]) {
+        for secret in secrets {
+            debug!("Adding secret ({})", secret.id);
+            let _ = self
+                .tx
+                .send(SecretTaskCommand::AddSecret {
+                    secret: secret.to_owned(),
+                })
+                .await;
+        }
+    }
+
+    async fn get_secret(&self, secret_id: &str) -> Option<Secret> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .tx
+            .send(SecretTaskCommand::GetSecret {
+                key_id: secret_id.to_string(),
+                tx,
+            })
+            .await;
+
+        rx.await.unwrap_or(None)
+    }
+
+    async fn find_secrets(&self, secret_ids: &[String]) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        let _ = self
+            .tx
+            .send(SecretTaskCommand::FindSecrets {
+                keys: secret_ids.to_vec(),
+                tx,
+            })
+            .await;
+
+        rx.await.unwrap_or(vec![])
+    }
+
+    /// This implementation will always return None!
+    async fn remove_secret(&self, secret_id: &str) -> Option<Secret> {
+        let _ = self
+            .tx
+            .send(SecretTaskCommand::RemoveSecret {
+                key_id: secret_id.to_string(),
+            })
+            .await;
+
+        None
+    }
+
+    async fn len(&self) -> usize {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.tx.send(SecretTaskCommand::SecretsStored { tx }).await;
+
+        rx.await.unwrap_or(0)
+    }
+
+    async fn is_empty(&self) -> bool {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.tx.send(SecretTaskCommand::SecretsStored { tx }).await;
+
+        match rx.await {
+            Ok(length) => length == 0,
+            Err(_) => true,
+        }
     }
 }
