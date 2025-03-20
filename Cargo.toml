@@ -18,8 +18,8 @@ rust-version = "1.85.0"
 [workspace.dependencies]
 # Local Crates
 affinidi-tdk = { version = "0.1.1", path = "./crates/affinidi-tdk" }
-affinidi-tdk-common = { version = "0.1.0" }
-affinidi-secrets-resolver = { version = "0.1.0" }
+affinidi-tdk-common = { version = "0.1.0", path = "./crates/affinidi-tdk-common" }
+affinidi-secrets-resolver = { version = "0.1.0", path = "./crates/affinidi-secrets-resolver" }
 affinidi-did-authentication = { version = "0.1.1", path = "./crates/affinidi-did-authentication" }
 affinidi-meeting-place = { version = "0.1.1", path = "./crates/affinidi-meeting-place" }
 

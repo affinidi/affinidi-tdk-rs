@@ -17,9 +17,9 @@ default = ["messaging"]
 messaging = []
 
 [dependencies]
-affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
 affinidi-did-authentication.workspace = true
+affinidi-secrets-resolver = { version = "0.1.0" }
 ahash.workspace = true
 did-peer.workspace = true
 moka.workspace = true
