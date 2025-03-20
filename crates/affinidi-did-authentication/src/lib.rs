@@ -335,37 +335,39 @@ impl DIDAuthentication {
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
 
-            let (auth_msg, _) = auth_response
-                .pack_encrypted(
-                    endpoint_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    did_resolver,
-                    secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
-                .await?;
+            // TODO: uncomment me
+            // let (auth_msg, _) = auth_response
+            //     .pack_encrypted(
+            //         endpoint_did,
+            //         Some(profile_did),
+            //         Some(profile_did),
+            //         did_resolver,
+            //         secrets_resolver,
+            //         &PackEncryptedOptions::default(),
+            //     )
+            //     .await?;
 
-            debug!("Successfully packed auth message\n{:#?}", auth_msg);
+            // debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
-            let step2_body = if let DidChallenge::Complex(_) = step1_response {
-                auth_msg
-            } else {
-                json!({"challenge_response":
-                    BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)
-                })
-                .to_string()
-            };
+            // let step2_body = if let DidChallenge::Complex(_) = step1_response {
+            //     auth_msg
+            // } else {
+            //     json!({"challenge_response":
+            //         BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)
+            //     })
+            //     .to_string()
+            // };
 
-            let step2_response =
-                _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
+            // let step2_response =
+            //     _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
 
-            debug!("Tokens received:\n{:#?}", step2_response);
+            // debug!("Tokens received:\n{:#?}", step2_response);
 
-            debug!("Successfully authenticated");
+            // debug!("Successfully authenticated");
 
-            self.authenticated = true;
-            self.tokens = Some(step2_response.tokens()?);
+            // self.authenticated = true;
+            // self.tokens = Some(step2_response.tokens()?);
+            // TODO: uncomment me
             Ok(())
         }
         .instrument(_span)
@@ -438,23 +440,26 @@ impl DIDAuthentication {
         .expires_time(now + 60)
         .finalize();
 
-        match refresh_message
-            .pack_encrypted(
-                endpoint_did,
-                Some(profile_did),
-                Some(profile_did),
-                did_resolver,
-                secrets_resolver,
-                &PackEncryptedOptions::default(),
-            )
-            .await
-        {
-            Ok((refresh_msg, _)) => Ok(refresh_msg),
-            Err(err) => Err(DIDAuthError::Authentication(format!(
-                "Couldn't pack authentication refresh message: {:?}",
-                err
-            ))),
-        }
+        // TODO: uncomment me
+        // match refresh_message
+        //     .pack_encrypted(
+        //         endpoint_did,
+        //         Some(profile_did),
+        //         Some(profile_did),
+        //         did_resolver,
+        //         secrets_resolver,
+        //         &PackEncryptedOptions::default(),
+        //     )
+        //     .await
+        // {
+        //     Ok((refresh_msg, _)) => Ok(refresh_msg),
+        //     Err(err) => Err(DIDAuthError::Authentication(format!(
+        //         "Couldn't pack authentication refresh message: {:?}",
+        //         err
+        //     ))),
+        // }
+        Ok("".to_string())
+        // TODO: uncomment me
     }
 
     /// Refresh the access tokens as required
