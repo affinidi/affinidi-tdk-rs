@@ -75,11 +75,13 @@ impl SimpleSecretsResolver {
     /// # Returns
     /// A new SecretsResolver
     ///
-    /// ```
-    /// use affinidi_secrets_resolver::SecretsResolver;
-    ///
-    /// let secrets_resolver = SecretsResolver::new(vec![]);
-    /// ```
+    // TODO: uncomment me
+    // /// ```
+    // /// use affinidi_secrets_resolver::SecretsResolver;
+    // ///
+    // /// let secrets_resolver = SecretsResolver::new(vec![]);
+    // /// ```
+    // TODO: uncomment me
     pub async fn new(known_secrets: &[Secret]) -> Self {
         let secrets = SimpleSecretsResolver {
             known_secrets: RefCell::new(AHashMap::new()),
