@@ -2,7 +2,7 @@
  * Common modules used across Affinidi TDK and services
  */
 
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use config::TDKConfig;
 use environments::TDKEnvironment;
@@ -20,7 +20,10 @@ pub mod tasks;
 pub use affinidi_secrets_resolver as secrets_resolver;
 use tasks::authentication::AuthenticationCache;
 
-/// Private SharedState struct for the TDK to use internally
+/// Common SharedState struct for Affinidi TDK Crates to use internally
+/// Can be used on it's own as bootstrap into individual crates without using TDK directly
+/// This shared state should only contain what is absolutely necessary for the crate to function
+#[derive(Clone)]
 pub struct TDKSharedState {
     pub config: TDKConfig,
     pub did_resolver: DIDCacheClient,
@@ -32,6 +35,9 @@ pub struct TDKSharedState {
 
 /// Creates a reusable HTTP/HTTPS Client that can be used
 pub fn create_http_client() -> Client {
+    // Set a process wide default crypto provider.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let tls_config = ClientConfig::with_platform_verifier();
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
@@ -42,4 +48,29 @@ pub fn create_http_client() -> Client {
         ))
         .build()
         .unwrap()
+}
+
+impl TDKSharedState {
+    /// default basic setup for TDKSharedState
+    /// For production code you should be using the TDKConfig Builder to create a custom setup
+    pub async fn default() -> Self {
+        let config = TDKConfig::builder().build().unwrap();
+        let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let (secrets_resolver, _) = ThreadedSecretsResolver::new(None).await;
+        let client = create_http_client();
+        let environment = TDKEnvironment::default();
+        let (authentication, _) =
+            AuthenticationCache::new(1_000, &did_resolver, secrets_resolver.clone(), &client);
+
+        TDKSharedState {
+            config,
+            did_resolver,
+            secrets_resolver,
+            client,
+            environment,
+            authentication,
+        }
+    }
 }

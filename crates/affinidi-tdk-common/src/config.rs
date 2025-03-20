@@ -9,6 +9,7 @@ use crate::errors::TDKError;
 
 const DEFAULT_ENVIRONMENT_PATH: &str = "environment.json";
 
+#[derive(Clone)]
 pub struct TDKConfig {
     pub did_resolver: Option<DIDCacheClient>,
     pub did_resolver_config: Option<DIDCacheConfig>,
@@ -16,6 +17,8 @@ pub struct TDKConfig {
     pub environment_path: String,
     pub load_environment: bool,
     pub environment_name: String,
+    pub authentication_cache_limit: usize,
+    pub use_atm: bool,
 }
 
 impl TDKConfig {
@@ -62,6 +65,16 @@ pub struct TDKConfigBuilder {
     /// Default environment name to load
     /// Default: default
     environment_name: Option<String>,
+
+    /// Limit for the authentication cache
+    /// Default: 1000
+    authentication_cache_limit: usize,
+
+    #[cfg(feature = "messaging")]
+    /// Use Affinidi Trusted Messaging
+    /// Default: true
+    /// NOTE: You can specify an externally configured ATM instance when instantiating TDK which will override this
+    use_atm: bool,
 }
 
 impl Default for TDKConfigBuilder {
@@ -73,6 +86,9 @@ impl Default for TDKConfigBuilder {
             environment_path: None,
             load_environment: true,
             environment_name: None,
+            authentication_cache_limit: 1_000,
+            #[cfg(feature = "messaging")]
+            use_atm: true,
         }
     }
 }
@@ -94,6 +110,9 @@ impl TDKConfigBuilder {
                 .unwrap_or(DEFAULT_ENVIRONMENT_PATH.into()),
             load_environment: self.load_environment,
             environment_name: self.environment_name.unwrap_or("default".into()),
+            authentication_cache_limit: self.authentication_cache_limit,
+            #[cfg(feature = "messaging")]
+            use_atm: self.use_atm,
         })
     }
 
@@ -169,6 +188,37 @@ impl TDKConfigBuilder {
     /// ```
     pub fn with_environment_name(mut self, environment_name: String) -> Self {
         self.environment_name = Some(environment_name);
+        self
+    }
+
+    /// How many Authentication sets should we cache?
+    /// Defaults: 1_000
+    /// Example:
+    /// ```
+    /// use affinidi_tdk::config::TDKConfig;
+    ///
+    /// let tdk_config = TDKConfig::builder().with_authentication_cache_limit(10_000).build();
+    ///
+    /// let tdk = TDK::new(tdk_config);
+    /// ```
+    pub fn with_authentication_cache_limit(mut self, authentication_cache_limit: usize) -> Self {
+        self.authentication_cache_limit = authentication_cache_limit;
+        self
+    }
+
+    #[cfg(feature = "messaging")]
+    /// How many Authentication sets should we cache?
+    /// Defaults: true
+    /// Example:
+    /// ```
+    /// use affinidi_tdk::config::TDKConfig;
+    ///
+    /// let tdk_config = TDKConfig::builder().with_use_atm(false).build();
+    ///
+    /// let tdk = TDK::new(tdk_config);
+    /// ```
+    pub fn with_use_atm(mut self, use_atm: bool) -> Self {
+        self.use_atm = use_atm;
         self
     }
 }

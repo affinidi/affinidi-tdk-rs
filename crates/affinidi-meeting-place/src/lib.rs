@@ -6,6 +6,7 @@ use affinidi_did_authentication::AuthorizationTokens;
 use tracing::debug;
 
 /// Affinidi Meeting Place SDK
+#[derive(Clone)]
 pub struct MeetingPlace {
     /// The Meeting Place DID
     pub(crate) mp_did: String,

@@ -7,12 +7,13 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
+use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
-use affinidi_tdk_common::{environments::TDKEnvironments, errors::Result};
+use affinidi_tdk_common::{
+    TDKSharedState, create_http_client, environments::TDKEnvironments, errors::Result,
+    tasks::authentication::AuthenticationCache,
+};
 use common::{config::TDKConfig, environments::TDKEnvironment};
-use reqwest::Client;
-use rustls::ClientConfig;
-use rustls_platform_verifier::ConfigVerifierExt;
 use std::sync::Arc;
 
 pub mod dids;
@@ -29,18 +30,11 @@ pub use affinidi_tdk_common as common;
 /// TDK instance that can be used to interact with Affinidi services
 #[derive(Clone)]
 pub struct TDK {
-    pub(crate) inner: Arc<SharedState>,
-}
-
-/// Private SharedState struct for the TDK to use internally
-pub(crate) struct SharedState {
-    pub(crate) config: TDKConfig,
-    pub(crate) did_resolver: DIDCacheClient,
-    pub(crate) secrets_resolver: ThreadedSecretsResolver,
-    pub(crate) client: Client,
+    pub(crate) inner: Arc<TDKSharedState>,
     #[cfg(feature = "messaging")]
-    pub(crate) atm: Option<ATM>,
-    pub(crate) environment: TDKEnvironment,
+    pub atm: Option<ATM>,
+    #[cfg(feature = "meeting-place")]
+    pub meeting_place: Option<meeting_place::MeetingPlace>,
 }
 
 /// Affinidi Trusted Development Kit (TDK)
@@ -59,17 +53,11 @@ pub(crate) struct SharedState {
 ///
 /// ```
 impl TDK {
-    pub async fn new(config: TDKConfig) -> Result<Self> {
-        let tls_config = ClientConfig::with_platform_verifier();
-        let client = reqwest::ClientBuilder::new()
-            .use_rustls_tls()
-            .use_preconfigured_tls(tls_config.clone())
-            .user_agent(format!(
-                "Affinidi Trust Development Kit {}",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .build()
-            .unwrap();
+    pub async fn new(
+        config: TDKConfig,
+        #[cfg(feature = "messaging")] atm: Option<ATM>,
+    ) -> Result<Self> {
+        let client = create_http_client();
 
         // Instantiate the DID resolver for TDK
         let did_resolver = if let Some(did_resolver) = &config.did_resolver {
@@ -87,29 +75,13 @@ impl TDK {
             ThreadedSecretsResolver::new(None).await.0
         };
 
-        /*
-        #[cfg(feature = "messaging")]
-        // Instantiate Affinidi Messaging
-        let atm = if config.use_atm {
-            if let Some(atm) = &config.atm {
-                Some(atm.to_owned())
-            } else if let Some(atm_config) = &config.atm_config {
-                Some(ATM::new(atm_config.to_owned()).await?)
-            } else {
-                // Use the same DID Resolver for ATM
-                Some(
-                    ATM::new(
-                        ATMConfigBuilder::default()
-                            .with_external_did_resolver(&did_resolver)
-                            .build()?,
-                    )
-                    .await?,
-                )
-            }
-        } else {
-            None
-        };
-        */
+        // Instantiate the authentication cache
+        let (authentication, _) = AuthenticationCache::new(
+            config.authentication_cache_limit as u64,
+            &did_resolver,
+            secrets_resolver.clone(),
+            &client,
+        );
 
         // Load Environment
         // Adds secrets to the secrets resolver
@@ -132,18 +104,40 @@ impl TDK {
             TDKEnvironment::default()
         };
 
-        let shared_state = SharedState {
+        // Create the shared state, then we can use this inside other Affinidi Crates
+        let shared_state = TDKSharedState {
             config,
             did_resolver,
             secrets_resolver,
             client,
-            #[cfg(feature = "messaging")]
-            atm: None,
             environment,
+            authentication,
+        };
+
+        #[cfg(feature = "messaging")]
+        // Instantiate Affinidi Messaging
+        let atm = if shared_state.config.use_atm {
+            if let Some(atm) = atm {
+                Some(atm.to_owned())
+            } else {
+                // Use the same DID Resolver for ATM
+                Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
+            }
+        } else {
+            None
         };
 
         Ok(TDK {
             inner: Arc::new(shared_state),
+            #[cfg(feature = "messaging")]
+            atm,
+            #[cfg(feature = "meeting-place")]
+            meeting_place: None,
         })
+    }
+
+    /// Get the shared state of the TDK
+    pub fn get_shared_state(&self) -> Arc<TDKSharedState> {
+        self.inner.clone()
     }
 }

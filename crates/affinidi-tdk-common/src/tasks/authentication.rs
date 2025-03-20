@@ -99,7 +99,7 @@ impl AuthenticationCache {
         secrets_resolver: ThreadedSecretsResolver,
         client: &Client,
     ) -> (Self, mpsc::Sender<AuthenticationCommand>) {
-        let (tx, rx) = mpsc::channel(10);
+        let (tx, rx) = mpsc::channel(32);
 
         (
             AuthenticationCache {

@@ -49,7 +49,7 @@ pub enum SecretTaskCommand {
 impl SecretsTask {
     /// Create a new SecretsTask
     pub fn new() -> (Self, mpsc::Sender<SecretTaskCommand>) {
-        let (tx, rx) = mpsc::channel(10);
+        let (tx, rx) = mpsc::channel(32);
 
         (SecretsTask { channel_rx: rx }, tx)
     }

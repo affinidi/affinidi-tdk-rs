@@ -12,6 +12,10 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["messaging"]
+messaging = []
+
 [dependencies]
 affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
