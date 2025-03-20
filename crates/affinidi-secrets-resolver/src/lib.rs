@@ -67,21 +67,19 @@ pub struct SimpleSecretsResolver {
 }
 
 impl SimpleSecretsResolver {
-    /// Instantiate a new SecretsResolver
+    /// Instantiate a new SimpleSecretsResolver
     ///
     /// # Arguments
     /// * `known_secrets` - A list of known secrets (can be empty)
     ///
     /// # Returns
-    /// A new SecretsResolver
+    /// A new SimpleSecretsResolver
     ///
-    // TODO: uncomment me
-    // /// ```
-    // /// use affinidi_secrets_resolver::SecretsResolver;
-    // ///
-    // /// let secrets_resolver = SecretsResolver::new(vec![]);
-    // /// ```
-    // TODO: uncomment me
+    /// ```
+    /// use affinidi_secrets_resolver::SimpleSecretsResolver;
+    ///
+    /// let secrets_resolver = SimpleSecretsResolver::new(&[]);
+    /// ```
     pub async fn new(known_secrets: &[Secret]) -> Self {
         let secrets = SimpleSecretsResolver {
             known_secrets: RefCell::new(AHashMap::new()),

@@ -15,12 +15,9 @@
  */
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-// TODO: uncomment me
-// use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
 use affinidi_secrets_resolver::SecretsResolver;
-// TODO: uncomment me
-// use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
 use errors::{DIDAuthError, Result};
 use reqwest::Client;
@@ -84,9 +81,7 @@ enum TokensType {
 }
 
 impl TokensType {
-    // TODO: uncomment me
-    // pub fn tokens(&self) -> Result<AuthorizationTokens> {
-    pub fn _tokens(&self) -> Result<AuthorizationTokens> {
+    pub fn tokens(&self) -> Result<AuthorizationTokens> {
         match self {
             TokensType::AffinidiMessaging(c) => Ok(c.data.clone()),
             TokensType::MeetingPlace(m) => {
@@ -340,39 +335,37 @@ impl DIDAuthentication {
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
 
-            // TODO: uncomment me
-            // let (auth_msg, _) = auth_response
-            //     .pack_encrypted(
-            //         endpoint_did,
-            //         Some(profile_did),
-            //         Some(profile_did),
-            //         did_resolver,
-            //         secrets_resolver,
-            //         &PackEncryptedOptions::default(),
-            //     )
-            //     .await?;
+            let (auth_msg, _) = auth_response
+                .pack_encrypted(
+                    endpoint_did,
+                    Some(profile_did),
+                    Some(profile_did),
+                    did_resolver,
+                    secrets_resolver,
+                    &PackEncryptedOptions::default(),
+                )
+                .await?;
 
-            // debug!("Successfully packed auth message\n{:#?}", auth_msg);
+            debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
-            // let step2_body = if let DidChallenge::Complex(_) = step1_response {
-            //     auth_msg
-            // } else {
-            //     json!({"challenge_response":
-            //         BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)
-            //     })
-            //     .to_string()
-            // };
+            let step2_body = if let DidChallenge::Complex(_) = step1_response {
+                auth_msg
+            } else {
+                json!({"challenge_response":
+                    BASE64_URL_SAFE_NO_PAD.encode(&auth_msg)
+                })
+                .to_string()
+            };
 
-            // let step2_response =
-            //     _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
+            let step2_response =
+                _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
 
-            // debug!("Tokens received:\n{:#?}", step2_response);
+            debug!("Tokens received:\n{:#?}", step2_response);
 
-            // debug!("Successfully authenticated");
+            debug!("Successfully authenticated");
 
-            // self.authenticated = true;
-            // self.tokens = Some(step2_response.tokens()?);
-            // TODO: uncomment me
+            self.authenticated = true;
+            self.tokens = Some(step2_response.tokens()?);
             Ok(())
         }
         .instrument(_span)
@@ -412,9 +405,7 @@ impl DIDAuthentication {
         profile_did: &str,
         endpoint_did: &str,
         did_resolver: &DIDCacheClient,
-        // TODO: uncomment me
-        // secrets_resolver: &S,
-        _secrets_resolver: &S,
+        secrets_resolver: &S,
     ) -> Result<String>
     where
         S: SecretsResolver,
@@ -436,9 +427,7 @@ impl DIDAuthentication {
             .unwrap()
             .as_secs();
 
-        // TODO: uncomment me
-        // let refresh_message = Message::build(
-        let _refresh_message = Message::build(
+        let refresh_message = Message::build(
             Uuid::new_v4().into(),
             [&endpoint, "/refresh"].concat(),
             json!({"refresh_token": refresh_token}),
@@ -449,26 +438,23 @@ impl DIDAuthentication {
         .expires_time(now + 60)
         .finalize();
 
-        // TODO: uncomment me
-        // match refresh_message
-        //     .pack_encrypted(
-        //         endpoint_did,
-        //         Some(profile_did),
-        //         Some(profile_did),
-        //         did_resolver,
-        //         secrets_resolver,
-        //         &PackEncryptedOptions::default(),
-        //     )
-        //     .await
-        // {
-        //     Ok((refresh_msg, _)) => Ok(refresh_msg),
-        //     Err(err) => Err(DIDAuthError::Authentication(format!(
-        //         "Couldn't pack authentication refresh message: {:?}",
-        //         err
-        //     ))),
-        // }
-        Ok("".to_string())
-        // TODO: uncomment me
+        match refresh_message
+            .pack_encrypted(
+                endpoint_did,
+                Some(profile_did),
+                Some(profile_did),
+                did_resolver,
+                secrets_resolver,
+                &PackEncryptedOptions::default(),
+            )
+            .await
+        {
+            Ok((refresh_msg, _)) => Ok(refresh_msg),
+            Err(err) => Err(DIDAuthError::Authentication(format!(
+                "Couldn't pack authentication refresh message: {:?}",
+                err
+            ))),
+        }
     }
 
     /// Refresh the access tokens as required
