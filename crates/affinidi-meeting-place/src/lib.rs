@@ -9,10 +9,10 @@ use tracing::debug;
 #[derive(Clone)]
 pub struct MeetingPlace {
     /// The Meeting Place DID
-    pub(crate) mp_did: String,
+    pub(crate) _mp_did: String,
 
     /// The Authorization Tokens for Meeting Place
-    auth_tokens: Option<AuthorizationTokens>,
+    _auth_tokens: Option<AuthorizationTokens>,
 }
 
 impl MeetingPlace {
@@ -25,8 +25,8 @@ impl MeetingPlace {
             mp_did
         );
         Self {
-            mp_did,
-            auth_tokens: None,
+            _mp_did: mp_did,
+            _auth_tokens: None,
         }
     }
 

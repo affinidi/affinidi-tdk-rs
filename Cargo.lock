@@ -98,7 +98,7 @@ version = "0.1.1"
 dependencies = [
  "affinidi-did-resolver-cache-sdk 0.5.1",
  "affinidi-messaging-didcomm 0.10.0",
- "affinidi-secrets-resolver 0.1.1",
+ "affinidi-secrets-resolver 0.1.0",
  "base64 0.22.1",
  "chrono",
  "reqwest 0.12.15",
@@ -298,8 +298,8 @@ dependencies = [
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm 0.10.0",
  "affinidi-messaging-sdk",
- "affinidi-secrets-resolver 0.1.1",
- "affinidi-tdk-common 0.1.1",
+ "affinidi-secrets-resolver 0.1.0",
+ "affinidi-tdk-common 0.1.0",
  "clap",
  "did-peer 0.5.1",
  "reqwest 0.12.15",
@@ -340,7 +340,7 @@ version = "0.1.1"
 dependencies = [
  "affinidi-did-authentication 0.1.1",
  "affinidi-did-resolver-cache-sdk 0.5.1",
- "affinidi-secrets-resolver 0.1.1",
+ "affinidi-secrets-resolver 0.1.0",
  "ahash 0.8.11",
  "did-peer 0.5.1",
  "moka",
