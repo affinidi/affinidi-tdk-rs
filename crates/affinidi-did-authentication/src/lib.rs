@@ -149,7 +149,7 @@ impl AuthenticationType {
 
 /// The DID Authentication struct
 #[derive(Clone, Debug)]
-pub struct DIDAuthentication<'a> {
+pub struct DIDAuthentication {
     /// There are two different DID authentication methods that need to be supported for now
     /// Set to true if
     type_: AuthenticationType,
@@ -159,35 +159,21 @@ pub struct DIDAuthentication<'a> {
 
     /// true if authenticated, false otherwise
     pub authenticated: bool,
-
-    /// The endpoint DID to authenticate with
-    endpoint_did: &'a str,
-
-    /// Profile DID to authenticate
-    profile_did: &'a str,
 }
 
-impl Default for DIDAuthentication<'_> {
+impl Default for DIDAuthentication {
     fn default() -> Self {
         Self {
             type_: AuthenticationType::Unknown,
             tokens: None,
             authenticated: false,
-            endpoint_did: "",
-            profile_did: "",
         }
     }
 }
 
-impl<'a> DIDAuthentication<'a> {
-    pub fn new(endpoint: &'a str, profile_did: &'a str) -> Self {
-        Self {
-            type_: AuthenticationType::Unknown,
-            tokens: None,
-            authenticated: false,
-            endpoint_did: endpoint,
-            profile_did,
-        }
+impl DIDAuthentication {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Find the [serviceEndpoint](https://www.w3.org/TR/did-1.0/#services) with type `Authentication` from a DID Document
@@ -218,6 +204,11 @@ impl<'a> DIDAuthentication<'a> {
     /// If already authenticated, short-circuits and returns immediately
     ///
     /// # Arguments
+    /// * `profile_did` - The DID of the profile to authenticate
+    /// * `endpoint_did` - The DID of the service endpoint to authenticate against
+    /// * `did_resolver` - The DID Resolver Cache Client
+    /// * `secrets_resolver` - The Secrets Resolver
+    /// * `client` - The HTTP Client to use for requests
     /// * `retry_limit` - The number of times to retry authentication (-1 = unlimited)
     ///
     /// # Returns
@@ -225,6 +216,8 @@ impl<'a> DIDAuthentication<'a> {
     /// AuthorizationTokens are contained in self
     pub async fn authenticate<S>(
         &mut self,
+        profile_did: &str,
+        endpoint_did: &str,
         did_resolver: &DIDCacheClient,
         secrets_resolver: &S,
         client: &Client,
@@ -237,7 +230,13 @@ impl<'a> DIDAuthentication<'a> {
         let mut timer = 1;
         loop {
             match self
-                ._authenticate(did_resolver, secrets_resolver, client)
+                ._authenticate(
+                    profile_did,
+                    endpoint_did,
+                    did_resolver,
+                    secrets_resolver,
+                    client,
+                )
                 .await
             {
                 Ok(_) => {
@@ -256,7 +255,7 @@ impl<'a> DIDAuthentication<'a> {
 
                     error!(
                         "DID ({}): Attempt #{}. Error authenticating: {:?} :: Sleeping for ({}) seconds",
-                        self.profile_did, retry_count, err, timer
+                        profile_did, retry_count, err, timer
                     );
                     tokio::time::sleep(std::time::Duration::from_secs(timer)).await;
                     if timer < 10 {
@@ -269,6 +268,8 @@ impl<'a> DIDAuthentication<'a> {
 
     async fn _authenticate<S>(
         &mut self,
+        profile_did: &str,
+        endpoint_did: &str,
         did_resolver: &DIDCacheClient,
         secrets_resolver: &S,
         client: &Client,
@@ -281,7 +282,13 @@ impl<'a> DIDAuthentication<'a> {
             if self.authenticated && self.type_.is_affinidi_messaging() {
                 // Check if we need to refresh the token
                 match self
-                    ._refresh_authentication(did_resolver, secrets_resolver, client)
+                    ._refresh_authentication(
+                        profile_did,
+                        endpoint_did,
+                        did_resolver,
+                        secrets_resolver,
+                        client,
+                    )
                     .await
                 {
                     Ok(_) => {
@@ -294,7 +301,9 @@ impl<'a> DIDAuthentication<'a> {
                 }
             }
 
-            let endpoint = self._get_endpoint_address(did_resolver).await?;
+            let endpoint = self
+                ._get_endpoint_address(endpoint_did, did_resolver)
+                .await?;
 
             debug!("Retrieving authentication challenge...");
 
@@ -302,7 +311,7 @@ impl<'a> DIDAuthentication<'a> {
             let step1_response = _http_post::<DidChallenge>(
                 client,
                 &[&endpoint, "/challenge"].concat(),
-                &format!("{{\"did\": \"{}\"}}", self.profile_did).to_string(),
+                &format!("{{\"did\": \"{}\"}}", profile_did).to_string(),
             )
             .await?;
 
@@ -319,7 +328,8 @@ impl<'a> DIDAuthentication<'a> {
 
             // Step 2. Sign the challenge
 
-            let auth_response = self._create_auth_challenge_response(&step1_response)?;
+            let auth_response =
+                self._create_auth_challenge_response(profile_did, endpoint_did, &step1_response)?;
             debug!(
                 "Auth response message:\n{}",
                 serde_json::to_string_pretty(&auth_response).unwrap()
@@ -327,9 +337,9 @@ impl<'a> DIDAuthentication<'a> {
 
             let (auth_msg, _) = auth_response
                 .pack_encrypted(
-                    self.endpoint_did,
-                    Some(self.profile_did),
-                    Some(self.profile_did),
+                    endpoint_did,
+                    Some(profile_did),
+                    Some(profile_did),
                     did_resolver,
                     secrets_resolver,
                     &PackEncryptedOptions::default(),
@@ -366,9 +376,13 @@ impl<'a> DIDAuthentication<'a> {
     /// Returns the endpoint if it's a URL, or resolves the DID to get the endpoint
     /// # Returns
     /// The endpoint address or a AuthenticationAbort error (hard abort)
-    async fn _get_endpoint_address(&self, did_resolver: &DIDCacheClient) -> Result<String> {
-        if self.endpoint_did.starts_with("did:") {
-            let doc = did_resolver.resolve(self.endpoint_did).await?;
+    async fn _get_endpoint_address(
+        &self,
+        endpoint_did: &str,
+        did_resolver: &DIDCacheClient,
+    ) -> Result<String> {
+        if endpoint_did.starts_with("did:") {
+            let doc = did_resolver.resolve(endpoint_did).await?;
             if let Some(endpoint) = DIDAuthentication::find_service_endpoint(&doc.doc) {
                 Ok(endpoint)
             } else {
@@ -377,7 +391,7 @@ impl<'a> DIDAuthentication<'a> {
                 ))
             }
         } else {
-            Ok(self.endpoint_did.to_string())
+            Ok(endpoint_did.to_string())
         }
     }
 
@@ -388,13 +402,17 @@ impl<'a> DIDAuthentication<'a> {
     /// A packed DIDComm message to be sent
     async fn _create_refresh_request<S>(
         &self,
+        profile_did: &str,
+        endpoint_did: &str,
         did_resolver: &DIDCacheClient,
         secrets_resolver: &S,
     ) -> Result<String>
     where
         S: SecretsResolver,
     {
-        let endpoint = self._get_endpoint_address(did_resolver).await?;
+        let endpoint = self
+            ._get_endpoint_address(endpoint_did, did_resolver)
+            .await?;
 
         let refresh_token = if let Some(tokens) = &self.tokens {
             &tokens.refresh_token
@@ -414,17 +432,17 @@ impl<'a> DIDAuthentication<'a> {
             [&endpoint, "/refresh"].concat(),
             json!({"refresh_token": refresh_token}),
         )
-        .to(self.endpoint_did.to_string())
-        .from(self.profile_did.to_owned())
+        .to(endpoint_did.to_string())
+        .from(profile_did.to_owned())
         .created_time(now)
         .expires_time(now + 60)
         .finalize();
 
         match refresh_message
             .pack_encrypted(
-                self.endpoint_did,
-                Some(self.profile_did),
-                Some(self.profile_did),
+                endpoint_did,
+                Some(profile_did),
+                Some(profile_did),
                 did_resolver,
                 secrets_resolver,
                 &PackEncryptedOptions::default(),
@@ -442,6 +460,8 @@ impl<'a> DIDAuthentication<'a> {
     /// Refresh the access tokens as required
     async fn _refresh_authentication<S>(
         &mut self,
+        profile_did: &str,
+        endpoint_did: &str,
         did_resolver: &DIDCacheClient,
         secrets_resolver: &S,
         client: &Client,
@@ -472,11 +492,16 @@ impl<'a> DIDAuthentication<'a> {
                 // Refresh the token
 
                 let refresh_msg = self
-                    ._create_refresh_request(did_resolver, secrets_resolver)
+                    ._create_refresh_request(
+                        profile_did,
+                        endpoint_did,
+                        did_resolver,
+                        secrets_resolver,
+                    )
                     .await?;
                 let new_tokens = _http_post::<AuthRefreshResponse>(
                     client,
-                    &[self.endpoint_did, "/refresh"].concat(),
+                    &[endpoint_did, "/refresh"].concat(),
                     &refresh_msg,
                 )
                 .await?;
@@ -506,7 +531,12 @@ impl<'a> DIDAuthentication<'a> {
     ///
     /// Notes:
     /// - This message will expire after 60 seconds
-    fn _create_auth_challenge_response(&self, body: &DidChallenge) -> Result<Message> {
+    fn _create_auth_challenge_response(
+        &self,
+        profile_did: &str,
+        endpoint_did: &str,
+        body: &DidChallenge,
+    ) -> Result<Message> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -523,8 +553,8 @@ impl<'a> DIDAuthentication<'a> {
             "https://affinidi.com/atm/1.0/authenticate".to_owned(),
             body,
         )
-        .to(self.endpoint_did.to_string())
-        .from(self.profile_did.to_owned())
+        .to(endpoint_did.to_string())
+        .from(profile_did.to_owned())
         .created_time(now)
         .expires_time(now + 60)
         .finalize())

@@ -26,13 +26,13 @@ affinidi-meeting-place = { version = "0.1", path = "./crates/affinidi-meeting-pl
 # Affinidi External Crates
 affinidi-messaging-sdk = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-didcomm" }
-affinidi-did-resolver-cache-sdk = { version = "~0.4", features = ["network"] }
+affinidi-did-resolver-cache-sdk = { version = "~0.5", features = ["network"] }
 
 ahash = "0.8"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 chrono = "0.4"
-did-peer = "0.4"
+did-peer = "0.5"
 moka = { version = "0.12", features = ["future"] }
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }

@@ -11,16 +11,19 @@
  *   - ThreadedSecretsResolver
  */
 
-use std::cell::RefCell;
+use std::{cell::RefCell, time::Duration};
 
 use ahash::AHashMap;
 use secrets::Secret;
 use task::{SecretTaskCommand, SecretsTask};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{
+        mpsc::{self, error::TrySendError},
+        oneshot,
+    },
     task::JoinHandle,
 };
-use tracing::debug;
+use tracing::{debug, warn};
 
 pub mod errors;
 pub mod secrets;
@@ -173,67 +176,139 @@ impl SecretsResolver for ThreadedSecretsResolver {
     async fn insert_vec(&self, secrets: &[Secret]) {
         for secret in secrets {
             debug!("Adding secret ({})", secret.id);
-            let _ = self
-                .tx
-                .send(SecretTaskCommand::AddSecret {
-                    secret: secret.to_owned(),
-                })
-                .await;
+            match self.tx.try_send(SecretTaskCommand::AddSecret {
+                secret: secret.to_owned(),
+            }) {
+                Ok(_) => (),
+                Err(TrySendError::Closed(_)) => {
+                    warn!("Secrets Task has been closed");
+                }
+                Err(TrySendError::Full(_)) => {
+                    warn!("Secrets Task channel is full");
+                }
+            }
         }
     }
 
     async fn get_secret(&self, secret_id: &str) -> Option<Secret> {
         let (tx, rx) = oneshot::channel();
-        let _ = self
-            .tx
-            .send(SecretTaskCommand::GetSecret {
-                key_id: secret_id.to_string(),
-                tx,
-            })
-            .await;
+        match self.tx.try_send(SecretTaskCommand::GetSecret {
+            key_id: secret_id.to_string(),
+            tx,
+        }) {
+            Ok(_) => (),
+            Err(TrySendError::Closed(_)) => {
+                warn!("Secrets Task has been closed");
+                return None;
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Secrets Task channel is full");
+                return None;
+            }
+        }
 
-        rx.await.unwrap_or(None)
+        let timeout = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(timeout);
+
+        tokio::select! {
+            _ = &mut timeout => None,
+            rx = rx => rx.unwrap_or(None)
+        }
     }
 
     async fn find_secrets(&self, secret_ids: &[String]) -> Vec<String> {
         let (tx, rx) = oneshot::channel();
-        let _ = self
-            .tx
-            .send(SecretTaskCommand::FindSecrets {
-                keys: secret_ids.to_vec(),
-                tx,
-            })
-            .await;
+        match self.tx.try_send(SecretTaskCommand::FindSecrets {
+            keys: secret_ids.to_vec(),
+            tx,
+        }) {
+            Ok(_) => (),
+            Err(TrySendError::Closed(_)) => {
+                warn!("Secrets Task has been closed");
+                return vec![];
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Secrets Task channel is full");
+                return vec![];
+            }
+        }
 
-        rx.await.unwrap_or(vec![])
+        let timeout = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(timeout);
+
+        tokio::select! {
+            _ = &mut timeout => vec![],
+            rx = rx => rx.unwrap_or(vec![])
+        }
     }
 
     /// This implementation will always return None!
     async fn remove_secret(&self, secret_id: &str) -> Option<Secret> {
-        let _ = self
-            .tx
-            .send(SecretTaskCommand::RemoveSecret {
-                key_id: secret_id.to_string(),
-            })
-            .await;
+        match self.tx.try_send(SecretTaskCommand::RemoveSecret {
+            key_id: secret_id.to_string(),
+        }) {
+            Ok(_) => (),
+            Err(TrySendError::Closed(_)) => {
+                warn!("Secrets Task has been closed");
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Secrets Task channel is full");
+            }
+        }
 
         None
     }
 
     async fn len(&self) -> usize {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(SecretTaskCommand::SecretsStored { tx }).await;
+        match self.tx.try_send(SecretTaskCommand::SecretsStored { tx }) {
+            Ok(_) => (),
+            Err(TrySendError::Closed(_)) => {
+                warn!("Secrets Task has been closed");
+                return 0;
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Secrets Task channel is full");
+                return 0;
+            }
+        }
 
-        rx.await.unwrap_or(0)
+        let timeout = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(timeout);
+
+        tokio::select! {
+            _ = &mut timeout => 0,
+            rx = rx => {
+                rx.unwrap_or(0)
+            }
+        }
     }
 
     async fn is_empty(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(SecretTaskCommand::SecretsStored { tx }).await;
+        match self.tx.try_send(SecretTaskCommand::SecretsStored { tx }) {
+            Ok(_) => (),
+            Err(TrySendError::Closed(_)) => {
+                warn!("Secrets Task has been closed");
+                return true;
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!("Secrets Task channel is full");
+                return true;
+            }
+        }
 
-        match rx.await {
-            Ok(length) => length == 0,
-            Err(_) => true,
+        let timeout = tokio::time::sleep(Duration::from_secs(1));
+        tokio::pin!(timeout);
+
+        tokio::select! {
+            _ = &mut timeout => true,
+            rx = rx => {
+                match rx {
+                    Ok(length) => length == 0,
+                    Err(_) => true,
+                }
+            }
         }
     }
 }

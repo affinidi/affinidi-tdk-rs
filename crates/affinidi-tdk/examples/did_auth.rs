@@ -127,10 +127,12 @@ async fn main() -> Result<()> {
     let client = create_http_client();
 
     // Attempt Authentication
-    let mut did_auth = DIDAuthentication::new(&args.service_did, &profile.did);
+    let mut did_auth = DIDAuthentication::new();
 
     match did_auth
         .authenticate(
+            &profile.did,
+            &args.service_did,
             &did_resolver,
             &secrets_resolver,
             &client,
