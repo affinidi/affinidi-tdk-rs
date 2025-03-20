@@ -15,9 +15,12 @@
  */
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+// TODO: uncomment me
+// use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::Message;
 use affinidi_secrets_resolver::SecretsResolver;
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+// TODO: uncomment me
+// use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
 use errors::{DIDAuthError, Result};
 use reqwest::Client;
@@ -81,7 +84,9 @@ enum TokensType {
 }
 
 impl TokensType {
-    pub fn tokens(&self) -> Result<AuthorizationTokens> {
+    // TODO: uncomment me
+    // pub fn tokens(&self) -> Result<AuthorizationTokens> {
+    pub fn _tokens(&self) -> Result<AuthorizationTokens> {
         match self {
             TokensType::AffinidiMessaging(c) => Ok(c.data.clone()),
             TokensType::MeetingPlace(m) => {
@@ -407,7 +412,9 @@ impl DIDAuthentication {
         profile_did: &str,
         endpoint_did: &str,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &S,
+        // TODO: uncomment me
+        // secrets_resolver: &S,
+        _secrets_resolver: &S,
     ) -> Result<String>
     where
         S: SecretsResolver,
@@ -429,7 +436,9 @@ impl DIDAuthentication {
             .unwrap()
             .as_secs();
 
-        let refresh_message = Message::build(
+        // TODO: uncomment me
+        // let refresh_message = Message::build(
+        let _refresh_message = Message::build(
             Uuid::new_v4().into(),
             [&endpoint, "/refresh"].concat(),
             json!({"refresh_token": refresh_token}),
