@@ -25,11 +25,9 @@ impl TDKConfig {
     /// Returns a builder for `Config`
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
-    // ///
-    // /// let config = TDKConfig::builder().build();
-    // TODO: uncomment me
+    /// use affinidi_tdk::config::TDKConfig;
+    ///
+    /// let config = TDKConfig::builder().build();
     /// ```
     pub fn builder() -> TDKConfigBuilder {
         TDKConfigBuilder::default()
@@ -39,12 +37,10 @@ impl TDKConfig {
 /// Builder for `TDKConfig`.
 /// Example:
 /// ```
-// TODO: uncomment me
-// /// use affinidi_tdk::config::TDKConfig;
+/// use affinidi_tdk::config::TDKConfig;
 ///
 /// // Create a new `TDKConfig` with defaults
-// /// let config = TDKConfig::builder().build();
-// TODO: uncomment me
+/// let config = TDKConfig::builder().build();
 /// ```
 pub struct TDKConfigBuilder {
     /// Affinidi DID Resolver cache client
@@ -123,15 +119,13 @@ impl TDKConfigBuilder {
     /// If you want to provide a DID resolver already setup outside of the TDK
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
-    // /// use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+    /// use affinidi_tdk::config::TDKConfig;
+    /// use affinidi_did_resolver_cache_sdk::DIDCacheClient;
     ///
-    // /// let did_resolver = DIDCacheClient::new()
-    // /// let tdk_config = TDKConfig::builder().with_did_resolver(did_resolver).build();
+    /// let did_resolver = DIDCacheClient::new()
+    /// let tdk_config = TDKConfig::builder().with_did_resolver(did_resolver).build();
     ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_did_resolver(mut self, did_resolver: DIDCacheClient) -> Self {
         self.did_resolver = Some(did_resolver);
@@ -141,15 +135,13 @@ impl TDKConfigBuilder {
     /// If you have a SecretsResolver already setup outside of the TDK
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
-    // /// use affinidi_secrets_resolver::ThreadedSecretsResolver;
-    // ///
-    // /// let secrets_resolver = ThreadedSecretsResolver::new(None);
-    // /// let tdk_config = TDKConfig::builder().with_secrets_resolver(secrets_resolver).build();
-    // ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// use affinidi_tdk::config::TDKConfig;
+    /// use affinidi_secrets_resolver::ThreadedSecretsResolver;
+    ///
+    /// let secrets_resolver = ThreadedSecretsResolver::new(None);
+    /// let tdk_config = TDKConfig::builder().with_secrets_resolver(secrets_resolver).build();
+    ///
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_secrets_resolver(mut self, secrets_resolver: ThreadedSecretsResolver) -> Self {
         self.secrets_resolver = Some(secrets_resolver);
@@ -159,13 +151,11 @@ impl TDKConfigBuilder {
     /// Specify a path to the environment profile file containing profiles
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
-    // ///
-    // /// let tdk_config = TDKConfig::builder().with_environment_path("environment.json".into()).build();
-    // ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// use affinidi_tdk::config::TDKConfig;
+    ///
+    /// let tdk_config = TDKConfig::builder().with_environment_path("environment.json".into()).build();
+    ///
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_environment_path(mut self, environment_path: String) -> Self {
         self.environment_path = Some(environment_path);
@@ -175,13 +165,11 @@ impl TDKConfigBuilder {
     /// Should TDK load an environment on startup?
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
-    // ///
-    // /// let tdk_config = TDKConfig::builder().with_load_environment(false).build();
-    // ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// use affinidi_tdk::config::TDKConfig;
+    ///
+    /// let tdk_config = TDKConfig::builder().with_load_environment(false).build();
+    ///
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_load_environment(mut self, load_environment: bool) -> Self {
         self.load_environment = load_environment;
@@ -192,13 +180,11 @@ impl TDKConfigBuilder {
     /// Defaults: "default"
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
+    /// use affinidi_tdk::config::TDKConfig;
     ///
-    // /// let tdk_config = TDKConfig::builder().with_environment_name("local".into()).build();
+    /// let tdk_config = TDKConfig::builder().with_environment_name("local".into()).build();
     ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_environment_name(mut self, environment_name: String) -> Self {
         self.environment_name = Some(environment_name);
@@ -209,13 +195,11 @@ impl TDKConfigBuilder {
     /// Defaults: 1_000
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
+    /// use affinidi_tdk::config::TDKConfig;
     ///
-    // /// let tdk_config = TDKConfig::builder().with_authentication_cache_limit(10_000).build();
+    /// let tdk_config = TDKConfig::builder().with_authentication_cache_limit(10_000).build();
     ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_authentication_cache_limit(mut self, authentication_cache_limit: usize) -> Self {
         self.authentication_cache_limit = authentication_cache_limit;
@@ -227,13 +211,11 @@ impl TDKConfigBuilder {
     /// Defaults: true
     /// Example:
     /// ```
-    // TODO: uncomment me
-    // /// use affinidi_tdk::config::TDKConfig;
+    /// use affinidi_tdk::config::TDKConfig;
     ///
-    // /// let tdk_config = TDKConfig::builder().with_use_atm(false).build();
+    /// let tdk_config = TDKConfig::builder().with_use_atm(false).build();
     ///
-    // /// let tdk = TDK::new(tdk_config);
-    // TODO: uncomment me
+    /// let tdk = TDK::new(tdk_config);
     /// ```
     pub fn with_use_atm(mut self, use_atm: bool) -> Self {
         self.use_atm = use_atm;

@@ -7,9 +7,7 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
-// TODO: uncomment me
-// use affinidi_messaging_sdk::config::ATMConfigBuilder;
-// TODO: uncomment me
+use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{
     TDKSharedState, create_http_client, environments::TDKEnvironments, errors::Result,
@@ -123,10 +121,7 @@ impl TDK {
                 Some(atm.to_owned())
             } else {
                 // Use the same DID Resolver for ATM
-                // TODO: uncomment me
-                // Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
-                None
-                // TODO: uncomment me
+                Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
             }
         } else {
             None
