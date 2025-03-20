@@ -24,8 +24,8 @@ affinidi-did-authentication = { version = "0.1", path = "./crates/affinidi-did-a
 affinidi-meeting-place = { version = "0.1", path = "./crates/affinidi-meeting-place" }
 
 # Affinidi External Crates
-affinidi-messaging-sdk = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-sdk" }
-affinidi-messaging-didcomm = { version = "0.10", path = "../affinidi-messaging/affinidi-messaging-didcomm" }
+affinidi-messaging-sdk = { version = "0.9.7" }
+affinidi-messaging-didcomm = { version = "0.9.7" }
 affinidi-did-resolver-cache-sdk = { version = "~0.5", features = ["network"] }
 
 ahash = "0.8"
