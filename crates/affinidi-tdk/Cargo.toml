@@ -23,7 +23,7 @@ affinidi-messaging-sdk = { workspace = true, optional = true }
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-authentication.workspace = true
 affinidi-tdk-common = { version = "0.1.0" }
-affinidi-secrets-resolver = { version = "0.1.0" }
+affinidi-secrets-resolver = { version = "0.1.2" }
 affinidi-meeting-place = { workspace = true, optional = true }
 clap.workspace = true
 did-peer.workspace = true
