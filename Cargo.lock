@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -144,9 +144,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-meeting-place"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
- "affinidi-did-authentication 0.1.3",
+ "affinidi-did-authentication 0.1.2",
  "tracing",
 ]
 
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "ahash 0.8.11",
  "serde",
@@ -242,9 +242,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
- "affinidi-did-authentication 0.1.3",
+ "affinidi-did-authentication 0.1.2",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
@@ -287,9 +287,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-common"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
- "affinidi-did-authentication 0.1.3",
+ "affinidi-did-authentication 0.1.2",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-secrets-resolver 0.1.2",
  "ahash 0.8.11",
