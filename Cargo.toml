@@ -4,7 +4,7 @@ resolver = "3"
 
 [workspace.package]
 description = "Affinidi Trust Development Kit. A Rust library for building secure, privacy-preserving, and interoperable applications."
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Glenn Gore <glenn@affinidi.com>"]
 readme = "README.md"
@@ -17,11 +17,11 @@ rust-version = "1.85.0"
 
 [workspace.dependencies]
 # Local Crates
-affinidi-tdk = { version = "0.1.1", path = "./crates/affinidi-tdk" }
-affinidi-tdk-common = { version = "0.1.0", path = "./crates/affinidi-tdk-common" }
-affinidi-secrets-resolver = { version = "0.1.0", path = "./crates/affinidi-secrets-resolver" }
-affinidi-did-authentication = { version = "0.1.1", path = "./crates/affinidi-did-authentication" }
-affinidi-meeting-place = { version = "0.1.1", path = "./crates/affinidi-meeting-place" }
+affinidi-tdk = { version = "0.1.2", path = "./crates/affinidi-tdk" }
+affinidi-tdk-common = { version = "0.1.2", path = "./crates/affinidi-tdk-common" }
+affinidi-secrets-resolver = { version = "0.1.2", path = "./crates/affinidi-secrets-resolver" }
+affinidi-did-authentication = { version = "0.1.2", path = "./crates/affinidi-did-authentication" }
+affinidi-meeting-place = { version = "0.1.2", path = "./crates/affinidi-meeting-place" }
 
 # Affinidi External Crates
 affinidi-messaging-sdk = { version = "0.10.0" }
