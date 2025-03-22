@@ -3,7 +3,7 @@
  */
 
 use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
-use affinidi_messaging_didcomm::error::Error as DidcommError;
+// use affinidi_messaging_didcomm::error::Error as DidcommError;
 use affinidi_secrets_resolver::errors::SecretsResolverError;
 use thiserror::Error;
 
@@ -35,11 +35,11 @@ pub enum DIDAuthError {
 
 pub type Result<T> = std::result::Result<T, DIDAuthError>;
 
-impl From<DidcommError> for DIDAuthError {
-    fn from(error: DidcommError) -> Self {
-        DIDAuthError::DIDComm(error.to_string())
-    }
-}
+// impl From<DidcommError> for DIDAuthError {
+//     fn from(error: DidcommError) -> Self {
+//         DIDAuthError::DIDComm(error.to_string())
+//     }
+// }
 
 impl From<DIDCacheError> for DIDAuthError {
     fn from(error: DIDCacheError) -> Self {
