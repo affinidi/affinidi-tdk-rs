@@ -15,7 +15,7 @@
  */
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+// use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
@@ -26,9 +26,12 @@ use serde_json::json;
 use ssi::dids::{Document, document::service::Endpoint};
 use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, error, info, span};
-use uuid::Uuid;
+// use uuid::Uuid;
 
 pub mod errors;
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+pub struct Message {}
 
 /// The authorization tokens received in the fourth step of the DID authentication process
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -335,16 +338,17 @@ impl DIDAuthentication {
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
 
-            let (auth_msg, _) = auth_response
-                .pack_encrypted(
-                    endpoint_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    did_resolver,
-                    secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
-                .await?;
+            let auth_msg = String::new();
+            // let (auth_msg, _) = auth_response
+            //     .pack_encrypted(
+            //         endpoint_did,
+            //         Some(profile_did),
+            //         Some(profile_did),
+            //         did_resolver,
+            //         secrets_resolver,
+            //         &PackEncryptedOptions::default(),
+            //     )
+            //     .await?;
 
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
@@ -402,19 +406,19 @@ impl DIDAuthentication {
     /// A packed DIDComm message to be sent
     async fn _create_refresh_request<S>(
         &self,
-        profile_did: &str,
+        _profile_did: &str,
         endpoint_did: &str,
         did_resolver: &DIDCacheClient,
-        secrets_resolver: &S,
+        _secrets_resolver: &S,
     ) -> Result<String>
     where
         S: SecretsResolver,
     {
-        let endpoint = self
+        let _endpoint = self
             ._get_endpoint_address(endpoint_did, did_resolver)
             .await?;
 
-        let refresh_token = if let Some(tokens) = &self.tokens {
+        let _refresh_token = if let Some(tokens) = &self.tokens {
             &tokens.refresh_token
         } else {
             return Err(DIDAuthError::Authentication(
@@ -422,39 +426,42 @@ impl DIDAuthentication {
             ));
         };
 
-        let now = SystemTime::now()
+        let _now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let refresh_message = Message::build(
-            Uuid::new_v4().into(),
-            [&endpoint, "/refresh"].concat(),
-            json!({"refresh_token": refresh_token}),
-        )
-        .to(endpoint_did.to_string())
-        .from(profile_did.to_owned())
-        .created_time(now)
-        .expires_time(now + 60)
-        .finalize();
+        // Pass MessageBuilder as a param and let affinidi-messaging impl it?
+        // this way affinidi-messaging depends on tdk, not vice-versa
+        // let refresh_message = Message::build(
+        //     Uuid::new_v4().into(),
+        //     [&endpoint, "/refresh"].concat(),
+        //     json!({"refresh_token": refresh_token}),
+        // )
+        // .to(endpoint_did.to_string())
+        // .from(profile_did.to_owned())
+        // .created_time(now)
+        // .expires_time(now + 60)
+        // .finalize();
 
-        match refresh_message
-            .pack_encrypted(
-                endpoint_did,
-                Some(profile_did),
-                Some(profile_did),
-                did_resolver,
-                secrets_resolver,
-                &PackEncryptedOptions::default(),
-            )
-            .await
-        {
-            Ok((refresh_msg, _)) => Ok(refresh_msg),
-            Err(err) => Err(DIDAuthError::Authentication(format!(
-                "Couldn't pack authentication refresh message: {:?}",
-                err
-            ))),
-        }
+        // match refresh_message
+        //     .pack_encrypted(
+        //         endpoint_did,
+        //         Some(profile_did),
+        //         Some(profile_did),
+        //         did_resolver,
+        //         secrets_resolver,
+        //         &PackEncryptedOptions::default(),
+        //     )
+        //     .await
+        // {
+        //     Ok((refresh_msg, _)) => Ok(refresh_msg),
+        //     Err(err) => Err(DIDAuthError::Authentication(format!(
+        //         "Couldn't pack authentication refresh message: {:?}",
+        //         err
+        //     ))),
+        // }
+        Ok(String::new())
     }
 
     /// Refresh the access tokens as required
@@ -533,31 +540,32 @@ impl DIDAuthentication {
     /// - This message will expire after 60 seconds
     fn _create_auth_challenge_response(
         &self,
-        profile_did: &str,
-        endpoint_did: &str,
+        _profile_did: &str,
+        _endpoint_did: &str,
         body: &DidChallenge,
     ) -> Result<Message> {
-        let now = SystemTime::now()
+        let _now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let body = if let DidChallenge::Complex(c) = body {
+        let _body = if let DidChallenge::Complex(c) = body {
             json!({"challenge": c.data.challenge, "session_id": c.session_id})
         } else {
             json!({"challenge": body.challenge()})
         };
 
-        Ok(Message::build(
-            Uuid::new_v4().into(),
-            "https://affinidi.com/atm/1.0/authenticate".to_owned(),
-            body,
-        )
-        .to(endpoint_did.to_string())
-        .from(profile_did.to_owned())
-        .created_time(now)
-        .expires_time(now + 60)
-        .finalize())
+        //     Ok(Message::build(
+        //         Uuid::new_v4().into(),
+        //         "https://affinidi.com/atm/1.0/authenticate".to_owned(),
+        //         body,
+        //     )
+        //     .to(endpoint_did.to_string())
+        //     .from(profile_did.to_owned())
+        //     .created_time(now)
+        //     .expires_time(now + 60)
+        //     .finalize())
+        Ok(Message {})
     }
 }
 

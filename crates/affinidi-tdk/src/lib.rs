@@ -5,9 +5,9 @@
  */
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-#[cfg(feature = "messaging")]
-use affinidi_messaging_sdk::ATM;
-use affinidi_messaging_sdk::config::ATMConfigBuilder;
+// #[cfg(feature = "messaging")]
+// use affinidi_messaging_sdk::ATM;
+// use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{
     TDKSharedState, create_http_client, environments::TDKEnvironments, errors::Result,
@@ -21,9 +21,9 @@ pub mod dids;
 // Re-export required crates for convenience to applications
 #[cfg(feature = "meeting-place")]
 pub use affinidi_meeting_place as meeting_place;
-pub use affinidi_messaging_didcomm as didcomm;
-#[cfg(feature = "messaging")]
-pub use affinidi_messaging_sdk as messaging;
+// pub use affinidi_messaging_didcomm as didcomm;
+// #[cfg(feature = "messaging")]
+// pub use affinidi_messaging_sdk as messaging;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
 
@@ -31,8 +31,8 @@ pub use affinidi_tdk_common as common;
 #[derive(Clone)]
 pub struct TDK {
     pub(crate) inner: Arc<TDKSharedState>,
-    #[cfg(feature = "messaging")]
-    pub atm: Option<ATM>,
+    // #[cfg(feature = "messaging")]
+    // pub atm: Option<ATM>,
     #[cfg(feature = "meeting-place")]
     pub meeting_place: Option<meeting_place::MeetingPlace>,
 }
@@ -53,10 +53,7 @@ pub struct TDK {
 ///
 /// ```
 impl TDK {
-    pub async fn new(
-        config: TDKConfig,
-        #[cfg(feature = "messaging")] atm: Option<ATM>,
-    ) -> Result<Self> {
+    pub async fn new(config: TDKConfig) -> Result<Self> {
         let client = create_http_client();
 
         // Instantiate the DID resolver for TDK
@@ -114,23 +111,23 @@ impl TDK {
             authentication,
         };
 
-        #[cfg(feature = "messaging")]
-        // Instantiate Affinidi Messaging
-        let atm = if shared_state.config.use_atm {
-            if let Some(atm) = atm {
-                Some(atm.to_owned())
-            } else {
-                // Use the same DID Resolver for ATM
-                Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
-            }
-        } else {
-            None
-        };
+        // #[cfg(feature = "messaging")]
+        // // Instantiate Affinidi Messaging
+        // let atm = if shared_state.config.use_atm {
+        //     if let Some(atm) = atm {
+        //         Some(atm.to_owned())
+        //     } else {
+        //         // Use the same DID Resolver for ATM
+        //         Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
+        //     }
+        // } else {
+        //     None
+        // };
 
         Ok(TDK {
             inner: Arc::new(shared_state),
-            #[cfg(feature = "messaging")]
-            atm,
+            // #[cfg(feature = "messaging")]
+            // atm,
             #[cfg(feature = "meeting-place")]
             meeting_place: None,
         })
