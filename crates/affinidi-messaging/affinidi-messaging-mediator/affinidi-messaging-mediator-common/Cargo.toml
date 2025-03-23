@@ -10,6 +10,7 @@ publish.workspace = true
 license.workspace = true
 readme.workspace = true
 rust-version.workspace = true
+repository.workspace = true
 
 [dependencies]
 affinidi-messaging-sdk.workspace = true
