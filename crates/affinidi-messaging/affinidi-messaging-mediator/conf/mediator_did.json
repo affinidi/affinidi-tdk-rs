@@ -1,0 +1,91 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/suites/jws-2020/v1"
+  ],
+  "id": "did:web:localhost%3A7037:mediator:v1:.well-known",
+  "verificationMethod": [
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-0",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:localhost%3A7037:mediator:v1:.well-known",
+      "publicKeyJwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "9Nkwio0ZNOGSamKT5zQTPTzRu4ETV1ctWgRAoy37FSI"
+      }
+    },
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-1",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:localhost%3A7037:mediator:v1:.well-known",
+      "publicKeyJwk": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "CKu4ykvQzNJyHwmjPVBrSQ2Hhi7lDWDAhx84ss2HI7E",
+        "y": "Wg2PsYOtpKMDQTULs9sc-nGbW6-6GEInCp3ejQwZHoU"
+      }
+    },
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-2",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:localhost%3A7037:mediator:v1:.well-known",
+      "publicKeyJwk": {
+        "crv": "secp256k1",
+        "kty": "EC",
+        "x": "Lk1FY8MmyLjBswU4KbLoBQ_1THZJBMx2n6aIBXt1uXo",
+        "y": "tEv7EQHj4g4njOfrsjjDJBPKOI9RGWWMS8NYClo2cqo"
+      }
+    },
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-3",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:localhost%3A7037:mediator:v1:.well-known",
+      "publicKeyJwk": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "hEEjK3_80e7DDzibXAX66-uKM8mZuq7EB6LLiAuJnYI",
+        "y": "PaWjK4KtMK6KUSFp2_ACYPPlikLBmKXhfPSZvFN6xus"
+      }
+    }
+  ],
+  "authentication": [
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-0",
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-1"
+  ],
+  "assertionMethod": [
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-0",
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-1"
+  ],
+  "keyAgreement": [
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-2",
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-3"
+  ],
+  "service": [
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#service",
+      "type": "DIDCommMessaging",
+      "serviceEndpoint": [
+        {
+          "uri": "http://127.0.0.1:7037/mediator/v1",
+          "routingKeys": [],
+          "accept": [
+            "didcomm/v2"
+          ]
+        },
+        {
+          "uri": "ws://127.0.0.1:7037/mediator/v1/ws",
+          "routingKeys": [],
+          "accept": [
+            "didcomm/v2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#auth",
+      "type": "Authentication",
+      "serviceEndpoint": "http://127.0.0.1:7037/mediator/v1/authenticate"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+[package]
+name = "affinidi-did-authentication"
+description = "Using proof of DID ownership to authenticate to services"
+version = "0.1.6"
+edition.workspace = true
+authors.workspace = true
+readme.workspace = true
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+affinidi-messaging-didcomm.workspace = true
+affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-secrets-resolver.workspace = true
+
+base64 = "0.22"
+chrono = "0.4"
+reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+ssi = { version = "0.10" }
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["full"] }
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+    "release_max_level_info",
+] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "fmt",
+    "json",
+] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }

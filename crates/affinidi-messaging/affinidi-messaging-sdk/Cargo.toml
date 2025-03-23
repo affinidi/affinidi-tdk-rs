@@ -1,0 +1,72 @@
+[package]
+name = "affinidi-messaging-sdk"
+version = "0.10.1"
+description = "Affinidi Messaging SDK"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+
+[dependencies]
+# Affinidi Crates
+affinidi-tdk-common.workspace = true
+affinidi-secrets-resolver.workspace = true
+affinidi-messaging-didcomm.workspace = true
+affinidi-did-resolver-cache-sdk.workspace = true
+
+# External Crates
+ahash = { version = "0.8", features = ["serde"] }
+base64 = "0.22"
+futures-util = "0.3"
+http = "1"
+jsonwebtoken = "9.3"
+regex = "1.11"
+reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+rustls = { version = "0.23", default-features = false, features = [
+    "aws_lc_rs",
+    "tls12",
+] }
+rustls-pemfile = "2"
+rustls-platform-verifier = "0.5"
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+sha1 = "0.10"
+sha256 = "1.6"
+ssi = { version = "0.10" }
+thiserror = "2.0"
+tokio = { version = "1.44", features = ["full"] }
+tokio-rustls = "0.26"
+tokio-stream = "0.1"
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+    "release_max_level_info",
+    "valuable",
+] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "fmt",
+    "json",
+    "valuable",
+] }
+url = "2.5"
+uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+web-socket = "0.7"
+
+[dev-dependencies]
+did-peer.workspace = true
+
+clap = { version = "4.5", features = ["derive"] }
+console = "0.15"
+dialoguer = "0.11"
+rand = "0.9"
+rcgen = { version = "0.13", default-features = false, features = [
+    "aws_lc_rs",
+    "pem",
+] }
+regex = "1.11"
+ring = { version = "0.17", features = ["std"] }
+time = "0.3"

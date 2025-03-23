@@ -1,0 +1,18 @@
+[database]
+### database_url: URL of the Redis compatible database
+### Default: redis://127.0.0.1/
+database_url = "redis://127.0.0.1/"
+
+### database_pool_size: Number of connections to the database
+### Default: 10
+database_pool_size = 10
+
+### database_timeout: Timeout for database operations in seconds
+### Default: 2
+database_timeout = 2
+
+[processors.message_expiry_cleanup]
+### enabled: If true, the message expiry cleanup processor is enabled within the mediator locally
+### Default: true
+### NOTE: This is ignored when running as a standalone processor
+enabled = true

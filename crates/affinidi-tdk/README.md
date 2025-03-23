@@ -5,19 +5,7 @@
 
 ## Overview
 
-Affinidi [Trust Development Kit](https://docs.affinidi.com/dev-tools/affinidi-tdk/) simplifies development of privacy preserving solutions using decentralised identity and data sharing technologies.
-
-## Features
-
-The following features are enabled for the TDK Crate
-
-* default (Includes all crates by default)
-  * messaging: Affinidi Messaging SDK Crates
-
-To disable default, you can use the following:
-
-1. To disable from the command line use the option `--no-default-features`
-2. In Cargo.toml of a crate, use the `default-features = false` option on the crate dependency
+Affinidi Trust Development Kit (TDK) provides common elements that assist in developing privacy preserving services using decentralized identity technologies.
 
 ## Support & Feedback
 
