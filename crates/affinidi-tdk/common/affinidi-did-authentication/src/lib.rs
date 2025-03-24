@@ -599,38 +599,3 @@ where
         DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
     })
 }
-
-async fn _http_check(client: &Client, url: &str, body: &str, authorization: &str) -> Result<()> {
-    debug!("POSTing to {}", url);
-    debug!("Body: {}", body);
-    let response = client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Authorization", ["Bearer ", authorization].concat())
-        .body(body.to_string())
-        .send()
-        .await
-        .map_err(|e| {
-            DIDAuthError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e))
-        })?;
-
-    let response_status = response.status();
-    let response_body = response
-        .text()
-        .await
-        .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
-
-    if !response_status.is_success() {
-        if response_status.as_u16() == 401 {
-            return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
-        } else {
-            return Err(DIDAuthError::Authentication(format!(
-                "Failed to get authentication response. url: {}, status: {}",
-                url, response_status
-            )));
-        }
-    }
-
-    info!("response body: {}", response_body);
-    Ok(())
-}
