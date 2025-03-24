@@ -10,10 +10,17 @@
 use affinidi_did_authentication::{AuthorizationTokens, DIDAuthentication, errors::DIDAuthError};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use ahash::AHasher;
-use moka::future::Cache;
+use ahash::{AHasher, RandomState};
+use moka::{
+    Expiry,
+    future::{Cache, CacheBuilder},
+};
 use reqwest::Client;
-use std::{hash::Hasher, sync::Arc, time::Duration};
+use std::{
+    hash::Hasher,
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio::{
     sync::{
         Mutex,
@@ -33,7 +40,7 @@ pub struct AuthenticationCache {
 
 /// Private inner struct for AuthenticationCache
 pub struct AuthenticationCacheInner {
-    cache: Cache<u64, AuthorizationTokens>,
+    cache: Cache<u64, AuthenticationRecord, RandomState>,
     channel_rx: mpsc::Receiver<AuthenticationCommand>,
     did_resolver: DIDCacheClient,
     secrets_resolver: ThreadedSecretsResolver,
@@ -86,6 +93,28 @@ pub enum AuthenticationCommand {
     },
 }
 
+/// Authentication Record stored in the cache
+#[derive(Clone)]
+struct AuthenticationRecord {
+    tokens: AuthorizationTokens,
+}
+
+// Sets up expiry for the AuthenticationRecord to expire when the refresh token expires
+impl Expiry<u64, AuthenticationRecord> for AuthenticationRecord {
+    fn expire_after_create(
+        &self,
+        _key: &u64,
+        value: &AuthenticationRecord,
+        _current_time: Instant,
+    ) -> Option<Duration> {
+        // Set the expiry of this entry to the expiry of the refresh token
+        // It is the delta Duration between now and the refresh expiry
+        let refresh_expiry = Duration::from_secs(value.tokens.refresh_expires_at);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        Some(refresh_expiry - now)
+    }
+}
+
 impl AuthenticationCache {
     /// Create a new AuthenticationCache
     /// # Arguments
@@ -101,10 +130,18 @@ impl AuthenticationCache {
     ) -> (Self, mpsc::Sender<AuthenticationCommand>) {
         let (tx, rx) = mpsc::channel(32);
 
+        // Dummy expiry that is used to set the expiry of the AuthenticationRecord
+        let expiry = AuthenticationRecord {
+            tokens: AuthorizationTokens::default(),
+        };
+        let cache = CacheBuilder::new(max_capacity)
+            .expire_after(expiry)
+            .build_with_hasher(ahash::RandomState::default());
+
         (
             AuthenticationCache {
                 inner: Arc::new(Mutex::new(AuthenticationCacheInner {
-                    cache: Cache::new(max_capacity),
+                    cache,
                     channel_rx: rx,
                     did_resolver: did_resolver.clone(),
                     secrets_resolver,
@@ -273,7 +310,11 @@ impl AuthenticationCacheInner {
                     service_endpoint_did,
                     is_authenticated.is_some()
                 );
-                let _ = tx.send(is_authenticated);
+                if let Some(record) = is_authenticated {
+                    let _ = tx.send(Some(record.tokens));
+                } else {
+                    let _ = tx.send(None);
+                }
             }
             Some(AuthenticationCommand::Authenticate {
                 profile_did,
@@ -289,12 +330,12 @@ impl AuthenticationCacheInner {
                     profile_did, service_endpoint_did
                 );
 
-                if let Some(tokens) = self.cache.get(&hash).await {
+                if let Some(record) = self.cache.get(&hash).await {
                     debug!(
                         "{} is already authenticated against {}",
                         profile_did, service_endpoint_did
                     );
-                    let _ = tx.send(Ok(tokens));
+                    let _ = tx.send(Ok(record.tokens));
                 } else {
                     let did_resolver = self.did_resolver.clone();
                     let secrets_resolver = self.secrets_resolver.clone();
@@ -330,7 +371,7 @@ impl AuthenticationCacheInner {
                                     match result {
                                         Ok(tokens) => {
                                             if let Some(tokens) = &tokens {
-                                                self.cache.insert(hash, tokens.clone()).await;
+                                                self.cache.insert(hash, AuthenticationRecord {  tokens: tokens.clone() }).await;
                                                 let _ = tx.send(Ok(tokens.clone()));
                                             } else {
                                                 let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(
@@ -390,4 +431,47 @@ fn hash(profile_did: &str, service_endpoint_did: &str) -> u64 {
     let mut hasher_1 = AHasher::default();
     hasher_1.write([profile_did, service_endpoint_did].concat().as_bytes());
     hasher_1.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tasks::authentication::AuthenticationRecord;
+    use affinidi_did_authentication::AuthorizationTokens;
+    use moka::future::CacheBuilder;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    /// Test the cache expires correctly
+    #[tokio::test]
+    async fn check_cache_expiry_good() {
+        let expiry = AuthenticationRecord {
+            tokens: AuthorizationTokens::default(),
+        };
+        let cache = CacheBuilder::new(1)
+            .expire_after(expiry)
+            .build_with_hasher(ahash::RandomState::default());
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        cache
+            .insert(
+                1,
+                AuthenticationRecord {
+                    tokens: AuthorizationTokens {
+                        access_token: "access".to_string(),
+                        access_expires_at: now.as_secs() + 1,
+                        refresh_token: "refresh".to_string(),
+                        refresh_expires_at: now.as_secs() + 1,
+                    },
+                },
+            )
+            .await;
+
+        // Cache should contain the key
+        assert!(cache.contains_key(&1));
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        cache.run_pending_tasks().await;
+
+        assert!(!cache.contains_key(&1));
+        assert!(cache.get(&1).await.is_none());
+    }
 }

@@ -29,8 +29,6 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.6"
-aws-sdk-dynamodb = "1.69"
-aws-sdk-memorydb = "1.64"
 aws-sdk-secretsmanager = "1.66"
 aws-sdk-ssm = "1.68"
 axum = { version = "0.8", features = ["ws"] }
@@ -62,7 +60,6 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 ssi = { version = "0.10" }
-thiserror = "2.0"
 tokio = { version = "1.44", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.8"

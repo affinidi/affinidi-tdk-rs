@@ -93,7 +93,6 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -141,7 +140,6 @@ dependencies = [
  "axum-server",
  "chrono",
  "did-peer",
- "highway",
  "http 1.3.1",
  "moka",
  "rand 0.9.0",
@@ -198,11 +196,9 @@ version = "0.10.1"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-messaging-mediator",
  "affinidi-messaging-sdk",
  "affinidi-tdk",
  "ahash 0.8.11",
- "askar-crypto",
  "base64 0.22.1",
  "clap",
  "console",
@@ -212,8 +208,6 @@ dependencies = [
  "regex",
  "reqwest 0.12.15",
  "ring",
- "rustls 0.23.25",
- "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha256",
@@ -239,8 +233,6 @@ dependencies = [
  "ahash 0.8.11",
  "async-convert",
  "aws-config",
- "aws-sdk-dynamodb",
- "aws-sdk-memorydb",
  "aws-sdk-secretsmanager",
  "aws-sdk-ssm",
  "axum",
@@ -268,7 +260,6 @@ dependencies = [
  "serde_json",
  "sha256",
  "ssi",
- "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
  "toml 0.8.20",
@@ -301,11 +292,7 @@ dependencies = [
  "affinidi-messaging-mediator-common",
  "clap",
  "deadpool-redis",
- "redis",
- "rustls 0.23.25",
- "semver",
  "serde",
- "thiserror 2.0.12",
  "tokio",
  "toml 0.8.20",
  "tracing",
@@ -316,9 +303,7 @@ dependencies = [
 name = "affinidi-messaging-sdk"
 version = "0.10.1"
 dependencies = [
- "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-secrets-resolver",
  "affinidi-tdk-common",
  "ahash 0.8.11",
  "base64 0.22.1",
@@ -326,9 +311,6 @@ dependencies = [
  "console",
  "dialoguer",
  "did-peer",
- "futures-util",
- "http 1.3.1",
- "jsonwebtoken",
  "rand 0.9.0",
  "rcgen",
  "regex",
@@ -346,9 +328,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls 0.26.2",
- "tokio-stream",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
  "web-socket",
@@ -367,7 +347,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "circular-queue",
- "color-eyre",
  "crossterm",
  "did-peer",
  "image",
@@ -416,12 +395,9 @@ dependencies = [
  "affinidi-tdk-common",
  "clap",
  "did-peer",
- "reqwest 0.12.15",
  "rustls 0.23.25",
- "rustls-platform-verifier",
  "serde_json",
  "ssi",
- "thiserror 2.0.12",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -802,51 +778,6 @@ dependencies = [
  "pin-project-lite",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "aws-sdk-dynamodb"
-version = "1.69.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c42f454f50a050aaa3f3d200a3ac072e48c18c4bb5356c38be7eee1da1439a43"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand",
- "http 0.2.12",
- "once_cell",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
-name = "aws-sdk-memorydb"
-version = "1.64.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7794352c5c02995f46fb036baf2cc2e9c33845c58b8dfebf644bc3b98207df03"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "http 0.2.12",
- "once_cell",
- "regex-lite",
- "tracing",
 ]
 
 [[package]]
@@ -1853,33 +1784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "color-eyre"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55146f5e46f237f7423d74111267d4597b59b0dad0ffaf7303bce9945d843ad5"
-dependencies = [
- "backtrace",
- "color-spantrace",
- "eyre",
- "indenter",
- "once_cell",
- "owo-colors",
- "tracing-error",
-]
-
-[[package]]
-name = "color-spantrace"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd6be1b2a7e382e2b98b43b2adcca6bb0e465af0bdd38123873ae61eb17a72c2"
-dependencies = [
- "once_cell",
- "owo-colors",
- "tracing-core",
- "tracing-error",
-]
-
-[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2452,9 +2356,9 @@ dependencies = [
 
 [[package]]
 name = "deranged"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c9e6a11ca8224451684bc0d7d5a7adbf8f2fd6887261a1cfc3c0432f9d4068e"
+checksum = "28cfac68e08048ae1883171632c2aef3ebc555621ae56fbccce1cbf22dd7f058"
 dependencies = [
  "powerfmt",
  "serde",
@@ -2879,16 +2783,6 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
-]
-
-[[package]]
-name = "eyre"
-version = "0.6.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd915d99f24784cdc19fd37ef22b97e3ff0ae756c7e492e9fbfe897d61e2aec"
-dependencies = [
- "indenter",
- "once_cell",
 ]
 
 [[package]]
@@ -3809,12 +3703,6 @@ name = "imgref"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0263a3d970d5c054ed9312c0057b4f3bde9c0b33836d3637361d4a9e6e7a408"
-
-[[package]]
-name = "indenter"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce23b50ad8242c51a442f3ff322d56b02f08852c77e4c0b4d3fd684abc89c683"
 
 [[package]]
 name = "indexmap"
@@ -5041,12 +4929,6 @@ checksum = "6ff55baddef9e4ad00f88b6c743a2a8062d4c6ade126c2a528644b8e444d52ce"
 dependencies = [
  "stable_deref_trait",
 ]
-
-[[package]]
-name = "owo-colors"
-version = "3.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
 
 [[package]]
 name = "p256"
@@ -7778,9 +7660,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.40"
+version = "0.3.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d9c75b47bdff86fa3334a3db91356b8d7d86a9b839dab7d0bdc5c3d3a077618"
+checksum = "8a7619e19bc266e0f9c5e6686659d394bc57973859340060a69221e57dbc0c40"
 dependencies = [
  "deranged",
  "itoa",
@@ -7799,9 +7681,9 @@ checksum = "c9e9a38711f559d9e3ce1cdb06dd7c5b8ea546bc90052da6d06bb76da74bb07c"
 
 [[package]]
 name = "time-macros"
-version = "0.2.21"
+version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29aa485584182073ed57fd5004aa09c371f021325014694e432313345865fd04"
+checksum = "3526739392ec93fd8b359c8e98514cb3e8e021beb4e5f597b00a0221f8ed8a49"
 dependencies = [
  "num-conv",
  "time-core",
@@ -8065,16 +7947,6 @@ checksum = "e672c95779cf947c5311f83787af4fa8fffd12fb27e4993211a84bdfd9610f9c"
 dependencies = [
  "once_cell",
  "valuable",
-]
-
-[[package]]
-name = "tracing-error"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b1581020d7a273442f5b45074a6a57d5757ad0a47dac0e9f0bd57b81936f3db"
-dependencies = [
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
