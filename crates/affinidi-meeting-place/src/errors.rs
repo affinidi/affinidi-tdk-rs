@@ -2,6 +2,7 @@
  * Affinidi Meeting-Place Error Handling
  */
 
+use affinidi_did_authentication::errors::DIDAuthError;
 use affinidi_tdk_common::errors::TDKError;
 use thiserror::Error;
 
@@ -26,5 +27,11 @@ pub type Result<T> = std::result::Result<T, MeetingPlaceError>;
 impl From<TDKError> for MeetingPlaceError {
     fn from(error: TDKError) -> Self {
         MeetingPlaceError::TDK(error.to_string())
+    }
+}
+
+impl From<DIDAuthError> for MeetingPlaceError {
+    fn from(error: DIDAuthError) -> Self {
+        MeetingPlaceError::Authentication(error.to_string())
     }
 }

@@ -7,21 +7,45 @@ use affinidi_tdk_common::{TDKSharedState, profiles::TDKProfile};
 use errors::{MeetingPlaceError, Result};
 use reqwest::Client;
 use serde::Deserialize;
-use tracing::debug;
+use serde_json::json;
+use tracing::{debug, info};
 
 pub mod errors;
 
 /// Affinidi Meeting Place SDK
 #[derive(Clone)]
-pub struct MeetingPlace {}
+pub struct MeetingPlace {
+    /// DID for MeetingPlace
+    mp_did: String,
+}
 
 impl MeetingPlace {
+    pub fn new(mp_did: String) -> Self {
+        Self { mp_did }
+    }
+
     pub async fn check_offer_phrase(
+        &self,
         tdk: &TDKSharedState,
         profile: TDKProfile,
         phrase: &str,
     ) -> Result<bool> {
+        let tokens = tdk
+            .authentication
+            .authenticate(profile.did, self.mp_did.clone(), 3, None)
+            .await?;
+
+        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client, "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase", &json!({"offerPhrase": phrase}).to_string(), &tokens).await;
+        info!("check_offer_phrase response: {:#?}", response);
+        Ok(false)
     }
+}
+
+// ************************************************************************************************
+
+#[derive(Debug, Deserialize)]
+struct CheckOfferPhraseResponse {
+    is_in_use: bool,
 }
 
 async fn _http_post<T>(

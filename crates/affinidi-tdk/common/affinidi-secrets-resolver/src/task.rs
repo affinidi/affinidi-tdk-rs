@@ -73,52 +73,52 @@ impl SecretsTask {
                         }
                 }
             } // End of loop
-
-            debug!("Exiting Secrets Task");
         }
 
-        fn _handle_msg(
-            secrets_cache: &mut AHashMap<String, Secret>,
-            msg: Option<SecretTaskCommand>,
-        ) -> bool {
-            let mut exit_flag = false;
-            match msg {
-                Some(SecretTaskCommand::AddSecret { secret }) => {
-                    secrets_cache.insert(secret.id.clone(), secret);
-                }
-                Some(SecretTaskCommand::AddSecrets { secrets }) => {
-                    for secret in secrets {
-                        secrets_cache.insert(secret.id.clone(), secret);
-                    }
-                }
-                Some(SecretTaskCommand::RemoveSecret { key_id }) => {
-                    secrets_cache.remove(&key_id);
-                }
-                Some(SecretTaskCommand::GetSecret { key_id, tx }) => {
-                    let _ = tx.send(secrets_cache.get(&key_id).cloned());
-                }
-                Some(SecretTaskCommand::FindSecrets { keys, tx }) => {
-                    let _ = tx.send(
-                        keys.iter()
-                            .filter(|sid| secrets_cache.contains_key(sid.as_str()))
-                            .cloned()
-                            .collect(),
-                    );
-                }
-                Some(SecretTaskCommand::SecretsStored { tx }) => {
-                    let _ = tx.send(secrets_cache.len());
-                }
-                Some(SecretTaskCommand::Terminate) => {
-                    debug!("Terminating Secrets Task");
-                    exit_flag = true;
-                }
-                None => {
-                    warn!("Secrets Task channel closed unexpectedly");
-                    exit_flag = true;
-                }
-            }
+        debug!("Exiting Secrets Task");
+    }
+}
 
-            exit_flag
+fn _handle_msg(
+    secrets_cache: &mut AHashMap<String, Secret>,
+    msg: Option<SecretTaskCommand>,
+) -> bool {
+    let mut exit_flag = false;
+    match msg {
+        Some(SecretTaskCommand::AddSecret { secret }) => {
+            secrets_cache.insert(secret.id.clone(), secret);
+        }
+        Some(SecretTaskCommand::AddSecrets { secrets }) => {
+            for secret in secrets {
+                secrets_cache.insert(secret.id.clone(), secret);
+            }
+        }
+        Some(SecretTaskCommand::RemoveSecret { key_id }) => {
+            secrets_cache.remove(&key_id);
+        }
+        Some(SecretTaskCommand::GetSecret { key_id, tx }) => {
+            let _ = tx.send(secrets_cache.get(&key_id).cloned());
+        }
+        Some(SecretTaskCommand::FindSecrets { keys, tx }) => {
+            let _ = tx.send(
+                keys.iter()
+                    .filter(|sid| secrets_cache.contains_key(sid.as_str()))
+                    .cloned()
+                    .collect(),
+            );
+        }
+        Some(SecretTaskCommand::SecretsStored { tx }) => {
+            let _ = tx.send(secrets_cache.len());
+        }
+        Some(SecretTaskCommand::Terminate) => {
+            debug!("Terminating Secrets Task");
+            exit_flag = true;
+        }
+        None => {
+            warn!("Secrets Task channel closed unexpectedly");
+            exit_flag = true;
         }
     }
+
+    exit_flag
 }
