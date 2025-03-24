@@ -3,9 +3,10 @@
  */
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_secrets_resolver::ThreadedSecretsResolver;
+use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use config::TDKConfig;
 use environments::TDKEnvironment;
+use profiles::TDKProfile;
 use reqwest::Client;
 use rustls::ClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
@@ -72,5 +73,12 @@ impl TDKSharedState {
             environment,
             authentication,
         }
+    }
+
+    /// Adds a TDK Profile to the shared state
+    /// Which is really just adding the secrets to the secrets resolver
+    /// For the moment...
+    pub async fn add_profile(&self, profile: &TDKProfile) {
+        self.secrets_resolver.insert_vec(&profile.secrets).await;
     }
 }

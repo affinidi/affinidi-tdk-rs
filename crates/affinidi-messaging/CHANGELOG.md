@@ -12,6 +12,10 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 * Ability to specify custom logging attributes to the statistics logs, useful for log aggregation.
   * NOTE: This uses an unstable feature of tracing.
 
+### Examples
+
+* Fixed loading of secrets into TDK
+
 ## 20th March 2025 (0.10.0)
 
 ### All (0.10.0)

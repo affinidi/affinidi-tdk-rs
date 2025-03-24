@@ -51,7 +51,11 @@ async fn main() -> Result<(), ATMError> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
+    // Instantiate the TDK
+    let tdk = TDKSharedState::default().await;
+
     let alice = if let Some(alice) = environment.profiles.get("Alice") {
+        tdk.add_profile(alice).await;
         alice
     } else {
         return Err(ATMError::ConfigError(
@@ -60,6 +64,7 @@ async fn main() -> Result<(), ATMError> {
     };
 
     let bob = if let Some(bob) = environment.profiles.get("Bob") {
+        tdk.add_profile(bob).await;
         bob
     } else {
         return Err(ATMError::ConfigError(
@@ -72,18 +77,17 @@ async fn main() -> Result<(), ATMError> {
     config = config.with_ssl_certificates(&mut environment.ssl_certificates);
 
     // Create a new ATM Client
-    let tdk = TDKSharedState::default().await;
     let atm = ATM::new(config.build()?, tdk).await?;
     let protocols = Protocols::new();
 
     debug!("Enabling Alice's Profile");
     let alice = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, alice).await?, true)
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, alice).await?, false)
         .await?;
 
     debug!("Enabling Bob's Profile");
     let bob = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, bob).await?, true)
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, bob).await?, false)
         .await?;
 
     // Ensure Profile has a valid mediator to forward through
@@ -178,10 +182,15 @@ async fn main() -> Result<(), ATMError> {
     // See if Alice has a message waiting
     let response = atm.fetch_messages(&alice, &FetchOptions::default()).await?;
 
-    println!(
-        "Alice new message msg_id({})",
-        response.success.first().unwrap().msg_id
-    );
+    if response.success.is_empty() {
+        println!("Alice has no messages");
+        return Ok(());
+    } else {
+        println!(
+            "Alice has messages: {:#?}",
+            response.success.first().unwrap().msg_id
+        );
+    }
 
     let new_msg_id = response.success.first().unwrap().msg_id.clone();
 
