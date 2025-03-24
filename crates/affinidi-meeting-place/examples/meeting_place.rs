@@ -68,11 +68,10 @@ async fn main() -> Result<()> {
         "default".to_string()
     };
 
-    let mut environment =
+    let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
     println!("Using Environment: {}", environment_name);
 
-    // TODO: Get profile....
     let environment_profile = if let Some(profile_name) = &args.name_profile {
         let Some(profile) = environment.profiles.get(profile_name) else {
             return Err(MeetingPlaceError::TDK(format!(
@@ -91,7 +90,7 @@ async fn main() -> Result<()> {
         };
         tdk.add_profile(profile).await;
         profile
-    } else if let Some(profile) = environment.profiles.ve values().first() {
+    } else if let Some(profile) = environment.profiles.values().next() {
         tdk.add_profile(profile).await;
         profile
     } else {

@@ -3,6 +3,7 @@
  */
 
 use affinidi_did_authentication::AuthorizationTokens;
+use affinidi_tdk_common::{TDKSharedState, profiles::TDKProfile};
 use errors::{MeetingPlaceError, Result};
 use reqwest::Client;
 use serde::Deserialize;
@@ -12,31 +13,15 @@ pub mod errors;
 
 /// Affinidi Meeting Place SDK
 #[derive(Clone)]
-pub struct MeetingPlace {
-    /// The Meeting Place DID
-    pub(crate) _mp_did: String,
-
-    /// The Authorization Tokens for Meeting Place
-    _auth_tokens: Option<AuthorizationTokens>,
-}
+pub struct MeetingPlace {}
 
 impl MeetingPlace {
-    /// Create a new instance of the Meeting Place SDK
-    /// # Arguments
-    /// * `mp_did` - The Meeting Place DID
-    pub fn new(mp_did: String) -> Self {
-        debug!(
-            "Creating new Meeting Place SDK instance with DID: {}",
-            mp_did
-        );
-        Self {
-            _mp_did: mp_did,
-            _auth_tokens: None,
-        }
+    pub async fn check_offer_phrase(
+        tdk: &TDKSharedState,
+        profile: TDKProfile,
+        phrase: &str,
+    ) -> Result<bool> {
     }
-
-    /// Authenticate with Meeting Place
-    pub fn authenticate(&self) {}
 }
 
 async fn _http_post<T>(
