@@ -1,0 +1,57 @@
+[package]
+name = "affinidi-messaging-text-client"
+version = "0.10.1"
+description = "Affinidi Messaging SDK"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Affinidi Crates
+affinidi-tdk.workspace = true
+affinidi-messaging-sdk.workspace = true
+affinidi-messaging-didcomm.workspace = true
+affinidi-did-resolver-cache-sdk.workspace = true
+did-peer.workspace = true
+
+# External Crates
+ahash = { version = "0.8", features = ["serde"] }
+anyhow = '1.0'
+base64 = "0.22"
+chrono = "0.4"
+circular-queue = { version = "0.2", features = ["serde_support"] }
+color-eyre = "0.6"
+crossterm = { version = "0.28", features = ["event-stream"] }
+image = "0.25.5"
+log = "0.4"
+qrcode = "0.14"
+rand = "0.9"
+ratatui = "0.29"
+ratatui-image = { version = "5", features = ["crossterm", "image-defaults"] }
+reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+ssi = { version = "0.10" }
+textwrap = "0.16"
+tokio = { version = "1.44", features = ["full"] }
+tokio-stream = "0.1"
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+    "release_max_level_info",
+    "valuable",
+] }
+tracing-subscriber = { version = "0.3", features = [
+    "env-filter",
+    "fmt",
+    "json",
+    "valuable",
+] }
+tui-input = "0.11.0"
+tui-logger = { version = "0.17", features = ["tracing-support"] }
+uuid = { version = "1.15", features = ["v4", "fast-rng"] }

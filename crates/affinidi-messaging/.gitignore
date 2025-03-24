@@ -1,0 +1,5 @@
+dump.rdb
+.DS_Store
+/**/secrets.json
+**/*.gif
+environments.json

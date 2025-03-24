@@ -1,0 +1,51 @@
+[package]
+name = 'affinidi-messaging-didcomm'
+version = "0.10.1"
+authors = [
+    'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
+    'Glenn Gore <glenn@affinidi.com>',
+]
+edition.workspace = true
+description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
+license = 'Apache-2.0'
+repository.workspace = true
+readme = 'README.md'
+publish = true
+rust-version.workspace = true
+
+[dependencies]
+# Affinidi Crates
+affinidi-secrets-resolver.workspace = true
+affinidi-did-resolver-cache-sdk.workspace = true
+
+# External Crates
+ahash = { version = "0.8", features = ["serde"] }
+askar-crypto = "0.3.3"
+anyhow = '1.0'
+base64 = "0.22"
+bs58 = "0.5"
+lazy_static = { version = "1.5", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde-enum-str = '0.4'
+serde_json = "1.0"
+sha2 = "0.10"
+sha256 = "1.6"
+ssi = { version = "0.10" }
+thiserror = "2.0"
+varint = "0.9"
+tokio = { version = "1.44", features = ["rt", "macros"] }
+tracing = { version = "0.1", features = [
+    "max_level_debug",
+    "release_max_level_info",
+    "valuable",
+] }
+uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_futures"] }
+lazy_static = { version = "1.5" }
+tracing-test = "0.2"
+
+[features]
+uniffi = []
+testvectors = ["lazy_static"]

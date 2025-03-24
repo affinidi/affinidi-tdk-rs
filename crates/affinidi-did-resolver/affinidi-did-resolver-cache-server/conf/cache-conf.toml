@@ -1,0 +1,32 @@
+### log_level: trace debug info warn error
+### default: info
+log_level = "info"
+
+### listen_address: <ip_address>:<tcp_port> that this service will listen on.
+### Default: 0.0.0.0:8080
+listen_address = "${LISTEN_ADDRESS:0.0.0.0:8080}"
+
+### statistics_interval: # of seconds between statistics logging
+### Default: 60 second
+statistics_interval = "${STATISTICS_INTERVAL:10}"
+
+### enable_http_endpoint: true/false
+### Default: true
+### If true, the server will make available /resolve endpoint for HTTP GET requests
+### that will resolve a DID Document from the cache.
+enable_http_endpoint = "${ENABLE_HTTP_ENDPOINT:true}"
+
+### enable_websocket_endpoint: true/false
+### Default: true
+### If true, the server will make available /resolve endpoint for websocket requests
+### that will resolve a DID Document from the cache.
+enable_websocket_endpoint = "${ENABLE_WEBSOCKET_ENDPOINT:true}"
+
+[cache]
+### capacity_count: Approx how many items to cache in memory
+### Default: ~1,000 cached DID Documents
+capacity_count = "${CACHE_CAPACITY_COUNT:1000}"
+
+### expire: Cache Time To Live (TTL) for a cached entry in seconds
+### Default: 300 (5 minutes)
+expire = "${EXPIRE:300}"
