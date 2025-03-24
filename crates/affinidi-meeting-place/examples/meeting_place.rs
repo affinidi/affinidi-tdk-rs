@@ -2,12 +2,14 @@
  * Example of how to check an offer on Meeting Place
  */
 
-use std::env;
-
-use affinidi_did_authentication::DIDAuthentication;
-use affinidi_meeting_place::errors::{MeetingPlaceError, Result};
+use affinidi_meeting_place::{
+    MeetingPlace,
+    errors::{MeetingPlaceError, Result},
+};
 use affinidi_tdk_common::{TDKSharedState, environments::TDKEnvironments};
 use clap::{Parser, Subcommand};
+use std::env;
+use tracing::info;
 use tracing_subscriber::filter;
 
 /// Affinidi Meeting Place Check-Offer
@@ -29,6 +31,10 @@ struct Cli {
     /// Profile Name to use from the environment
     #[arg(short, long)]
     name_profile: Option<String>,
+
+    /// DID for MeetingPlace
+    #[arg(short, long)]
+    mp_did: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,7 +107,17 @@ async fn main() -> Result<()> {
     };
 
     match args.command {
-        Commands::CheckOfferPhrase(check_offer_phrase) => {}
+        Commands::CheckOfferPhrase(check_offer_phrase) => {
+            let mp = MeetingPlace::new(args.mp_did);
+            let result = mp
+                .check_offer_phrase(
+                    &tdk,
+                    environment_profile.clone(),
+                    &check_offer_phrase.phrase,
+                )
+                .await?;
+            info!("Offer Phrase is in use? {}", result);
+        }
     };
 
     Ok(())

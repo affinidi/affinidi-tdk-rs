@@ -8,7 +8,7 @@ use errors::{MeetingPlaceError, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{debug, info};
+use tracing::debug;
 
 pub mod errors;
 
@@ -35,9 +35,9 @@ impl MeetingPlace {
             .authenticate(profile.did, self.mp_did.clone(), 3, None)
             .await?;
 
-        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client, "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase", &json!({"offerPhrase": phrase}).to_string(), &tokens).await;
-        info!("check_offer_phrase response: {:#?}", response);
-        Ok(false)
+        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client, "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase", &json!({"offerPhrase": phrase}).to_string(), &tokens).await?;
+
+        Ok(response.is_in_use)
     }
 }
 
@@ -45,6 +45,7 @@ impl MeetingPlace {
 
 #[derive(Debug, Deserialize)]
 struct CheckOfferPhraseResponse {
+    #[serde(rename = "isInUse")]
     is_in_use: bool,
 }
 

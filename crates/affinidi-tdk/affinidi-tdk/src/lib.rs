@@ -82,6 +82,7 @@ impl TDK {
             secrets_resolver.clone(),
             &client,
         );
+        authentication.start().await;
 
         // Load Environment
         // Adds secrets to the secrets resolver
