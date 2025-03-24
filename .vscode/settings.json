@@ -1,6 +1,0 @@
-{
-    "rust-analyzer.cargo.extraEnv": {
-        "RUSTFLAGS": "--cfg tracing_unstable"
-    },
-    "rust-analyzer.linkedProjects": []
-}
