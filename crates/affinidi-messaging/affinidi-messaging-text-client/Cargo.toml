@@ -26,7 +26,6 @@ anyhow = '1.0'
 base64 = "0.22"
 chrono = "0.4"
 circular-queue = { version = "0.2", features = ["serde_support"] }
-color-eyre = "0.6"
 crossterm = { version = "0.28", features = ["event-stream"] }
 image = "0.25.5"
 log = "0.4"
