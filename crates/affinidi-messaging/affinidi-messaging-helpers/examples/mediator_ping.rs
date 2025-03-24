@@ -49,6 +49,9 @@ async fn main() -> Result<(), ATMError> {
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
     println!("Using Environment: {}", environment_name);
 
+    // Instantiate TDK
+    let tdk = TDKSharedState::default().await;
+
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -58,6 +61,7 @@ async fn main() -> Result<(), ATMError> {
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
     let alice = if let Some(alice) = environment.profiles.get("Alice") {
+        tdk.add_profile(alice).await;
         alice
     } else {
         return Err(ATMError::ConfigError(
@@ -65,14 +69,11 @@ async fn main() -> Result<(), ATMError> {
         ));
     };
 
-    info!("TIMTAM Alice = {:#?}", alice);
-
     let mut config = ATMConfig::builder();
 
     config = config.with_ssl_certificates(&mut environment.ssl_certificates);
 
     // Create a new ATM Client
-    let tdk = TDKSharedState::default().await;
     let atm = ATM::new(config.build()?, tdk).await?;
     let protocols = Protocols::new();
 

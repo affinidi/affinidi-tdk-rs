@@ -11,7 +11,7 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{
     TDKSharedState, create_http_client, environments::TDKEnvironments, errors::Result,
-    tasks::authentication::AuthenticationCache,
+    profiles::TDKProfile, tasks::authentication::AuthenticationCache,
 };
 use common::{config::TDKConfig, environments::TDKEnvironment};
 use std::sync::Arc;
@@ -139,5 +139,15 @@ impl TDK {
     /// Get the shared state of the TDK
     pub fn get_shared_state(&self) -> Arc<TDKSharedState> {
         self.inner.clone()
+    }
+
+    /// Adds a TDK Profile to the shared state
+    /// Which is really just adding the secrets to the secrets resolver
+    /// For the moment...
+    pub async fn add_profile(&self, profile: &TDKProfile) {
+        self.inner
+            .secrets_resolver
+            .insert_vec(&profile.secrets)
+            .await;
     }
 }

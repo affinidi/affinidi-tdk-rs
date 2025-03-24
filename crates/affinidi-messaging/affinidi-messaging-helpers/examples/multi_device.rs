@@ -536,36 +536,4 @@ async fn main() -> Result<(), ATMError> {
     .expect("Couldn't unpack message");
     info!("Message unpacked successfully: {}", unpack2.0.body);
     Ok(())
-
-    /*
-
-
-    // Bob gets his messages
-    println!();
-    println!("Bob receiving messages");
-    match protocols
-        .message_pickup
-        .live_stream_get(&atm, &bob, true, &msg_id, Duration::from_secs(5), true)
-        .await?
-    {
-        Some(msg) => {
-            println!();
-            println!(
-                "Decrypted Message from Alice to Bob msg_id({}):\n {:#?}\n",
-                msg_id, msg.0
-            );
-        }
-        None => {
-            println!("No messages found. Exiting...");
-        }
-    }
-
-    let end = SystemTime::now();
-    println!(
-        "Forwarding Example took {}ms in total",
-        end.duration_since(start).unwrap().as_millis(),
-    );
-    */
-
-    //    Ok(())
 }

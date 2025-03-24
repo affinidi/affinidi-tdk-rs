@@ -46,7 +46,11 @@ async fn main() -> Result<(), ATMError> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
+    // Instantiate TDK
+    let tdk = TDKSharedState::default().await;
+
     let alice = if let Some(alice) = environment.profiles.get("Alice") {
+        tdk.add_profile(alice).await;
         alice
     } else {
         return Err(ATMError::ConfigError(
@@ -59,7 +63,6 @@ async fn main() -> Result<(), ATMError> {
     config = config.with_ssl_certificates(&mut environment.ssl_certificates);
 
     // Create a new ATM Client
-    let tdk = TDKSharedState::default().await;
     let atm = ATM::new(config.build()?, tdk).await?;
     let protocols = Protocols::new();
 
