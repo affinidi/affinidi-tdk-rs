@@ -1,6 +1,6 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.10.1"
+version = "0.10.2"
 authors = [
     'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
     'Glenn Gore <glenn@affinidi.com>',

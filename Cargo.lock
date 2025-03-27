@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-secrets-resolver",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-helpers"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "affinidi-messaging-sdk",
  "axum",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-processors"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "affinidi-messaging-mediator-common",
  "clap",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-text-client"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
