@@ -5,6 +5,24 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## xx March 2025 (0.10.3)
+
+* SECURITY_FIX: WARNING: There is an edge case of being able to send bad messages on behalf of another DID if you can steal the authorization tokens. This is due to the security checks being applied to session information only.
+  * Mitigation is to add additional checks to check the digital signing of messages in addition to the session info
+  * Admin commands will have additional security checks applied
+    * Stricter expiry times
+    * Can not send Admin commands anonymously (must be signed)
+
+### Mediator (0.10.3)
+
+* FIX: check_permissions() on acls was incorrectly comparing DID to DID_Hash. Should have been DID_Hash to DID_hash comparison
+  * There is no security impact from this, prior to this fix, all non-admin requests would have failed.
+
+### SDK (0.10.3)
+
+* CLEANUP: Removed authentication code from the ATM SDK
+  * Now uses the affinidi-secrets-resolver crate
+
 ## 27th March 2025 (0.10.2)
 
 ### Mediator (0.10.2)

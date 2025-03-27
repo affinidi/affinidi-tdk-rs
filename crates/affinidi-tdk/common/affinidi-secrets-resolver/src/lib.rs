@@ -159,15 +159,6 @@ impl ThreadedSecretsResolver {
     }
 }
 
-impl Drop for ThreadedSecretsResolver {
-    fn drop(&mut self) {
-        let tx = self.tx.clone();
-        tokio::task::spawn(async move {
-            let _ = tx.send(SecretTaskCommand::Terminate).await;
-        });
-    }
-}
-
 impl SecretsResolver for ThreadedSecretsResolver {
     async fn insert(&self, secret: Secret) {
         self.insert_vec(&[secret]).await;

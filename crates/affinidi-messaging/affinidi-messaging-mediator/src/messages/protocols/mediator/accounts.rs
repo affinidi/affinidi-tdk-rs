@@ -54,6 +54,7 @@ pub(crate) async fn process(
                 );
             }
         };
+        debug!("Received Mediator Account request: {:?}", request);
 
         // Process the request
         match request {

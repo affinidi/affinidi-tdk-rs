@@ -1,3 +1,4 @@
+use affinidi_did_authentication::errors::DIDAuthError;
 use affinidi_messaging_didcomm::Message;
 use affinidi_tdk_common::errors::TDKError;
 use thiserror::Error;
@@ -79,6 +80,12 @@ impl From<ATMError> for TDKError {
 impl From<TDKError> for ATMError {
     fn from(err: TDKError) -> Self {
         ATMError::TDKError(err.to_string())
+    }
+}
+
+impl From<DIDAuthError> for ATMError {
+    fn from(err: DIDAuthError) -> Self {
+        ATMError::AuthenticationError(err.to_string())
     }
 }
 

@@ -234,7 +234,13 @@ impl ATM {
             }
         };
 
-        let tokens = profile.authenticate(&self.inner).await?;
+        let (profile_did, mediator_did) = profile.dids()?;
+        // Check if authenticated
+        let tokens = self
+            .get_tdk()
+            .authentication
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
 
         let msg = message.to_owned();
 

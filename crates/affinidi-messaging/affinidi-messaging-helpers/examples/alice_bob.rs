@@ -1,17 +1,15 @@
 //! Sends a message from Alice to Bob and then retrieves it.
 
 use affinidi_messaging_didcomm::Message;
-use affinidi_messaging_sdk::{
-    ATM, config::ATMConfig, errors::ATMError, profiles::ATMProfile, protocols::Protocols,
-};
-use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
+use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile, protocols::Protocols};
+use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;
 use serde_json::json;
 use std::{
     env,
     time::{Duration, SystemTime},
 };
-use tracing::debug;
+use tracing::info;
 use tracing_subscriber::filter;
 use uuid::Uuid;
 
@@ -39,11 +37,6 @@ async fn main() -> Result<(), ATMError> {
         "default".to_string()
     };
 
-    // Instantiate TDK
-    let tdk = TDKSharedState::default().await;
-
-    let mut environment =
-        TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
     println!("Using Environment: {}", environment_name);
 
     // construct a subscriber that prints formatted traces to stdout
@@ -54,7 +47,20 @@ async fn main() -> Result<(), ATMError> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    let alice = if let Some(alice) = environment.profiles.get("Alice") {
+    // Instantiate TDK
+    let tdk = TDK::new(
+        TDKConfig::builder()
+            .with_environment_name(environment_name.clone())
+            .build()?,
+        None,
+    )
+    .await?;
+
+    let environment = &tdk.get_shared_state().environment;
+    let atm = tdk.atm.clone().unwrap();
+    let protocols = Protocols::new();
+
+    let tdk_alice = if let Some(alice) = environment.profiles.get("Alice") {
         tdk.add_profile(alice).await;
         alice
     } else {
@@ -62,8 +68,12 @@ async fn main() -> Result<(), ATMError> {
             format!("Alice not found in Environment: {}", environment_name).to_string(),
         ));
     };
+    let atm_alice = atm
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
+        .await?;
+    info!("Alice profile active");
 
-    let bob = if let Some(bob) = environment.profiles.get("Bob") {
+    let tdk_bob = if let Some(bob) = environment.profiles.get("Bob") {
         tdk.add_profile(bob).await;
         bob
     } else {
@@ -71,30 +81,16 @@ async fn main() -> Result<(), ATMError> {
             format!("Bob not found in Environment: {}", environment_name).to_string(),
         ));
     };
-
-    let mut config = ATMConfig::builder();
-
-    config = config.with_ssl_certificates(&mut environment.ssl_certificates);
-
-    // Create a new ATM Client
-    let atm = ATM::new(config.build()?, tdk).await?;
-    let protocols = Protocols::new();
-
-    debug!("Enabling Alice's Profile");
-    let alice = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, alice).await?, true)
+    let atm_bob = atm
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_bob).await?, true)
         .await?;
-
-    debug!("Enabling Bob's Profile");
-    let bob = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, bob).await?, true)
-        .await?;
+    info!("Bob profile active");
 
     let start = SystemTime::now();
 
     // Ensure Environment has a valid mediator to forward through
-    let mediator_did = if let Some(mediator) = environment.default_mediator {
-        mediator.clone()
+    let mediator_did = if let Some(mediator) = &environment.default_mediator {
+        mediator.to_string()
     } else {
         return Err(ATMError::ConfigError(
             "Environment Mediator not found".to_string(),
@@ -112,8 +108,8 @@ async fn main() -> Result<(), ATMError> {
         "Chatty Alice".into(),
         json!("Hello Bob!"),
     )
-    .to(bob.inner.did.clone())
-    .from(alice.inner.did.clone())
+    .to(atm_bob.inner.did.clone())
+    .from(atm_alice.inner.did.clone())
     .created_time(now)
     .expires_time(now + 10)
     .finalize();
@@ -129,9 +125,9 @@ async fn main() -> Result<(), ATMError> {
     let packed_msg = atm
         .pack_encrypted(
             &msg,
-            &bob.inner.did,
-            Some(&alice.inner.did),
-            Some(&alice.inner.did),
+            &atm_bob.inner.did,
+            Some(&atm_alice.inner.did),
+            Some(&atm_alice.inner.did),
         )
         .await?;
 
@@ -147,10 +143,10 @@ async fn main() -> Result<(), ATMError> {
         .routing
         .forward_message(
             &atm,
-            &alice,
+            &atm_alice,
             &packed_msg.0,
             &mediator_did,
-            &bob.inner.did,
+            &atm_bob.inner.did,
             None,
             None,
         )
@@ -163,7 +159,7 @@ async fn main() -> Result<(), ATMError> {
     println!();
 
     // Send the message
-    atm.send_message(&alice, &forward_msg, &forward_id, false, false)
+    atm.send_message(&atm_alice, &forward_msg, &forward_id, false, false)
         .await?;
 
     println!("Alice sent message to Bob");
@@ -173,7 +169,7 @@ async fn main() -> Result<(), ATMError> {
     println!("Bob receiving messages");
     match protocols
         .message_pickup
-        .live_stream_get(&atm, &bob, true, &msg_id, Duration::from_secs(5), true)
+        .live_stream_get(&atm, &atm_bob, true, &msg_id, Duration::from_secs(5), true)
         .await?
     {
         Some(msg) => {

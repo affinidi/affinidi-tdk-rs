@@ -41,8 +41,13 @@ impl OOBDiscovery {
         profile: &Arc<ATMProfile>,
         expiry: Option<Duration>,
     ) -> Result<String, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
         // Check if authenticated
-        let tokens = profile.authenticate(&atm.inner).await?;
+        let tokens = atm
+            .get_tdk()
+            .authentication
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -196,8 +201,13 @@ impl OOBDiscovery {
         profile: &Arc<ATMProfile>,
         oobid: &str,
     ) -> Result<String, ATMError> {
+        let (profile_did, mediator_did) = profile.dids()?;
         // Check if authenticated
-        let tokens = profile.authenticate(&atm.inner).await?;
+        let tokens = atm
+            .get_tdk()
+            .authentication
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
 
         let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
             return Err(ATMError::MsgSendError(format!(

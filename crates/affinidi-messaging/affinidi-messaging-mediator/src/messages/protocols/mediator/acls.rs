@@ -440,7 +440,7 @@ pub(crate) async fn process(
 pub(crate) fn check_permissions(session: &Session, dids: &[String]) -> bool {
     session.account_type == AccountType::RootAdmin
         || session.account_type == AccountType::Admin
-        || dids.len() == 1 && dids[0] == session.did
+        || dids.len() == 1 && dids[0] == session.did_hash
 }
 
 /// Helper method that generates a response message

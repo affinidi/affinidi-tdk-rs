@@ -48,8 +48,14 @@ impl ATM {
         let _span = span!(Level::DEBUG, "delete_messages");
 
         async move {
-        // Check if authenticated
-        let tokens = profile.authenticate(&self.inner).await?;
+            let (profile_did, mediator_did) = profile.dids()?;
+            // Check if authenticated
+            let tokens = self
+                .get_tdk()
+                .authentication
+                .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+                .await?;
+
         if messages.message_ids.len() > MAX_DELETED_MESSAGES {
             return  Err(ATMError::MsgSendError(format!(
                 "Operation exceeds the allowed limit. You may delete a maximum of 100 messages per request. Received {} ids.",

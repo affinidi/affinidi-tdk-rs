@@ -15,7 +15,6 @@ use crate::{
 use affinidi_messaging_didcomm::{Message, UnpackOptions, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
-    authentication::AuthRefreshResponse,
     messages::{AuthorizationResponse, GenericDataStruct, known::MessageType},
     protocols::mediator::{
         accounts::AccountType,
@@ -30,13 +29,20 @@ use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, info, span, warn};
-
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthenticationChallenge {
     pub challenge: String,
     pub session_id: String,
 }
 impl GenericDataStruct for AuthenticationChallenge {}
+
+/// Refresh tokens response from the authentication service
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+pub struct AuthRefreshResponse {
+    pub access_token: String,
+    pub access_expires_at: u64,
+}
+impl GenericDataStruct for AuthRefreshResponse {}
 
 /// Request body for POST /authenticate/challenge
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]

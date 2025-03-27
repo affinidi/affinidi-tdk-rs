@@ -118,8 +118,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("  {}{}", style("Friend Bob created with DID: ").blue(), style(&environment.profiles.get("Bob").unwrap().did).color256(208));
         environment.profiles.insert("Charlie".into(), _create_friend("Charlie", environment.default_mediator.as_deref()));
         println!("  {}{}", style("Friend Charlie created with DID: ").blue(), style(&environment.profiles.get("Charlie").unwrap().did).color256(208));
-        environment.profiles.insert("Malorie".into(), _create_friend("Malorie", environment.default_mediator.as_deref()));
-        println!("  {}{}{}{}", style("Friend(?) ").blue(), style("Malorie").red(), style(" created with DID: ").blue(), style(&environment.profiles.get("Malorie").unwrap().did).color256(208));
+        environment.profiles.insert("Mallory".into(), _create_friend("Mallory", environment.default_mediator.as_deref()));
+        println!("  {}{}{}{}", style("Friend(?) ").blue(), style("Mallory").red(), style(" created with DID: ").blue(), style(&environment.profiles.get("Mallory").unwrap().did).color256(208));
     }
 
     if Confirm::with_theme(&theme)
