@@ -10,7 +10,7 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 ### Mediator (0.10.2)
 
 * FIX: Sending a messages to a DID unknown to the mediator, first message would succeed and then other messages would fail
-  * Due to the DID account not being setup correctly. When a DID is unknown, the mediator will correctly setiup the DID account
+  * Due to the DID account not being setup correctly. When a DID is unknown, the mediator will correctly setup the DID account
 * FEATURE: Improved logging on session errors. Includes DID Hash so you can determine originating DID
 
 ### SDK (0.10.2)
