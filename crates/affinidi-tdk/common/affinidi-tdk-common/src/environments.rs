@@ -70,13 +70,13 @@ impl TDKEnvironments {
     ) -> Result<TDKEnvironment> {
         let file_path = file_path.unwrap_or("environments.json");
 
-        let profiles = TDKEnvironments::load_file(file_path)?;
+        let environments = TDKEnvironments::load_file(file_path)?;
 
-        if let Some(profile) = profiles.environments.get(environment_name) {
-            Ok(profile.clone())
+        if let Some(environment) = environments.environments.get(environment_name) {
+            Ok(environment.clone())
         } else {
             Err(TDKError::Profile(format!(
-                "Couldn't find profile ({})!",
+                "Couldn't find environment ({})!",
                 environment_name
             )))
         }

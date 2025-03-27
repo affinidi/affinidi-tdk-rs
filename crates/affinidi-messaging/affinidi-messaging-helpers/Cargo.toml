@@ -61,3 +61,6 @@ tracing-subscriber = { version = "0.3", features = [
     "valuable",
 ] }
 uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+affinidi-tdk.workspace = true

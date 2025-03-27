@@ -41,10 +41,10 @@ did-peer = { version = "0.5.2", path = "crates/affinidi-did-resolver/affinidi-di
 affinidi-meeting-place = { version = "0.1.6", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-helpers = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
-affinidi-messaging-mediator = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
+affinidi-messaging-mediator = { version = "0.10.2", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
-affinidi-messaging-sdk = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.10.2", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
 affinidi-messaging-text-client = { version = "0.10.1", path = "./crates/affinidi-messaging/affinidi-messaging-text-client" }
 affinidi-tdk = { version = "0.1.7", path = "./crates/affinidi-tdk/affinidi-tdk" }
 affinidi-did-authentication = { version = "0.1.6", path = "./crates/affinidi-tdk/common/affinidi-did-authentication" }

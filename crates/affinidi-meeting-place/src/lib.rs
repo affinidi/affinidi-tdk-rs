@@ -8,9 +8,12 @@ use errors::{MeetingPlaceError, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
+use ssi::dids::{Document, document::service::Endpoint};
 use tracing::debug;
 
 pub mod errors;
+pub mod offers;
+pub mod vcard;
 
 /// Affinidi Meeting Place SDK
 #[derive(Clone)]
@@ -35,7 +38,9 @@ impl MeetingPlace {
             .authenticate(profile.did, self.mp_did.clone(), 3, None)
             .await?;
 
-        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client, "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase", &json!({"offerPhrase": phrase}).to_string(), &tokens).await?;
+        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client,
+             "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase",
+              &json!({"offerPhrase": phrase}).to_string(), &tokens).await?;
 
         Ok(response.is_in_use)
     }
@@ -49,7 +54,7 @@ struct CheckOfferPhraseResponse {
     is_in_use: bool,
 }
 
-async fn _http_post<T>(
+pub(crate) async fn _http_post<T>(
     client: &Client,
     url: &str,
     body: &str,
@@ -92,4 +97,41 @@ where
     serde_json::from_str::<T>(&response_body).map_err(|e| {
         MeetingPlaceError::API(format!("Couldn't deserialize API body response: {}", e))
     })
+}
+
+/// Find the [serviceEndpoint](https://www.w3.org/TR/did-1.0/#services) with type `DIDCommMessaging` from a DID Document
+/// # Arguments
+/// * `doc` - The DID Document to search
+///
+/// # Returns
+/// URI of the service endpoint if it exists
+pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
+    if let Some(service) = doc.service("service") {
+        if let Some(endpoint) = &service.service_endpoint {
+            let mut uris = Vec::new();
+            for endpoint in endpoint {
+                match endpoint {
+                    Endpoint::Uri(e) => {
+                        uris.push(e.to_string());
+                    }
+                    Endpoint::Map(e) => {
+                        debug!("Endpoint: {:?}", e);
+                        if let Some(uri) = e.get("uri") {
+                            uris.push(
+                                uri.to_string()
+                                    .trim_start_matches('"')
+                                    .trim_end_matches('"')
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            uris
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    }
 }

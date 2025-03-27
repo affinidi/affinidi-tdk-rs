@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::SystemTime};
 
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha256::digest;
 use tracing::{Instrument, Level, debug, span};
@@ -23,6 +24,12 @@ pub struct TrustPingSent {
     pub response: SendMessageResponse,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct TrustPingBody {
+    response_requested: bool,
+}
+
 impl TrustPing {
     /// Sends a DIDComm Trust-Ping message
     /// - `to_did` - The DID to send the ping to
@@ -41,7 +48,7 @@ impl TrustPing {
         expect_pong: bool,
         wait_response: bool,
     ) -> Result<TrustPingSent, ATMError> {
-        let _span = span!(Level::DEBUG, "create_ping_message",);
+        let _span = span!(Level::DEBUG, "send_ping",);
         async move {
             debug!(
                 "Pinging {}, signed?({}) pong_response_expected?({}) wait_response({})",
@@ -50,34 +57,9 @@ impl TrustPing {
 
             let (profile_did, _) = profile.dids()?;
 
-            // If an anonymous ping is being sent, we should ensure that expect_response is false
-            let expect_response = if !signed && expect_pong {
-                debug!("Anonymous pings cannot expect a response, changing to false...");
-                false
-            } else {
-                expect_pong
-            };
+            let from_did = if signed { Some(profile_did) } else { None };
 
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            let mut msg = Message::build(
-                Uuid::new_v4().into(),
-                "https://didcomm.org/trust-ping/2.0/ping".to_owned(),
-                json!({"response_requested": expect_response}),
-            )
-            .to(to_did.to_owned());
-
-            let from_did = if !signed {
-                // Can support anonymous pings
-                None
-            } else {
-                msg = msg.from(profile_did.to_string());
-                Some(profile_did)
-            };
-            let msg = msg.created_time(now).expires_time(now + 300).finalize();
+            let msg = self.generate_ping_message(from_did, to_did, expect_pong)?;
             let mut msg_info = TrustPingSent {
                 message_id: msg.id.clone(),
                 message_hash: "".to_string(),
@@ -113,5 +95,91 @@ impl TrustPing {
         }
         .instrument(_span)
         .await
+    }
+
+    /// Generate a DIDComm PlainText Trust-Ping message
+    /// - `from_did` - The DID to send the ping from (anonymous if set to None)
+    /// - `to_did` - The DID to send the ping to
+    /// - `expect_pong` - whether a ping response from endpoint is expected
+    ///
+    /// Returns: Plaintext DIDComm Message
+    pub fn generate_ping_message(
+        &self,
+        from_did: Option<&str>,
+        to_did: &str,
+        expect_pong: bool,
+    ) -> Result<Message, ATMError> {
+        let _span = span!(Level::DEBUG, "generate_ping_message",).entered();
+        debug!(
+            "Pinging ({}) from ({:?}) pong_response_expected?({})",
+            to_did, from_did, expect_pong
+        );
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let expect_pong = if from_did.is_none() && expect_pong {
+            debug!("Anonymous pings cannot expect a response, changing to false...");
+            false
+        } else {
+            true
+        };
+
+        let mut msg = Message::build(
+            Uuid::new_v4().into(),
+            "https://didcomm.org/trust-ping/2.0/ping".to_owned(),
+            json!(TrustPingBody {
+                response_requested: expect_pong
+            }),
+        )
+        .to(to_did.to_owned());
+
+        if let Some(from) = from_did {
+            msg = msg.from(from.to_string());
+        };
+        Ok(msg.created_time(now).expires_time(now + 300).finalize())
+    }
+
+    /// Generate a Trust-Ping Pong Response DIDComm PlainText message
+    /// - `ping` - The DIDComm Ping Message
+    /// - `from_did` - The DID to send the pong from (if None then will be anonymous)
+    ///
+    /// Returns: Plaintext DIDComm Message
+    pub fn generate_pong_message(
+        &self,
+        ping: &Message,
+        from_did: Option<&str>,
+    ) -> Result<Message, ATMError> {
+        let _span = span!(Level::DEBUG, "generate_pong_message",).entered();
+        debug!("Pong response to ({:?}) from ({:?})", ping.to, ping.from);
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let to_did = if let Some(from) = &ping.from {
+            from.to_string()
+        } else {
+            return Err(ATMError::MsgSendError(
+                "Anonymous Ping received, can't send a Pong response".to_string(),
+            ));
+        };
+
+        let mut msg = Message::build(
+            Uuid::new_v4().into(),
+            "https://didcomm.org/trust-ping/2.0/ping-response".to_owned(),
+            serde_json::Value::Null,
+        )
+        .thid(ping.id.clone())
+        .to(to_did);
+
+        if let Some(from_did) = from_did {
+            msg = msg.from(from_did.to_string());
+        }
+
+        Ok(msg.created_time(now).expires_time(now + 300).finalize())
     }
 }

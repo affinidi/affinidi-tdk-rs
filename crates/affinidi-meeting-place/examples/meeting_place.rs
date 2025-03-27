@@ -5,6 +5,7 @@
 use affinidi_meeting_place::{
     MeetingPlace,
     errors::{MeetingPlaceError, Result},
+    offers::{Offer, RegisterOffer},
 };
 use affinidi_tdk_common::{TDKSharedState, environments::TDKEnvironments};
 use clap::{Parser, Subcommand};
@@ -41,6 +42,9 @@ struct Cli {
 enum Commands {
     /// Check-Offer-Phrase
     CheckOfferPhrase(OfferPhraseArgs),
+
+    /// Register-Offer
+    RegisterOffer(Box<RegisterOfferArgs>),
 }
 
 #[derive(Debug, Parser)]
@@ -49,6 +53,62 @@ struct OfferPhraseArgs {
     /// Meeting Place Offer Phrase
     #[arg(short, long)]
     phrase: String,
+}
+
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct RegisterOfferArgs {
+    /// Friendly UX Name for the offer
+    #[arg(long)]
+    offer_name: String,
+
+    /// Description for the offer
+    #[arg(long)]
+    description: String,
+
+    /// Mediator DID (will use default Environment if not specified)
+    #[arg(long)]
+    mediator_did: Option<String>,
+
+    /// (Optional) Surname of the contact person
+    #[arg(long)]
+    contact_surname: Option<String>,
+
+    /// (Optional) Given name of the contact person
+    #[arg(long)]
+    contact_given_name: Option<String>,
+
+    /// (Optional) Email of the contact person
+    #[arg(long)]
+    contact_email: Option<String>,
+
+    /// (Optional) Phone number of the contact person
+    #[arg(long)]
+    contact_phone: Option<String>,
+
+    #[arg(long)]
+    /// (Optional) ISO-8601 date-time (2024-12-31T23:59:59Z)
+    valid_until: Option<String>,
+
+    #[arg(long)]
+    /// (Optional) Maximum number of times the offer can be used
+    maximum_usage: Option<usize>,
+
+    /// (Optional) Push notification token for the device
+    #[arg(long)]
+    device_token: Option<String>,
+
+    /// (Optional) Platform Type
+    #[arg(long)]
+    platform_type: Option<u32>,
+
+    /// (Optional) Custom Offer Phrase
+    #[arg(long)]
+    custom_phrase: Option<String>,
+
+    /// (Optional) Contact Attributes
+    #[arg(long)]
+    contact_attributes: Option<u32>,
 }
 
 #[tokio::main]
@@ -106,9 +166,9 @@ async fn main() -> Result<()> {
         )));
     };
 
+    let mp = MeetingPlace::new(args.mp_did);
     match args.command {
         Commands::CheckOfferPhrase(check_offer_phrase) => {
-            let mp = MeetingPlace::new(args.mp_did);
             let result = mp
                 .check_offer_phrase(
                     &tdk,
@@ -117,6 +177,34 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             info!("Offer Phrase is in use? {}", result);
+        }
+        Commands::RegisterOffer(register_offer) => {
+            let mediator_did = if let Some(mediator_did) = register_offer.mediator_did {
+                mediator_did
+            } else if let Some(mediator_did) = &environment_profile.mediator {
+                mediator_did.to_string()
+            } else {
+                return Err(MeetingPlaceError::TDK(
+                    "No mediator DID specified and no default mediator in profile".to_string(),
+                ));
+            };
+
+            let mut offer_details = RegisterOffer::create(
+                &register_offer.offer_name,
+                &register_offer.description,
+                &environment_profile.did,
+                &mediator_did,
+            )?;
+
+            if let Some(custom_phrase) = register_offer.custom_phrase {
+                offer_details.custom_phrase(&custom_phrase);
+            }
+
+            let offer_details = offer_details.build(&tdk).await?;
+
+            let mut offer = Offer::new_from_register_offer(offer_details);
+            offer.register_offer(&mp, &tdk, environment_profile).await?;
+            info!("Offer registered: {:#?}", offer.offer_details);
         }
     };
 

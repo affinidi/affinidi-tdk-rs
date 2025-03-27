@@ -16,12 +16,13 @@ impl Database {
     /// Stores a message in the database
     /// Returns the message_id (hash of the message)
     /// - expires_at: The timestamp at which the message expires (since epoch in seconds)
+    /// - `from_hash`: The hash of the DID of the sender
     pub async fn store_message(
         &self,
         session_id: &str,
         message: &str,
         to_did: &str,
-        from_did: Option<&str>,
+        from_hash: Option<&str>,
         expires_at: u64,
     ) -> Result<String, MediatorError> {
         let _span = span!(Level::DEBUG, "store_message", session_id = session_id);
@@ -29,17 +30,11 @@ impl Database {
             let message_hash = digest(message.as_bytes());
             let to_hash = digest(to_did.as_bytes());
 
-            let from_hash = if let Some(from_did) = from_did {
-                digest(from_did)
-            } else {
-                "ANONYMOUS".to_string()
-            };
-
+            let from_hash = from_hash.unwrap_or("ANONYMOUS");
             debug!(
-                "trying to store msg_id({}), from({:?}) from_hash({:?}) to({}) to_hash({}), bytes({})",
+                "trying to store msg_id({}), from_hash({:?}) to({}) to_hash({}), bytes({})",
                 message_hash,
-                from_did,
-                from_did.map(|h| digest(h.as_bytes())),
+                from_hash,
                 to_did,
                 &to_hash,
                 message.len()
@@ -47,14 +42,17 @@ impl Database {
 
             let mut conn = self.0.get_async_connection().await?;
             deadpool_redis::redis::cmd("FCALL")
-            .arg("store_message")
+                .arg("store_message")
                 .arg(1)
                 .arg(&message_hash)
                 .arg(message)
                 .arg(expires_at)
                 .arg(message.len())
                 .arg(&to_hash)
-                .arg(&from_hash).exec_async(&mut conn).await.map_err(|err| {
+                .arg(from_hash)
+                .exec_async(&mut conn)
+                .await
+                .map_err(|err| {
                     event!(Level::ERROR, "Couldn't store message in database: {}", err);
                     MediatorError::DatabaseError(
                         session_id.into(),
@@ -62,7 +60,10 @@ impl Database {
                     )
                 })?;
 
-            info!("Message hash({}) from({}) to({}) stored in database", message_hash, from_hash, to_hash);
+            info!(
+                "Message hash({}) from({}) to({}) stored in database",
+                message_hash, from_hash, to_hash
+            );
 
             Ok(message_hash)
         }
