@@ -1,12 +1,12 @@
 [package]
 name = 'affinidi-messaging-didcomm'
 version = "0.10.2"
+description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
     'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
     'Glenn Gore <glenn@affinidi.com>',
 ]
 edition.workspace = true
-description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 license = 'Apache-2.0'
 repository.workspace = true
 readme = 'README.md'

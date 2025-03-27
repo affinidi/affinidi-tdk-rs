@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-meeting-place"
-description = "Affinidi Meeting Place SDK. Discover and connect with others in a secure and private way."
 version = "0.1.6"
+description = "Affinidi Meeting Place SDK. Discover and connect with others in a secure and private way."
 edition.workspace = true
 authors.workspace = true
 readme.workspace = true
