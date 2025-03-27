@@ -42,7 +42,7 @@ async fn _store_message(
             &session.session_id,
             data,
             to_did,
-            Some(&state.config.mediator_did),
+            Some(&state.config.mediator_did_hash),
             expiry,
         )
         .await
@@ -258,7 +258,7 @@ pub(crate) async fn store_forwarded_message(
     state: &SharedData,
     session: &Session,
     message: &str,
-    sender: Option<&str>,
+    sender_hash: Option<&str>,
     recipient: &str,
     expires_at: Option<u64>,
 ) -> Result<(), MediatorError> {
@@ -301,7 +301,13 @@ pub(crate) async fn store_forwarded_message(
 
         match state
             .database
-            .store_message(&session.session_id, message, recipient, sender, expires_at)
+            .store_message(
+                &session.session_id,
+                message,
+                recipient,
+                sender_hash,
+                expires_at,
+            )
             .await
         {
             Ok(msg_id) => {

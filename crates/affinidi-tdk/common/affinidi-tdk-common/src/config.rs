@@ -7,7 +7,7 @@ use affinidi_secrets_resolver::ThreadedSecretsResolver;
 
 use crate::errors::TDKError;
 
-const DEFAULT_ENVIRONMENT_PATH: &str = "environment.json";
+const DEFAULT_ENVIRONMENT_PATH: &str = "environments.json";
 
 #[derive(Clone)]
 pub struct TDKConfig {

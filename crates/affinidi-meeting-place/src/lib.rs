@@ -3,33 +3,135 @@
  */
 
 use affinidi_did_authentication::AuthorizationTokens;
+use affinidi_tdk_common::{TDKSharedState, profiles::TDKProfile};
+use errors::{MeetingPlaceError, Result};
+use reqwest::Client;
+use serde::Deserialize;
+use serde_json::json;
+use ssi::dids::{Document, document::service::Endpoint};
 use tracing::debug;
+
+pub mod errors;
+pub mod offers;
+pub mod vcard;
 
 /// Affinidi Meeting Place SDK
 #[derive(Clone)]
 pub struct MeetingPlace {
-    /// The Meeting Place DID
-    pub(crate) _mp_did: String,
-
-    /// The Authorization Tokens for Meeting Place
-    _auth_tokens: Option<AuthorizationTokens>,
+    /// DID for MeetingPlace
+    mp_did: String,
 }
 
 impl MeetingPlace {
-    /// Create a new instance of the Meeting Place SDK
-    /// # Arguments
-    /// * `mp_did` - The Meeting Place DID
     pub fn new(mp_did: String) -> Self {
-        debug!(
-            "Creating new Meeting Place SDK instance with DID: {}",
-            mp_did
-        );
-        Self {
-            _mp_did: mp_did,
-            _auth_tokens: None,
+        Self { mp_did }
+    }
+
+    pub async fn check_offer_phrase(
+        &self,
+        tdk: &TDKSharedState,
+        profile: TDKProfile,
+        phrase: &str,
+    ) -> Result<bool> {
+        let tokens = tdk
+            .authentication
+            .authenticate(profile.did, self.mp_did.clone(), 3, None)
+            .await?;
+
+        let response = _http_post::<CheckOfferPhraseResponse>(&tdk.client,
+             "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/check-offer-phrase",
+              &json!({"offerPhrase": phrase}).to_string(), &tokens).await?;
+
+        Ok(response.is_in_use)
+    }
+}
+
+// ************************************************************************************************
+
+#[derive(Debug, Deserialize)]
+struct CheckOfferPhraseResponse {
+    #[serde(rename = "isInUse")]
+    is_in_use: bool,
+}
+
+pub(crate) async fn _http_post<T>(
+    client: &Client,
+    url: &str,
+    body: &str,
+    tokens: &AuthorizationTokens,
+) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    debug!("POSTing to {}", url);
+    debug!("Body: {}", body);
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", tokens.access_token))
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| MeetingPlaceError::API(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+
+    let response_status = response.status();
+    let response_body = response
+        .text()
+        .await
+        .map_err(|e| MeetingPlaceError::API(format!("Couldn't get HTTP body: {:?}", e)))?;
+
+    if !response_status.is_success() {
+        if response_status.as_u16() == 401 {
+            return Err(MeetingPlaceError::Authentication(
+                "Permission Denied (401: Unauthorized)`".into(),
+            ));
+        } else {
+            return Err(MeetingPlaceError::API(format!(
+                "Failed to get authentication response. url: {}, status: {}",
+                url, response_status
+            )));
         }
     }
 
-    /// Authenticate with Meeting Place
-    pub fn authenticate(&self) {}
+    debug!("response body: {}", response_body);
+    serde_json::from_str::<T>(&response_body).map_err(|e| {
+        MeetingPlaceError::API(format!("Couldn't deserialize API body response: {}", e))
+    })
+}
+
+/// Find the [serviceEndpoint](https://www.w3.org/TR/did-1.0/#services) with type `DIDCommMessaging` from a DID Document
+/// # Arguments
+/// * `doc` - The DID Document to search
+///
+/// # Returns
+/// URI of the service endpoint if it exists
+pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
+    if let Some(service) = doc.service("service") {
+        if let Some(endpoint) = &service.service_endpoint {
+            let mut uris = Vec::new();
+            for endpoint in endpoint {
+                match endpoint {
+                    Endpoint::Uri(e) => {
+                        uris.push(e.to_string());
+                    }
+                    Endpoint::Map(e) => {
+                        debug!("Endpoint: {:?}", e);
+                        if let Some(uri) = e.get("uri") {
+                            uris.push(
+                                uri.to_string()
+                                    .trim_start_matches('"')
+                                    .trim_end_matches('"')
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            uris
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    }
 }

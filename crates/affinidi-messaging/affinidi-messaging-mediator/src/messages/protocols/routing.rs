@@ -55,11 +55,17 @@ pub(crate) async fn process(
         // Get the next account if it exists
         let next_account = match state.database.account_get(&next_did_hash).await {
             Ok(Some(next_account)) => next_account,
-            Ok(None) => Account {
-                did_hash: next_did_hash.clone(),
-                acls: state.config.security.global_acl_default.to_u64(),
-                ..Default::default()
-            },
+            Ok(None) => {
+                debug!("Next account not found, creating a new one");
+                state
+                    .database
+                    .account_add(
+                        &next_did_hash,
+                        &state.config.security.global_acl_default,
+                        None,
+                    )
+                    .await?
+            }
             Err(e) => {
                 return Err(MediatorError::DatabaseError(
                     session.session_id.clone(),
@@ -318,7 +324,7 @@ pub(crate) async fn process(
                 state,
                 session,
                 &data,
-                msg.from.as_deref(),
+                Some(&from_account.did_hash),
                 &next,
                 Some(expires_at),
             )

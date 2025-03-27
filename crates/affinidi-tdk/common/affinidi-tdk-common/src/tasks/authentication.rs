@@ -154,9 +154,10 @@ impl AuthenticationCache {
     }
 
     /// Start the Authentication Task
-    pub async fn start(self) -> JoinHandle<()> {
+    pub async fn start(&self) -> JoinHandle<()> {
+        let self_clone = self.clone();
         tokio::spawn(async move {
-            self.run().await;
+            self_clone.run().await;
         })
     }
 

@@ -200,8 +200,10 @@ impl Database {
             session.challenge.clone_from(challenge);
         } else {
             warn!(
-                "{}: No challenge found when retrieving session({})!",
-                session_id, session_id
+                "{}: No challenge found when retrieving session({}) did_hash({})!",
+                session_id,
+                session_id,
+                digest(did)
             );
             return Err(MediatorError::SessionError(
                 session_id.into(),

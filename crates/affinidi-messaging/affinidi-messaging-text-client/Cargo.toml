@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.10.1"
+version = "0.10.2"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true

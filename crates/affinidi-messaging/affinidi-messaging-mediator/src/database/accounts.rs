@@ -138,6 +138,7 @@ impl Database {
 
             Ok(Account {
                 did_hash: did_hash.to_string(),
+                acls: acls.to_u64(),
                 ..Default::default()
             })
         }

@@ -5,14 +5,28 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## 27th March 2025 (0.10.2)
+
+### Mediator (0.10.2)
+
+* FIX: Sending a messages to a DID unknown to the mediator, first message would succeed and then other messages would fail
+  * Due to the DID account not being setup correctly. When a DID is unknown, the mediator will correctly setup the DID account
+* FEATURE: Improved logging on session errors. Includes DID Hash so you can determine originating DID
+
+### SDK (0.10.2)
+
+* Trust-Ping protocol added the following methods
+  * generate_ping_message(): - Creates a DIDComm Plaintext message only
+  * generate_pong_message(): - Creates a pong response Plaintext message only
+
 ## 24th March 2025 (0.10.1)
 
-### Mediator
+### Mediator (0.10.1)
 
 * Ability to specify custom logging attributes to the statistics logs, useful for log aggregation.
   * NOTE: This uses an unstable feature of tracing.
 
-### Examples
+### Examples (0.10.1)
 
 * Fixed loading of secrets into TDK
 

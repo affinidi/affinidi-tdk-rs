@@ -80,8 +80,13 @@ impl Database {
                     "Database schema version ({}) doesn't match mediator version ({}).",
                     schema_version, mediator_version
                 );
-                self.upgrade_0_10_0(&config.security.global_acl_default)
-                    .await?;
+                if schema_version < Version::parse("0.10.0").unwrap() {
+                    // Upgrade the database schema to 0.10.0
+                    self.upgrade_0_10_0(&config.security.global_acl_default)
+                        .await?;
+                    info!("Database schema version updated to ({})", mediator_version);
+                }
+                self.upgrade_0_10_2().await?;
                 info!("Database schema version updated to ({})", mediator_version);
             }
         } else {
