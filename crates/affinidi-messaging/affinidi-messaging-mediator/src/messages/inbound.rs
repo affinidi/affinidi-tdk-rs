@@ -3,11 +3,14 @@ use std::time::SystemTime;
 use crate::{
     SharedData,
     database::session::Session,
-    messages::{MessageHandler, store::store_message},
+    messages::{MessageHandler, error_response::generate_error_response, store::store_message},
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata, UnpackOptions, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::sending::InboundMessageResponse;
+use affinidi_messaging_sdk::messages::{
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    sending::InboundMessageResponse,
+};
 use sha256::digest;
 use tracing::{Instrument, debug, info, span};
 
@@ -61,8 +64,35 @@ pub(crate) async fn handle_inbound(
 
                     debug!("message unpacked:\n{:#?}", msg);
 
+                    // Allow anonymous (unsigned) messages?
+                    if metadata.sign_from.is_none()
+                        && state.config.security.block_anonymous_outer_envelope
+                    {
+                        return Err(MediatorError::PermissionError(
+                            session.session_id.clone(),
+                            "Anonymous messages sent to the mediator are NOT allowed".into(),
+                        ));
+                    }
+
+                    // Does the signing key match the session DID?
+                    if state.config.security.force_session_did_match {
+                        match check_session_signing_match(session, &metadata.sign_from) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
+                                    ProblemReportSorter::Error,
+                                    ProblemReportScope::Protocol,
+                                    "unauthorized".into(),
+                                    "unauthorized to access Mediator Administration protocol. Session mismatch to admin DID!".into(),
+                                    vec![e.to_string()], None
+                                ), false)?;
+                                return store_message(state, session, &error, &metadata).await;
+                            },
+                        }
+                    }
+
                     // Process the message
-                    let message_response = msg.process(state, session).await?;
+                    let message_response = msg.process(state, session, &metadata).await?;
                     debug!("message processed:\n{:#?}", message_response);
 
                     store_message(state, session, &message_response, &metadata).await
@@ -128,4 +158,22 @@ pub(crate) async fn handle_inbound(
     }
     .instrument(_span)
     .await
+}
+
+/// Ensure the Session DID and the message signing DID match
+fn check_session_signing_match(
+    session: &Session,
+    sign_from: &Option<String>,
+) -> Result<(), MediatorError> {
+    if let Some(sign_from) = sign_from {
+        if let Some(sign_did) = sign_from.split_once('#') {
+            if sign_did.0 == session.did {
+                return Ok(());
+            }
+        }
+    }
+    Err(MediatorError::PermissionError(
+        session.session_id.clone(),
+        "Message signature does not match session DID".into(),
+    ))
 }

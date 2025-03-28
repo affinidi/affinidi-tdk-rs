@@ -61,6 +61,10 @@ pub struct SecurityConfigRaw {
     pub jwt_access_expiry: String,
     pub jwt_refresh_expiry: String,
     pub cors_allow_origin: Option<String>,
+    pub block_anonymous_outer_envelope: String,
+    pub block_remote_admin_msgs: String,
+    pub force_session_did_match: String,
+    pub admin_messages_expiry: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -82,6 +86,10 @@ pub struct SecurityConfig {
     pub jwt_refresh_expiry: u64,
     #[serde(skip_serializing)]
     pub cors_allow_origin: CorsLayer,
+    pub block_anonymous_outer_envelope: bool,
+    pub force_session_did_match: bool,
+    pub block_remote_admin_msgs: bool,
+    pub admin_messages_expiry: u64,
 }
 
 impl Debug for SecurityConfig {
@@ -101,6 +109,13 @@ impl Debug for SecurityConfig {
             .field("jwt_access_expiry", &self.jwt_access_expiry)
             .field("jwt_refresh_expiry", &self.jwt_refresh_expiry)
             .field("cors_allow_origin", &self.cors_allow_origin)
+            .field(
+                "block_anonymous_outer_envelope",
+                &self.block_anonymous_outer_envelope,
+            )
+            .field("force_session_did_match", &self.force_session_did_match)
+            .field("block_remote_admin_msgs", &self.block_remote_admin_msgs)
+            .field("admin_messages_expiry", &self.admin_messages_expiry)
             .finish()
     }
 }
@@ -131,6 +146,10 @@ impl SecurityConfig {
                     Method::PATCH,
                     Method::PUT,
                 ]),
+            block_anonymous_outer_envelope: true,
+            force_session_did_match: true,
+            block_remote_admin_msgs: true,
+            admin_messages_expiry: 3,
         }
     }
 }
@@ -164,8 +183,26 @@ impl SecurityConfigRaw {
             ssl_key_file: self.ssl_key_file.clone(),
             jwt_access_expiry: self.jwt_access_expiry.parse().unwrap_or(900),
             jwt_refresh_expiry: self.jwt_refresh_expiry.parse().unwrap_or(86_400),
+            block_anonymous_outer_envelope: self
+                .block_anonymous_outer_envelope
+                .parse()
+                .unwrap_or(true),
+            force_session_did_match: self.force_session_did_match.parse().unwrap_or(true),
+            block_remote_admin_msgs: self.block_remote_admin_msgs.parse().unwrap_or(true),
+            admin_messages_expiry: self.admin_messages_expiry.parse().unwrap_or(3),
             ..SecurityConfig::default().await
         };
+
+        // Check if conflicting config on anonymous and force session_match
+        if !config.block_anonymous_outer_envelope && config.force_session_did_match {
+            eprintln!(
+                "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false"
+            );
+            return Err(MediatorError::ConfigError(
+                "NA".into(),
+                "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false".into(),
+            ));
+        }
 
         // Convert the default ACL Set into a GlobalACLSet
         config.global_acl_default = MediatorACLSet::from_string_ruleset(&self.global_acl_default)

@@ -204,6 +204,7 @@ dependencies = [
 name = "affinidi-messaging-helpers"
 version = "0.10.2"
 dependencies = [
+ "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
  "affinidi-messaging-sdk",

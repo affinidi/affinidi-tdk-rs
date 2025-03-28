@@ -64,3 +64,4 @@ uuid = { version = "1.15", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-tdk.workspace = true
+affinidi-did-authentication.workspace = true

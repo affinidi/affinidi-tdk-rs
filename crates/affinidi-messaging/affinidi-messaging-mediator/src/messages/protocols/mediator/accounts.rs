@@ -6,7 +6,7 @@ use crate::{
     database::session::Session,
     messages::{ProcessMessageResponse, error_response::generate_error_response},
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -25,10 +25,59 @@ pub(crate) async fn process(
     msg: &Message,
     state: &SharedData,
     session: &Session,
+    metadata: &UnpackMetadata,
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "mediator_accounts");
 
     async move {
+        // Check if message is valid from an expiry perspective (for any admin accounts)
+        if session.account_type == AccountType::Admin
+        || session.account_type == AccountType::RootAdmin
+        {
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            if let Some(created_time) = msg.created_time {
+                if (created_time + state.config.security.admin_messages_expiry) >= now
+                    || created_time > now
+                {
+                    warn!("ADMIN related message has an invalid created_time header.");
+                    return generate_error_response(
+                        state,
+                        session,
+                        &msg.id,
+                        ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "expired".into(),
+                            "admin related message does not meet mediator created_time constraints"
+                                .into(),
+                            vec![],
+                            None,
+                        ),
+                        false,
+                    );
+                }
+            } else {
+                warn!("ADMIN related message has no created_time header. Required.");
+                return generate_error_response(
+                    state,
+                    session,
+                    &msg.id,
+                    ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "missing_expiry".into(),
+                        "missing created_time header on an admin related message".into(),
+                        vec![],
+                        None,
+                    ),
+                    false,
+                );
+            }
+        }
+
         // Parse the message body
         let request: MediatorAccountRequest = match serde_json::from_value(msg.body.clone()) {
             Ok(request) => request,
@@ -59,7 +108,7 @@ pub(crate) async fn process(
         match request {
             MediatorAccountRequest::AccountGet(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, &[did_hash.clone()]) {
+                if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return generate_error_response(
                         state,
@@ -212,7 +261,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountRemove(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, &[did_hash.clone()]) {
+                if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return generate_error_response(
                         state,
@@ -374,7 +423,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountChangeQueueLimits {did_hash, send_queue_limit, receive_queue_limit } => {
                  // Check permissions and ACLs
-                 if !check_permissions(session, &[did_hash.clone()]) {
+                 if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return generate_error_response(
                         state,
