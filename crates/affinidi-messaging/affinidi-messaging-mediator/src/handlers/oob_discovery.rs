@@ -16,13 +16,16 @@
 use crate::{SharedData, database::session::Session};
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::protocols::oob_discovery::OOBInviteResponse;
+use affinidi_messaging_sdk::protocols::{
+    mediator::accounts::AccountType, oob_discovery::OOBInviteResponse,
+};
 use axum::{
     Json,
     extract::{Query, State},
 };
 use http::StatusCode;
 use serde::Deserialize;
+use subtle::ConstantTimeEq;
 
 #[derive(Deserialize)]
 pub struct Parameters {
@@ -74,7 +77,7 @@ pub async fn oobid_handler(
     oobid: Query<Parameters>,
 ) -> Result<(StatusCode, Json<SuccessResponse<String>>), AppError> {
     match state.database.oob_discovery_get(&oobid._oobid).await? {
-        Some(invite) => Ok((
+        Some((invite, _)) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
                 sessionId: "NA".into(),
@@ -106,11 +109,37 @@ pub async fn delete_oobid_handler(
     State(state): State<SharedData>,
     oobid: Query<Parameters>,
 ) -> Result<(StatusCode, Json<SuccessResponse<String>>), AppError> {
-    // ACL Check
-    if !session.acls.get_create_invites().0 {
-        return Err(
-            MediatorError::ACLDenied("DID does not have create_invites access".into()).into(),
-        );
+    // Check if non ADMIN level account, do they own this OOB invite?
+    if session.account_type != AccountType::Admin && session.account_type != AccountType::RootAdmin
+    {
+        let oob_did_owner = match state.database.oob_discovery_get(&oobid._oobid).await? {
+            Some((_, oob_owner)) => oob_owner,
+            _ => {
+                return Ok((
+                    StatusCode::OK,
+                    Json(SuccessResponse {
+                        sessionId: "NA".into(),
+                        httpCode: StatusCode::NO_CONTENT.as_u16(),
+                        errorCode: 0,
+                        errorCodeStr: "NA".to_string(),
+                        message: "NO CONTENT".to_string(),
+                        data: None,
+                    }),
+                ));
+            }
+        };
+
+        if oob_did_owner
+            .as_bytes()
+            .ct_eq(session.did_hash.as_bytes())
+            .unwrap_u8()
+            == 0
+        {
+            return Err(MediatorError::ACLDenied(
+                "DID does not have ownership of the OOB Invite".into(),
+            )
+            .into());
+        }
     }
 
     let response = state.database.oob_discovery_delete(&oobid._oobid).await?;

@@ -22,6 +22,9 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 * FEATURE: Two new mediator configuration options added:
   * `block_anonymous_outer_envelope` Ensures that all messages delivered to the mediator MUST be signed.
   * `block_remote_admin_msgs` Ensures that all admin messages must be delivered from the admin DID itself, can not be forwarded by another party.
+  * `admin_messages_expiry` Puts a tight tolerance on admin messages to limit replay attacks
+* CHANGE: OOB Invites are now represented as a HASH and not as a SET
+  * Only the owner of the OOB Invite or an ADMIN level account can delete OOB Invites
 
 ### SDK (0.10.3)
 

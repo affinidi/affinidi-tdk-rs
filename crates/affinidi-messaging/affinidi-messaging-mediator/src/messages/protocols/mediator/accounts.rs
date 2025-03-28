@@ -356,10 +356,31 @@ pub(crate) async fn process(
                     ), false);
                 }
 
+                // Only RootAdmin account can change account type to RootAdmin
+                if _type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
+                    warn!("DID ({}) is not a RootAdmin account", session.did_hash);
+                    return generate_error_response(state, session, &msg.id, ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "unauthorized".into(),
+                        "unauthorized to change account type to RootAdmin. Must be a RootAdmin for this Mediator!".into(),
+                        vec![], None
+                    ), false);
+                }
+
                 // Get current account type and handle any shift to/from admin
                 let current = state.database.account_get(&did_hash).await?;
                 if let Some(current) = &current {
-                    if current._type == _type {
+                    if current._type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
+                        warn!("DID ({}) is not a RootAdmin account", session.did_hash);
+                        return generate_error_response(state, session, &msg.id, ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "unauthorized".into(),
+                            "unauthorized to change account type from RootAdmin. Must be a RootAdmin for this Mediator!".into(),
+                            vec![], None
+                        ), false);
+                    } else if current._type == _type {
                         // Types are the same, no need to change.
                         return _generate_response_message(
                             &msg.id,

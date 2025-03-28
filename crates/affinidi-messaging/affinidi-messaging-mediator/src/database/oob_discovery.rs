@@ -79,15 +79,18 @@ impl Database {
             };
 
             let invite_hash = digest(&base64_invite);
-            let key = Database::to_cache_key(invite_hash.to_owned());
+            let key = Database::to_cache_key(&invite_hash);
 
             match deadpool_redis::redis::pipe()
                 .atomic()
-                .cmd("SET")
-                .arg(key.to_owned())
+                .cmd("HMSET")
+                .arg(&key)
+                .arg("INVITE")
                 .arg(&base64_invite)
+                .arg("DID")
+                .arg(did_hash)
                 .cmd("EXPIREAT")
-                .arg(key)
+                .arg(&key)
                 .arg(expire_at)
                 .cmd("HINCRBY")
                 .arg("GLOBAL")
@@ -114,28 +117,36 @@ impl Database {
     }
 
     /// Retrieve an OOB Discovery Invitation if it exists
-    pub async fn oob_discovery_get(&self, oob_id: &str) -> Result<Option<String>, MediatorError> {
+    pub async fn oob_discovery_get(
+        &self,
+        oob_id: &str,
+    ) -> Result<Option<(String, String)>, MediatorError> {
         let _span = span!(Level::DEBUG, "oob_discovery_get", oob_id = oob_id);
 
         async move {
             let mut conn = self.0.get_async_connection().await?;
 
-            let key = Database::to_cache_key(oob_id.to_owned());
-            let invitation: Option<String> = match deadpool_redis::redis::pipe()
+            let key = Database::to_cache_key(oob_id);
+            let invitation: Option<(String, String)> = match deadpool_redis::redis::pipe()
                 .atomic()
-                // .cmd("HGET")
-                // .arg(HASH_KEY)
-                // .arg(oob_id)
-                .cmd("GET")
+                .cmd("HMGET")
                 .arg(key)
+                .arg("INVITE")
+                .arg("DID")
                 .cmd("HINCRBY")
                 .arg("GLOBAL")
                 .arg("OOB_INVITES_CLAIMED")
                 .arg(1)
-                .query_async::<Vec<String>>(&mut conn)
+                .query_async::<(Vec<String>, String)>(&mut conn)
                 .await
             {
-                Ok(invitation) => invitation.first().map(|a| a.to_string()),
+                Ok((oob, _)) => {
+                    if oob.len() != 2 {
+                        None
+                    } else {
+                        Some((oob[0].clone(), oob[1].clone()))
+                    }
+                }
                 Err(err) => {
                     error!("Database Error: {}", err);
                     return Err(MediatorError::DatabaseError(
@@ -160,10 +171,7 @@ impl Database {
         async move {
             let mut conn = self.0.get_async_connection().await?;
 
-            let key = Database::to_cache_key(oob_id.to_owned());
-            // let result: bool = match deadpool_redis::redis::cmd("HDEL")
-            //     .arg(HASH_KEY)
-            //     .arg(oob_id)
+            let key = Database::to_cache_key(oob_id);
             let result: bool = match deadpool_redis::redis::cmd("DEL")
                 .arg(key)
                 .query_async::<bool>(&mut conn)
@@ -187,7 +195,8 @@ impl Database {
         .await
     }
 
-    fn to_cache_key(id: String) -> String {
-        format!("{HASH_KEY_PREFIX}{id}")
+    /// Creates the OOB Invite Hash Key (OOB_INVITES:HASH)
+    fn to_cache_key(id: &str) -> String {
+        [HASH_KEY_PREFIX, ":", id].concat()
     }
 }
