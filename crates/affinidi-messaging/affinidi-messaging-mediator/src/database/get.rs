@@ -3,6 +3,7 @@ use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::MessageListElement;
 use itertools::Itertools;
 use redis::{Value, from_redis_value};
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, Level, debug, event, span};
 
 impl Database {
@@ -77,8 +78,28 @@ impl Database {
 
             // Update SEND metrics
 
-            if did_hash == message.from_address.as_ref().unwrap_or(&"".to_string())
-                || did_hash == message.to_address.as_ref().unwrap_or(&"".to_string())
+            if did_hash
+                .as_bytes()
+                .ct_eq(
+                    message
+                        .from_address
+                        .as_ref()
+                        .unwrap_or(&"".to_string())
+                        .as_bytes(),
+                )
+                .unwrap_u8()
+                == 1
+                || did_hash
+                    .as_bytes()
+                    .ct_eq(
+                        message
+                            .to_address
+                            .as_ref()
+                            .unwrap_or(&"".to_string())
+                            .as_bytes(),
+                    )
+                    .unwrap_u8()
+                    == 1
             {
                 let _ = self.update_send_stats(message.size as i64).await;
                 Ok(message)

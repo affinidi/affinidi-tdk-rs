@@ -10,6 +10,7 @@ use affinidi_messaging_sdk::{
 };
 use serde_json::{Value, json};
 use sha256::digest;
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, span, warn};
 use uuid::Uuid;
 
@@ -99,7 +100,7 @@ pub(crate) async fn process(
                 // Remove root admin DID and Mediator DID in case it is in the list
                 // Protects accidentally deleting the only admin account or the mediator itself
                 let root_admin = digest(&state.config.admin_did);
-                let attr: Vec<String> = attr.iter().filter_map(|a| if a == &root_admin || a == &state.config.mediator_did_hash { None } else { Some(a.to_owned()) }).collect();
+                let attr: Vec<String> = attr.iter().filter_map(|a| if a.as_bytes().ct_eq(root_admin.as_bytes()).unwrap_u8() == 1 || a.as_bytes().ct_eq(state.config.mediator_did_hash.as_bytes()).unwrap_u8() == 1 { None } else { Some(a.to_owned()) }).collect();
                 if attr.is_empty() {
                     return generate_error_response(state, session, &msg.id, ProblemReport::new(
                         ProblemReportSorter::Error,

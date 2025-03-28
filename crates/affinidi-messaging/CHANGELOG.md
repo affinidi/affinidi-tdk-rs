@@ -17,6 +17,8 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 
 * FIX: check_permissions() on acls was incorrectly comparing DID to DID_Hash. Should have been DID_Hash to DID_hash comparison
   * There is no security impact from this, prior to this fix, all non-admin requests would have failed.
+* See Security Fix notice for 0.10.3
+* Constant-time evaluations used for hash comparisons (protection against side-channel attacks)
 
 ### SDK (0.10.3)
 

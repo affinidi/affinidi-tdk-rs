@@ -14,6 +14,7 @@ use affinidi_messaging_sdk::{
     },
 };
 use serde_json::{Value, json};
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, span, warn};
 use uuid::Uuid;
 
@@ -440,7 +441,12 @@ pub(crate) async fn process(
 pub(crate) fn check_permissions(session: &Session, dids: &[String]) -> bool {
     session.account_type == AccountType::RootAdmin
         || session.account_type == AccountType::Admin
-        || dids.len() == 1 && dids[0] == session.did_hash
+        || dids.len() == 1
+            && dids[0]
+                .as_bytes()
+                .ct_eq(session.did_hash.as_bytes())
+                .unwrap_u8()
+                == 1
 }
 
 /// Helper method that generates a response message

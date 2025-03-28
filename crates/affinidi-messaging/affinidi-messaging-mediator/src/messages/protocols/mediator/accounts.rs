@@ -1,5 +1,11 @@
 use std::time::SystemTime;
 
+use super::acls::check_permissions;
+use crate::{
+    SharedData,
+    database::session::Session,
+    messages::{ProcessMessageResponse, error_response::generate_error_response},
+};
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
@@ -11,16 +17,9 @@ use affinidi_messaging_sdk::{
 };
 use serde_json::{Value, json};
 use sha256::digest;
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
-
-use crate::{
-    SharedData,
-    database::session::Session,
-    messages::{ProcessMessageResponse, error_response::generate_error_response},
-};
-
-use super::acls::check_permissions;
 
 pub(crate) async fn process(
     msg: &Message,
@@ -233,7 +232,7 @@ pub(crate) async fn process(
 
                 // Check if the mediator DID is being removed
                 // Protects accidentally deleting the mediator itself
-                if state.config.mediator_did_hash == did_hash {
+                if state.config.mediator_did_hash.as_bytes().ct_eq(did_hash.as_bytes()).unwrap_u8() == 1 {
                     return generate_error_response(
                         state,
                         session,
@@ -253,7 +252,7 @@ pub(crate) async fn process(
                 // Check if the root admin DID is being removed
                 // Protects accidentally deleting the only admin account
                 let root_admin = digest(&state.config.admin_did);
-                if root_admin == did_hash {
+                if root_admin.as_bytes().ct_eq(did_hash.as_bytes()).unwrap_u8() == 1 {
                     return generate_error_response(
                         state,
                         session,
