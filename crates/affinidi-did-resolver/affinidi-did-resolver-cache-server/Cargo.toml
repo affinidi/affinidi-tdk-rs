@@ -1,6 +1,6 @@
 [package]
-version = "0.5.2"
 name = "affinidi-did-resolver-cache-server"
+version = "0.5.2"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
