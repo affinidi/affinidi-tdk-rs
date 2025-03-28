@@ -81,7 +81,7 @@ pub async fn authentication_challenge(
 
         // Check if DID is allowed to connect
         let (allowed, known) =
-            MediatorACLSet::authentication_check(&state, &digest(&session.did_hash), None).await?;
+            MediatorACLSet::authentication_check(&state, &session.did_hash, None).await?;
 
         if !allowed {
             info!("DID({}) is blocked from connecting", session.did);

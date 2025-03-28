@@ -68,10 +68,14 @@ pub(crate) async fn handle_inbound(
                     if metadata.sign_from.is_none()
                         && state.config.security.block_anonymous_outer_envelope
                     {
-                        return Err(MediatorError::PermissionError(
-                            session.session_id.clone(),
+                        let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "unauthorized".into(),
                             "Anonymous messages sent to the mediator are NOT allowed".into(),
-                        ));
+                            vec![], None
+                        ), false)?;
+                        return store_message(state, session, &error, &metadata).await;
                     }
 
                     // Does the signing key match the session DID?
@@ -92,10 +96,20 @@ pub(crate) async fn handle_inbound(
                     }
 
                     // Process the message
-                    let message_response = msg.process(state, session, &metadata).await?;
-                    debug!("message processed:\n{:#?}", message_response);
-
-                    store_message(state, session, &message_response, &metadata).await
+                    let response = match msg.process(state, session, &metadata).await {
+                        Ok(response) => response,
+                        Err(e) => {
+                            generate_error_response(state, session, &msg.id, ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "inbound_processing_error".into(),
+                                "An error occurred while handling inbound message: {1}".into(),
+                                vec![e.to_string()], None
+                            ), false)?
+                        }
+                    };
+                    debug!("message processed:\n{:#?}", response);
+                    store_message(state, session, &response, &metadata).await
                 } else {
                     // this is a direct delivery method
                     if !state.config.security.local_direct_delivery_allowed {

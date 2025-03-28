@@ -25,6 +25,7 @@ Missing versions on the changelog simply reflect minor deployment changes on our
   * `admin_messages_expiry` Puts a tight tolerance on admin messages to limit replay attacks
 * CHANGE: OOB Invites are now represented as a HASH and not as a SET
   * Only the owner of the OOB Invite or an ADMIN level account can delete OOB Invites
+* SECURITY: Inner envelope on forwarded messages is now checked and matched against ACL's
 
 ### SDK (0.10.3)
 

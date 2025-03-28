@@ -1,12 +1,9 @@
 use crate::{
-    SharedData,
-    database::session::Session,
-    messages::inbound::handle_inbound,
-    tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
+    database::session::Session, messages::inbound::handle_inbound, tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands}, SharedData
 };
 use affinidi_messaging_didcomm::{Message as DidcommMessage, PackEncryptedOptions};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
-use affinidi_messaging_sdk::messages::problem_report::{
+use affinidi_messaging_sdk::messages:: problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
 };
 use axum::{
@@ -109,12 +106,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(response) => {
+                                        Ok(_) => {
                                             debug!("Successful handling of message - finished processing");
-                                            response
+                                            //response
                                         }
                                         Err(e) => {
                                             warn!("Error processing message: {:?}", e);
+                                    
                                             continue;
                                         }
                                     };
@@ -142,9 +140,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(response) => {
+                                        Ok(_) => {
                                             debug!("Successful handling of message - finished processing");
-                                            response
                                         }
                                         Err(e) => {
                                             warn!("Error processing message: {:?}", e);

@@ -36,7 +36,7 @@ pub(crate) async fn process(
                 .unwrap()
                 .as_secs();
             if let Some(created_time) = msg.created_time {
-                if (created_time + state.config.security.admin_messages_expiry) >= now
+                if (created_time + state.config.security.admin_messages_expiry) <= now
                     || created_time > now
                 {
                     warn!("ADMIN related message has an invalid created_time header.");

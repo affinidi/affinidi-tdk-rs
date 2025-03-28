@@ -9,7 +9,7 @@ use std::{
     env,
     time::{Duration, SystemTime},
 };
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::filter;
 use uuid::Uuid;
 
@@ -139,7 +139,7 @@ async fn main() -> Result<(), ATMError> {
     println!();
 
     // Wrap it in a forward
-    let (forward_id, forward_msg) = protocols
+    let (_forward_id, forward_msg) = protocols
         .routing
         .forward_message(
             &atm,
@@ -159,10 +159,18 @@ async fn main() -> Result<(), ATMError> {
     println!();
 
     // Send the message
-    atm.send_message(&atm_alice, &forward_msg, &forward_id, false, false)
-        .await?;
-
-    println!("Alice sent message to Bob");
+    match atm
+        .send_message(&atm_alice, &forward_msg, &msg_id, false, false)
+        .await
+    {
+        Ok(_) => {
+            info!("Alice sent message to Mediator");
+        }
+        Err(e) => {
+            error!("Error sending message: {:?}", e);
+            return Ok(());
+        }
+    }
 
     // Bob gets his messages
     println!();
