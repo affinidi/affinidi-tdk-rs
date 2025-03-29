@@ -7,8 +7,9 @@ use crate::errors::{MeetingPlaceError, Result};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Vcard {
+    #[serde(rename = "n")]
     name: VcardName,
     email: Option<VcardType>,
     tel: Option<VcardType>,
@@ -27,7 +28,7 @@ impl Default for Vcard {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VcardName {
     surname: Option<String>,
     given: Option<String>,

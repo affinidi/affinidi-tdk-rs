@@ -2,7 +2,7 @@
  * Handles the creation of offers
  */
 
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use crate::{
     _http_post, MeetingPlace,
@@ -20,18 +20,20 @@ use tracing::debug;
 use uuid::Uuid;
 
 /// Top-level Meeting Place struct for an Offer
+#[derive(Debug)]
 pub struct Offer {
     pub status: String,
+    /// DIDComm message
     pub message: Option<String>,
     pub offer_link: Option<String>,
     pub valid_until: Option<String>,
     pub registration: Option<RegisterOffer>,
-    pub offer_details: Option<RegisterOfferResponse>,
+    pub mnemonic: Option<String>,
 }
 
 /// Register an offer with Meeting Place
 /// https://gitlab.com/affinidi/octo/larter/affinidi-meeting-place/api-meetingplace#post-register-offer
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct RegisterOffer {
     /// Name of the offer that will be displayed to acceptors in their UI
     #[serde(rename = "offerName")]
@@ -97,13 +99,26 @@ pub struct RegisterOffer {
     contact_attributes: u32,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum PlatformType {
     APNS,
     #[allow(non_camel_case_types)]
     APNS_SANDBOX,
     FCM,
     NONE,
+}
+
+impl FromStr for PlatformType {
+    type Err = MeetingPlaceError;
+
+    fn from_str(platform_type: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match platform_type.to_uppercase().as_str() {
+            "APNS" => PlatformType::APNS,
+            "APNS_SANDBOX" => PlatformType::APNS_SANDBOX,
+            "FCM" => PlatformType::FCM,
+            _ => PlatformType::NONE,
+        })
+    }
 }
 
 /// Used within MeetingPlace to represent the type of contact
@@ -337,16 +352,33 @@ impl RegisterOffer {
     }
 }
 
+/// Query an offer from Meeting Place
+/// https://gitlab.com/affinidi/octo/larter/affinidi-meeting-place/api-meetingplace#post-query-offer
+#[derive(Serialize)]
+pub struct QueryOffer {
+    mnemonic: String,
+    did: String,
+}
+
+/// Query an offer from Meeting Place
+/// https://gitlab.com/affinidi/octo/larter/affinidi-meeting-place/api-meetingplace#post-deregister-offer
+#[derive(Serialize)]
+pub struct DeregisteryOffer {
+    mnemonic: String,
+    #[serde(rename = "offerLink")]
+    offer_link: String,
+}
+
 impl Offer {
     /// Create an Offer from a RegisterOffer
     pub fn new_from_register_offer(registration: RegisterOffer) -> Self {
         Self {
             status: "PENDING".to_string(),
-            message: None,
+            message: Some(registration.didcomm_message.clone()),
             offer_link: None,
             valid_until: None,
             registration: Some(registration),
-            offer_details: None,
+            mnemonic: None,
         }
     }
 
@@ -357,7 +389,7 @@ impl Offer {
         mp: &MeetingPlace,
         tdk: &TDKSharedState,
         profile: &TDKProfile,
-    ) -> Result<()> {
+    ) -> Result<RegisterOfferResponse> {
         let Some(registration) = &self.registration else {
             return Err(MeetingPlaceError::Error(
                 "there is no offer registration record!".to_string(),
@@ -382,8 +414,11 @@ impl Offer {
         )
         .await?;
 
-        self.offer_details = Some(response);
-        Ok(())
+        self.mnemonic = Some(response.mnemonic.clone());
+        self.offer_link = Some(response.offer_link.clone());
+        self.valid_until = Some(response.valid_until.clone());
+        self.status = "REGISTERED".to_string();
+        Ok(response)
     }
 
     /// Creates the DIDComm OOB Invitation message for the offer
@@ -405,6 +440,93 @@ impl Offer {
             })?),
         )
     }
+
+    /// Query Meeting Place for an offer
+    pub async fn query_offer(
+        mp: &MeetingPlace,
+        tdk: &TDKSharedState,
+        profile: &TDKProfile,
+        offer_phrase: &str,
+    ) -> Result<Offer> {
+        let tokens = tdk
+            .authentication
+            .authenticate(profile.did.to_string(), mp.mp_did.to_string(), 3, None)
+            .await?;
+
+        let response = _http_post::<QueryOfferResponse>(
+            &tdk.client,
+            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/query-offer",
+            &serde_json::to_string(&QueryOffer {
+                mnemonic: offer_phrase.to_string(),
+                did: profile.did.to_string(),
+            })
+            .map_err(|e| {
+                MeetingPlaceError::Serialization(format!(
+                    "Couldn't serialize register offer request: {}",
+                    e
+                ))
+            })?,
+            &tokens,
+        )
+        .await?;
+
+        Ok(Offer {
+            status: "ACTIVE".to_string(),
+            message: Some(response.didcomm_message),
+            offer_link: Some(response.offer_link),
+            valid_until: Some(response.valid_until),
+            registration: None,
+            mnemonic: Some(offer_phrase.to_string()),
+        })
+    }
+
+    /// Deregister (remove) an offer from Meeting Place
+    pub async fn deregister_offer(
+        &mut self,
+        mp: &MeetingPlace,
+        tdk: &TDKSharedState,
+        profile: &TDKProfile,
+    ) -> Result<DeregisterOfferResponse> {
+        let tokens = tdk
+            .authentication
+            .authenticate(profile.did.to_string(), mp.mp_did.to_string(), 3, None)
+            .await?;
+
+        let mnemonic = if let Some(mnemonic) = &self.mnemonic {
+            mnemonic.to_string()
+        } else {
+            return Err(MeetingPlaceError::Error(
+                "No mnemonic provided for deregistering offer".to_string(),
+            ));
+        };
+
+        let offer_link = if let Some(offer_link) = &self.offer_link {
+            offer_link.to_string()
+        } else {
+            return Err(MeetingPlaceError::Error(
+                "No offer_link provided for deregistering offer".to_string(),
+            ));
+        };
+
+        let response = _http_post::<DeregisterOfferResponse>(
+            &tdk.client,
+            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/deregister-offer",
+            &serde_json::to_string(&DeregisteryOffer {
+                mnemonic,
+                offer_link,
+            })
+            .map_err(|e| {
+                MeetingPlaceError::Serialization(format!(
+                    "Couldn't serialize register offer request: {}",
+                    e
+                ))
+            })?,
+            &tokens,
+        )
+        .await?;
+
+        Ok(response)
+    }
 }
 
 // ************************************************************************************************
@@ -420,4 +542,29 @@ pub struct RegisterOfferResponse {
     pub maximum_usage: usize,
     #[serde(rename = "offerLink")]
     pub offer_link: String,
+}
+
+/// The return value from the query-offer API
+#[derive(Debug, Deserialize)]
+pub struct QueryOfferResponse {
+    #[serde(rename = "offerLink")]
+    pub offer_link: String,
+    pub name: String,
+    pub description: String,
+    #[serde(rename = "validUntil")]
+    pub valid_until: String,
+    pub vcard: String,
+    #[serde(rename = "mediatorEndpoint")]
+    pub mediator_endpoint: String,
+    #[serde(rename = "mediatorWSSEndpoint")]
+    pub mediator_websocket_endpoint: String,
+    #[serde(rename = "didcommMessage")]
+    pub didcomm_message: String,
+}
+
+/// The return value from the deregister-offer API
+#[derive(Debug, Deserialize)]
+pub struct DeregisterOfferResponse {
+    pub status: String,
+    pub message: String,
 }
