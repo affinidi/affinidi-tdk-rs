@@ -121,12 +121,12 @@ impl Debug for SecurityConfig {
 }
 
 impl SecurityConfig {
-    async fn default() -> Self {
+    fn default(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
         SecurityConfig {
             mediator_acl_mode: AccessListModeType::ExplicitDeny,
             global_acl_default: MediatorACLSet::default(),
             local_direct_delivery_allowed: false,
-            mediator_secrets: Arc::new(ThreadedSecretsResolver::new(None).await.0),
+            mediator_secrets: secrets_resolver,
             use_ssl: true,
             ssl_certificate_file: "".into(),
             ssl_key_file: "".into(),
@@ -167,7 +167,11 @@ impl SecurityConfigRaw {
         Ok(origins)
     }
 
-    async fn convert(&self, aws_config: &SdkConfig) -> Result<SecurityConfig, MediatorError> {
+    async fn convert(
+        &self,
+        secrets_resolver: Arc<ThreadedSecretsResolver>,
+        aws_config: &SdkConfig,
+    ) -> Result<SecurityConfig, MediatorError> {
         let mut config = SecurityConfig {
             mediator_acl_mode: match self.mediator_acl_mode.as_str() {
                 "explicit_allow" => AccessListModeType::ExplicitAllow,
@@ -190,7 +194,7 @@ impl SecurityConfigRaw {
             force_session_did_match: self.force_session_did_match.parse().unwrap_or(true),
             block_remote_admin_msgs: self.block_remote_admin_msgs.parse().unwrap_or(true),
             admin_messages_expiry: self.admin_messages_expiry.parse().unwrap_or(3),
-            ..SecurityConfig::default().await
+            ..SecurityConfig::default(secrets_resolver)
         };
 
         // Check if conflicting config on anonymous and force session_match
@@ -226,7 +230,7 @@ impl SecurityConfigRaw {
         }
 
         // Load mediator secrets
-        config.mediator_secrets = Arc::new(load_secrets(&self.mediator_secrets, aws_config).await?);
+        load_secrets(&config.mediator_secrets, &self.mediator_secrets, aws_config).await?;
 
         // Create the JWT encoding and decoding keys
         let jwt_secret = config_jwt_secret(&self.jwt_authorization_secret, aws_config).await?;
@@ -500,7 +504,7 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
-    async fn default() -> Self {
+    fn default(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
         let did_resolver_config = DIDCacheConfigBuilder::default()
             .with_cache_capacity(1000)
             .with_cache_ttl(300)
@@ -521,7 +525,7 @@ impl Config {
             streaming_uuid: "".into(),
             did_resolver_config,
             api_prefix: "/mediator/v1/".into(),
-            security: SecurityConfig::default().await,
+            security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
                 forwarding: ForwardingConfig::default(),
                 message_expiry_cleanup: MessageExpiryCleanupConfig::default(),
@@ -553,6 +557,12 @@ impl TryFrom<ConfigRaw> for Config {
             }
         }
 
+        // Set up a common secrets resolver
+        // Do this here and pass into the defaults so that they don't create multiple instances of the same
+        // When you instantiate config, the ..Config::default() will run the full default() function again
+        // If SecretsResolver was instantiated in default(), it would create two copies of it (though only use one)
+        let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
+
         let mut config = Config {
             log_level: match raw.log_level.as_str() {
                 "trace" => LevelFilter::TRACE,
@@ -570,14 +580,17 @@ impl TryFrom<ConfigRaw> for Config {
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or(true),
             did_resolver_config: raw.did_resolver.convert(),
             api_prefix: raw.server.api_prefix,
-            security: raw.security.convert(&aws_config).await?,
+            security: raw
+                .security
+                .convert(secrets_resolver.clone(), &aws_config)
+                .await?,
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,
                 message_expiry_cleanup: raw.processors.message_expiry_cleanup.clone().try_into()?,
             },
             limits: raw.limits.try_into()?,
             tags,
-            ..Config::default().await
+            ..Config::default(secrets_resolver)
         };
 
         config.mediator_did_hash = digest(&config.mediator_did);
@@ -645,9 +658,10 @@ impl TryFrom<ConfigRaw> for Config {
 
 /// Loads the secret data into the Config file.
 async fn load_secrets(
+    secrets_resolver: &Arc<ThreadedSecretsResolver>,
     secrets: &str,
     aws_config: &SdkConfig,
-) -> Result<ThreadedSecretsResolver, MediatorError> {
+) -> Result<(), MediatorError> {
     let parts: Vec<&str> = secrets.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
@@ -686,7 +700,6 @@ async fn load_secrets(
         }
     };
 
-    let (secrets_resolver, _) = ThreadedSecretsResolver::new(None).await;
     let secrets: Vec<Secret> = serde_json::from_str(&content).map_err(|err| {
         eprintln!("Could not parse `mediator_secrets` JSON content. {}", err);
         MediatorError::ConfigError(
@@ -696,13 +709,13 @@ async fn load_secrets(
     })?;
 
     info!(
-        "Loading {} mediatior Secret{}",
+        "Loading {} mediator Secret{}",
         secrets.len(),
         if secrets.is_empty() { "" } else { "s" }
     );
     secrets_resolver.insert_vec(&secrets).await;
 
-    Ok(secrets_resolver)
+    Ok(())
 }
 
 /// Read the primary configuration file for the mediator
