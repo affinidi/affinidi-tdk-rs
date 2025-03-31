@@ -5,7 +5,7 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
-## xx March 2025 (0.10.3)
+## 1st April 2025 (0.10.3)
 
 * SECURITY_FIX: WARNING: There is an edge case of being able to send bad messages on behalf of another DID if you can steal the authorization tokens. This is due to the security checks being applied to session information only.
   * Mitigation is to add additional checks to check the digital signing of messages in addition to the session info
