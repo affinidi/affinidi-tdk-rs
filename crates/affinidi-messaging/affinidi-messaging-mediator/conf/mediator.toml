@@ -172,6 +172,7 @@ block_anonymous_outer_envelope = "${BLOCK_ANONYMOUS_OUTER_ENVELOPE:true}"
 ### Default: true
 ### NOTE: This is a security feature to prevent a malicious actor from sending messages on behalf of another DID
 ### NOTE: Inner messages can still be signed by a different DID, but the outer envelope must match the session DID
+### NOTE: This option MUST be set to false if `block_anonymous_outer_envelope` is set to false. Mediator will not start otherwise!
 force_session_did_match = "${FORCE_SESSION_DID_MATCH:true}"
 
 ### block_remote_admin_msgs: If true, any admin messages must be delivered to the mediator by the admin DID
