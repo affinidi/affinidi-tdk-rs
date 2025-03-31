@@ -9,7 +9,6 @@
 use crate::{
     ATM,
     errors::ATMError,
-    messages::AuthorizationResponse,
     protocols::message_pickup::MessagePickup,
     transports::websockets::{
         ws_connection::WsConnectionCommands,
@@ -46,8 +45,6 @@ pub struct ATMProfileInner {
     pub did: String,
     pub alias: String,
     pub mediator: Arc<Option<Mediator>>,
-    pub(crate) authorization: Mutex<Option<AuthorizationResponse>>,
-    pub(crate) authenticated: AtomicBool,
     /// Channel to send commands to the WS_Handler task
     pub(crate) channel_tx: Mutex<Sender<WsHandlerCommands>>,
     /// Channel to receive commands from the WS_Handler task
@@ -86,8 +83,6 @@ impl ATMProfile {
                 did,
                 alias,
                 mediator: Arc::new(mediator),
-                authorization: Mutex::new(None),
-                authenticated: AtomicBool::new(false),
                 channel_tx: Mutex::new(tx),
                 channel_rx: Mutex::new(rx),
             }),

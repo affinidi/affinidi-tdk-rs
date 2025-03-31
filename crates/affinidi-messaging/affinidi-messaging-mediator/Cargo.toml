@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.10.2"
+version = "0.10.3"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -60,6 +60,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 ssi = { version = "0.10" }
+subtle = "2.6"
 tokio = { version = "1.44", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.8"

@@ -13,7 +13,7 @@ use tokio::sync::{
 use tracing::debug;
 use transports::websockets::ws_handler::{WsHandlerCommands, WsHandlerMode};
 
-pub mod authentication;
+//pub mod authentication;
 pub mod config;
 pub mod delete_handler;
 pub mod errors;

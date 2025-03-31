@@ -612,7 +612,7 @@ impl MediatorACLSet {
         }
     }
 
-    /// Can this DID create/manage OOB invites?
+    /// Does this DID receive anonymous messages?
     /// Returns (anon_receive, anon_receive_change)
     pub fn get_anon_receive(&self) -> (bool, bool) {
         // BIT 14 :: Can receive anonymous messages

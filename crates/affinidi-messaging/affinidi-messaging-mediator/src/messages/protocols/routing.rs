@@ -5,7 +5,7 @@ use crate::{
     database::session::Session,
     messages::{ProcessMessageResponse, WrapperType, store::store_forwarded_message},
 };
-use affinidi_messaging_didcomm::{AttachmentData, Message};
+use affinidi_messaging_didcomm::{AttachmentData, Message, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::Account, acls::MediatorACLSet};
 use base64::prelude::*;
@@ -289,6 +289,23 @@ pub(crate) async fn process(
                 .as_secs()
                 + state.config.limits.message_expiry_seconds
         };
+
+        // Check inner message for routing
+        let next_envelope = match MetaEnvelope::new(&data, &state.did_resolver).await {
+            Ok(envelope) => envelope,
+            Err(e) => {
+                return Err(MediatorError::ParseError(
+                    session.session_id.clone(),
+                    "Inner envelope inside forwarded envelope DIDComm message".into(),
+                    e.to_string(),
+                ));
+            }
+        };
+        if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
+            return Err(MediatorError::ACLDenied(
+                "Inner message is anonymous and receiver isn't accepting anonymous messages".into(),
+            ));
+        }
 
         debug!(" *************************************** ");
         debug!(" TO: {}", next);

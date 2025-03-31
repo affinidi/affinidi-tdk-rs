@@ -105,6 +105,7 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
     match atm
         .forward_and_send_message(
             &our_profile,
+            false,
             &packed,
             None,
             mediator_did,

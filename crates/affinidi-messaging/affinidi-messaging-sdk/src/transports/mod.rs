@@ -163,6 +163,7 @@ impl ATM {
 
     /// Takes a packed message, wraps it in a forward envelope and sends it to the target DID
     /// - profile: The profile to send the message from
+    /// - anonymous: Whether to send the message anonymously
     /// - message: The packed message to send
     /// - msg_id: The ID of the message (used for message response pickup), if None, then the forwarded message ID is used
     /// - target_did: The DID of the target agent (this is where the message will be sent - typically a mediator)
@@ -175,6 +176,7 @@ impl ATM {
     pub async fn forward_and_send_message(
         &self,
         profile: &Arc<ATMProfile>,
+        anonymous: bool,
         message: &str,
         msg_id: Option<&str>,
         target_did: &str,
@@ -190,6 +192,7 @@ impl ATM {
             .forward_message(
                 self,
                 profile,
+                anonymous,
                 message,
                 target_did,
                 next_did,
@@ -234,7 +237,13 @@ impl ATM {
             }
         };
 
-        let tokens = profile.authenticate(&self.inner).await?;
+        let (profile_did, mediator_did) = profile.dids()?;
+        // Check if authenticated
+        let tokens = self
+            .get_tdk()
+            .authentication
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
 
         let msg = message.to_owned();
 

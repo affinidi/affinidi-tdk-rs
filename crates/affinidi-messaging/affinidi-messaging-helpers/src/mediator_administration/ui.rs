@@ -8,6 +8,7 @@ use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
+use ssi::crypto::p384::elliptic_curve::subtle::ConstantTimeEq;
 use std::sync::Arc;
 
 use crate::SharedConfig;
@@ -80,7 +81,13 @@ pub(crate) async fn list_admins(
                     _ => ("Unknown".into(), 1_u8),
                 };
                 print!(" {}", style(format!("({})", role)).color256(color));
-                if admin.did_hash == config.our_admin_hash {
+                if admin
+                    .did_hash
+                    .as_bytes()
+                    .ct_eq(config.our_admin_hash.as_bytes())
+                    .unwrap_u8()
+                    == 1
+                {
                     print!(" {}", style("(our Admin account)").color256(208));
                 }
 
@@ -172,7 +179,16 @@ pub(crate) async fn strip_admins(
                 .accounts
                 .iter()
                 .filter_map(|x| {
-                    if x.did_hash != config.our_admin_hash && x.did_hash != config.mediator_did_hash
+                    if x.did_hash
+                        .as_bytes()
+                        .ct_eq(config.our_admin_hash.as_bytes())
+                        .unwrap_u8()
+                        == 0
+                        && x.did_hash
+                            .as_bytes()
+                            .ct_eq(config.mediator_did_hash.as_bytes())
+                            .unwrap_u8()
+                            == 0
                     {
                         Some(x.did_hash.clone())
                     } else {

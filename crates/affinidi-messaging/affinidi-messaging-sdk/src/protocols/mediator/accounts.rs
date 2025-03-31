@@ -13,7 +13,7 @@ use std::{
     time::SystemTime,
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum MediatorAccountRequest {
     #[serde(rename = "account_get")]
     AccountGet(String),

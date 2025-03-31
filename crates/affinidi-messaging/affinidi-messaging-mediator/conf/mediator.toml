@@ -162,6 +162,29 @@ jwt_refresh_expiry = "${JWT_REFRESH_EXPIRY:86_400}"
 ### Example: "https://affinidi.com,https://example2.com"
 # cors_allow_origin = "${CORS_ALLOW_ORIGIN:https://affinidi.com}"
 
+### block_anonymous_outer_envelope: If true, the mediator requires all messages being sent to the Mediator to be signed
+### Default: true
+### NOTE: Setting this to false allows for anonymous messages to be sent to the mediator itself
+### NOTE: You can still send an anonymous message to a recipient; It must wrapped in a signed forwarding wrapper
+block_anonymous_outer_envelope = "${BLOCK_ANONYMOUS_OUTER_ENVELOPE:true}"
+
+### force_session_did_match: If true, the signing DID in the outer envelope MUST match the Session DID
+### Default: true
+### NOTE: This is a security feature to prevent a malicious actor from sending messages on behalf of another DID
+### NOTE: Inner messages can still be signed by a different DID, but the outer envelope must match the session DID
+### NOTE: This option MUST be set to false if `block_anonymous_outer_envelope` is set to false. Mediator will not start otherwise!
+force_session_did_match = "${FORCE_SESSION_DID_MATCH:true}"
+
+### block_remote_admin_msgs: If true, any admin messages must be delivered to the mediator by the admin DID
+### Default: true
+### NOTE: This is a security feature to prevent a malicious actor from sending admin messages to the mediator
+### NOTE: This means you can NOT route admin messages via another mediator or endpoint, you must direct connect to the mediator
+block_remote_admin_msgs = "${BLOCK_REMOTE_ADMIN_MSGS:true}"
+
+### admin_messages_expiry: Time To Live (TTL) in seconds for admin messages (minimizes the risk of replay attacks)
+### Default: 3 (3 seconds)
+admin_messages_expiry = "${ADMIN_MESSAGES_EXPIRY:3}"
+
 ### ****************************************************************************************************************************
 ### Live streaming setup
 ### ****************************************************************************************************************************

@@ -16,11 +16,15 @@ impl ATM {
     ) -> Result<MessageList, ATMError> {
         let _span = span!(Level::DEBUG, "list_messages", folder = folder.to_string());
         async move {
-            let profile_did = profile.inner.did.clone();
+            let (profile_did, mediator_did) = profile.dids()?;
             debug!("listing folder({}) for DID({})", profile_did, folder);
 
             // Check if authenticated
-            let tokens = profile.authenticate(&self.inner).await?;
+            let tokens = self
+                .get_tdk()
+                .authentication
+                .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+                .await?;
 
             let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
                 return Err(ATMError::TransportError(

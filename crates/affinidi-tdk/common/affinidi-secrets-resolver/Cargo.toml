@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-secrets-resolver"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 authors.workspace = true
 readme.workspace = true

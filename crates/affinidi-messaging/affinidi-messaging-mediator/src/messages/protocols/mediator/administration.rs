@@ -2,7 +2,7 @@
 //! Must be a administrator to use this protocol
 use std::time::SystemTime;
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -10,6 +10,7 @@ use affinidi_messaging_sdk::{
 };
 use serde_json::{Value, json};
 use sha256::digest;
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, span, warn};
 use uuid::Uuid;
 
@@ -19,20 +20,52 @@ use crate::{
     messages::{ProcessMessageResponse, error_response::generate_error_response},
 };
 
+use super::acls::check_admin_signature;
+
 /// Responsible for processing a Mediator Administration message
 pub(crate) async fn process(
     msg: &Message,
     state: &SharedData,
     session: &Session,
+    metadata: &UnpackMetadata,
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "mediator_administration");
 
     async move {
+        // Check if message is valid from an expiry perspective
+        let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+        if let Some(created_time) = msg.created_time {
+            if (created_time + state.config.security.admin_messages_expiry) <= now || created_time > now  {
+                warn!("ADMIN related message has an invalid created_time header.");
+                return generate_error_response(state, session, &msg.id, ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "expired".into(),
+                    "admin related message does not meet mediator created_time constraints".into(),
+                    vec![], None
+                ), false);
+            }
+        } else {
+            warn!("ADMIN related message has no created_time header. Required.");
+                return generate_error_response(state, session, &msg.id, ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "missing_expiry".into(),
+                    "missing created_time header on an admin related message".into(),
+                    vec![], None
+                ), false);
+        }
+
         // Check to ensure this account is an admin account
         if !state
             .database
             .check_admin_account(&session.did_hash)
-            .await?
+            .await? || (state.config.security.block_remote_admin_msgs &&
+                 !check_admin_signature(session, &metadata.sign_from))
         {
             warn!("DID ({}) is not an admin account", session.did_hash);
             return generate_error_response(state, session, &msg.id, ProblemReport::new(
@@ -99,7 +132,7 @@ pub(crate) async fn process(
                 // Remove root admin DID and Mediator DID in case it is in the list
                 // Protects accidentally deleting the only admin account or the mediator itself
                 let root_admin = digest(&state.config.admin_did);
-                let attr: Vec<String> = attr.iter().filter_map(|a| if a == &root_admin || a == &state.config.mediator_did_hash { None } else { Some(a.to_owned()) }).collect();
+                let attr: Vec<String> = attr.iter().filter_map(|a| if a.as_bytes().ct_eq(root_admin.as_bytes()).unwrap_u8() == 1 || a.as_bytes().ct_eq(state.config.mediator_did_hash.as_bytes()).unwrap_u8() == 1 { None } else { Some(a.to_owned()) }).collect();
                 if attr.is_empty() {
                     return generate_error_response(state, session, &msg.id, ProblemReport::new(
                         ProblemReportSorter::Error,

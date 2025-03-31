@@ -76,12 +76,12 @@ pub fn accept_key_from(sec_ws_key: impl AsRef<[u8]>) -> String {
 /// key: value
 /// ...
 /// ```
-pub fn request(
+pub(crate) fn request(
     host: impl AsRef<str>,
     path: impl AsRef<str>,
     headers: impl IntoIterator<Item = impl Header>,
 ) -> (String, String) {
-    let host = host.as_ref();
+    let host = host.as_ref().trim_end();
     let path = path.as_ref().trim_start_matches('/');
     let sec_key = base64_encode(42_u128.to_ne_bytes());
     let headers: String = headers.into_iter().map(|f| Header::fmt(&f)).collect();

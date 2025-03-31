@@ -5,6 +5,36 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## 1st April 2025 (0.10.3)
+
+* SECURITY_FIX: WARNING: There is an edge case of being able to send bad messages on behalf of another DID if you can steal the authorization tokens. This is due to the security checks being applied to session information only.
+  * Mitigation is to add additional checks to check the digital signing of messages in addition to the session info
+  * Admin commands will have additional security checks applied
+    * Stricter expiry times
+    * Can not send Admin commands anonymously (must be signed)
+
+### Mediator (0.10.3)
+
+* FIX: check_permissions() on acls was incorrectly comparing DID to DID_Hash. Should have been DID_Hash to DID_hash comparison
+  * There is no security impact from this, prior to this fix, all non-admin requests would have failed.
+* SECURITY: See Security Fix notice for 0.10.3
+* SECURITY: Constant-time evaluations used for hash comparisons (protection against side-channel attacks)
+* FEATURE: Two new mediator configuration options added:
+  * `block_anonymous_outer_envelope` Ensures that all messages delivered to the mediator MUST be signed.
+  * `block_remote_admin_msgs` Ensures that all admin messages must be delivered from the admin DID itself, can not be forwarded by another party.
+  * `admin_messages_expiry` Puts a tight tolerance on admin messages to limit replay attacks
+* CHANGE: OOB Invites are now represented as a HASH and not as a SET
+  * Only the owner of the OOB Invite or an ADMIN level account can delete OOB Invites
+* SECURITY: Inner envelope on forwarded messages is now checked and matched against ACL's
+* FEATURE: Better error handling and responses to clients
+  * Will now try and respond with a DIDComm Problem Report via both REST and WebSocket API where-ever possible
+
+### SDK (0.10.3)
+
+* CLEANUP: Removed authentication code from the ATM SDK
+  * Now uses the affinidi-secrets-resolver crate
+* FEATURE: Routing protocol now allows you to configure whether the forward should be anonymous or signed
+
 ## 27th March 2025 (0.10.2)
 
 ### Mediator (0.10.2)

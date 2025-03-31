@@ -8,6 +8,7 @@ use axum::{
 };
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use tracing::{Instrument, Level, debug, span};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -44,7 +45,13 @@ pub async fn message_list_handler(
 
         // Check that the DID hash matches the session DID
         // TODO: In the future, add support for lists of DID's owned by the session owner
-        if session.did_hash != did_hash {
+        if session
+            .did_hash
+            .as_bytes()
+            .ct_eq(did_hash.as_bytes())
+            .unwrap_u8()
+            == 0
+        {
             return Err(MediatorError::PermissionError(
                 session.session_id,
                 "You don't have permission to access this resource.".into(),

@@ -363,6 +363,7 @@ pub async fn send_invitation_accept(
     // Send the response message
     atm.forward_and_send_message(
         &accept_temp_profile,
+        false,
         &packed.0,
         None,
         &mediator_did,

@@ -5,11 +5,12 @@
 use affinidi_meeting_place::{
     MeetingPlace,
     errors::{MeetingPlaceError, Result},
-    offers::{Offer, RegisterOffer},
+    offers::{ContactAttributeType, Offer, PlatformType, RegisterOffer},
+    vcard::Vcard,
 };
-use affinidi_tdk_common::{TDKSharedState, environments::TDKEnvironments};
+use affinidi_tdk_common::{TDKSharedState, environments::TDKEnvironments, profiles::TDKProfile};
 use clap::{Parser, Subcommand};
-use std::env;
+use std::{env, str::FromStr};
 use tracing::info;
 use tracing_subscriber::filter;
 
@@ -40,11 +41,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Check-Offer-Phrase
-    CheckOfferPhrase(OfferPhraseArgs),
+    /// Check-Offer
+    Check(OfferPhraseArgs),
+
+    /// Query-Offer-Phrase
+    Query(OfferPhraseArgs),
 
     /// Register-Offer
-    RegisterOffer(Box<RegisterOfferArgs>),
+    Register(Box<RegisterOfferArgs>),
+
+    /// Deregister-Offer
+    Deregister(OfferPhraseArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -98,9 +105,9 @@ struct RegisterOfferArgs {
     #[arg(long)]
     device_token: Option<String>,
 
-    /// (Optional) Platform Type
+    /// (Optional) Platform Type (APNS, APNS_SANDBOX, FCM, NONE)
     #[arg(long)]
-    platform_type: Option<u32>,
+    platform_type: Option<String>,
 
     /// (Optional) Custom Offer Phrase
     #[arg(long)]
@@ -168,7 +175,7 @@ async fn main() -> Result<()> {
 
     let mp = MeetingPlace::new(args.mp_did);
     match args.command {
-        Commands::CheckOfferPhrase(check_offer_phrase) => {
+        Commands::Check(check_offer_phrase) => {
             let result = mp
                 .check_offer_phrase(
                     &tdk,
@@ -178,35 +185,100 @@ async fn main() -> Result<()> {
                 .await?;
             info!("Offer Phrase is in use? {}", result);
         }
-        Commands::RegisterOffer(register_offer) => {
-            let mediator_did = if let Some(mediator_did) = register_offer.mediator_did {
-                mediator_did
-            } else if let Some(mediator_did) = &environment_profile.mediator {
-                mediator_did.to_string()
-            } else {
-                return Err(MeetingPlaceError::TDK(
-                    "No mediator DID specified and no default mediator in profile".to_string(),
-                ));
-            };
-
-            let mut offer_details = RegisterOffer::create(
-                &register_offer.offer_name,
-                &register_offer.description,
-                &environment_profile.did,
-                &mediator_did,
-            )?;
-
-            if let Some(custom_phrase) = register_offer.custom_phrase {
-                offer_details.custom_phrase(&custom_phrase);
-            }
-
-            let offer_details = offer_details.build(&tdk).await?;
+        Commands::Register(register_offer) => {
+            let offer_details =
+                _create_register_offer(&tdk, &register_offer, environment_profile).await?;
 
             let mut offer = Offer::new_from_register_offer(offer_details);
-            offer.register_offer(&mp, &tdk, environment_profile).await?;
-            info!("Offer registered: {:#?}", offer.offer_details);
+            let response = offer.register_offer(&mp, &tdk, environment_profile).await?;
+            info!("Offer registered: {:#?}", response);
+        }
+        Commands::Query(query_offer) => {
+            let result =
+                Offer::query_offer(&mp, &tdk, environment_profile, &query_offer.phrase).await?;
+            info!("Offer result: {:#?}", result);
+        }
+        Commands::Deregister(query_offer) => {
+            let mut offer =
+                Offer::query_offer(&mp, &tdk, environment_profile, &query_offer.phrase).await?;
+
+            let result = offer
+                .deregister_offer(&mp, &tdk, environment_profile)
+                .await?;
+            info!("Deregister result: {:#?}", result);
         }
     };
 
     Ok(())
+}
+
+/// Converts the CLI Arguments to a RegisterOffer
+async fn _create_register_offer(
+    tdk: &TDKSharedState,
+    args: &RegisterOfferArgs,
+    profile: &TDKProfile,
+) -> Result<RegisterOffer> {
+    let mediator_did = if let Some(mediator_did) = &args.mediator_did {
+        mediator_did.to_owned()
+    } else if let Some(mediator_did) = &profile.mediator {
+        mediator_did.to_string()
+    } else {
+        return Err(MeetingPlaceError::TDK(
+            "No mediator DID specified and no default mediator in profile".to_string(),
+        ));
+    };
+
+    let mut offer_details = RegisterOffer::create(
+        &args.offer_name,
+        &args.description,
+        &profile.did,
+        &mediator_did,
+    )?;
+
+    // Create the vcard
+    offer_details.vcard(Vcard::new(
+        args.contact_given_name.clone(),
+        args.contact_surname.clone(),
+        args.contact_email.clone(),
+        args.contact_phone.clone(),
+    ));
+
+    if let Some(valid_until) = &args.valid_until {
+        let valid_until = chrono::DateTime::parse_from_rfc3339(valid_until)
+            .map_err(|err| MeetingPlaceError::Error(format!("invalid valid_until timestamp. Must be in ISO 8601 format (2025-03-17T09:00:00-00:00)! Reason: {}", err)))?.to_utc();
+
+        let now = chrono::Utc::now();
+        let delta = valid_until - now;
+        if delta.num_seconds() <= 0 {
+            return Err(MeetingPlaceError::Error(
+                "valid_until timestamp must be in the future".to_string(),
+            ));
+        }
+
+        offer_details.valid_until(delta.to_std().map_err(|err| {
+            MeetingPlaceError::Error(format!("invalid valid_until timestamp. Reason: {}", err))
+        })?);
+    }
+
+    if let Some(maximum_usage) = args.maximum_usage {
+        offer_details.maximum_usage(maximum_usage);
+    }
+
+    if let Some(device_token) = &args.device_token {
+        offer_details.device_token(device_token);
+    }
+
+    if let Some(platform_type) = &args.platform_type {
+        offer_details.platform_type(PlatformType::from_str(platform_type)?);
+    }
+
+    if let Some(contact_attributes) = args.contact_attributes {
+        offer_details.contact_attributes(ContactAttributeType::from_u32(contact_attributes));
+    }
+
+    if let Some(custom_phrase) = &args.custom_phrase {
+        offer_details.custom_phrase(custom_phrase);
+    }
+
+    offer_details.build(tdk).await
 }

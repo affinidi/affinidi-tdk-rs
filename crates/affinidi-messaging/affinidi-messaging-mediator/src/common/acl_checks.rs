@@ -14,7 +14,7 @@ pub(crate) trait ACLCheck {
         shared: &SharedData,
         did_hash: &str,
         session: Option<&Session>,
-    ) -> Result<bool, MediatorError>;
+    ) -> Result<(bool, bool), MediatorError>;
 }
 
 impl ACLCheck for MediatorACLSet {
@@ -23,14 +23,18 @@ impl ACLCheck for MediatorACLSet {
     /// - `did_hash`: SHA256 hash of the DID we are looking up
     /// - `session`: Optional: If provided uses ACL's in Session, otherwise looks up from database
     ///
-    /// Returns true if the DID is allowed to connect, false otherwise
+    /// Returns two booleans:
+    /// - First boolean is true if the DID is allowed to connect to the mediator
+    /// - Second boolean is true if the DID was known to the mediator
     async fn authentication_check(
         shared: &SharedData,
         did_hash: &str,
         session: Option<&Session>,
-    ) -> Result<bool, MediatorError> {
+    ) -> Result<(bool, bool), MediatorError> {
         // Do we know about this DID?
+        let mut known = false;
         let acls = if let Some(session) = session {
+            known = true;
             session.acls.clone()
         } else {
             debug!("Fetching acls from database did_hash({})", did_hash);
@@ -47,6 +51,7 @@ impl ACLCheck for MediatorACLSet {
                     acl.acls.to_hex_string(),
                     did_hash
                 );
+                known = true;
                 acl.acls.clone()
             } else {
                 debug!(
@@ -57,6 +62,6 @@ impl ACLCheck for MediatorACLSet {
             }
         };
 
-        Ok(!acls.get_blocked())
+        Ok((!acls.get_blocked(), known))
     }
 }

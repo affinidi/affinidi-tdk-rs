@@ -31,15 +31,18 @@ impl MessageType {
         message: &Message,
         state: &SharedData,
         session: &Session,
+        metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError> {
         match self.0 {
             SDKMessageType::MediatorAdministration => {
-                administration::process(message, state, session).await
+                administration::process(message, state, session, metadata).await
             }
             SDKMessageType::MediatorAccountManagement => {
-                accounts::process(message, state, session).await
+                accounts::process(message, state, session, metadata).await
             }
-            SDKMessageType::MediatorACLManagement => acls::process(message, state, session).await,
+            SDKMessageType::MediatorACLManagement => {
+                acls::process(message, state, session, metadata).await
+            }
             SDKMessageType::TrustPing => ping::process(message, session),
             SDKMessageType::MessagePickupStatusRequest => {
                 message_pickup::status_request(message, state, session).await
@@ -121,6 +124,7 @@ pub(crate) trait MessageHandler {
         &self,
         state: &SharedData,
         session: &Session,
+        metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError>;
 
     /// Uses the incoming unpack metadata to determine best way to pack the message
@@ -145,6 +149,7 @@ impl MessageHandler for Message {
         &self,
         state: &SharedData,
         session: &Session,
+        metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError> {
         let msg_type = MessageType(self.type_.as_str().parse::<SDKMessageType>().map_err(
             |err| {
@@ -171,7 +176,7 @@ impl MessageHandler for Message {
             }
         }
 
-        msg_type.process(self, state, session).await
+        msg_type.process(self, state, session, metadata).await
     }
 
     async fn pack<S>(

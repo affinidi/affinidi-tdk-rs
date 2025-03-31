@@ -331,8 +331,14 @@ impl WsConnection {
     async fn _create_socket(
         &mut self,
     ) -> Result<WebSocket<BufReader<Pin<Box<dyn ReadWrite>>>>, ATMError> {
+        let (profile_did, mediator_did) = self.profile.dids()?;
         // Check if authenticated
-        let tokens = self.profile.authenticate(&self.shared).await?;
+        let tokens = self
+            .shared
+            .tdk_common
+            .authentication
+            .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
+            .await?;
 
         debug!("Creating websocket connection");
         // Create a custom websocket request, turn this into a client_request

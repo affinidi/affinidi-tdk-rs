@@ -109,12 +109,33 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(response) => {
+                                        Ok(_) => {
                                             debug!("Successful handling of message - finished processing");
-                                            response
+                                            //response
                                         }
                                         Err(e) => {
-                                            warn!("Error processing message: {:?}", e);
+                                            debug!("Error processing message: {:?}", e);
+
+                                            // Send a problem report to the sender
+                                            match e {
+                                                MediatorError::MediatorError(_, msg_id, problem_report, _, log_message) => {
+                                                    match  _package_problem_report(&state, &session, msg_id, *problem_report).await {
+                                                        Ok(msg) => {
+                                                            debug!("Sending problem report: {:?}", msg);
+                                                            warn!(log_message);
+                                                            let _ = socket.send(Message::Text(msg.into())).await;
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("Error packaging problem report: {:?}", e);
+                                                        }
+                                                    }
+                                                },
+                                                _ => {
+                                                    // This is a generic error, we don't need to send a problem report
+                                                    warn!("Error processing message: {:?}", e);
+                                                }
+                                            }
+
                                             continue;
                                         }
                                     };
@@ -142,9 +163,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(response) => {
+                                        Ok(_) => {
                                             debug!("Successful handling of message - finished processing");
-                                            response
                                         }
                                         Err(e) => {
                                             warn!("Error processing message: {:?}", e);
@@ -171,9 +191,9 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                 let _ = socket.send(Message::Text(msg.into())).await;
                             },
                             WebSocketCommands::Close => {
-                                if let Ok(msg) =  _generate_duplicate_connection_problem_report(&state, &session).await {
+                                if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await {
                                    let _ = socket.send(Message::Text(msg.into())).await;
-                            }
+                                }
                                 debug!("Received close message from streaming task, closing websocket connection");
                                 already_deregistered_flag = true;
                                 break;
@@ -211,11 +231,9 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
     .await
 }
 
-async fn _generate_duplicate_connection_problem_report(
-    state: &SharedData,
-    session: &Session,
-) -> Result<String, MediatorError> {
-    let problem_report = ProblemReport::new(
+/// Generates a problem report for a duplicate websocket connection
+fn _generate_duplicate_connection_problem_report() -> ProblemReport {
+    ProblemReport::new(
         ProblemReportSorter::Warning,
         ProblemReportScope::Other("websocket".to_string()),
         "duplicate-channel".to_string(),
@@ -223,9 +241,17 @@ async fn _generate_duplicate_connection_problem_report(
             .to_string(),
         vec![],
         None,
-    );
+    )
+}
 
-    let pr_msg = DidcommMessage::build(
+/// Takes a problem report and packages it for sending to the recipient
+async fn _package_problem_report(
+    state: &SharedData,
+    session: &Session,
+    msg_id: Option<String>,
+    problem_report: ProblemReport,
+) -> Result<String, MediatorError> {
+    let mut pr_msg = DidcommMessage::build(
         Uuid::new_v4().to_string(),
         "https://didcomm.org/report-problem/2.0/problem-report".to_string(),
         json!(problem_report),
@@ -237,10 +263,14 @@ async fn _generate_duplicate_connection_problem_report(
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs(),
-    )
-    .finalize();
+    );
+
+    if let Some(msg_id) = msg_id {
+        pr_msg = pr_msg.pthid(msg_id);
+    }
 
     let (packed, _) = pr_msg
+        .finalize()
         .pack_encrypted(
             &session.did,
             Some(&state.config.mediator_did),
