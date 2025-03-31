@@ -4,7 +4,7 @@ use affinidi_messaging_sdk::messages::sending::InboundMessageResponse;
 use axum::{Json, extract::State};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use tracing::{Instrument, Level, span};
+use tracing::{Instrument, Level, debug, span};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RecipientHeader {
@@ -60,6 +60,7 @@ pub async fn message_inbound_handler(
         };
 
         let response = handle_inbound(&state, &session, &s).await?;
+        debug!("timtam: handle_inbound response: {:#?}", response);
 
         Ok((
             StatusCode::OK,

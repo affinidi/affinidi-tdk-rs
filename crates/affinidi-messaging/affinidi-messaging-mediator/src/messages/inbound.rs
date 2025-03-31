@@ -12,7 +12,7 @@ use affinidi_messaging_sdk::messages::{
     sending::InboundMessageResponse,
 };
 use sha256::digest;
-use tracing::{Instrument, debug, info, span};
+use tracing::{Instrument, debug, info, span, warn};
 
 use super::{ProcessMessageResponse, WrapperType};
 
@@ -21,7 +21,11 @@ pub(crate) async fn handle_inbound(
     session: &Session,
     message: &str,
 ) -> Result<InboundMessageResponse, MediatorError> {
-    let _span = span!(tracing::Level::DEBUG, "handle_inbound",);
+    let _span = span!(
+        tracing::Level::DEBUG,
+        "handle_inbound",
+        session = &session.session_id
+    );
 
     async move {
         let mut envelope = match MetaEnvelope::new(message, &state.did_resolver).await {
@@ -68,13 +72,21 @@ pub(crate) async fn handle_inbound(
                     if metadata.sign_from.is_none()
                         && state.config.security.block_anonymous_outer_envelope
                     {
-                        let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "unauthorized".into(),
-                            "Anonymous messages sent to the mediator are NOT allowed".into(),
-                            vec![], None
-                        ), false)?;
+                        warn!("Anonymous message received, not allowed");
+                        let error = generate_error_response(
+                            state,
+                            session,
+                            &msg.id,
+                            ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "unauthorized".into(),
+                                "Anonymous messages sent to the mediator are NOT allowed".into(),
+                                vec![],
+                                None,
+                            ),
+                            false,
+                        )?;
                         return store_message(state, session, &error, &metadata).await;
                     }
 
@@ -83,30 +95,43 @@ pub(crate) async fn handle_inbound(
                         match check_session_signing_match(session, &metadata.sign_from) {
                             Ok(_) => {}
                             Err(e) => {
-                                let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
-                                    ProblemReportSorter::Error,
-                                    ProblemReportScope::Protocol,
-                                    "unauthorized".into(),
-                                    "unauthorized to access Mediator Administration protocol. Session mismatch to admin DID!".into(),
-                                    vec![e.to_string()], None
-                                ), false)?;
+                                warn!("Outer envelope sending DID does not match session DID");
+                                let error = generate_error_response(
+                                    state,
+                                    session,
+                                    &msg.id,
+                                    ProblemReport::new(
+                                        ProblemReportSorter::Error,
+                                        ProblemReportScope::Protocol,
+                                        "unauthorized".into(),
+                                        "Session mismatch to sending DID! {1}".into(),
+                                        vec![e.to_string()],
+                                        None,
+                                    ),
+                                    false,
+                                )?;
                                 return store_message(state, session, &error, &metadata).await;
-                            },
+                            }
                         }
                     }
 
                     // Process the message
                     let response = match msg.process(state, session, &metadata).await {
                         Ok(response) => response,
-                        Err(e) => {
-                            generate_error_response(state, session, &msg.id, ProblemReport::new(
+                        Err(e) => generate_error_response(
+                            state,
+                            session,
+                            &msg.id,
+                            ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
                                 "inbound_processing_error".into(),
                                 "An error occurred while handling inbound message: {1}".into(),
-                                vec![e.to_string()], None
-                            ), false)?
-                        }
+                                vec![e.to_string()],
+                                None,
+                            ),
+                            false,
+                        )?,
                     };
                     debug!("message processed:\n{:#?}", response);
                     store_message(state, session, &response, &metadata).await
