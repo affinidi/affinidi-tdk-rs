@@ -293,6 +293,7 @@ dependencies = [
  "rustls 0.23.25",
  "semver",
  "serde",
+ "serde_json",
  "thiserror 2.0.12",
  "tracing",
 ]

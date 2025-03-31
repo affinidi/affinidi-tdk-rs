@@ -26,11 +26,14 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 * CHANGE: OOB Invites are now represented as a HASH and not as a SET
   * Only the owner of the OOB Invite or an ADMIN level account can delete OOB Invites
 * SECURITY: Inner envelope on forwarded messages is now checked and matched against ACL's
+* FEATURE: Better error handling and responses to clients
+  * Will now try and respond with a DIDComm Problem Report via both REST and WebSocket API where-ever possible
 
 ### SDK (0.10.3)
 
 * CLEANUP: Removed authentication code from the ATM SDK
   * Now uses the affinidi-secrets-resolver crate
+* FEATURE: Routing protocol now allows you to configure whether the forward should be anonymous or signed
 
 ## 27th March 2025 (0.10.2)
 

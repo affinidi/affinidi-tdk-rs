@@ -21,6 +21,7 @@ impl Routing {
     ///
     /// - atm: The Affinidi Messaging instance
     /// - profile: The profile of the agent forwarding the message
+    /// - anonymous: Will not sign or add from fields if true
     /// - message: The message to be forwarded
     /// - target_did: The DID of the target agent (typically a mediator)
     /// - next_did: The DID of the next agent to forward the message to
@@ -35,6 +36,7 @@ impl Routing {
         &self,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
+        anonymous: bool,
         message: &str,
         target_did: &str,
         next_did: &str,
@@ -54,8 +56,14 @@ impl Routing {
                 json!({"next": next_did}),
             )
             .to(target_did.to_owned())
-            .from(profile.inner.did.clone())
             .attachment(attachment);
+
+            let from_did = if !anonymous {
+                forwarded = forwarded.from(profile.inner.did.clone());
+                Some(profile.inner.did.as_str())
+            } else {
+                None
+            };
 
             if let Some(expires_time) = expires_time {
                 forwarded = forwarded.expires_time(expires_time);
@@ -72,8 +80,8 @@ impl Routing {
             let (msg, _) = forwarded
                 .pack_encrypted(
                     target_did,
-                    Some(&profile.inner.did),
-                    Some(&profile.inner.did),
+                    from_did,
+                    from_did,
                     &atm.inner.tdk_common.did_resolver,
                     &atm.inner.tdk_common.secrets_resolver,
                     &PackEncryptedOptions::default(),

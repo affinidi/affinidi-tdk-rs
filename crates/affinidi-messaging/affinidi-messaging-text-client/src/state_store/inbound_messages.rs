@@ -240,6 +240,7 @@ async fn _handle_connection_setup(
         .forward_message(
             atm,
             &current_profile,
+            false,
             packed.unwrap().0.as_str(),
             state.settings.mediator_did.as_ref().unwrap(),
             &to,

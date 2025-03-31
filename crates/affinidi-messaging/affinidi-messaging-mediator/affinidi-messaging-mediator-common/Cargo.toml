@@ -29,6 +29,7 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 semver = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
 thiserror = "2.0"
 tracing = { version = "0.1", features = [
     "max_level_debug",

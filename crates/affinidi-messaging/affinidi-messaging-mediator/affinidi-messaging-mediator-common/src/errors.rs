@@ -1,4 +1,4 @@
-use affinidi_messaging_sdk::messages::GenericDataStruct;
+use affinidi_messaging_sdk::messages::{GenericDataStruct, problem_report::ProblemReport};
 use axum::{
     Json,
     http::StatusCode,
@@ -76,6 +76,15 @@ pub enum MediatorError {
     ACLDenied(String),
     #[error("Processor ({0}) error: {1}")]
     ProcessorError(ProcessorError, String),
+
+    /// This is a catch-all for any error that is using DIDComm Problem Reports
+    /// `SessId` - Session ID
+    /// `Option<String>` - MSG ID responding to
+    /// `ProblemReport` - DIDComm Problem Report
+    /// `u16` - HTTP status code
+    /// `String` - Log message
+    #[error("Mediator Error: code({3}): {4}")]
+    MediatorError(SessId, Option<String>, Box<ProblemReport>, u16, String),
 }
 
 impl From<MediatorError> for ProcessorError {
@@ -311,6 +320,18 @@ impl IntoResponse for AppError {
                     message: format!("Processor ({}): {}", processor, message),
                 };
                 event!(Level::WARN, "{}", response.to_string());
+                response
+            }
+            MediatorError::MediatorError(session_id, _, problem_report, http_code, log_text) => {
+                let response = ErrorResponse {
+                    httpCode: http_code,
+                    sessionId: session_id,
+                    errorCode: 20,
+                    errorCodeStr: "DIDCommProblemReport".to_string(),
+                    message: serde_json::to_string(&problem_report)
+                        .unwrap_or_else(|_| "Failed to serialize Problem Report".to_string()),
+                };
+                event!(Level::WARN, log_text);
                 response
             }
         };

@@ -161,6 +161,7 @@ async fn main() -> Result<(), ATMError> {
         .forward_message(
             &atm,
             &bob,
+            false,
             &packed.0,
             &mediator_did,
             &alice.inner.did,
