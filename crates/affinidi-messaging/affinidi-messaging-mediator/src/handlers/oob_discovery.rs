@@ -16,8 +16,9 @@
 use crate::{SharedData, database::session::Session};
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::protocols::{
-    mediator::accounts::AccountType, oob_discovery::OOBInviteResponse,
+use affinidi_messaging_sdk::{
+    messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    protocols::{mediator::accounts::AccountType, oob_discovery::OOBInviteResponse},
 };
 use axum::{
     Json,
@@ -44,19 +45,89 @@ pub async fn oob_invite_handler(
 ) -> Result<(StatusCode, Json<SuccessResponse<OOBInviteResponse>>), AppError> {
     // ACL Check
     if !session.acls.get_create_invites().0 {
-        return Err(
-            MediatorError::ACLDenied("DID does not have create_invites access".into()).into(),
-        );
+        return Err(MediatorError::MediatorError(
+            45,
+            session.session_id,
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.permission".into(),
+                "DID doesn't have permission to access the requested resource".into(),
+                vec![],
+                None,
+            )),
+            StatusCode::FORBIDDEN.as_u16(),
+            "DID doesn't have permission to access the requested resource".to_string(),
+        )
+        .into());
     }
 
-    let oob_id = state
+    let oob_id = match state
         .database
         .oob_discovery_store(
             &session.did_hash,
             &body,
             state.config.limits.oob_invite_ttl as u64,
         )
-        .await?;
+        .await
+    {
+        Ok(oob_id) => oob_id,
+        Err(MediatorError::InternalError(code, _, text)) => {
+            return Err(MediatorError::MediatorError(
+                code,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "message.serialize".into(),
+                    "Couldn't serialize DIDComm message envelope. Reason: {1}".into(),
+                    vec![text],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Couldn't serialize DIDComm message envelope".to_string(),
+            )
+            .into());
+        }
+        Err(MediatorError::DatabaseError(code, _, text)) => {
+            return Err(MediatorError::MediatorError(
+                code,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.error".into(),
+                    "Database transaction error: {1}".into(),
+                    vec![text.to_string()],
+                    None,
+                )),
+                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                format!("Database transaction error: {}", text),
+            )
+            .into());
+        }
+        Err(e) => {
+            return Err(MediatorError::MediatorError(
+                46,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "oob.store".into(),
+                    "Couldn't store OOB invite. Reason: {1}".into(),
+                    vec![e.to_string()],
+                    None,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                format!("Couldn't store OOB invite. Reason: {}", e),
+            )
+            .into());
+        }
+    };
 
     Ok((
         StatusCode::OK,
@@ -112,7 +183,27 @@ pub async fn delete_oobid_handler(
     // Check if non ADMIN level account, do they own this OOB invite?
     if session.account_type != AccountType::Admin && session.account_type != AccountType::RootAdmin
     {
-        let oob_did_owner = match state.database.oob_discovery_get(&oobid._oobid).await? {
+        let oob_did_owner = match state
+            .database
+            .oob_discovery_get(&oobid._oobid)
+            .await
+            .map_err(|e| {
+                MediatorError::MediatorError(
+                    14,
+                    session.session_id.clone(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error".into(),
+                        "Database transaction error: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    format!("Database transaction error: {}", e),
+                )
+            })? {
             Some((_, oob_owner)) => oob_owner,
             _ => {
                 return Ok((
@@ -135,8 +226,20 @@ pub async fn delete_oobid_handler(
             .unwrap_u8()
             == 0
         {
-            return Err(MediatorError::ACLDenied(
-                "DID does not have ownership of the OOB Invite".into(),
+            return Err(MediatorError::MediatorError(
+                45,
+                session.session_id.clone(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.permission".into(),
+                    "DID doesn't have permission to access the requested resource".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID doesn't have permission to access the requested resource".to_string(),
             )
             .into());
         }

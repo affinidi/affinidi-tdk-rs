@@ -24,6 +24,7 @@ impl Database {
                     err
                 );
                 MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "redis function clean_start_streaming() failed. Reason: {}",
@@ -46,6 +47,7 @@ impl Database {
                 response
             );
             Err(MediatorError::DatabaseError(
+                23,
                 "NA".into(),
                 format!(
                     "redis fn clean_start_streaming() failed. Response ({:?})",
@@ -143,6 +145,7 @@ impl Database {
                     err
                 );
                 return Err(MediatorError::DatabaseError(
+                    24,
                     "NA".into(),
                     format!(
                         "publish_live_message() for did_hash({}) failed to serialize message. Reason: {}",
@@ -176,6 +179,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "publish_live_message() for did_hash({}) channel(CHANNEL:{}) failed. Reason: {}",
@@ -220,6 +224,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "streaming_register_client() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
@@ -262,6 +267,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "streaming_start_live() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
@@ -304,6 +310,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "streaming_stop_live() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
@@ -347,6 +354,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!(
                         "streaming_deregister_client() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",

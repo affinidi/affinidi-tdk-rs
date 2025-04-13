@@ -40,6 +40,7 @@ pub async fn well_known_web_did_handler(
         match state.config.mediator_did_doc {
             Some(doc) => Ok(Json(doc)),
             _ => Err(MediatorError::ConfigError(
+                48,
                 "NA".to_string(),
                 "No Mediator DID Document is configured".to_string(),
             )

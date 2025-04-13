@@ -10,7 +10,11 @@
 */
 use crate::database::Database;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_sdk::messages::problem_report::{
+    ProblemReport, ProblemReportScope, ProblemReportSorter,
+};
 use ahash::AHashMap as HashMap;
+use http::StatusCode;
 use redis::aio::PubSub;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -111,9 +115,21 @@ impl StreamingTask {
             let channel = format!("CHANNEL:{}", uuid);
             pubsub.subscribe(channel.clone()).await.map_err(|err| {
                 error!("Error subscribing to channel: {}", err);
-                MediatorError::DatabaseError(
-                    "NA".into(),
-                    format!("Error subscribing to channel: {}", err),
+
+                MediatorError::MediatorError(
+                    78,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.pubsub.subscribe".into(),
+                        "Can't subscribe to channel: {1}".into(),
+                        vec![err.to_string()],
+                        None,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    format!("Can't subscribe to channel: {}", err),
                 )
             })?;
 

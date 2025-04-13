@@ -1,7 +1,10 @@
 use crate::{SharedData, database::session::Session};
 use affinidi_messaging_didcomm::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::messages::{Folder, GenericDataStruct, MessageList};
+use affinidi_messaging_sdk::messages::{
+    Folder, GenericDataStruct, MessageList,
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+};
 use axum::{
     Json,
     extract::{Path, State},
@@ -40,7 +43,22 @@ pub async fn message_list_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::ACLDenied("DID does not have LOCAL access".into()).into());
+            return Err(MediatorError::MediatorError(
+                40,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.local".into(),
+                    "DID isn't local to the mediator".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID isn't local to the mediator".to_string(),
+            )
+            .into());
         }
 
         // Check that the DID hash matches the session DID
@@ -52,9 +70,20 @@ pub async fn message_list_handler(
             .unwrap_u8()
             == 0
         {
-            return Err(MediatorError::PermissionError(
+            return Err(MediatorError::MediatorError(
+                45,
                 session.session_id,
-                "You don't have permission to access this resource.".into(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.permission".into(),
+                    "DID doesn't have permission to access the requested resource".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID doesn't have permission to access the requested resource".to_string(),
             )
             .into());
         }

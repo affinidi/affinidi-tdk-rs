@@ -1,6 +1,10 @@
 use crate::{SharedData, database::session::Session};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::messages::{GetMessagesResponse, fetch::FetchOptions};
+use affinidi_messaging_sdk::messages::{
+    GetMessagesResponse,
+    fetch::FetchOptions,
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+};
 use axum::{Json, extract::State};
 use http::StatusCode;
 use regex::Regex;
@@ -30,12 +34,42 @@ pub async fn inbox_fetch_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::ACLDenied("DID does not have LOCAL access".into()).into());
+            return Err(MediatorError::MediatorError(
+                40,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.local".into(),
+                    "DID isn't local to the mediator".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID isn't local to the mediator".to_string(),
+            )
+            .into());
         }
 
         // Check options
         if body.limit< 1 || body.limit > 100 {
-            return Err(MediatorError::ConfigError(session.session_id, format!("limit must be between 1 and 100 inclusive. Received limit({})", body.limit)).into());
+            return Err(MediatorError::MediatorError(
+                41,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "api.inbox_fetch.limit".into(),
+                    "Invalid limit ({1}). Must be 1-100 in range".into(),
+                    vec![body.limit.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Invalid limit".to_string(),
+            )
+            .into());
         }
 
         // Check for valid start_id (unixtime in milliseconds including+1 digit so we are ok for another 3,114 years!)
@@ -43,12 +77,41 @@ pub async fn inbox_fetch_handler(
         let re = Regex::new(r"\d{13,14}-\d{1,3}$").unwrap();
         if let Some(start_id) = &body.start_id {
             if ! re.is_match(start_id) {
-                return Err(MediatorError::ConfigError(session.session_id, format!("start_id isn't valid. Should match UNIX_EPOCH in milliseconds + -(0..999). Received start_id({})", start_id)).into());
+                return Err(MediatorError::MediatorError(
+                    42,
+                    session.session_id,
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "api.inbox_fetch.start_id".into(),
+                        "start_id isn't valid. Should match UNIX_EPOCH in milliseconds + `-(0..999)`. Received: {1}".into(),
+                        vec![start_id.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("start_id isn't valid. Should match UNIX_EPOCH in milliseconds + `-(0..999)`. Received: {}", start_id),
+                )
+                .into());
             }
         }
 
         // Fetch messages if possible
-        let results = state.database.fetch_messages(&session.session_id, &session.did_hash, &body).await?;
+        let results = state.database.fetch_messages(&session.session_id, &session.did_hash, &body).await.map_err(|e| {MediatorError::MediatorError(
+            14,
+            session.session_id.clone(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.error".into(),
+                "Database transaction error: {1}".into(),
+                vec![e.to_string()],
+                None,
+            )),
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            format!("Database transaction error: {}", e),
+        )})?;
 
         Ok((
             StatusCode::OK,

@@ -48,6 +48,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("Add failed. Reason: {}", err),
                 )
@@ -73,8 +74,9 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
-                        format!("Add failed. Reason: {}", err),
+                        format!("Get failed. Reason: {}", err),
                     )
                 })?;
 
@@ -130,6 +132,7 @@ impl Database {
 
             cmd.exec_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("account_add() failed. Reason: {}", err),
                 )
@@ -169,11 +172,13 @@ impl Database {
             if let Some(current) = &current {
                 if current._type == AccountType::Mediator {
                     return Err(MediatorError::InternalError(
+                        18,
                         "NA".to_string(),
                         "Cannot remove the mediator account".to_string(),
                     ));
                 } else if current._type == AccountType::RootAdmin {
                     return Err(MediatorError::InternalError(
+                        18,
                         "NA".to_string(),
                         "Cannot remove the root admin account".to_string(),
                     ));
@@ -231,6 +236,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("Error removing DID ({}) Records. Reason: {}", did_hash, err),
                     )
@@ -255,12 +261,7 @@ impl Database {
 
         async move {
             debug!("Requesting list of accounts from mediator");
-            if limit > 100 {
-                return Err(MediatorError::DatabaseError(
-                    "NA".to_string(),
-                    "limit cannot exceed 100".to_string(),
-                ));
-            }
+            let limit = if limit > 100 { 100 } else { limit };
 
             let mut con = self.0.get_async_connection().await?;
 
@@ -273,12 +274,13 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("SSCAN cursor ({}) failed. Reason: {}", cursor, err),
                     )
                 })?;
 
-            // For each DID, fetch their details
+            // For each DID, fetch their access_list count and DID Details
             let mut did_query = Pipeline::new();
             let did_query = did_query.atomic();
             let mut access_list_query = Pipeline::new();
@@ -291,8 +293,9 @@ impl Database {
             let did_results: Vec<HashMap<String, String>> =
                 did_query.query_async(&mut con).await.map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
-                        format!("HGETALL  failed. Reason: {}", err),
+                        format!("did_details HGETALL failed. Reason: {}", err),
                     )
                 })?;
 
@@ -301,8 +304,9 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
-                        format!("SCARD failed. Reason: {}", err),
+                        format!("did_access_list SCARD failed. Reason: {}", err),
                     )
                 })?;
 
@@ -350,6 +354,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("account_change_type() failed. Reason: {}", err),
                     )
@@ -421,6 +426,7 @@ impl Database {
                     .await
                     .map_err(|err| {
                         MediatorError::DatabaseError(
+                            14,
                             "NA".to_string(),
                             format!(
                                 "changing queue_limit ({}) failed. Reason: {}",
@@ -438,6 +444,7 @@ impl Database {
                     .await
                     .map_err(|err| {
                         MediatorError::DatabaseError(
+                            23,
                             "NA".to_string(),
                             format!(
                                 "changing queue_limit ({}) failed. Reason: {}",

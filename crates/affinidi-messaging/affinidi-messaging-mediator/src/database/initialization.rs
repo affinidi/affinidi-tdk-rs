@@ -47,6 +47,7 @@ impl Database {
                 .await
                 .map_err(|e| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("Couldn't get database SCHEMA_VERSION: {}", e),
                     )
@@ -55,6 +56,7 @@ impl Database {
         if let Some(schema_version) = schema_version {
             let mediator_version = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {
                 MediatorError::InternalError(
+                    17,
                     "NA".into(),
                     format!(
                         "Couldn't parse mediator package version ({}). Reason: {}",
@@ -64,6 +66,7 @@ impl Database {
             })?;
             let schema_version = Version::parse(&schema_version).map_err(|e| {
                 MediatorError::InternalError(
+                    17,
                     "NA".into(),
                     format!(
                         "Couldn't parse database SCHEMA_VERSION ({}). Reason: {}",

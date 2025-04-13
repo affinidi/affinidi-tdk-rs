@@ -5,6 +5,8 @@
 //! 4. If the challenge is correct, the server sends two JWT tokens to the client (access and refresh tokens)
 //! 5. Client uses the access token to access protected services
 //! 6. If the access token expires, the client uses the refresh token to get a new access token
+//!
+//! NOTE: All errors handled in the handlers are returned as a Problem Report messages
 
 use super::message_inbound::InboundMessage;
 use crate::{
@@ -15,7 +17,11 @@ use crate::{
 use affinidi_messaging_didcomm::{Message, UnpackOptions, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
-    messages::{AuthorizationResponse, GenericDataStruct, known::MessageType},
+    messages::{
+        AuthorizationResponse, GenericDataStruct,
+        known::MessageType,
+        problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    },
     protocols::mediator::{accounts::AccountType, acls::MediatorACLSet},
 };
 use axum::{Json, extract::State};
@@ -25,7 +31,7 @@ use rand::{Rng, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::time::SystemTime;
-use tracing::{Instrument, Level, debug, info, span, warn};
+use tracing::{Instrument, Level, debug, info, span};
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthenticationChallenge {
     pub challenge: String,
@@ -85,7 +91,22 @@ pub async fn authentication_challenge(
 
         if !allowed {
             info!("DID({}) is blocked from connecting", session.did);
-            return Err(MediatorError::ACLDenied("DID Blocked".to_string()).into());
+            return Err(MediatorError::MediatorError(
+                25,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.blocked".into(),
+                    "DID is blocked".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID is blocked".to_string(),
+            )
+            .into());
         } else if !known {
             // Register the DID as a local DID
             state
@@ -141,10 +162,20 @@ pub async fn authentication_response(
         let mut envelope = match MetaEnvelope::new(&s, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
-                return Err(MediatorError::ParseError(
-                    "UNKNOWN".to_string(),
-                    "Raw inbound DIDComm message".into(),
-                    e.to_string(),
+                return Err(MediatorError::MediatorError(
+                    28,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.response.parse".into(),
+                        "authentication response couldn't be parsed: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("authentication response couldn't be parsed: {}", e),
                 )
                 .into());
             }
@@ -153,18 +184,64 @@ pub async fn authentication_response(
         let from_did = match &envelope.from_did {
             Some(from_did) => {
                 // Check if DID is allowed to connect
-                if !MediatorACLSet::authentication_check(&state, &digest(from_did), None)
-                    .await?
-                    .0
-                {
-                    info!("DID({}) is blocked from connecting", from_did);
-                    return Err(MediatorError::ACLDenied("DID Blocked".to_string()).into());
+                match MediatorACLSet::authentication_check(&state, &digest(from_did), None).await {
+                    Ok((allowed, _)) => {
+                        if allowed {
+                            from_did.to_string()
+                        } else {
+                            return Err(MediatorError::MediatorError(
+                                25,
+                                "".to_string(),
+                                None,
+                                Box::new(ProblemReport::new(
+                                    ProblemReportSorter::Error,
+                                    ProblemReportScope::Protocol,
+                                    "authentication.blocked".into(),
+                                    "DID is blocked".into(),
+                                    vec![],
+                                    None,
+                                )),
+                                StatusCode::FORBIDDEN.as_u16(),
+                                "DID is blocked".to_string(),
+                            )
+                            .into());
+                        }
+                    }
+                    Err(e) => {
+                        return Err(MediatorError::MediatorError(
+                            14,
+                            "".to_string(),
+                            None,
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
+                                None,
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        )
+                        .into());
+                    }
                 }
-                from_did.to_string()
             }
             _ => {
-                return Err(MediatorError::AuthenticationError(
-                    "Could not determine from_did".to_string(),
+                return Err(MediatorError::MediatorError(
+                    25,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.response.from".into(),
+                        "authentication response message is missing from header".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "authentication response message is missing from header".to_string(),
                 )
                 .into());
             }
@@ -181,9 +258,20 @@ pub async fn authentication_response(
         {
             Ok(ok) => ok,
             Err(e) => {
-                return Err(MediatorError::MessageUnpackError(
-                    "UNKNOWN".to_string(),
-                    format!("Couldn't unpack incoming message. Reason: {}", e),
+                return Err(MediatorError::MediatorError(
+                    32,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.unpack".into(),
+                        "Message unpack failed: envelope {1} Reason: {2}".into(),
+                        vec![s, e.to_string()],
+                        None,
+                    )),
+                    StatusCode::FORBIDDEN.as_u16(),
+                    format!("Message unpack failed. Reason: {}", e),
                 )
                 .into());
             }
@@ -191,13 +279,38 @@ pub async fn authentication_response(
 
         // Only accepts AffinidiAuthenticate messages
         match msg.type_.as_str().parse::<MessageType>().map_err(|err| {
-            MediatorError::ParseError("UNKNOWN".to_string(), "msg.type".into(), err.to_string())
+            MediatorError::MediatorError(
+                30,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.type.incorrect".into(),
+                    "Unexpected message type: {1}: Error: {2}".into(),
+                    vec![msg.type_.to_string(), err.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                format!("Unexpected message type: {} Error: {}", msg.type_, err),
+            )
         })? {
             MessageType::AffinidiAuthenticate => (),
             _ => {
-                return Err(MediatorError::SessionError(
-                    "UNKNOWN".to_string(),
-                    "Only accepts Affinidi Authentication protocol messages".to_string(),
+                return Err(MediatorError::MediatorError(
+                    30,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.type.incorrect".into(),
+                        "Unexpected message type: {1}".into(),
+                        vec![msg.type_.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("Unexpected message type: {}", msg.type_),
                 )
                 .into());
             }
@@ -210,49 +323,108 @@ pub async fn authentication_response(
             .as_secs();
         if let Some(expires) = msg.expires_time {
             if expires <= now {
-                return Err(MediatorError::MessageExpired(
-                    "-1".into(),
-                    expires.to_string(),
-                    now.to_string(),
+                return Err(MediatorError::MediatorError(
+                    31,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.expired".into(),
+                        "Message has expired: {1}".into(),
+                        vec![expires.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Message has expired".to_string(),
                 )
                 .into());
             }
+        } else {
+            // Authentication responses must have an expires_time header
+            return Err(MediatorError::MediatorError(
+                31,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.expired".into(),
+                    "Message is missing the expires_time header. Must contain this header".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Message missing expires_time header".to_string(),
+            )
+            .into());
         }
 
-        // Turn message body into Challenge
-        let challenge: AuthenticationChallenge =
-            serde_json::from_value(msg.body).map_err(|err| {
-                warn!(
-                    "Couldn't parse body into AuthenticationChallenge. Reason: {}",
-                    err
-                );
-                MediatorError::SessionError(
-                    "UNKNOWN".into(),
-                    format!(
-                        "Couldn't parse body into AuthenticationChallenge. Reason: {}",
-                        err
-                    ),
-                )
-            })?;
+        // Turn message body into Challenge response
+        let challenge: AuthenticationChallenge = serde_json::from_value(msg.body).map_err(|e| {
+            MediatorError::MediatorError(
+                28,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.response.parse".into(),
+                    "authentication response couldn't be parsed: {1}".into(),
+                    vec![e.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                format!("authentication response couldn't be parsed: {}", e),
+            )
+        })?;
 
         // Retrieve the session info from the database
-        let mut session = state
+        let mut session = match state
             .database
             .get_session(&challenge.session_id, &from_did)
-            .await?;
+            .await
+        {
+            Ok(session) => session,
+            Err(e) => {
+                return Err(MediatorError::MediatorError(
+                    14,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error".into(),
+                        "Database transaction error: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    format!("Database transaction error: {}", e),
+                )
+                .into());
+            }
+        };
 
         // check that the DID matches from what was given for the initial challenge request to what was used for the message response
         if let Some(from_did) = msg.from {
             if from_did != session.did {
-                warn!(
-                    "DID ({}) from authorization message does not match DID ({}) from session",
-                    from_did, session.did
-                );
-                return Err(MediatorError::SessionError(
-                    challenge.session_id.clone(),
+                return Err(MediatorError::MediatorError(
+                    33,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.session.mismatch".into(),
+                        "DID mismatch during authentication process".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
                     format!(
-                        "DID ({}) from authorization message does not match DID from session",
-                        from_did
+                        "DID mismatch during authentication process: first_did({}) second_did({})",
+                        session.did, from_did
                     ),
                 )
                 .into());
@@ -263,13 +435,20 @@ pub async fn authentication_response(
         if let SessionState::ChallengeSent = session.state {
             debug!("Database session state is ChallengeSent - Good to go!");
         } else {
-            warn!(
-                "{}: Session is in an invalid state for authentication",
-                session.session_id
-            );
-            return Err(MediatorError::SessionError(
-                session.session_id.clone(),
-                "Session is in an invalid state for authentication".into(),
+            return Err(MediatorError::MediatorError(
+                34,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.session.invalid".into(),
+                    "Session is in an invalid state to complete authentication".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Session is in an invalid state to complete authentication".to_string(),
             )
             .into());
         }
@@ -283,6 +462,7 @@ pub async fn authentication_response(
             state.config.security.jwt_access_expiry,
             &state.config.security.jwt_encoding_key,
         )?;
+
         let refresh_claims = SessionClaims {
             aud: "ATM".to_string(),
             sub: session.did.clone(),
@@ -306,9 +486,20 @@ pub async fn authentication_response(
                 &state.config.security.jwt_encoding_key,
             )
             .map_err(|err| {
-                MediatorError::InternalError(
-                    "UNKNOWN".into(),
-                    format!("Couldn't encode refresh token. Reason: {}", err),
+                MediatorError::MediatorError(
+                    36,
+                    session.session_id.to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.session.refresh_token".into(),
+                        "Couldn't create JWT Refresh token. Reason: {1}".into(),
+                        vec![err.to_string()],
+                        None,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    format!("Couldn't create JWT Refresh token. Reason: {}", err),
                 )
             })?,
             refresh_expires_at: refresh_claims.exp,
@@ -318,7 +509,24 @@ pub async fn authentication_response(
         state
             .database
             .update_session_authenticated(&old_sid, &session.session_id, &digest(&session.did))
-            .await?;
+            .await
+            .map_err(|e| {
+                MediatorError::MediatorError(
+                    14,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error".into(),
+                        "Database transaction error: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    format!("Database transaction error: {}", e),
+                )
+            })?;
 
         // Register the DID and initial setup
         _register_did_and_setup(&state, &session.did_hash).await?;
@@ -378,10 +586,20 @@ pub async fn authentication_refresh(
         let mut envelope = match MetaEnvelope::new(&s, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
-                return Err(MediatorError::ParseError(
-                    "UNKNOWN".to_string(),
-                    "Raw inbound DIDComm message".into(),
-                    e.to_string(),
+                return Err(MediatorError::MediatorError(
+                    37,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.envelope.read".into(),
+                        "Couldn't read DIDComm envelope: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("Couldn't read DIDComm envelope: {}", e),
                 )
                 .into());
             }
@@ -398,12 +616,20 @@ pub async fn authentication_refresh(
         {
             Ok(ok) => ok,
             Err(e) => {
-                return Err(MediatorError::MessageUnpackError(
-                    "UNKNOWN".to_string(),
-                    format!(
-                        "Couldn't unpack incoming authentication refresh message. Reason: {}",
-                        e
-                    ),
+                return Err(MediatorError::MediatorError(
+                    32,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.unpack".into(),
+                        "Message unpack failed: envelope {1} Reason: {2}".into(),
+                        vec![s, e.to_string()],
+                        None,
+                    )),
+                    StatusCode::FORBIDDEN.as_u16(),
+                    format!("Message unpack failed. Reason: {}", e),
                 )
                 .into());
             }
@@ -411,13 +637,38 @@ pub async fn authentication_refresh(
 
         // Only accepts AffinidiAuthenticateRefresh messages
         match msg.type_.as_str().parse::<MessageType>().map_err(|err| {
-            MediatorError::ParseError("UNKNOWN".to_string(), "msg.type".into(), err.to_string())
+            MediatorError::MediatorError(
+                30,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.type.incorrect".into(),
+                    "Unexpected message type: {1}: Error: {2}".into(),
+                    vec![msg.type_.to_string(), err.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                format!("Unexpected message type: {} Error: {}", msg.type_, err),
+            )
         })? {
             MessageType::AffinidiAuthenticateRefresh => (),
             _ => {
-                return Err(MediatorError::SessionError(
-                    "UNKNOWN".to_string(),
-                    "Only accepts Affinidi Authentication protocol messages".to_string(),
+                return Err(MediatorError::MediatorError(
+                    30,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.type.incorrect".into(),
+                        "Unexpected message type: {1}".into(),
+                        vec![msg.type_.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("Unexpected message type: {}", msg.type_),
                 )
                 .into());
             }
@@ -430,31 +681,79 @@ pub async fn authentication_refresh(
             .as_secs();
         if let Some(expires) = msg.expires_time {
             if expires <= now {
-                return Err(MediatorError::MessageExpired(
-                    "-1".into(),
-                    expires.to_string(),
-                    now.to_string(),
+                return Err(MediatorError::MediatorError(
+                    31,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.expired".into(),
+                        "Message has expired: {1}".into(),
+                        vec![expires.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Message has expired".to_string(),
                 )
                 .into());
             }
+        } else {
+            // Authentication responses must have an expires_time header
+            return Err(MediatorError::MediatorError(
+                31,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.expired".into(),
+                    "Message is missing the expires_time header. Must contain this header".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Message missing expires_time header".to_string(),
+            )
+            .into());
         }
 
         let refresh_token = if let Some(refresh_token) = msg.body.get("refresh_token") {
             if let Some(refresh_token) = refresh_token.as_str() {
                 refresh_token
             } else {
-                return Err(MediatorError::ParseError(
-                    "UNKNOWN".into(),
-                    "msg.body".into(),
-                    "Couldn't parse message body into refresh_token".into(),
+                return Err(MediatorError::MediatorError(
+                    38,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.session.refresh_token.parse".into(),
+                        "Couldn't parse JWT Refresh token. Not a string.".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    "Couldn't create JWT Refresh token. Not a string".to_string(),
                 )
                 .into());
             }
         } else {
-            return Err(MediatorError::ParseError(
-                "UNKNOWN".into(),
-                "msg.body".into(),
-                "Couldn't parse message body into refresh_token".into(),
+            return Err(MediatorError::MediatorError(
+                38,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.session.refresh_token.parse".into(),
+                    "Couldn't parse JWT Refresh token. Missing.".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                "Couldn't parse JWT Refresh token. Missing".to_string(),
             )
             .into());
         };
@@ -470,35 +769,85 @@ pub async fn authentication_refresh(
         ) {
             Ok(token) => token,
             Err(err) => {
-                return Err(MediatorError::AuthenticationError(format!(
-                    "Couldn't decode refresh token. Reason: {}",
-                    err
-                ))
-                .into());
-            }
-        };
-
-        // Refresh token is valid - check against database and ensure it still exists
-        let session_check = match &envelope.from_did {
-            Some(from_did) => {
-                state
-                    .database
-                    .get_session(&results.claims.session_id, from_did)
-                    .await?
-            }
-            _ => {
-                return Err(MediatorError::AuthenticationError(
-                    "Could not determine from_did".to_string(),
+                return Err(MediatorError::MediatorError(
+                    38,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.session.refresh_token.parse".into(),
+                        "Couldn't decode JWT Refresh token. Reason: {1}".into(),
+                        vec![err.to_string()],
+                        None,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    format!("Couldn't decode JWT Refresh token. Reason: {}", err),
                 )
                 .into());
             }
         };
 
+        // Refresh token is valid - check against database and ensure it still exists
+        let session_check = if let Some(from_did) = &envelope.from_did {
+            state
+                .database
+                .get_session(&results.claims.session_id, from_did)
+                .await
+                .map_err(|e| {
+                    MediatorError::MediatorError(
+                        14,
+                        "".to_string(),
+                        None,
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error".into(),
+                            "Database transaction error: {1}".into(),
+                            vec![e.to_string()],
+                            None,
+                        )),
+                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        format!("Database transaction error: {}", e),
+                    )
+                })?
+        } else {
+            return Err(MediatorError::MediatorError(
+                39,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.message.from.missing".into(),
+                    "DIDComm message is missing the from: header. Required for this transaction"
+                        .into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                "DIDComm message is missing the from: header. Required for this transaction"
+                    .to_string(),
+            )
+            .into());
+        };
+
         // Is the session in an authenticated state? If not, then we can't refresh
         if session_check.state != SessionState::Authenticated {
-            return Err(MediatorError::SessionError(
-                results.claims.session_id.clone(),
-                "Session is not in an authenticated state".into(),
+            return Err(MediatorError::MediatorError(
+                34,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.session.invalid".into(),
+                    "Session is in an invalid state to complete authentication. Should be Authenticated, instead is {1}".into(),
+                    vec![session_check.state.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                format!("Session is in an invalid state to complete authentication. Should be Authenticated, instead is {}", session_check.state),
             )
             .into());
         }
@@ -506,7 +855,22 @@ pub async fn authentication_refresh(
         // Does the Global ACL still allow them to connect?
         if session_check.acls.get_blocked() {
             info!("DID({}) is blocked from connecting", session_check.did);
-            return Err(MediatorError::ACLDenied("DID Blocked".to_string()).into());
+            return Err(MediatorError::MediatorError(
+                25,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.blocked".into(),
+                    "DID is blocked".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID is blocked".to_string(),
+            )
+            .into());
         }
 
         // Generate a new access token
@@ -575,9 +939,20 @@ fn _create_access_token(
         encoding_key,
     )
     .map_err(|err| {
-        MediatorError::InternalError(
-            "UNKNOWN".into(),
-            format!("Couldn't encode access token. Reason: {}", err),
+        MediatorError::MediatorError(
+            35,
+            session_id.to_string(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.session.access_token".into(),
+                "Couldn't create JWT Access token. Reason: {1}".into(),
+                vec![err.to_string()],
+                None,
+            )),
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            format!("Couldn't create JWT Access token. Reason: {}", err),
         )
     })?;
 

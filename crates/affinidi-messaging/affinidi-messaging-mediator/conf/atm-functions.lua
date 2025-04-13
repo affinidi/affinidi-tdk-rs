@@ -82,12 +82,12 @@ local function delete_message(keys, args)
     local meta = redis.call('HGETALL', 'MSG:META:' .. keys[1])
     local next = next
     if next(meta.map) == nil then
-        return redis.error_reply('Message ('.. keys[1] ..') not found')
+        return redis.error_reply('NOT_FOUND: message_hash ('.. keys[1] ..')')
     end
 
     -- Check that the requesting DID has some form of ownership of this message
     if meta.map.TO ~= args[1] and meta.map.FROM ~= args[1] and args[1] ~= "ADMIN" then
-        return redis.error_reply('Requesting DID does not have ownership of this message')
+        return redis.error_reply('PERMISSION_DENIED: Requesting DID does not have ownership of this message')
     end
 
     local bytes = meta.map.BYTES

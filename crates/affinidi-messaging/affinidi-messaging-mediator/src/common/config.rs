@@ -202,7 +202,7 @@ impl SecurityConfigRaw {
             eprintln!(
                 "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false"
             );
-            return Err(MediatorError::ConfigError(
+            return Err(MediatorError::ConfigError(12,
                 "NA".into(),
                 "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false".into(),
             ));
@@ -216,6 +216,7 @@ impl SecurityConfigRaw {
                 err
             );
             MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!(
                     "Couldn't parse global_acl_default config parameter. Reason: {}",
@@ -240,6 +241,7 @@ impl SecurityConfigRaw {
         let pair = Ed25519KeyPair::from_pkcs8(&jwt_secret).map_err(|err| {
             eprintln!("Could not create JWT key pair. {}", err);
             MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!("Could not create JWT key pair. {}", err),
             )
@@ -601,6 +603,7 @@ impl TryFrom<ConfigRaw> for Config {
             let doc: Document = serde_json::from_str(&content).map_err(|err| {
                 eprintln!("Could not parse DID Document. Reason: {}", err);
                 MediatorError::ConfigError(
+                    12,
                     "NA".into(),
                     format!("Could not parse DID Document. Reason: {}", err),
                 )
@@ -615,6 +618,7 @@ impl TryFrom<ConfigRaw> for Config {
                 config.security.jwt_access_expiry, config.security.jwt_refresh_expiry
             );
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 "JWT Access expiry must be less than JWT Refresh expiry".into(),
             ));
@@ -631,6 +635,7 @@ impl TryFrom<ConfigRaw> for Config {
             .await
             .map_err(|err| {
                 MediatorError::DIDError(
+                    12,
                     "NA".into(),
                     "NA".into(),
                     format!("Couldn't start DID Resolver: {}", err),
@@ -665,6 +670,7 @@ async fn load_secrets(
     let parts: Vec<&str> = secrets.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Invalid `mediator_secrets` format".into(),
         ));
@@ -683,17 +689,23 @@ async fn load_secrets(
                 .map_err(|e| {
                     eprintln!("Could not get secret value. {}", e);
                     MediatorError::ConfigError(
+                        12,
                         "NA".into(),
                         format!("Could not get secret value. {}", e),
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
                 eprintln!("No secret string found in response");
-                MediatorError::ConfigError("NA".into(), "No secret string found in response".into())
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "No secret string found in response".into(),
+                )
             })?
         }
         _ => {
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 "Invalid `mediator_secrets` format! Expecting file:// or aws_secrets:// ...".into(),
             ));
@@ -703,6 +715,7 @@ async fn load_secrets(
     let secrets: Vec<Secret> = serde_json::from_str(&content).map_err(|err| {
         eprintln!("Could not parse `mediator_secrets` JSON content. {}", err);
         MediatorError::ConfigError(
+            12,
             "NA".into(),
             format!("Could not parse `mediator_secrets` JSON content. {}", err),
         )
@@ -732,6 +745,7 @@ fn read_config_file(file_name: &str) -> Result<ConfigRaw, MediatorError> {
         Err(err) => {
             eprintln!("Could not parse configuration settings. {:?}", err);
             Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!("Could not parse configuration settings. Reason: {:?}", err),
             ))
@@ -757,6 +771,7 @@ where
             err
         );
         MediatorError::ConfigError(
+            12,
             "NA".into(),
             format!(
                 "Could not open file({}). {}",
@@ -784,6 +799,7 @@ fn expand_env_vars(raw_config: &Vec<String>) -> Result<Vec<String>, MediatorErro
     let re = Regex::new(r"\$\{(?P<env_var>[A-Z_]{1,}[0-9A-Z_]*):(?P<default_value>.*)\}").map_err(
         |e| {
             MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!("Couldn't create ENV Regex. Reason: {}", e),
             )
@@ -811,6 +827,7 @@ async fn read_did_config(
     let parts: Vec<&str> = did_config.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             format!("Invalid `{}` format", field_name),
         ));
@@ -820,6 +837,7 @@ async fn read_did_config(
         "aws_parameter_store" => aws_parameter_store(parts[1], aws_config).await?,
         _ => {
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 "Invalid mediator_did format! Expecting file:// or aws_parameter_store:// ..."
                     .into(),
@@ -839,6 +857,7 @@ async fn config_jwt_secret(
     let parts: Vec<&str> = jwt_secret.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Invalid `jwt_authorization_secret` format".into(),
         ));
@@ -857,16 +876,22 @@ async fn config_jwt_secret(
                 .map_err(|e| {
                     eprintln!("Could not get secret value. {}", e);
                     MediatorError::ConfigError(
+                        12,
                         "NA".into(),
                         format!("Could not get secret value. {}", e),
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
                 eprintln!("No secret string found in response");
-                MediatorError::ConfigError("NA".into(), "No secret string found in response".into())
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "No secret string found in response".into(),
+                )
             })?
         }
         _ => return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Invalid `jwt_authorization_secret` format! Expecting string:// or aws_secrets:// ..."
                 .into(),
@@ -876,6 +901,7 @@ async fn config_jwt_secret(
     BASE64_URL_SAFE_NO_PAD.decode(content).map_err(|err| {
         eprintln!("Could not create JWT key pair. {}", err);
         MediatorError::ConfigError(
+            12,
             "NA".into(),
             format!("Could not create JWT key pair. {}", err),
         )
@@ -887,6 +913,7 @@ fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
         Ok(hostname::get()
             .map_err(|e| {
                 MediatorError::ConfigError(
+                    12,
                     "NA".into(),
                     format!("Couldn't get hostname. Reason: {}", e),
                 )
@@ -894,6 +921,7 @@ fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
             .into_string()
             .map_err(|e| {
                 MediatorError::ConfigError(
+                    12,
                     "NA".into(),
                     format!("Couldn't get hostname. Reason: {:?}", e),
                 )
@@ -902,6 +930,7 @@ fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
         Ok(host_name.split_at(9).1.to_string())
     } else {
         Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Invalid hostname format!".into(),
         ))
@@ -923,24 +952,31 @@ async fn aws_parameter_store(
         .map_err(|e| {
             eprintln!("Could not get ({:?}) parameter. {}", parameter_name, e);
             MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!("Could not get ({:?}) parameter. {}", parameter_name, e),
             )
         })?;
     let parameter = response.parameter.ok_or_else(|| {
         eprintln!("No parameter string found in response");
-        MediatorError::ConfigError("NA".into(), "No parameter string found in response".into())
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            "No parameter string found in response".into(),
+        )
     })?;
 
     if let Some(_type) = parameter.r#type {
         if _type != ParameterType::String {
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 "Expected String parameter type".into(),
             ));
         }
     } else {
         return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Unknown parameter type".into(),
         ));
@@ -952,6 +988,7 @@ async fn aws_parameter_store(
             parameter.name
         );
         MediatorError::ConfigError(
+            12,
             "NA".into(),
             format!(
                 "Parameter ({:?}) found, but no parameter value found in response",
@@ -969,6 +1006,7 @@ async fn read_document(
     let parts: Vec<&str> = document_path.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
+            12,
             "NA".into(),
             "Invalid `document_path` format".into(),
         ));
@@ -978,6 +1016,7 @@ async fn read_document(
         "aws_parameter_store" => aws_parameter_store(parts[1], aws_config).await?,
         _ => {
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 "Invalid document_path format! Expecting file:// or aws_parameter_store:// ..."
                     .into(),
@@ -1000,6 +1039,7 @@ async fn load_forwarding_protection_blocks(
         Err(err) => {
             eprintln!("Could not parse blocked_forwarding_dids. Reason: {}", err);
             return Err(MediatorError::ConfigError(
+                12,
                 "NA".into(),
                 format!("Could not parse blocked_forwarding_dids. Reason: {}", err),
             ));
@@ -1013,6 +1053,7 @@ async fn load_forwarding_protection_blocks(
     for did in blocked_dids {
         let doc = did_resolver.resolve(&did).await.map_err(|err| {
             MediatorError::DIDError(
+                12,
                 "NA".into(),
                 did.clone(),
                 format!("Couldn't resolve DID. Reason: {}", err),
@@ -1084,12 +1125,12 @@ pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, Mediator
             // Build the subscriber
             .finish();
         tracing::subscriber::set_global_default(subscriber).map_err(|e| {
-            MediatorError::ConfigError("NA".into(), format!("Couldn't setup logging: {}", e))
+            MediatorError::ConfigError(12, "NA".into(), format!("Couldn't setup logging: {}", e))
         })?;
     } else {
         let subscriber = subscriber.finish();
         tracing::subscriber::set_global_default(subscriber).map_err(|e| {
-            MediatorError::ConfigError("NA".into(), format!("Couldn't setup logging: {}", e))
+            MediatorError::ConfigError(12, "NA".into(), format!("Couldn't setup logging: {}", e))
         })?;
     }
 

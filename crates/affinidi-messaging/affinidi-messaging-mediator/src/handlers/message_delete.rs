@@ -3,6 +3,7 @@ use affinidi_messaging_didcomm::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     DeleteMessageRequest, DeleteMessageResponse, GenericDataStruct,
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
 };
 use axum::{Json, extract::State};
 use http::StatusCode;
@@ -33,17 +34,41 @@ pub async fn message_delete_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::ACLDenied("DID does not have LOCAL access".into()).into());
+            return Err(MediatorError::MediatorError(
+                40,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.local".into(),
+                    "DID isn't local to the mediator".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID isn't local to the mediator".to_string(),
+            )
+            .into());
         }
 
         debug!("Deleting ({}) messages", body.message_ids.len());
         if body.message_ids.len() > state.config.limits.deleted_messages {
-            return Err(MediatorError::RequestDataError(
-                session.session_id.clone(),
-                format!(
-                    "Operation exceeds the allowed limit. You may delete a maximum of 100 messages per request. Received {} ids.",
-                    body.message_ids.len()
-                ),
+            return Err(MediatorError::MediatorError(
+                43,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "api.message_delete.limit".into(),
+                    "Invalid limit ({1}). Maximum of 100 messages can be deleted per transaction"
+                        .into(),
+                    vec![body.message_ids.len().to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Invalid limit".to_string(),
             )
             .into());
         }
@@ -52,15 +77,19 @@ pub async fn message_delete_handler(
         for message in &body.message_ids {
             debug!("Deleting message: message_id({})", message);
             let result = state
-                .database.0
-                .delete_message(Some(&session.session_id), &session.did_hash, message)
+                .database
+                .0
+                .delete_message(Some(&session.session_id), &session.did_hash, message, None)
                 .await;
 
             match result {
                 Ok(_) => deleted.success.push(message.into()),
                 Err(err) => {
                     // This often occurs because the message was already deleted, and client is trying to delete it again
-                    info!("{}: failed to delete msg({}). Reason: {}", session.session_id, message, err);
+                    info!(
+                        "{}: failed to delete msg({}). Reason: {}",
+                        session.session_id, message, err
+                    );
                     deleted.errors.push((message.into(), err.to_string()));
                 }
             }

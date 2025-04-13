@@ -433,7 +433,7 @@ impl DIDMethodResolver for DIDPeer {
                         }
                         'S' => {
                             // Service
-                            let raw = match BASE64_URL_SAFE_NO_PAD.decode(part[1..].as_bytes()) {
+                            let raw = match BASE64_URL_SAFE_NO_PAD.decode(&part.as_bytes()[1..]) {
                                 Ok(raw) => raw,
                                 Err(e) => {
                                     return Err(Error::Internal(format!(

@@ -16,6 +16,7 @@ use axum::{
     },
     response::IntoResponse,
 };
+use http::StatusCode;
 use serde_json::json;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{
@@ -43,9 +44,24 @@ pub async fn websocket_handler(
             .instrument(_span)
             .await
     } else {
-        let app_error: AppError =
-            MediatorError::ACLDenied("DID does not have LOCAL access".into()).into();
-        app_error.into_response()
+        let error: AppError = MediatorError::MediatorError(
+            40,
+            session.session_id,
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.local".into(),
+                "DID isn't local to the mediator".into(),
+                vec![],
+                None,
+            )),
+            StatusCode::FORBIDDEN.as_u16(),
+            "DID isn't local to the mediator".to_string(),
+        )
+        .into();
+
+        error.into_response()
     }
 }
 
@@ -118,7 +134,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                             // Send a problem report to the sender
                                             match e {
-                                                MediatorError::MediatorError(_, msg_id, problem_report, _, log_message) => {
+                                                MediatorError::MediatorError(_, _, msg_id, problem_report, _, log_message) => {
                                                     match  _package_problem_report(&state, &session, msg_id, *problem_report).await {
                                                         Ok(msg) => {
                                                             debug!("Sending problem report: {:?}", msg);
@@ -285,6 +301,7 @@ async fn _package_problem_report(
         .await
         .map_err(|err| {
             MediatorError::MessagePackError(
+                47,
                 session.session_id.clone(),
                 format!("Couldn't pack DIDComm message. Reason: {}", err),
             )

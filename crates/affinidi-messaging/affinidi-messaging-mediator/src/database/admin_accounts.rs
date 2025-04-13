@@ -47,6 +47,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!(
                         "error in setup of admin account for ({}). Reason: {}",
@@ -76,6 +77,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!(
                         "error in check of admin account for ({}). Reason: {}",
@@ -112,6 +114,7 @@ impl Database {
             debug!("Adding Admin accounts to the mediator");
             if accounts.len() > 100 {
                 return Err(MediatorError::DatabaseError(
+                    15,
                     "NA".to_string(),
                     "Number of admin accounts being added exceeds 100".to_string(),
                 ));
@@ -145,6 +148,7 @@ impl Database {
             debug!("Removing Admin accounts from the mediator");
             if accounts.len() > 100 {
                 return Err(MediatorError::DatabaseError(
+                    16,
                     "NA".to_string(),
                     "Number of admin accounts being removed exceeds 100".to_string(),
                 ));
@@ -172,6 +176,7 @@ impl Database {
 
             let result: Vec<i32> = tx.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("Remove failed. Reason: {}", err),
                 )
@@ -201,12 +206,7 @@ impl Database {
 
         async move {
             debug!("Requesting list of Admin accounts from mediator");
-            if limit > 100 {
-                return Err(MediatorError::DatabaseError(
-                    "NA".to_string(),
-                    "limit cannot exceed 100".to_string(),
-                ));
-            }
+            let limit = if limit > 100 { 100 } else { limit };
 
             let mut con = self.0.get_async_connection().await?;
 
@@ -216,11 +216,12 @@ impl Database {
                 .arg("ADMINS")
                 .arg(cursor)
                 .arg("COUNT")
-                .arg(100)
+                .arg(limit)
                 .query_async(&mut con)
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("SSCAN cursor ({}) failed. Reason: {}", cursor, err),
                     )
@@ -232,6 +233,7 @@ impl Database {
                 let value: Vec<Value> = from_redis_value(item).unwrap();
                 if value.len() != 2 {
                     return Err(MediatorError::DatabaseError(
+                        17,
                         "NA".to_string(),
                         "SSCAN result is not a tuple".to_string(),
                     ));
@@ -239,6 +241,7 @@ impl Database {
                 new_cursor = from_redis_value::<String>(value.first().unwrap())
                     .map_err(|err| {
                         MediatorError::DatabaseError(
+                            17,
                             "NA".into(),
                             format!("cursor could not be correctly parsed. Reason: {}", err),
                         )
@@ -248,6 +251,7 @@ impl Database {
 
                 admins = from_redis_value(value.last().unwrap()).map_err(|err| {
                     MediatorError::DatabaseError(
+                        17,
                         "NA".to_string(),
                         format!("admin list could not be correctly parsed. Reason: {}", err),
                     )
@@ -267,6 +271,7 @@ impl Database {
 
             let _types: Vec<Option<String>> = tx.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("Fetching Admin role types failed. Reason: {}", err),
                 )

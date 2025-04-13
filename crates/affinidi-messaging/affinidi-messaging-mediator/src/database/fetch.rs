@@ -37,6 +37,7 @@ impl Database {
                         err
                     );
                     MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("Couldn't fetch_messages() from database: {}", err),
                     )
@@ -74,7 +75,7 @@ impl Database {
                 if let FetchDeletePolicy::Optimistic = options.delete_policy {
                     match self
                         .0
-                        .delete_message(Some(session_id), did_hash, &message.msg_id)
+                        .delete_message(Some(session_id), did_hash, &message.msg_id, None)
                         .await
                     {
                         Ok(_) => {

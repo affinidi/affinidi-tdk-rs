@@ -35,6 +35,7 @@ impl TryFrom<&String> for SessionState {
             _ => {
                 warn!("Unknown SessionState: ({})", value);
                 Err(MediatorError::SessionError(
+                    20,
                     "NA".into(),
                     format!("Unknown SessionState: ({})", value),
                 ))
@@ -79,6 +80,7 @@ impl TryFrom<(&str, HashMap<String, String>)> for Session {
                 sid, sid
             );
             return Err(MediatorError::SessionError(
+                20,
                 sid.into(),
                 "No challenge found when retrieving session!".into(),
             ));
@@ -89,6 +91,7 @@ impl TryFrom<(&str, HashMap<String, String>)> for Session {
         } else {
             warn!("{}: No state found when retrieving session({})!", sid, sid);
             return Err(MediatorError::SessionError(
+                20,
                 sid.into(),
                 "No state found when retrieving session!".into(),
             ));
@@ -100,6 +103,7 @@ impl TryFrom<(&str, HashMap<String, String>)> for Session {
         } else {
             warn!("{}: No DID found when retrieving session({})!", sid, sid);
             return Err(MediatorError::SessionError(
+                20,
                 sid.into(),
                 "No DID found when retrieving session!".into(),
             ));
@@ -111,6 +115,7 @@ impl TryFrom<(&str, HashMap<String, String>)> for Session {
                 Err(err) => {
                     warn!("{}: Error parsing acls({})! Error: {}", sid, acls, err);
                     return Err(MediatorError::SessionError(
+                        26,
                         sid.into(),
                         "No ACL found when retrieving session!".into(),
                     ));
@@ -119,6 +124,7 @@ impl TryFrom<(&str, HashMap<String, String>)> for Session {
         } else {
             warn!("{}: Error parsing acls!", sid);
             return Err(MediatorError::SessionError(
+                20,
                 sid.into(),
                 "No ACL found when retrieving session!".into(),
             ));
@@ -157,6 +163,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::SessionError(
+                    14,
                     sid.clone(),
                     format!("tried to create new session ({})! Error: {}", sid, err),
                 )
@@ -185,6 +192,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::SessionError(
+                        14,
                         session_id.into(),
                         format!("tried to retrieve session({}). Error: {}", session_id, err),
                     )
@@ -206,6 +214,7 @@ impl Database {
                 digest(did)
             );
             return Err(MediatorError::SessionError(
+                20,
                 session_id.into(),
                 "No challenge found when retrieving session!".into(),
             ));
@@ -219,6 +228,7 @@ impl Database {
                 session_id, session_id
             );
             return Err(MediatorError::SessionError(
+                20,
                 session_id.into(),
                 "No state found when retrieving session!".into(),
             ));
@@ -233,6 +243,7 @@ impl Database {
                 session_id, session_id
             );
             return Err(MediatorError::SessionError(
+                20,
                 session_id.into(),
                 "No DID found when retrieving session!".into(),
             ));
@@ -244,6 +255,7 @@ impl Database {
         } else {
             warn!("{}: Error parsing role_type!", session_id);
             return Err(MediatorError::SessionError(
+                20,
                 session_id.into(),
                 "No role_type found when retrieving session!".into(),
             ));
@@ -258,14 +270,16 @@ impl Database {
                             session_id, acls, err
                         );
                         return Err(MediatorError::SessionError(
+                            14,
                             session_id.into(),
-                            "No ACL found when retrieving session!".into(),
+                            "Couldn't parse ACLS for session!".into(),
                         ));
                     }
                 }
             } else {
                 warn!("{}: Error parsing acls!", session_id);
                 return Err(MediatorError::SessionError(
+                    20,
                     session_id.into(),
                     "No ACL found when retrieving session!".into(),
                 ));
@@ -273,6 +287,7 @@ impl Database {
         } else {
             warn!("{}: Error parsing acls!", session_id);
             return Err(MediatorError::SessionError(
+                20,
                 session_id.into(),
                 "No ACL found when retrieving session!".into(),
             ));
@@ -316,6 +331,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::SessionError(
+                    14,
                     old_session_id.into(),
                     format!(
                         "tried to retrieve session({}). Error: {}",

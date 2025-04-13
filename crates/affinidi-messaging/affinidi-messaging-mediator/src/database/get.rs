@@ -8,12 +8,13 @@ use tracing::{Instrument, Level, debug, event, span};
 
 impl Database {
     /// Get a message from the database
+    /// - did_hash: DID Hash of the requesting DID (could be sender or receiver)
     /// - msg_id: The unique identifier of the message
     pub async fn get_message(
         &self,
         did_hash: &str,
         msg_id: &str,
-    ) -> Result<MessageListElement, MediatorError> {
+    ) -> Result<Option<MessageListElement>, MediatorError> {
         let _span = span!(Level::DEBUG, "get_message", msg_id = msg_id,);
         async move {
             let mut conn = self.0.get_async_connection().await?;
@@ -34,6 +35,7 @@ impl Database {
                         err
                     );
                     MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("Couldn't get message_id({}) from database: {}", msg_id, err),
                     )
@@ -41,13 +43,11 @@ impl Database {
 
             let didcomm_message: String = match didcomm_message {
                 Value::Nil => {
-                    return Err(MediatorError::DatabaseError(
-                        did_hash.into(),
-                        format!("Message not found for ID: {}", msg_id),
-                    ));
+                    return Ok(None);
                 }
                 v => from_redis_value(&v).map_err(|e| {
                     MediatorError::InternalError(
+                        17,
                         did_hash.into(),
                         format!("Couldn't convert didcomm_message to string: {}", e),
                     )
@@ -76,8 +76,7 @@ impl Database {
                 }
             }
 
-            // Update SEND metrics
-
+            // Ensure requesting DID is either sender or receiver
             if did_hash
                 .as_bytes()
                 .ct_eq(
@@ -101,13 +100,13 @@ impl Database {
                     .unwrap_u8()
                     == 1
             {
+                // Update SEND metrics
                 let _ = self.update_send_stats(message.size as i64).await;
-                Ok(message)
+                Ok(Some(message))
             } else {
-                Err(MediatorError::DatabaseError(
-                    did_hash.into(),
-                    format!("Message not found for DID: {}", did_hash),
-                ))
+                // Requesting DID is neither sender nor receiver
+                // Return None as safety measure - returning an error could leak that the message exists
+                Ok(None)
             }
         }
         .instrument(_span)

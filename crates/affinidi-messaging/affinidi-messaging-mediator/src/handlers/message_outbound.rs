@@ -1,5 +1,8 @@
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::messages::{GetMessagesRequest, GetMessagesResponse};
+use affinidi_messaging_sdk::messages::{
+    GetMessagesRequest, GetMessagesResponse,
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+};
 use axum::{Json, extract::State};
 use http::StatusCode;
 use tracing::{Instrument, Level, debug, span};
@@ -23,7 +26,22 @@ pub async fn message_outbound_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::ACLDenied("DID does not have LOCAL access".into()).into());
+            return Err(MediatorError::MediatorError(
+                40,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.local".into(),
+                    "DID isn't local to the mediator".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID isn't local to the mediator".to_string(),
+            )
+            .into());
         }
 
         debug!(
@@ -36,7 +54,7 @@ pub async fn message_outbound_handler(
         for msg_id in &body.message_ids {
             debug!("getting message with id: {}", msg_id);
             match state.database.get_message(&session.did_hash, msg_id).await {
-                Ok(msg) => {
+                Ok(Some(msg)) => {
                     debug!("Got message: {:?}", msg);
                     messages.success.push(msg);
 
@@ -45,7 +63,12 @@ pub async fn message_outbound_handler(
                         match state
                             .database
                             .0
-                            .delete_message(Some(&session.session_id), &session.did_hash, msg_id)
+                            .delete_message(
+                                Some(&session.session_id),
+                                &session.did_hash,
+                                msg_id,
+                                None,
+                            )
                             .await
                         {
                             Ok(_) => {
@@ -59,6 +82,12 @@ pub async fn message_outbound_handler(
                             }
                         }
                     }
+                }
+                Ok(None) => {
+                    debug!("Message not found: {}", msg_id);
+                    messages
+                        .get_errors
+                        .push((msg_id.clone(), "Message not found".to_string()));
                 }
                 Err(err) => {
                     debug!("Error getting message: {:?}", err);
