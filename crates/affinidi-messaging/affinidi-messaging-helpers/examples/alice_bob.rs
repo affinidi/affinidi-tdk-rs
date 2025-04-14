@@ -88,15 +88,6 @@ async fn main() -> Result<(), ATMError> {
 
     let start = SystemTime::now();
 
-    // Ensure Environment has a valid mediator to forward through
-    let mediator_did = if let Some(mediator) = &environment.default_mediator {
-        mediator.to_string()
-    } else {
-        return Err(ATMError::ConfigError(
-            "Environment Mediator not found".to_string(),
-        ));
-    };
-
     // Create message from Alice to Bob
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -139,6 +130,7 @@ async fn main() -> Result<(), ATMError> {
     println!();
 
     // Wrap it in a forward
+    let bob_mediator_did = tdk_bob.mediator.to_owned().unwrap();
     let (_forward_id, forward_msg) = protocols
         .routing
         .forward_message(
@@ -146,7 +138,7 @@ async fn main() -> Result<(), ATMError> {
             &atm_alice,
             false,
             &packed_msg.0,
-            &mediator_did,
+            &bob_mediator_did,
             &atm_bob.inner.did,
             None,
             None,
