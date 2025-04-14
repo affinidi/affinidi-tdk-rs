@@ -84,8 +84,9 @@ impl Database {
             debug!("Account {} does not exist", did_hash);
             return Ok(None);
         }
-
-        Ok(Some(_to_account(details, access_list_count)))
+        let mut account = _to_account(details, access_list_count);
+        account.did_hash = did_hash.to_string();
+        Ok(Some(account))
     }
 
     /// Add a DID account to the mediator

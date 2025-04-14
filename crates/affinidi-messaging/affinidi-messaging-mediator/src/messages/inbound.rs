@@ -163,8 +163,8 @@ pub(crate) async fn handle_inbound(
                     let from_hash = envelope.from_did.as_ref().map(digest);
                     if !state
                         .database
-                        .access_list_allowed(&digest(to_did), from_hash)
-                        .await?
+                        .access_list_allowed(&digest(to_did), from_hash.as_deref())
+                        .await
                     {
                         return Err(MediatorError::MediatorError(
                             73,

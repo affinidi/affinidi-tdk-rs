@@ -155,9 +155,6 @@ pub(crate) async fn process(
             ));
         }
 
-        // End of ACL Check for forward_to
-        // ****************************************************
-
         let attachments = if let Some(attachments) = &msg.attachments {
             attachments.to_owned()
         } else {
@@ -262,6 +259,35 @@ pub(crate) async fn process(
         };
 
         // ****************************************************
+
+        // ****************************************************
+        // Is the sending DID allowed by the next DID access_list and ACL?
+        if state
+            .database
+            .access_list_allowed(&next_did_hash, Some(&from_account.did_hash))
+            .await
+        {
+            debug!(
+                "Sender DID ({}) is allowed to send to next DID ({})",
+                from_account.did_hash, next_did_hash
+            );
+        } else {
+            return Err(MediatorError::MediatorError(
+                73,
+                session.session_id.to_string(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.access_list.denied".into(),
+                    "Delivery blocked due to ACLs (access_list denied)".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "Delivery blocked due to ACLs (access_list denied)".to_string(),
+            ));
+        }
 
         // Check against the limits
         let send_limit = from_account
