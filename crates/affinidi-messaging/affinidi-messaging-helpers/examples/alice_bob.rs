@@ -130,7 +130,7 @@ async fn main() -> Result<(), ATMError> {
     println!();
 
     // Wrap it in a forward
-    let bob_mediator_did = tdk_bob.mediator.to_owned().unwrap();
+    let bobs_mediator_did = tdk_bob.mediator.to_owned().unwrap();
     let (_forward_id, forward_msg) = protocols
         .routing
         .forward_message(
@@ -138,7 +138,7 @@ async fn main() -> Result<(), ATMError> {
             &atm_alice,
             false,
             &packed_msg.0,
-            &bob_mediator_did,
+            &bobs_mediator_did,
             &atm_bob.inner.did,
             None,
             None,
