@@ -111,7 +111,7 @@ impl MessageType {
                 "Feature is not implemented by the mediator: Affinidi Authentication is only handled by the Authorization handler"
                     .to_string(),
             )),
-            SDKMessageType::ForwardRequest => routing::process(message, state, session).await,
+            SDKMessageType::ForwardRequest => routing::process(message, metadata, state, session, ).await,
             SDKMessageType::ProblemReport => Err(MediatorError::MediatorError(
                 66,
                 session.session_id.clone(),

@@ -3,9 +3,13 @@ use std::time::SystemTime;
 use crate::{
     SharedData,
     database::session::Session,
-    messages::{ProcessMessageResponse, WrapperType, store::store_forwarded_message},
+    messages::{
+        ProcessMessageResponse, WrapperType,
+        error_response::generate_error_response,
+        store::{store_forwarded_message, store_message},
+    },
 };
-use affinidi_messaging_didcomm::{AttachmentData, Message, envelope::MetaEnvelope};
+use affinidi_messaging_didcomm::{AttachmentData, Message, UnpackMetadata, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -27,6 +31,7 @@ struct ForwardRequest {
 /// Process a forward message, run checks and then if accepted place into FORWARD_TASKS stream
 pub(crate) async fn process(
     msg: &Message,
+    metadata: &UnpackMetadata,
     state: &SharedData,
     session: &Session,
 ) -> Result<ProcessMessageResponse, MediatorError> {
@@ -37,7 +42,23 @@ pub(crate) async fn process(
     );
     async move {
         let ephemeral = if let Some(ephemeral) = msg.extra_headers.get("ephemeral") {
-            ephemeral.as_bool().unwrap_or(false)
+            match ephemeral.as_bool() {
+                Some(true) => true,
+                Some(false) => false,
+                None => {
+                    let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "message.header.ephemera.invalid".into(),
+                        "Ephemeral header isn't a JSON bool value. Defaults to false and still sends message".into(),
+                        vec![],
+                        None,
+                    ), true)?;
+
+                    store_message(state, session, &error, metadata).await?;
+                    false
+                }
+            }
         } else {
             false
         };

@@ -100,3 +100,4 @@ How you choose to handle these is left to the client side on how to handle these
 | 76 | 400 | e.p.message.recipients.too_many | No | There are too many recipients for this message |
 | 77 | 500 | e.p.me.storage.message.error | No | There was in internal error when storing the message |
 | 78 | 500 | e.p.me.res.storage.pubsub.subscribe | Yes | Couldn't subscribe to pubsub channel |
+| 79 | 400 | w.m.message.header.ephemeral.invalid | No | Ephemeral header isn't a JSON bool value. Defaults to false and still sends message |
