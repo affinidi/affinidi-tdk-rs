@@ -18,6 +18,7 @@ impl Database {
             .await
             .map_err(|e| {
                 MediatorError::DatabaseError(
+                    13,
                     "NA".into(),
                     format!("Couldn't set database SCHEMA_VERSION: {}", e),
                 )

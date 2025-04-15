@@ -6,7 +6,7 @@ Used to easily connect to the DID Universal Resolver Cache.
 # Crate features
 As this crate can be used either natively or in a WASM environment, the following features are available:
 * **local**
-    **default** - Enables the local mode of the SDK. This is the default mode.
+  * **default** - Enables the local mode of the SDK. This is the default mode.
 * **network**
     * Enables the network mode of the SDK. This mode requires a run-time service address to connect to.
     * This feature is NOT supported in a WASM environment. Will cause a compile error if used in WASM.

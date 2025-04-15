@@ -2,6 +2,10 @@ use std::time::SystemTime;
 
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_sdk::messages::problem_report::{
+    ProblemReport, ProblemReportScope, ProblemReportSorter,
+};
+use http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, info, span};
@@ -44,16 +48,20 @@ pub(crate) fn process(
 
     if let Some(expires) = msg.expires_time {
         if expires <= now {
-            debug!(
-                "Message expired at ({}) now({}) seconds_ago({})",
-                expires,
-                now,
-                now - expires
-            );
-            return Err(MediatorError::MessageExpired(
-                session.session_id.clone(),
-                expires.to_string(),
-                now.to_string(),
+            return Err(MediatorError::MediatorError(
+                31,
+                session.session_id.to_string(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.expired".into(),
+                    "Message has expired: {1}".into(),
+                    vec![expires.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Message has expired".to_string(),
             ));
         }
     }
@@ -62,15 +70,37 @@ pub(crate) fn process(
         if let Some(first) = to.first() {
             first.to_owned()
         } else {
-            return Err(MediatorError::RequestDataError(
-                session.session_id.clone(),
-                "Message missing valid 'to' field, expect at least one address in array.".into(),
+            return Err(MediatorError::MediatorError(
+                51,
+                session.session_id.to_string(),
+                Some(msg.id.clone()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "message.to".into(),
+                    "Invalid to: header, couldn't get first DID from the field.".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Invalid to: header, couldn't get first DID from the field.".to_string(),
             ));
         }
     } else {
-        return Err(MediatorError::RequestDataError(
-            session.session_id.clone(),
-            "Message missing 'to' field".into(),
+        return Err(MediatorError::MediatorError(
+            51,
+            session.session_id.to_string(),
+            Some(msg.id.clone()),
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.to".into(),
+                "Missing to: header in message".into(),
+                vec![],
+                None,
+            )),
+            StatusCode::BAD_REQUEST.as_u16(),
+            "Missing to: header in message".to_string(),
         ));
     };
     debug!("To: {}", to);
@@ -92,9 +122,22 @@ pub(crate) fn process(
         let from = if let Some(from) = &msg.from {
             from.to_owned()
         } else {
-            return Err(MediatorError::RequestDataError(
-                session.session_id.clone(),
-                "Anonymous Trust-Ping is asking for a response, this is an invalid request!".into(),
+            return Err(MediatorError::MediatorError(
+                50,
+                session.session_id.to_string(),
+                Some(msg.id.clone()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "message.anonymous".into(),
+                    "Anonymous Trust-Ping is asking for a response, this is an invalid request!"
+                        .into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Anonymous Trust-Ping is asking for a response, this is an invalid request!"
+                    .to_string(),
             ));
         };
 

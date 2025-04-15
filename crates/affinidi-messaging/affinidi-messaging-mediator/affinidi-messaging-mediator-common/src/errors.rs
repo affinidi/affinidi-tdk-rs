@@ -10,7 +10,11 @@ use std::fmt;
 use thiserror::Error;
 use tracing::{Level, event};
 
+/// Session ID is a random string of 12 characters
 type SessId = String;
+
+/// Error Code (unique code for each error)
+type ErrorCode = u16;
 
 pub struct AppError(MediatorError);
 
@@ -23,6 +27,8 @@ where
     }
 }
 
+/// Errors relating to the Mediator Processors. These are largely internal to the Mediator errors
+/// They should not be exposed to the user
 #[derive(Clone, Error, Debug)]
 pub enum ProcessorError {
     #[error("CommonError: {0}")]
@@ -35,56 +41,65 @@ pub enum ProcessorError {
 
 /// MediatorError the first String is always the session_id
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum MediatorError {
     #[error("Error in handling errors! {1}")]
-    ErrorHandlingError(SessId, String),
+    ErrorHandlingError(ErrorCode, SessId, String),
     #[error("{1}")]
-    InternalError(SessId, String),
+    InternalError(ErrorCode, SessId, String),
     #[error("Couldn't parse ({1}). Reason: {2}")]
-    ParseError(SessId, String, String),
+    ParseError(ErrorCode, SessId, String, String),
     #[error("Permission Error: {1}")]
-    PermissionError(SessId, String),
+    PermissionError(ErrorCode, SessId, String),
     #[error("Request is invalid: {1}")]
-    RequestDataError(SessId, String),
+    RequestDataError(ErrorCode, SessId, String),
     #[error("Service Limit exceeded: {1}")]
-    ServiceLimitError(SessId, String),
-    #[error("Unauthorized: {1}")]
-    Unauthorized(SessId, String),
+    ServiceLimitError(ErrorCode, SessId, String),
+    #[error("ErrorCode, Unauthorized: {1}")]
+    Unauthorized(ErrorCode, SessId, String),
     #[error("DID Error: did({1}) Error: {2}")]
-    DIDError(SessId, String, String),
+    DIDError(ErrorCode, SessId, String, String),
     #[error("Configuration Error: {1}")]
-    ConfigError(SessId, String),
+    ConfigError(ErrorCode, SessId, String),
     #[error("Database Error: {1}")]
-    DatabaseError(SessId, String),
+    DatabaseError(ErrorCode, SessId, String),
     #[error("Message unpack error: {1}")]
-    MessageUnpackError(SessId, String),
+    MessageUnpackError(ErrorCode, SessId, String),
     #[error("MessageExpired: expiry({1}) now({2})")]
-    MessageExpired(SessId, String, String),
+    MessageExpired(ErrorCode, SessId, String, String),
     #[error("Message pack error: {1}")]
-    MessagePackError(SessId, String),
+    MessagePackError(ErrorCode, SessId, String),
     #[error("Feature not implemented: {1}")]
-    NotImplemented(SessId, String),
+    NotImplemented(ErrorCode, SessId, String),
     #[error("Authorization Session ({0}) error: {1}")]
-    SessionError(SessId, String),
+    SessionError(ErrorCode, SessId, String),
     #[error("Anonymous message error: {1}")]
-    AnonymousMessageError(SessId, String),
+    AnonymousMessageError(ErrorCode, SessId, String),
     #[error("Forwarding/Routing message error: {1}")]
-    ForwardMessageError(SessId, String),
+    ForwardMessageError(ErrorCode, SessId, String),
     #[error("Authentication error: {0}")]
-    AuthenticationError(String),
+    AuthenticationError(ErrorCode, String),
     #[error("ACL Denied: {0}")]
-    ACLDenied(String),
+    ACLDenied(ErrorCode, String),
     #[error("Processor ({0}) error: {1}")]
-    ProcessorError(ProcessorError, String),
+    ProcessorError(ErrorCode, ProcessorError, String),
 
     /// This is a catch-all for any error that is using DIDComm Problem Reports
+    /// `ErrorCode` - Unique Error code
     /// `SessId` - Session ID
     /// `Option<String>` - MSG ID responding to
     /// `ProblemReport` - DIDComm Problem Report
     /// `u16` - HTTP status code
     /// `String` - Log message
     #[error("Mediator Error: code({3}): {4}")]
-    MediatorError(SessId, Option<String>, Box<ProblemReport>, u16, String),
+    MediatorError(
+        ErrorCode,
+        SessId,
+        Option<String>,
+        Box<ProblemReport>,
+        u16,
+        String,
+    ),
 }
 
 impl From<MediatorError> for ProcessorError {
@@ -95,238 +110,245 @@ impl From<MediatorError> for ProcessorError {
 
 impl From<ProcessorError> for MediatorError {
     fn from(error: ProcessorError) -> Self {
-        MediatorError::ProcessorError(error.clone(), error.to_string())
+        MediatorError::ProcessorError(0, error.clone(), error.to_string())
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let response = match self.0 {
-            MediatorError::ErrorHandlingError(session_id, msg) => {
+            MediatorError::ErrorHandlingError(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 1,
+                    errorCode: error_code,
                     errorCodeStr: "ErrorHandlingError".to_string(),
                     message: msg.to_string(),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::InternalError(session_id, msg) => {
+            MediatorError::InternalError(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 2,
+                    errorCode: error_code,
                     errorCodeStr: "InternalError".to_string(),
                     message: msg.to_string(),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ParseError(session_id, _, msg) => {
+            MediatorError::ParseError(error_code, session_id, _, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 3,
+                    errorCode: error_code,
                     errorCodeStr: "BadRequest: ParseError".to_string(),
                     message: msg.to_string(),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::PermissionError(session_id, msg) => {
+            MediatorError::PermissionError(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::FORBIDDEN.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 4,
+                    errorCode: error_code,
                     errorCodeStr: "Forbidden: PermissionError".to_string(),
                     message: msg.to_string(),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::RequestDataError(session_id, msg) => {
+            MediatorError::RequestDataError(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 5,
+                    errorCode: error_code,
                     errorCodeStr: "BadRequest: RequestDataError".to_string(),
                     message: format!("Bad Request: ({})", msg),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ServiceLimitError(session_id, msg) => {
+            MediatorError::ServiceLimitError(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 6,
+                    errorCode: error_code,
                     errorCodeStr: "BadRequest: ServiceLimitError".to_string(),
                     message: msg.to_string(),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::Unauthorized(session_id, msg) => {
+            MediatorError::Unauthorized(error_code, session_id, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::UNAUTHORIZED.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 7,
+                    errorCode: error_code,
                     errorCodeStr: "Unauthorized".to_string(),
                     message: format!("Unauthorized access: {}", msg),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::DIDError(session_id, did, msg) => {
+            MediatorError::DIDError(error_code, session_id, did, msg) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 8,
+                    errorCode: error_code,
                     errorCodeStr: "DIDError".to_string(),
                     message: format!("did({}) Error: {}", did, msg),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ConfigError(session_id, message) => {
+            MediatorError::ConfigError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 9,
+                    errorCode: error_code,
                     errorCodeStr: "ConfigError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::DatabaseError(session_id, message) => {
+            MediatorError::DatabaseError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 10,
+                    errorCode: error_code,
                     errorCodeStr: "DatabaseError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}: {}", session_id, response.to_string());
                 response
             }
-            MediatorError::MessageUnpackError(session_id, message) => {
+            MediatorError::MessageUnpackError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 11,
+                    errorCode: error_code,
                     errorCodeStr: "MessageUnpackError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::MessageExpired(session_id, expired, now) => {
+            MediatorError::MessageExpired(error_code, session_id, expired, now) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::UNPROCESSABLE_ENTITY.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 12,
+                    errorCode: error_code,
                     errorCodeStr: "MessageExpired".to_string(),
                     message: format!("Message expired: expiry({}) now({})", expired, now),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::MessagePackError(session_id, message) => {
+            MediatorError::MessagePackError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::BAD_REQUEST.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 13,
+                    errorCode: error_code,
                     errorCodeStr: "MessagePackError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::NotImplemented(session_id, message) => {
+            MediatorError::NotImplemented(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::NOT_IMPLEMENTED.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 14,
+                    errorCode: error_code,
                     errorCodeStr: "NotImplemented".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::SessionError(session_id, message) => {
+            MediatorError::SessionError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 15,
+                    errorCode: error_code,
                     errorCodeStr: "SessionError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::AnonymousMessageError(session_id, message) => {
+            MediatorError::AnonymousMessageError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 16,
+                    errorCode: error_code,
                     errorCodeStr: "AnonymousMessageError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ForwardMessageError(session_id, message) => {
+            MediatorError::ForwardMessageError(error_code, session_id, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     sessionId: session_id.to_string(),
-                    errorCode: 17,
+                    errorCode: error_code,
                     errorCodeStr: "ForwardMessageError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::AuthenticationError(message) => {
+            MediatorError::AuthenticationError(error_code, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::UNAUTHORIZED.as_u16(),
                     sessionId: "NO-SESSION".to_string(),
-                    errorCode: 18,
+                    errorCode: error_code,
                     errorCodeStr: "AuthenticationError".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ACLDenied(message) => {
+            MediatorError::ACLDenied(error_code, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::UNAUTHORIZED.as_u16(),
                     sessionId: "NO-SESSION".to_string(),
-                    errorCode: 19,
+                    errorCode: error_code,
                     errorCodeStr: "ACLDenied".to_string(),
                     message,
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::ProcessorError(processor, message) => {
+            MediatorError::ProcessorError(error_code, processor, message) => {
                 let response = ErrorResponse {
                     httpCode: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     sessionId: "NO-SESSION".to_string(),
-                    errorCode: 20,
+                    errorCode: error_code,
                     errorCodeStr: "ACLDenied".to_string(),
                     message: format!("Processor ({}): {}", processor, message),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
             }
-            MediatorError::MediatorError(session_id, _, problem_report, http_code, log_text) => {
+            MediatorError::MediatorError(
+                error_code,
+                session_id,
+                _,
+                problem_report,
+                http_code,
+                log_text,
+            ) => {
                 let response = ErrorResponse {
                     httpCode: http_code,
                     sessionId: session_id,
-                    errorCode: 20,
+                    errorCode: error_code,
                     errorCodeStr: "DIDCommProblemReport".to_string(),
                     message: serde_json::to_string(&problem_report)
                         .unwrap_or_else(|_| "Failed to serialize Problem Report".to_string()),

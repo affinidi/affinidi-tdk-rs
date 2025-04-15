@@ -91,6 +91,7 @@ impl Database {
                     err
                 );
                 MediatorError::DatabaseError(
+                    14,
                     "NA".into(),
                     format!("Couldn't get shared METADATA from database: {}", err),
                 )
@@ -98,6 +99,7 @@ impl Database {
 
         let result: Vec<String> = from_redis_value(&result).map_err(|e| {
             MediatorError::DatabaseError(
+                21,
                 "NA".into(),
                 format!("Couldn't parse GLOBAL metadata from database: {}", e),
             )
@@ -142,6 +144,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "INTERNAL".into(),
                     format!("Couldn't update GLOBAL SEND stats. Reason: {}", err),
                 )
@@ -162,6 +165,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "INTERNAL".into(),
                     format!(
                         "Couldn't update GLOBAL(WEBSOCKET_OPEN) stats. Reason: {}",
@@ -185,6 +189,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "INTERNAL".into(),
                     format!(
                         "Couldn't update GLOBAL(WEBSOCKET_CLOSE) stats. Reason: {}",
@@ -206,6 +211,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "INTERNAL".into(),
                     format!("Couldn't retrieve forward_tasks length. Reason: {}", err),
                 )

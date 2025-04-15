@@ -1,6 +1,9 @@
 use crate::{SharedData, database::session::Session, messages::inbound::handle_inbound};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::messages::sending::InboundMessageResponse;
+use affinidi_messaging_sdk::messages::{
+    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    sending::InboundMessageResponse,
+};
 use axum::{Json, extract::State};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -42,18 +45,41 @@ pub async fn message_inbound_handler(
     async move {
         // ACL Check
         if !session.acls.get_send_messages().0 {
-            return Err(
-                MediatorError::ACLDenied("DID does not have send/inbound access".into()).into(),
-            );
+            return Err(MediatorError::MediatorError(
+                44,
+                session.session_id,
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.send".into(),
+                    "DID isn't allowed to send messages through this mediator".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "DID isn't allowed to send messages through this mediator".to_string(),
+            )
+            .into());
         }
 
         let s = match serde_json::to_string(&body) {
             Ok(s) => s,
             Err(e) => {
-                return Err(MediatorError::ParseError(
-                    session.session_id.clone(),
-                    "InboundMessage".into(),
-                    e.to_string(),
+                return Err(MediatorError::MediatorError(
+                    19,
+                    session.session_id,
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "message.serialize".into(),
+                        "Couldn't serialize DIDComm message envelope. Reason: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Couldn't serialize DIDComm message envelope".to_string(),
                 )
                 .into());
             }

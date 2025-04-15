@@ -8,7 +8,7 @@ use affinidi_messaging_sdk::protocols::mediator::{
     },
 };
 use redis::{Cmd, Pipeline, Value, from_redis_value};
-use tracing::{Instrument, Level, debug, span};
+use tracing::{Instrument, Level, debug, span, warn};
 
 impl Database {
     /// Replace the ACL for a given DID
@@ -34,6 +34,7 @@ impl Database {
             .await
             .map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("set_acl failed. Reason: {}", err),
                 )
@@ -64,6 +65,7 @@ impl Database {
                     .await
                     .map_err(|err| {
                         MediatorError::DatabaseError(
+                            14,
                             "NA".to_string(),
                             format!("get_did_acls failed. Reason: {}", err),
                         )
@@ -71,7 +73,7 @@ impl Database {
 
             if let Some(acl) = acl {
                 Ok(Some(MediatorACLSet::from_hex_string(&acl).map_err(
-                    |e| MediatorError::InternalError(did_hash.into(), e.to_string()),
+                    |e| MediatorError::InternalError(26, did_hash.into(), e.to_string()),
                 )?))
             } else {
                 Ok(None)
@@ -95,6 +97,7 @@ impl Database {
             debug!("Requesting ACLs for ({}) DIDs from mediator", dids.len());
             if dids.len() > 100 {
                 return Err(MediatorError::DatabaseError(
+                    27,
                     "NA".to_string(),
                     "# of DIDs cannot exceed 100".to_string(),
                 ));
@@ -111,6 +114,7 @@ impl Database {
 
             let result: Vec<Value> = query.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("get_did_acls failed. Reason: {}", err),
                 )
@@ -123,7 +127,7 @@ impl Database {
             for (index, item) in result.iter().enumerate() {
                 if let Ok(acls_hex) = from_redis_value::<String>(item) {
                     let acls = MediatorACLSet::from_hex_string(&acls_hex).map_err(|e| {
-                        MediatorError::InternalError(dids[index].clone(), e.to_string())
+                        MediatorError::InternalError(26, dids[index].clone(), e.to_string())
                     })?;
                     acl_response.acl_response.push(MediatorACLExpanded {
                         did_hash: dids[index].clone(),
@@ -138,20 +142,19 @@ impl Database {
         .await
     }
 
-    /// Checks if the `to_hash` is allowed in the access list for the given `key_hash`
+    /// Checks if the `check_hash` is allowed in the access list for the given `key_hash`
     /// - `to_hash` - Hash of the DID we are checking against (typically the TO address)
     /// - `from_hash` - Hash of the DID we are checking for (typically the FROM address)
     ///
     /// Returns true if it exists, false otherwise
-    pub async fn access_list_allowed(
-        &self,
-        to_hash: &str,
-        from_hash: Option<String>,
-    ) -> Result<bool, MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+    pub async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
+        let Ok(mut con) = self.0.get_async_connection().await else {
+            warn!("Failed to get database connection");
+            return false;
+        };
 
-        if let Some(from_hash) = &from_hash {
-            let (exists, acl): (bool, Option<String>) = deadpool_redis::redis::pipe()
+        if let Some(from_hash) = from_hash {
+            let (exists, acl): (bool, Option<String>) = match deadpool_redis::redis::pipe()
                 .atomic()
                 .cmd("SISMEMBER")
                 .arg(["ACCESS_LIST:", to_hash].concat())
@@ -163,37 +166,48 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
-                        format!("get_global_acls failed. Reason: {}", err),
+                        format!("access_list_allowed failed. Reason: {}", err),
                     )
-                })?;
+                }) {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!("access_list_allowed failed. Reason: {}", err);
+                    return false;
+                }
+            };
 
             let acl = if let Some(acl) = acl {
-                MediatorACLSet::from_hex_string(&acl)
-                    .map_err(|e| MediatorError::InternalError(to_hash.into(), e.to_string()))?
+                if let Ok(acls) = MediatorACLSet::from_hex_string(&acl) {
+                    acls
+                } else {
+                    warn!("Failed to parse ACL for to_hash({})", to_hash);
+                    return false;
+                }
             } else {
                 debug!("ACL not found for DID: {}", to_hash);
-                return Ok(false);
+                return false;
             };
 
             if acl.get_access_list_mode().0 == AccessListModeType::ExplicitAllow {
                 debug!(
-                    "access_list_lookup == true for to_hash({}), from_hash({})",
+                    "access_list_allowed == true for to_hash({}), from_hash({})",
                     to_hash, from_hash
                 );
-                Ok(exists)
+                exists
             } else {
                 debug!(
-                    "access_list_lookup == false for to_hash({}), from_hash({})",
+                    "access_list_allowed == false for to_hash({}), from_hash({})",
                     to_hash, from_hash
                 );
-                Ok(!exists)
+                !exists
             }
         } else {
             // Anonymous Message
-            match self.get_did_acl(to_hash).await? {
-                Some(acl) => Ok(acl.get_anon_receive().0),
-                _ => Ok(false),
+            match self.get_did_acl(to_hash).await {
+                Ok(Some(acl)) => acl.get_anon_receive().0,
+                _ => false,
             }
         }
     }
@@ -228,6 +242,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("access_list_list failed. Reason: {}", err),
                     )
@@ -259,6 +274,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("access_list_count failed. Reason: {}", err),
                     )
@@ -309,6 +325,7 @@ impl Database {
 
             query.exec_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("access_list_add failed. Reason: {}", err),
                 )
@@ -353,6 +370,7 @@ impl Database {
 
             query.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
                     format!("access_list_remove failed. Reason: {}", err),
                 )
@@ -379,6 +397,7 @@ impl Database {
                 .await
                 .map_err(|err| {
                     MediatorError::DatabaseError(
+                        14,
                         "NA".to_string(),
                         format!("access_list_clear failed. Reason: {}", err),
                     )
@@ -402,7 +421,7 @@ impl Database {
             Level::DEBUG,
             "access_list_get",
             did_hash = did_hash,
-            remove_count = hashes.len()
+            get_count = hashes.len()
         );
 
         async move {
@@ -418,8 +437,9 @@ impl Database {
 
             let results: Vec<u8> = query.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
+                    14,
                     "NA".to_string(),
-                    format!("access_list_remove failed. Reason: {}", err),
+                    format!("access_list_get failed. Reason: {}", err),
                 )
             })?;
 

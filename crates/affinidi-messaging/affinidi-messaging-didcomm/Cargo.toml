@@ -1,6 +1,6 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.10.3"
+version = "0.10.4"
 description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
     'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',

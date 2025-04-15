@@ -56,6 +56,7 @@ impl Database {
                         err
                     );
                     MediatorError::DatabaseError(
+                        14,
                         did_hash.into(),
                         format!(
                             "Couldn't get message_list({}) from database for DID_hash {}: {}",
@@ -85,6 +86,7 @@ impl Database {
                     e
                 );
                 MediatorError::DatabaseError(
+                    26,
                     "NA".into(),
                     format!(
                         "Couldn't parse message_list did({}) folder({}): {}",

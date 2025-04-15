@@ -254,7 +254,11 @@ async fn _access_list_list(
         }
 
         if let Some(_cursor) = list.cursor {
-            cursor = Some(_cursor);
+            if _cursor == 0 {
+                break;
+            } else {
+                cursor = Some(_cursor);
+            }
         } else {
             break;
         }

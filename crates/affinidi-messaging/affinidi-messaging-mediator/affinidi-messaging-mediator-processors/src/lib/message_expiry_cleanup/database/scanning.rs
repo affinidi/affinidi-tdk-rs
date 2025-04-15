@@ -73,7 +73,7 @@ impl MessageExpiryCleanupProcessor {
             if let Some(msg_id) = msg_id {
                 if self
                     .database
-                    .delete_message(None, &msg_id, "ADMIN")
+                    .delete_message(None, &msg_id, "ADMIN", None)
                     .await
                     .is_ok()
                 {

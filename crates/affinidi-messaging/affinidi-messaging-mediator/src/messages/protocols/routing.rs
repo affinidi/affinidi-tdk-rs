@@ -7,8 +7,12 @@ use crate::{
 };
 use affinidi_messaging_didcomm::{AttachmentData, Message, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::protocols::mediator::{accounts::Account, acls::MediatorACLSet};
+use affinidi_messaging_sdk::{
+    messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    protocols::mediator::{accounts::Account, acls::MediatorACLSet},
+};
 use base64::prelude::*;
+use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
 use ssi::dids::{Document, document::service::Endpoint};
@@ -32,23 +36,51 @@ pub(crate) async fn process(
         session_id = session.session_id.as_str()
     );
     async move {
-        let next: String =
-            if let Ok(body) = serde_json::from_value::<ForwardRequest>(msg.body.to_owned()) {
-                match body.next {
-                    Some(next_str) => next_str,
-                    None => {
-                        return Err(MediatorError::RequestDataError(
-                            session.session_id.clone(),
-                            "Message missing valid 'next' field".into(),
-                        ));
-                    }
+        let ephemeral = if let Some(ephemeral) = msg.extra_headers.get("ephemeral") {
+            ephemeral.as_bool().unwrap_or(false)
+        } else {
+            false
+        };
+
+        let next: String = match serde_json::from_value::<ForwardRequest>(msg.body.to_owned()) {
+            Ok(body) => match body.next {
+                Some(next_str) => next_str,
+                None => {
+                    return Err(MediatorError::MediatorError(
+                        56,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "protocol.forwarding.next.missing".into(),
+                            "Forwarding message is missing next field".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::BAD_REQUEST.as_u16(),
+                        "Forwarding message is missing next field".to_string(),
+                    ));
                 }
-            } else {
-                return Err(MediatorError::RequestDataError(
-                    session.session_id.clone(),
-                    "Message is not a valid ForwardRequest, next is required in body".into(),
+            },
+            Err(e) => {
+                return Err(MediatorError::MediatorError(
+                    57,
+                    session.session_id.to_string(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.forwarding.parse".into(),
+                        "Couldn't parse forwarding message body. Reason: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("Couldn't parse forwarding message body. Reason: {}", e),
                 ));
-            };
+            }
+        };
         let next_did_hash = sha256::digest(next.as_bytes());
 
         // ****************************************************
@@ -64,12 +96,40 @@ pub(crate) async fn process(
                         &state.config.security.global_acl_default,
                         None,
                     )
-                    .await?
+                    .await
+                    .map_err(|e| {
+                        MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
+                                None,
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        )
+                    })?
             }
             Err(e) => {
-                return Err(MediatorError::DatabaseError(
-                    session.session_id.clone(),
-                    format!("Error getting next account: {}", e),
+                return Err(MediatorError::MediatorError(
+                    14,
+                    session.session_id.to_string(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error".into(),
+                        "Database transaction error: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    format!("Database transaction error: {}", e),
                 ));
             }
         };
@@ -78,21 +138,40 @@ pub(crate) async fn process(
         // Check if the next hop is allowed to receive forwarded messages
         let next_acls = MediatorACLSet::from_u64(next_account.acls);
         if !next_acls.get_receive_forwarded().0 {
-            return Err(MediatorError::ACLDenied(format!(
-                "Next DID({}) is blocked from receiving forwarded messages",
-                &next
-            )));
+            return Err(MediatorError::MediatorError(
+                58,
+                session.session_id.clone(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.receive_forwarded".into(),
+                    "Recipient isn't accepting forwarded messages".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "Recipient isn't accepting forwarded messages".to_string(),
+            ));
         }
-
-        // End of ACL Check for forward_to
-        // ****************************************************
 
         let attachments = if let Some(attachments) = &msg.attachments {
             attachments.to_owned()
         } else {
-            return Err(MediatorError::RequestDataError(
-                session.session_id.clone(),
-                "Nothing to forward, attachments are not defined!".into(),
+            return Err(MediatorError::MediatorError(
+                59,
+                session.session_id.to_string(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.missing".into(),
+                    "There were no attachments for this forward message".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "There were no attachments for this forward message".to_string(),
             ));
         };
         let attachments_bytes = attachments
@@ -118,24 +197,59 @@ pub(crate) async fn process(
                     ..Default::default()
                 },
                 Err(e) => {
-                    return Err(MediatorError::DatabaseError(
-                        session.session_id.clone(),
-                        format!("Error getting from account: {}", e),
+                    return Err(MediatorError::MediatorError(
+                        14,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error".into(),
+                            "Database transaction error: {1}".into(),
+                            vec![e.to_string()],
+                            None,
+                        )),
+                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        format!("Database transaction error: {}", e),
                     ));
                 }
             };
             let from_acls = MediatorACLSet::from_u64(from_account.acls);
 
             if !from_acls.get_send_forwarded().0 {
-                return Err(MediatorError::ACLDenied(
-                    "DID is blocked from sending forwarded messages".into(),
+                return Err(MediatorError::MediatorError(
+                    60,
+                    session.session_id.clone(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.send_forwarded".into(),
+                        "Sender isn't allowed to send forwarded messages".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::FORBIDDEN.as_u16(),
+                    "Sender isn't allowed to send forwarded messages".to_string(),
                 ));
             }
 
             from_account
         } else if !session.acls.get_send_forwarded().0 {
-            return Err(MediatorError::ACLDenied(
-                "DID is blocked from sending forwarding messages".into(),
+            return Err(MediatorError::MediatorError(
+                60,
+                session.session_id.clone(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.send_forwarded".into(),
+                    "Sender isn't allowed to send forwarded messages".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "Sender isn't allowed to send forwarded messages".to_string(),
             ));
         } else {
             Account {
@@ -146,20 +260,61 @@ pub(crate) async fn process(
 
         // ****************************************************
 
+        // ****************************************************
+        // Is the sending DID allowed by the next DID access_list and ACL?
+        if state
+            .database
+            .access_list_allowed(&next_did_hash, Some(&from_account.did_hash))
+            .await
+        {
+            debug!(
+                "Sender DID ({}) is allowed to send to next DID ({})",
+                from_account.did_hash, next_did_hash
+            );
+        } else {
+            return Err(MediatorError::MediatorError(
+                73,
+                session.session_id.to_string(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.access_list.denied".into(),
+                    "Delivery blocked due to ACLs (access_list denied)".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "Delivery blocked due to ACLs (access_list denied)".to_string(),
+            ));
+        }
+
         // Check against the limits
         let send_limit = from_account
             .queue_send_limit
             .unwrap_or(state.config.limits.queued_send_messages_soft);
         if send_limit != -1
+            && !ephemeral
             && from_account.send_queue_count + attachments.len() as u32 >= send_limit as u32
         {
             warn!(
                 "Sender DID ({}) has too many messages waiting to be delivered",
                 session.did_hash
             );
-            return Err(MediatorError::ServiceLimitError(
+            return Err(MediatorError::MediatorError(
+                61,
                 session.session_id.clone(),
-                "Sender DID has too many messages waiting to be delivered. Try again later".into(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "limits.queue.sender".into(),
+                    "Sender has too many messages waiting to be delivered".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                "Sender has too many messages waiting to be delivered".to_string(),
             ));
         }
 
@@ -172,15 +327,27 @@ pub(crate) async fn process(
             .queue_receive_limit
             .unwrap_or(state.config.limits.queued_receive_messages_soft);
         if recv_limit != -1
+            && !ephemeral
             && next_account.receive_queue_count + attachments.len() as u32 >= recv_limit as u32
         {
             warn!(
                 "Next DID ({}) has too many messages waiting to be delivered",
                 next_did_hash
             );
-            return Err(MediatorError::ServiceLimitError(
+            return Err(MediatorError::MediatorError(
+                62,
                 session.session_id.clone(),
-                "Next DID has too many messages waiting to be delivered. Try again later".into(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "limits.queue.recipient".into(),
+                    "Recipient (next) has too many messages waiting to be delivered".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                "Recipient (next) has too many messages waiting to be delivered".to_string(),
             ));
         }
 
@@ -189,26 +356,55 @@ pub(crate) async fn process(
                 "Too many attachments in message, limit is {}",
                 state.config.limits.attachments_max_count
             );
-            return Err(MediatorError::ServiceLimitError(
+            return Err(MediatorError::MediatorError(
+                63,
                 session.session_id.clone(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.too_many".into(),
+                    "Forwarded message has too many attachments ({1}). Limit is ({2})".into(),
+                    vec![
+                        attachments.len().to_string(),
+                        state.config.limits.attachments_max_count.to_string(),
+                    ],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
                 format!(
-                    "Too many attachments in message. Max ({})",
+                    "Forwarded message has too many attachments ({}). Limit is ({})",
+                    attachments.len(),
                     state.config.limits.attachments_max_count
                 ),
             ));
         }
 
-        if state.database.get_forward_tasks_len().await? >= state.config.limits.forward_task_queue {
+        if !ephemeral
+            && state.database.get_forward_tasks_len().await?
+                >= state.config.limits.forward_task_queue
+        {
             warn!(
                 "Forward task queue is full, limit is {}",
                 state.config.limits.forward_task_queue
             );
-            return Err(MediatorError::ServiceLimitError(
+            return Err(MediatorError::MediatorError(
+                64,
                 session.session_id.clone(),
-                format!(
-                    "Forward task queue is full. Max ({})",
-                    state.config.limits.forward_task_queue
-                ),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.forwarding.queue.limit".into(),
+                    "Mediator forwarding queue is at max limit, try again later".into(),
+                    vec![
+                        attachments.len().to_string(),
+                        state.config.limits.attachments_max_count.to_string(),
+                    ],
+                    None,
+                )),
+                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                "Mediator forwarding queue is at max limit, try again later".to_string(),
             ));
         }
 
@@ -226,11 +422,22 @@ pub(crate) async fn process(
                 "Forwarding delay is too long, limit is {}",
                 state.config.processors.forwarding.future_time_limit
             );
-            return Err(MediatorError::ServiceLimitError(
+            return Err(MediatorError::MediatorError(
+                65,
                 session.session_id.clone(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.delay_milli".into(),
+                    "Forward delay_milli field isn't valid. Max field value: {1}".into(),
+                    vec![(state.config.processors.forwarding.future_time_limit * 1000).to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
                 format!(
-                    "Forwarding delay is too long. Max ({})",
-                    state.config.processors.forwarding.future_time_limit
+                    "Forward delay_milli field isn't valid. Max field value: {}",
+                    state.config.processors.forwarding.future_time_limit * 1000
                 ),
             ));
         }
@@ -242,31 +449,108 @@ pub(crate) async fn process(
         let attachment = attachments.first().unwrap();
         let data = match attachment.data {
             AttachmentData::Base64 { ref value } => {
-                String::from_utf8(BASE64_URL_SAFE_NO_PAD.decode(&value.base64).unwrap()).unwrap()
+                match BASE64_URL_SAFE_NO_PAD.decode(&value.base64) {
+                    Ok(data) => match String::from_utf8(data) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            return Err(MediatorError::MediatorError(
+                                68,
+                                session.session_id.clone(),
+                                Some(msg.id.to_string()),
+                                Box::new(ProblemReport::new(
+                                    ProblemReportSorter::Warning,
+                                    ProblemReportScope::Message,
+                                    "protocol.forwarding.attachments.base64".into(),
+                                    "Couldn't parse base64 attachment. Error: {1}".into(),
+                                    vec![e.to_string()],
+                                    None,
+                                )),
+                                StatusCode::BAD_REQUEST.as_u16(),
+                                format!("Couldn't parse base64 attachment. Error: {}", e),
+                            ));
+                        }
+                    },
+                    Err(e) => {
+                        return Err(MediatorError::MediatorError(
+                            68,
+                            session.session_id.clone(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Warning,
+                                ProblemReportScope::Message,
+                                "protocol.forwarding.attachments.base64".into(),
+                                "Couldn't decode base64 attachment. Error: {1}".into(),
+                                vec![e.to_string()],
+                                None,
+                            )),
+                            StatusCode::BAD_REQUEST.as_u16(),
+                            format!("Couldn't decode base64 attachment. Error: {}", e),
+                        ));
+                    }
+                }
             }
             AttachmentData::Json { ref value } => {
                 if value.jws.is_some() {
                     // TODO: Implement JWS verification
-                    return Err(MediatorError::NotImplemented(
+                    return Err(MediatorError::MediatorError(
+                        66,
                         session.session_id.clone(),
-                        "Attachment contains a JWS encrypted JSON payload.".into(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.not_implemented".into(),
+                            "Feature is not implemented by the mediator: JWS Verified Attachment"
+                                .into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        "Feature is not implemented by the mediator: JWS Verified Attachment"
+                            .to_string(),
                     ));
                 } else {
                     match serde_json::to_string(&value.json) {
                         Ok(data) => data,
                         Err(e) => {
-                            return Err(MediatorError::RequestDataError(
+                            return Err(MediatorError::MediatorError(
+                                67,
                                 session.session_id.clone(),
-                                format!("Attachment is not valid JSON: {}", e),
+                                Some(msg.id.to_string()),
+                                Box::new(ProblemReport::new(
+                                    ProblemReportSorter::Warning,
+                                    ProblemReportScope::Message,
+                                    "protocol.forwarding.attachments.json.invalid".into(),
+                                    "JSON schema for attachment is incorrect: JSON({1}) Error: {2}"
+                                        .into(),
+                                    vec![value.json.to_string(), e.to_string()],
+                                    None,
+                                )),
+                                StatusCode::BAD_REQUEST.as_u16(),
+                                format!(
+                                    "JSON schema for attachment is incorrect: JSON({}) Error: {}",
+                                    value.json, e
+                                ),
                             ));
                         }
                     }
                 }
             }
-            _ => {
-                return Err(MediatorError::RequestDataError(
+            AttachmentData::Links { .. } => {
+                return Err(MediatorError::MediatorError(
+                    66,
                     session.session_id.clone(),
-                    "Attachment is wrong format".into(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.not_implemented".into(),
+                        "Feature is not implemented by the mediator: Attachment Links".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    "Feature is not implemented by the mediator: Attachment Links".to_string(),
                 ));
             }
         };
@@ -290,20 +574,43 @@ pub(crate) async fn process(
                 + state.config.limits.message_expiry_seconds
         };
 
-        // Check inner message for routing
+        // Check attached message for routing information
         let next_envelope = match MetaEnvelope::new(&data, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
-                return Err(MediatorError::ParseError(
+                return Err(MediatorError::MediatorError(
+                    37,
                     session.session_id.clone(),
-                    "Inner envelope inside forwarded envelope DIDComm message".into(),
-                    e.to_string(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.envelope.read".into(),
+                        "Couldn't read forward attached DIDComm envelope: {1}".into(),
+                        vec![e.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("Couldn't read DIDComm envelope: {}", e),
                 ));
             }
         };
+
         if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
-            return Err(MediatorError::ACLDenied(
-                "Inner message is anonymous and receiver isn't accepting anonymous messages".into(),
+            return Err(MediatorError::MediatorError(
+                69,
+                session.session_id.clone(),
+                Some(msg.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.receive_anon".into(),
+                    "Recipient isn't accepting anonymous messages".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::FORBIDDEN.as_u16(),
+                "Recipient isn't accepting anonymous messages".to_string(),
             ));
         }
 
@@ -311,14 +618,8 @@ pub(crate) async fn process(
         debug!(" TO: {}", next);
         debug!(" FROM: {:?}", msg.from);
         debug!(" Forwarded message:\n{}", data);
-        debug!(" Ephemeral: {:?}", msg.extra_headers.get("ephemeral"));
+        debug!(" Ephemeral: {}", ephemeral);
         debug!(" *************************************** ");
-
-        let ephemeral = if let Some(ephemeral) = msg.extra_headers.get("ephemeral") {
-            ephemeral.as_bool().unwrap_or(false)
-        } else {
-            false
-        };
 
         if ephemeral {
             // Live stream the message?
@@ -384,6 +685,7 @@ fn _service_local(
     state: &SharedData,
     next: &str,
     next_doc: &Document,
+    msg_id: &str,
 ) -> Result<bool, MediatorError> {
     let mut _error = None;
 
@@ -392,9 +694,21 @@ fn _service_local(
         warn!(
             "next hop is the mediator itself, but this should have been unpacked. not accepting this message"
         );
-        return Err(MediatorError::ForwardMessageError(
+        return Err(MediatorError::MediatorError(
+            70,
             session.session_id.clone(),
-            "next hop is the mediator, recursive forward found".into(),
+            Some(msg_id.to_string()),
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.next.mediator.self".into(),
+                "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
+                vec![],
+                None,
+            )),
+            StatusCode::FORBIDDEN.as_u16(),
+            "Forwarded next hop is the same mediator. Not allowed due to creating loops"
+                .to_string(),
         ));
     }
 
@@ -410,7 +724,22 @@ fn _service_local(
                         Endpoint::Uri(uri) => {
                             if uri.as_str().eq(&state.config.mediator_did) {
                                 warn!("next hop is the mediator itself, but this should have been unpacked. not accepting this message");
-                                _error = Some(MediatorError::ForwardMessageError(session.session_id.clone(), "next hop is the mediator, recursive forward found".into()));
+                                _error = Some(MediatorError::MediatorError(
+                                    70,
+                                    session.session_id.clone(),
+                                    Some(msg_id.to_string()),
+                                    Box::new(ProblemReport::new(
+                                        ProblemReportSorter::Warning,
+                                        ProblemReportScope::Message,
+                                        "protocol.forwarding.next.mediator.self".into(),
+                                        "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
+                                        vec![],
+                                        None,
+                                    )),
+                                    StatusCode::FORBIDDEN.as_u16(),
+                                    "Forwarded next hop is the same mediator. Not allowed due to creating loops"
+                                        .to_string(),
+                                ));
                                 false
                             } else {
                                 // Next hop is remote to the mediator

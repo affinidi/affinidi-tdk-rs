@@ -9,6 +9,7 @@ impl Database {
         // Load the file contents into a string
         let lua_scripts = read_to_string(scripts_path).map_err(|err| {
             MediatorError::ConfigError(
+                2,
                 "Initialization".into(),
                 format!(
                     "Couldn't ready database functions_file ({}). Reason: {}",
@@ -40,6 +41,7 @@ impl Database {
                     err
                 );
                 Err(MediatorError::DatabaseError(
+                    14,
                     "Initialization".into(),
                     format!("Loading LUA scripts, received database error: {}", err),
                 ))

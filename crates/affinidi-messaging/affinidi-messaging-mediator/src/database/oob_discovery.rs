@@ -36,22 +36,10 @@ impl Database {
         async move {
             let mut conn = self.0.get_async_connection().await?;
 
-            let now = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                Ok(now) => now.as_secs(),
-                Err(e) => {
-                    error!(
-                        "SystemTime::now().duration_since(UNIX_EPOCH) failed! Reason: {}",
-                        e
-                    );
-                    return Err(MediatorError::InternalError(
-                        "NA".into(),
-                        format!(
-                            "SystemTime::now().duration_since(UNIX_EPOCH) failed! Reason: {}",
-                            e
-                        ),
-                    ));
-                }
-            };
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
 
             // Setup the expiry in the database
             let expire_at = if let Some(expiry) = invite.expires_time {
@@ -72,6 +60,7 @@ impl Database {
                 Err(err) => {
                     error!("serializing error on Message. {}", err);
                     return Err(MediatorError::InternalError(
+                        19,
                         "NA".into(),
                         format!("serializing error on Message. {}", err),
                     ));
@@ -106,6 +95,7 @@ impl Database {
                 Err(err) => {
                     error!("Database Error: {}", err);
                     Err(MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("database store error: {}", err),
                     ))
@@ -150,6 +140,7 @@ impl Database {
                 Err(err) => {
                     error!("Database Error: {}", err);
                     return Err(MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("database fetch error: {}", err),
                     ));
@@ -181,6 +172,7 @@ impl Database {
                 Err(err) => {
                     error!("Database Error: {}", err);
                     return Err(MediatorError::DatabaseError(
+                        14,
                         "NA".into(),
                         format!("database fetch error: {}", err),
                     ));

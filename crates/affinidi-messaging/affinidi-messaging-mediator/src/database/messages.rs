@@ -61,7 +61,7 @@ impl Database {
                     .query_async(&mut con)
                     .await
                     .map_err(|e| {
-                        MediatorError::DatabaseError(session.session_id.clone(), e.to_string())
+                        MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
                     })?;
 
             let (stream_id, message) = if message.is_empty() {
@@ -97,7 +97,7 @@ impl Database {
 
             // Delete the message
             self.0
-                .delete_message(Some(&session.session_id), did_hash, message_hash)
+                .delete_message(Some(&session.session_id), did_hash, message_hash, None)
                 .await?;
 
             // Delete the stream entry
@@ -122,7 +122,9 @@ impl Database {
         deadpool_redis::redis::Cmd::xdel(key, &[id])
             .exec_async(&mut con)
             .await
-            .map_err(|e| MediatorError::DatabaseError(session.session_id.clone(), e.to_string()))
+            .map_err(|e| {
+                MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
+            })
     }
 
     // Deletes a stream record
@@ -143,6 +145,8 @@ impl Database {
         deadpool_redis::redis::Cmd::del(key)
             .exec_async(&mut con)
             .await
-            .map_err(|e| MediatorError::DatabaseError(session.session_id.clone(), e.to_string()))
+            .map_err(|e| {
+                MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
+            })
     }
 }

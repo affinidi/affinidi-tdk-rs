@@ -6,7 +6,11 @@ use crate::messages::MessageHandler;
 use crate::{SharedData, messages::PackOptions};
 use affinidi_messaging_didcomm::{PackEncryptedMetadata, UnpackMetadata};
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_sdk::messages::problem_report::{
+    ProblemReport, ProblemReportScope, ProblemReportSorter,
+};
 use affinidi_messaging_sdk::messages::sending::{InboundMessageList, InboundMessageResponse};
+use http::StatusCode;
 use sha256::digest;
 use tracing::{Instrument, debug, error, span, trace, warn};
 
@@ -72,12 +76,24 @@ pub(crate) async fn store_message(
                 WrapperType::Message(message) => {
                     // Pack the message for the next recipient(s)
                     let Some(to_dids) = &message.to else {
-                        return Err(MediatorError::MessagePackError(
+                        return Err(MediatorError::MediatorError(
+                            75,
                             session.session_id.clone(),
-                            "No recipients found".into(),
+                            Some(message.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "message.recipients.missing".into(),
+                                "Message has no recipients"
+                                    .into(),
+                                vec![],
+                                None,
+                            )),
+                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            "message has no recipients"
+                                .to_string(),
                         ));
                     };
-
                     debug!(
                         "response to_dids: count({}) vec({:?})",
                         to_dids.len(),
@@ -85,9 +101,21 @@ pub(crate) async fn store_message(
                     );
 
                     if to_dids.len() > state.config.limits.to_recipients {
-                        return Err(MediatorError::MessagePackError(
+                        return Err(MediatorError::MediatorError(
+                            76,
                             session.session_id.clone(),
-                            format!("Recipient count({}) exceeds limit", to_dids.len()),
+                            Some(message.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "message.recipients.too_many".into(),
+                                "Message has no too any recipients ({1}). Max: {2}"
+                                    .into(),
+                                vec![to_dids.len().to_string(), state.config.limits.to_recipients.to_string()],
+                                None,
+                            )),
+                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            format!("Message has no too any recipients ({}). Max: {}", to_dids.len(), state.config.limits.to_recipients),
                         ));
                     }
 
@@ -192,10 +220,23 @@ pub(crate) async fn store_message(
                 .await?;
             if meta.messaging_service.is_some() {
                 error!("TODO: Forwarded message - but will be sent to the wrong address!!!");
-                return Err(MediatorError::NotImplemented(
-                    session.session_id.clone(),
-                    "Forwarding not implemented when mediator creating a packed message".into(),
-                ));
+                return Err(MediatorError::MediatorError(
+                        66,
+                        session.session_id.clone(),
+                        Some(message.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.not_implemented".into(),
+                            "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
+                                .into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
+                            .to_string(),
+                    ));
             }
             trace!("Ephemeral message packed (meta):\n{:#?}", meta);
             trace!("Ephemeral message (msg):\n{:#?}", packed);
@@ -217,9 +258,22 @@ pub(crate) async fn store_message(
             Ok(InboundMessageResponse::Ephemeral(packed))
         } else {
             error!("No message to return");
-            Err(MediatorError::InternalError(
+            Err(MediatorError::MediatorError(
+                77,
                 session.session_id.clone(),
-                "Expected a message to return, but got None".into(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.storage.message.error".into(),
+                    "Expected a message to store, instead got None"
+                        .into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                "Expected a message to store, instead got None"
+                    .to_string(),
             ))
         }
     }
