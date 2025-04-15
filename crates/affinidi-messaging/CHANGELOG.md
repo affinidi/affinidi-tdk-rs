@@ -5,13 +5,14 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
-## xx April 2025 (0.10.4)
+## 15th April 2025 (0.10.4)
 
 ### Mediator (0.10.4)
 
 * FIX: Ephemeral DIDComm messages had send/receive limits applied. Should be ignored for ephemeral.
 * Error Handling enhanced to make it easier for developers to figure out what is happening during error conditions
   * See [Error Documentation](affinidi-messaging-mediator/ERRORS.md) for more information
+* FIX: Access List rules now applied to forwarded messages correctly.
 
 ## 1st April 2025 (0.10.3)
 
