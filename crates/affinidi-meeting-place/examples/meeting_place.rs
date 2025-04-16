@@ -173,7 +173,7 @@ async fn main() -> Result<()> {
         )));
     };
 
-    let mp = MeetingPlace::new(args.mp_did);
+    let mp = MeetingPlace::new(&tdk, args.mp_did).await?;
     match args.command {
         Commands::Check(check_offer_phrase) => {
             let result = mp
