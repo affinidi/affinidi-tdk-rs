@@ -30,7 +30,7 @@ pub struct InboundMessage {
 }
 
 /// Handles inbound messages to the mediator
-/// ACL_MODE: Rquires LOCAL access
+/// ACL_MODE: Requires LOCAL access
 ///
 pub async fn message_inbound_handler(
     session: Session,

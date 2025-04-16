@@ -360,7 +360,7 @@ impl MessagePickup {
                                 // Do nothing, keep waiting
                             }
                             _ => {
-                                return Err(ATMError::MsgReceiveError(format!("Unexpected message type: {:?}", msg).into()));
+                                return Err(ATMError::MsgReceiveError(format!("Unexpected message type: {:?}", msg)));
                             }
                         }
                     } _ => {

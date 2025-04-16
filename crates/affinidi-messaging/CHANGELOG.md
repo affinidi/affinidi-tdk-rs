@@ -5,6 +5,13 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## 16th April 2025 (0.10.5)
+
+### Mediator (0.10.5)
+
+* FEATURE: Will generate a problem report if the `ephemeral` header on a forwarded message is incorrect (i.e. String and not Bool)
+  * Error Code: 79, scope: w.m.message.header.ephemeral.invalid
+
 ## 15th April 2025 (0.10.4)
 
 ### Mediator (0.10.4)

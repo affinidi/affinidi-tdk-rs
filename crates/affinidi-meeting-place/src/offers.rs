@@ -2,8 +2,6 @@
  * Handles the creation of offers
  */
 
-use std::{str::FromStr, time::Duration};
-
 use crate::{
     _http_post, MeetingPlace,
     errors::{MeetingPlaceError, Result},
@@ -16,6 +14,7 @@ use base64::prelude::*;
 use chrono::{Local, TimeDelta};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::{str::FromStr, time::Duration};
 use tracing::debug;
 use uuid::Uuid;
 
@@ -403,7 +402,7 @@ impl Offer {
 
         let response = _http_post::<RegisterOfferResponse>(
             &tdk.client,
-            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/register-offer",
+            &[&mp.mp_api, "/register-offer"].concat(),
             &serde_json::to_string(registration).map_err(|e| {
                 MeetingPlaceError::Serialization(format!(
                     "Couldn't serialize register offer request: {}",
@@ -455,7 +454,7 @@ impl Offer {
 
         let response = _http_post::<QueryOfferResponse>(
             &tdk.client,
-            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/query-offer",
+            &[&mp.mp_api, "/query-offer"].concat(),
             &serde_json::to_string(&QueryOffer {
                 mnemonic: offer_phrase.to_string(),
                 did: profile.did.to_string(),
@@ -510,7 +509,7 @@ impl Offer {
 
         let response = _http_post::<DeregisterOfferResponse>(
             &tdk.client,
-            "https://ib8w1f44k7.execute-api.ap-southeast-1.amazonaws.com/dev/mpx/v1/deregister-offer",
+            &[&mp.mp_api, "/deregister-offer"].concat(),
             &serde_json::to_string(&DeregisteryOffer {
                 mnemonic,
                 offer_link,
