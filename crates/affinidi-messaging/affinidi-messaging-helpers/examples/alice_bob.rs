@@ -1,7 +1,14 @@
 //! Sends a message from Alice to Bob and then retrieves it.
 
 use affinidi_messaging_didcomm::Message;
-use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile, protocols::Protocols};
+use affinidi_messaging_sdk::{
+    errors::ATMError,
+    profiles::ATMProfile,
+    protocols::{
+        Protocols,
+        mediator::acls::{AccessListModeType, MediatorACLSet},
+    },
+};
 use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;
 use serde_json::json;
@@ -60,6 +67,7 @@ async fn main() -> Result<(), ATMError> {
     let atm = tdk.atm.clone().unwrap();
     let protocols = Protocols::new();
 
+    // Activate Alice Profile
     let tdk_alice = if let Some(alice) = environment.profiles.get("Alice") {
         tdk.add_profile(alice).await;
         alice
@@ -68,11 +76,26 @@ async fn main() -> Result<(), ATMError> {
             format!("Alice not found in Environment: {}", environment_name).to_string(),
         ));
     };
+
     let atm_alice = atm
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
         .await?;
-    info!("Alice profile active");
 
+    let Some(alice_info) = protocols
+        .mediator
+        .account_get(&atm, &atm_alice, None)
+        .await?
+    else {
+        panic!("Alice account not found on mediator");
+    };
+
+    info!("Alice profile active: {:?}", alice_info);
+    let alice_acl_mode = MediatorACLSet::from_u64(alice_info.acls)
+        .get_access_list_mode()
+        .0;
+    info!("Alice ACL Mode Type: {:?}", alice_acl_mode);
+
+    // Activate Bob Profile
     let tdk_bob = if let Some(bob) = environment.profiles.get("Bob") {
         tdk.add_profile(bob).await;
         bob
@@ -84,7 +107,51 @@ async fn main() -> Result<(), ATMError> {
     let atm_bob = atm
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_bob).await?, true)
         .await?;
-    info!("Bob profile active");
+
+    let Some(bob_info) = protocols.mediator.account_get(&atm, &atm_bob, None).await? else {
+        panic!("Bob account not found on mediator");
+    };
+
+    info!("Bob profile active: {:?}", bob_info);
+    let bob_acl_mode = MediatorACLSet::from_u64(bob_info.acls)
+        .get_access_list_mode()
+        .0;
+    info!("Bob ACL Mode Type: {:?}", bob_acl_mode);
+
+    // Reset ACL's as examples can get mixed up with back to back testing
+    info!("Resetting Access Lists");
+
+    // Reset Alice ACL's
+    if let AccessListModeType::ExplicitAllow = alice_acl_mode {
+        // Ensure Bob is added to Alice explicit allow list
+        protocols
+            .mediator
+            .access_list_add(&atm, &atm_alice, None, &[&bob_info.did_hash])
+            .await?;
+    } else {
+        // Ensure Bob is removed from Alice explicit deny list
+        protocols
+            .mediator
+            .access_list_remove(&atm, &atm_alice, None, &[&bob_info.did_hash])
+            .await?;
+    }
+    info!("Alice Access Lists reset");
+
+    // Reset Bob ACL's
+    if let AccessListModeType::ExplicitAllow = bob_acl_mode {
+        // Ensure Bob is added to Bob explicit allow list
+        protocols
+            .mediator
+            .access_list_add(&atm, &atm_bob, None, &[&alice_info.did_hash])
+            .await?;
+    } else {
+        // Ensure Bob is removed from Bob explicit deny list
+        protocols
+            .mediator
+            .access_list_remove(&atm, &atm_bob, None, &[&alice_info.did_hash])
+            .await?;
+    }
+    info!("Bob Access Lists reset");
 
     let start = SystemTime::now();
 

@@ -5,6 +5,21 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## XX April 2025
+
+### Messaging Helpers (Examples) (0.10.5)
+
+* Examples updated to work with the mediator in different Operating Modes (whether in explicit_allow or explicit_deny they will detect and ensure correct access list management)
+
+### Text Client (0.10.5)
+
+* Support for ACL, Access Lists and Mediator Operating modes added
+
+### Messaging SDK (0.10.5)
+
+* Ability to turn on/off direct-delivery to the SDK MPSC channel on a per profile basis.
+  * Helps with initialization of the profile such as access control management before switching to streaming mode
+
 ## 16th April 2025 (0.10.5)
 
 ### Mediator (0.10.5)

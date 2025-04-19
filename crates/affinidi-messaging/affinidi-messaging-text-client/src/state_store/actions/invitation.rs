@@ -1,6 +1,12 @@
 use affinidi_messaging_didcomm::{Attachment, Message, MessageBuilder};
 use affinidi_messaging_sdk::{
-    ATM, messages::SuccessResponse, profiles::ATMProfile, protocols::Protocols,
+    ATM,
+    messages::SuccessResponse,
+    profiles::ATMProfile,
+    protocols::{
+        Protocols,
+        mediator::acls::{AccessListModeType, MediatorACLSet},
+    },
 };
 use affinidi_tdk::secrets_resolver::{
     SecretsResolver,
@@ -8,12 +14,14 @@ use affinidi_tdk::secrets_resolver::{
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use image::Luma;
+use log::info;
 use qrcode::QrCode;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 use serde_json::json;
+use sha256::digest;
 use ssi::{JWK, dids::DIDKey, jwk::Params};
 use std::{
     fmt::{self, Debug, Formatter},
@@ -437,6 +445,53 @@ pub async fn create_invitation(
                                     .fg(Color::Blue),
                             ),
                         ]));
+                        state_tx.send(state.clone())?;
+
+                        // Ensure Mediator ACL set up is correctly setup
+                        let Some(profile_info) =
+                            protocols.mediator.account_get(atm, &profile, None).await?
+                        else {
+                            state.invite_popup.messages.push(Line::from(Span::styled(
+                                "Failed to get profile info from mediator",
+                                Style::default().fg(Color::Red),
+                            )));
+                            state_tx.send(state.clone())?;
+
+                            warn!("Failed to get profile info from mediator");
+                            return Err(anyhow::anyhow!(
+                                "Failed to get profile info from mediator"
+                            ));
+                        };
+                        info!("Profile info: {:?}", profile_info);
+
+                        let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
+                        if let AccessListModeType::ExplicitAllow =
+                            profile_acl_flags.get_access_list_mode().0
+                        {
+                            // Need to set invitation DID to explicit_deny
+                            if profile_acl_flags.get_access_list_mode_admin_change() {
+                                let mut new_acl = profile_acl_flags;
+                                new_acl.set_access_list_mode(
+                                    AccessListModeType::ExplicitDeny,
+                                    true,
+                                    false,
+                                )?;
+                                protocols
+                                    .mediator
+                                    .acls_set(atm, &profile, &digest(&profile.inner.did), &new_acl)
+                                    .await?;
+                            } else {
+                                state.invite_popup.messages.push(Line::from(Span::styled(
+                                    "Mediator is not allowing DID owners to change their Access List Mode! Contact support.",
+                                    Style::default().fg(Color::Red),
+                                )));
+                                state_tx.send(state.clone())?;
+                                return Err(anyhow::anyhow!(
+                                    "Mediator is not allowing DID owners to change their Access List Mode! Contact support."
+                                ));
+                            }
+                        }
+
                         state.invite_popup.messages.push(Line::from(Span::styled(
                             "Asking Mediator for OOB Invitation link...",
                             Style::default().fg(Color::LightBlue),
