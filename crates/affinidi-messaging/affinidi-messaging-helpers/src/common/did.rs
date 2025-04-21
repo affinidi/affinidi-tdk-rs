@@ -27,7 +27,10 @@ struct LocalDidPeerKeys {
 /// Creates a fully formed DID, with corresponding secrets
 /// - service: Creates a service definition with the provided URI if Some
 ///   - [0] = URI
-pub fn create_did(service: Option<String>) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
+pub fn create_did(
+    service: Option<String>,
+    auth_service: bool,
+) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
     // Generate keys for encryption and verification
     let v_ed25519_key = JWK::generate_ed25519().unwrap();
 
@@ -71,7 +74,7 @@ pub fn create_did(service: Option<String>) -> Result<(String, Vec<Secret>), Box<
     ];
 
     // Create a service definition
-    let services = service.map(|service| {
+    let mut services = service.map(|service| {
         vec![DIDPeerService {
             id: None,
             _type: "dm".into(),
@@ -82,6 +85,18 @@ pub fn create_did(service: Option<String>) -> Result<(String, Vec<Secret>), Box<
             }),
         }]
     });
+
+    if auth_service {
+        let auth_service = DIDPeerService {
+            id: Some("#auth".into()),
+            _type: "Authentication".into(),
+            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
+                uri: "https://example.com/auth".into(),
+                accept: vec!["didcomm/v2".into()],
+                routing_keys: vec![],
+            }),
+        };
+    }
 
     let services = services.as_ref();
 

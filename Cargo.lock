@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
