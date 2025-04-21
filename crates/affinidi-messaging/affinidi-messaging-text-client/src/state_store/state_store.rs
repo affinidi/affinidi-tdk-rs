@@ -45,6 +45,7 @@ impl StateStore {
         // Setup the initial state
         let atm = match ATM::new(
             ATMConfigBuilder::default()
+                .with_inbound_message_channel(inbound_message_channel)
                 .with_ws_handler_mode(WsHandlerMode::DirectChannel)
                 .build()?,
             tdk.clone(),

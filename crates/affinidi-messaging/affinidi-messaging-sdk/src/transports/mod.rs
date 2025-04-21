@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha256::digest;
 use std::{sync::Arc, time::Duration};
 use tracing::debug;
-use websockets::ws_connection::WsConnectionCommands;
+use websockets::websocket::WebSocketCommands;
 
 pub mod websockets;
 
@@ -77,27 +77,19 @@ impl ATM {
             ));
         };
 
-        if mediator
-            .ws_connected
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if let Some(channel) = &*mediator.ws_channel_tx.read().await {
             // Send to the WS_Connection task for this profile
             debug!(
                 "Profile ({}): Sending message to WebSocket Connection Handler",
                 profile.inner.alias
             );
 
-            if let Some(channel) = &*mediator.ws_channel_tx.lock().await {
-                channel
-                    .send(WsConnectionCommands::Send(message.to_owned()))
-                    .await
-                    .map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send websocket message: {:?}",
-                            err
-                        ))
-                    })?;
-            }
+            channel
+                .send(WebSocketCommands::SendMessage(message.to_owned()))
+                .await
+                .map_err(|err| {
+                    ATMError::TransportError(format!("Could not send websocket message: {:?}", err))
+                })?;
 
             debug!(
                 "Profile ({}): WebSocket Channel notified",
@@ -106,7 +98,7 @@ impl ATM {
 
             if wait_for_response {
                 let response = MessagePickup::default()
-                    .live_stream_get(self, profile, true, msg_id, Duration::from_secs(10), true)
+                    .live_stream_get(self, profile, msg_id, Duration::from_secs(10), true)
                     .await?;
 
                 if let Some((message, _)) = response {

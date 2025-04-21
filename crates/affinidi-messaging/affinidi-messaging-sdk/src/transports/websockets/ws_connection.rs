@@ -6,9 +6,8 @@ These connections are managed by the `WsHandler` and are created and destroyed a
 Each WsConnection is a tokio parallel task, and responsible for unpacking incoming messages
 
 */
-use super::SharedState;
 use crate::{
-    ATM, errors::ATMError, profiles::ATMProfile, protocols::Protocols,
+    ATM, SharedState, errors::ATMError, profiles::ATMProfile, protocols::Protocols,
     transports::websockets::utils::connect,
 };
 use affinidi_messaging_didcomm::{Message as DidcommMessage, UnpackMetadata};

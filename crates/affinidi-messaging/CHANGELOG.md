@@ -15,10 +15,13 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 
 * Support for ACL, Access Lists and Mediator Operating modes added
 
-### Messaging SDK (0.10.5)
+### Messaging SDK (0.11.0)
 
-* Ability to turn on/off direct-delivery to the SDK MPSC channel on a per profile basis.
-  * Helps with initialization of the profile such as access control management before switching to streaming mode
+* Re-factoring of WbSocket Handling to allow for greater functionality and more robust failure detection and handling
+  * Able to direct receive some messages while streaming others to common channel (this allows for some commands to operate independently of the stream)
+    * For Example: Getting Account information in the midst of an active stream of messages - you can now pull the individual response out
+* Breaking Changes
+  * protocols.message_pickup.live_stream_get(): Removed the `use_profile_channel` option
 
 ## 16th April 2025 (0.10.5)
 

@@ -9,13 +9,10 @@
 use crate::{
     ATM,
     errors::ATMError,
-    protocols::message_pickup::MessagePickup,
-    transports::websockets::{
-        ws_connection::WsConnectionCommands,
-        ws_handler::{WsHandlerCommands, WsHandlerMode},
+    transports::websockets::websocket::{
+        WebSocketCommands, WebSocketResponses, WebSocketTransport,
     },
 };
-use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_tdk_common::profiles::TDKProfile;
 use ahash::AHashMap as HashMap;
 use ssi::dids::{
@@ -23,12 +20,15 @@ use ssi::dids::{
     document::{Service, service::Endpoint},
 };
 use std::{
-    sync::{Arc, atomic::AtomicBool},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
-use tokio::sync::{
-    Mutex, RwLock,
-    mpsc::{Receiver, Sender},
+use tokio::{
+    select,
+    sync::{RwLock, broadcast, mpsc, oneshot},
 };
 use tracing::debug;
 
@@ -45,10 +45,6 @@ pub struct ATMProfileInner {
     pub did: String,
     pub alias: String,
     pub mediator: Arc<Option<Mediator>>,
-    /// Channel to send commands to the WS_Handler task
-    pub(crate) channel_tx: Mutex<Sender<WsHandlerCommands>>,
-    /// Channel to receive commands from the WS_Handler task
-    pub(crate) channel_rx: Mutex<Receiver<WsHandlerCommands>>,
 }
 
 impl ATMProfile {
@@ -76,15 +72,11 @@ impl ATMProfile {
 
         debug!("Mediator: {:?}", mediator);
 
-        let (tx, rx) = tokio::sync::mpsc::channel(32);
-
         let profile = ATMProfile {
             inner: Arc::new(ATMProfileInner {
                 did,
                 alias,
                 mediator: Arc::new(mediator),
-                channel_tx: Mutex::new(tx),
-                channel_rx: Mutex::new(rx),
             }),
         };
 
@@ -137,17 +129,17 @@ impl ATMProfile {
     /// This will bypass the WS_Handler and send messages directly to the provided Receiver
     pub async fn enable_direct_channel(
         &self,
-        channel_tx: Sender<Box<(Message, UnpackMetadata)>>,
+        channel_tx: broadcast::Sender<WebSocketResponses>,
     ) -> Result<(), ATMError> {
         match &*self.inner.mediator {
             Some(mediator) => {
-                if let Some(channel) = &*mediator.ws_channel_tx.lock().await {
+                if let Some(channel) = &*mediator.ws_channel_tx.read().await {
                     channel
-                        .send(WsConnectionCommands::EnableDirectChannel(channel_tx))
+                        .send(WebSocketCommands::EnableInboundChannel(channel_tx))
                         .await
                         .map_err(|err| {
                             ATMError::TransportError(format!(
-                                "Could not send websocket message: {:?}",
+                                "Could not send websocket EnableInboundChannel command: {:?}",
                                 err
                             ))
                         })?;
@@ -165,13 +157,13 @@ impl ATMProfile {
     pub async fn disable_direct_channel(&self) -> Result<(), ATMError> {
         match &*self.inner.mediator {
             Some(mediator) => {
-                if let Some(channel) = &*mediator.ws_channel_tx.lock().await {
+                if let Some(channel) = &*mediator.ws_channel_tx.read().await {
                     channel
-                        .send(WsConnectionCommands::DisableDirectChannel)
+                        .send(WebSocketCommands::DisableInboundChannel)
                         .await
                         .map_err(|err| {
                             ATMError::TransportError(format!(
-                                "Could not send websocket message: {:?}",
+                                "Could not send websocket DisableInboundChannel command: {:?}",
                                 err
                             ))
                         })?;
@@ -184,6 +176,23 @@ impl ATMProfile {
             )),
         }
     }
+
+    /// Stops the WebSocket connection for this profile
+    /// This will stop the WebSocket connection and any related tasks
+    pub async fn stop_websocket(&self) -> Result<(), ATMError> {
+        if let Some(mediator) = &*self.inner.mediator {
+            if let Some(channel) = &*mediator.ws_channel_tx.read().await {
+                channel.send(WebSocketCommands::Stop).await.map_err(|err| {
+                    ATMError::TransportError(format!(
+                        "Could not send websocket Stop command: {:?}",
+                        err
+                    ))
+                })?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -191,8 +200,12 @@ pub struct Mediator {
     pub did: String,
     pub rest_endpoint: Option<String>,
     pub(crate) websocket_endpoint: Option<String>,
-    pub(crate) ws_connected: AtomicBool, // Whether the websocket is connected
-    pub(crate) ws_channel_tx: Mutex<Option<Sender<WsConnectionCommands>>>,
+
+    /// MPSC Channel to send commands to the WebSocket connection
+    pub(crate) ws_channel_tx: RwLock<Option<mpsc::Sender<WebSocketCommands>>>,
+
+    /// Unique ID that is used for anything requiring a unique transaction identifier
+    pub(crate) tx_uuid: AtomicU32,
 }
 
 impl Mediator {
@@ -211,8 +224,8 @@ impl Mediator {
             did,
             rest_endpoint: Mediator::find_rest_endpoint(&mediator_doc),
             websocket_endpoint: Mediator::find_ws_endpoint(&mediator_doc),
-            ws_connected: AtomicBool::new(false),
-            ws_channel_tx: Mutex::new(None),
+            ws_channel_tx: RwLock::new(None),
+            tx_uuid: AtomicU32::new(0),
         };
 
         Ok(mediator)
@@ -275,6 +288,11 @@ impl Mediator {
         }
 
         None
+    }
+
+    /// Retruns the next transaction UUID
+    pub(crate) fn get_tx_uuid(&self) -> u32 {
+        self.tx_uuid.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -351,12 +369,7 @@ impl ATM {
     pub async fn profile_remove(&self, profile: &str) -> Result<bool, ATMError> {
         match self.inner.profiles.write().await.0.remove(profile) {
             Some(profile) => {
-                // Send a signal to the WsHandler to Remove this Profile
-                let _ = self
-                    .inner
-                    .ws_handler_send_stream
-                    .send(WsHandlerCommands::Deactivate(profile.clone()))
-                    .await;
+                let _ = profile.stop_websocket().await;
 
                 debug!("Profile({}): Removed from profiles", &profile.inner.alias);
                 Ok(true)
@@ -381,68 +394,73 @@ impl ATM {
             mediator
         };
 
-        if mediator
-            .ws_connected
-            .load(std::sync::atomic::Ordering::Relaxed)
         {
-            // Already connected
-            debug!(
-                "Profile ({}): is already connected to the WebSocket",
-                profile.inner.alias
-            );
-            return Ok(());
+            if mediator.ws_channel_tx.read().await.is_some() {
+                // Already connected
+                debug!(
+                    "Profile ({}): is already connected to the WebSocket",
+                    profile.inner.alias
+                );
+                return Ok(());
+            }
         }
 
         debug!("Profile({}): enabling...", profile.inner.alias);
 
-        // Send this profile info to the WS_Handler
-        let status_msg_id = match self
-            .inner
-            .ws_handler_send_stream
-            .send(WsHandlerCommands::Activate(profile.clone()))
-            .await
+        let (_, ws_channel) = WebSocketTransport::start(profile.clone(), self.inner.clone()).await;
         {
-            Ok(_) => {
-                debug!(
-                    "Profile({}): Successfully sent Activate command to WS_Handler",
-                    profile.inner.alias
-                );
+            mediator.ws_channel_tx.write().await.replace(ws_channel);
+        }
 
-                // Wait for the Activated message from the WS_handler
-                let mut rx_guard = profile.inner.channel_rx.lock().await;
-                match rx_guard.recv().await {
-                    Some(WsHandlerCommands::Activated(status_msg_id)) => {
-                        debug!("Profile({}): Activated", profile.inner.alias);
-                        status_msg_id
+        let (tx, rx) = oneshot::channel();
+
+        {
+            if let Some(channel_tx) = &*mediator.ws_channel_tx.read().await {
+                channel_tx
+                    .send(WebSocketCommands::NotifyConnection(tx))
+                    .await
+                    .map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send websocket NotifyConnection? command: {:?}",
+                            err
+                        ))
+                    })?;
+            } else {
+                return Err(ATMError::TransportError(
+                    "No WebSocket channel is configured for this Profile".to_string(),
+                ));
+            }
+        }
+
+        let sleep = tokio::time::sleep(Duration::from_secs(10));
+        tokio::pin!(sleep);
+
+        select! {
+            _ = sleep => {
+                return Err(ATMError::TransportError(
+                    "WebSocket isActive? command timed out".to_string(),
+                ));
+            }
+            val = rx => {
+                match val {
+                    Ok(is_active) => {
+                        if is_active {
+                            debug!("Profile({}): WebSocket is active", profile.inner.alias);
+                        } else {
+                            debug!("Profile({}): WebSocket is not active", profile.inner.alias);
+                            return Err(ATMError::TransportError(
+                                "WebSocket is not active".to_string(),
+                            ));
+                        }
                     }
-                    _ => {
+                    Err(err) => {
                         return Err(ATMError::TransportError(format!(
-                            "Profile({}): Couldn't activate the profile",
-                            profile.inner.alias
+                            "Could not receive websocket NotifyConnection? response: {:?}",
+                            err
                         )));
                     }
                 }
             }
-            Err(err) => {
-                return Err(ATMError::TransportError(format!(
-                    "Profile({}): Couldn't send Activate command to WS_Handler. Reason: {}",
-                    profile.inner.alias, err
-                )));
-            }
-        };
-
-        // If we are running in cached mode, then we should wait for the live-pickup status message and clear it
-        if let WsHandlerMode::Cached = self.inner.config.ws_handler_mode {
-            let _ = MessagePickup::default()
-                .live_stream_get(
-                    self,
-                    profile,
-                    true,
-                    &status_msg_id,
-                    Duration::from_secs(10),
-                    false,
-                )
-                .await;
         }
 
         Ok(())

@@ -19,11 +19,7 @@ use tracing::{Instrument, Level, debug, span, warn};
 use uuid::Uuid;
 
 use crate::{
-    ATM,
-    errors::ATMError,
-    messages::GenericDataStruct,
-    profiles::ATMProfile,
-    transports::{SendMessageResponse, websockets::ws_handler::WsHandlerCommands},
+    errors::ATMError, messages::GenericDataStruct, profiles::ATMProfile, transports::{websockets::websocket::{WebSocketCommands, WebSocketResponses}, SendMessageResponse}, ATM
 };
 
 #[derive(Default)]
@@ -222,65 +218,84 @@ impl MessagePickup {
     }
 
     /// Waits for the next message to be received via websocket live delivery
-    /// atm  : The ATM SDK to use
-    /// wait : How long to wait (in milliseconds) for a message before returning None
-    ///        If None, will block forever until a message is received
+    /// atm         : The ATM SDK to use
+    /// profile     : The profile to use
+    /// wait        : How long to wait (in milliseconds) for a message before returning None
+    ///                 If None, will block forever until a message is received
+    /// auto_delete : If true, will delete the message after receiving it
     /// Returns a tuple of the message and metadata, or None if no message was received
-    /// NOTE: You still need to delete the message from the server after receiving it
     pub async fn live_stream_next(
         &self,
         atm: &ATM,
+        profile: &Arc<ATMProfile>,
         wait: Option<Duration>,
+        auto_delete: bool,
     ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
         let _span = span!(Level::DEBUG, "live_stream_next");
 
         async move {
-            // Send the next request to the ws_handler
-            atm.inner
-                .ws_handler_send_stream
-                .send(WsHandlerCommands::Next)
-                .await
-                .map_err(|err| {
-                    ATMError::TransportError(format!(
-                        "Could not send message to ws_handler: {:?}",
-                        err
-                    ))
-                })?;
-            debug!("sent next request to ws_handler");
+            let Some(mediator) = &*profile.inner.mediator else {
+                warn!("Mediator not set for profile {}", profile.inner.alias);
+                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+            };
 
-            let stream = &mut atm.inner.ws_handler_recv_stream.lock().await;
-                // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
-                let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
-                select! {
-                    _ = sleep, if wait.is_some() => {
-                        debug!("Timeout reached, no message received");
-                        atm.inner
-                .ws_handler_send_stream
-                .send(WsHandlerCommands::CancelNext)
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // Send the next request to the profile websocket
+            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
+            };
+
+            let tx_uuid = mediator.get_tx_uuid();
+            ws_channel
+                .send(WebSocketCommands::Next(tx_uuid, tx))
                 .await
                 .map_err(|err| {
                     ATMError::TransportError(format!(
-                        "Could not send message to ws_handler: {:?}",
+                        "Could not send Next command to websocket: {:?}",
                         err
                     ))
                 })?;
-                        Ok(None)
-                    }
-                    value = stream.recv() => {
-                        match value { Some(msg) => {
-                            match msg {
-                                WsHandlerCommands::MessageReceived(message, meta) => {
-                                    Ok(Some((message, meta)))
-                                }
-                                _ => {
-                                    Err(ATMError::MsgReceiveError(format!("Unexpected message type: {:#?}", msg)))
-                                }
+            debug!("sent next request to websocket");
+
+            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
+            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
+
+            select! {
+                _ = sleep, if wait.is_some() => {
+                    debug!("Timeout reached, no message received");
+                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send CancelNext command to websocket: {:?}",
+                            err
+                        ))
+                    })?;
+                    Ok(None)
+                }
+                value = rx => {
+                    match value {
+                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                             // If auto_delete is true, delete the message
+                             if auto_delete {
+                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                        } _ => {
-                            Ok(None)
-                        }}
+                            Ok(Some((msg, meta)))
+                        }
+                        Err(e) => {
+                            warn!("Error receiving message: {:?}", e);
+                            Err(ATMError::MsgReceiveError(format!(
+                                "Error receiving message: {:?}",
+                                e
+                            )))
+                        }
                     }
                 }
+            }
         }
         .instrument(_span)
         .await
@@ -289,18 +304,15 @@ impl MessagePickup {
     /// Attempts to retrieve a specific message from the server via websocket live delivery
     /// atm                 : The ATM SDK to use
     /// profile             : The profile to use
-    /// use_profile_channel : If true, then send the response to the profile RX channel rather than the generic SDK Channel
     /// msg_id              : The ID of the message to retrieve (matches on either `id` or `pthid`)
     /// wait                : How long to wait (in milliseconds) for a message before returning None
     ///                       If 0, will not block
     /// auto_delete         : If true, will delete the message after receiving it
     /// Returns a tuple of the message and metadata, or None if no message was received
-    /// NOTE: You still need to delete the message from the server after receiving it
     pub async fn live_stream_get(
         &self,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
-        use_profile_channel: bool,
         msg_id: &str,
         wait: Duration,
         auto_delete: bool,
@@ -308,67 +320,66 @@ impl MessagePickup {
         let _span = span!(Level::DEBUG, "live_stream_get");
 
         async move {
-            // Pick the correct response channel for the message when returned
-            let return_channel_tx = if use_profile_channel {
-                profile.inner.channel_tx.lock().await.clone()
-            } else {
-                atm.inner.sdk_send_stream.clone()
+            let Some(mediator) = &*profile.inner.mediator else {
+                warn!("Mediator not set for profile {}", profile.inner.alias);
+                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // Send the next request to the profile websocket
+            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
             };
 
             // Send the get request to the ws_handler
-            atm.inner.ws_handler_send_stream
-                .send(WsHandlerCommands::Get(msg_id.to_string(), return_channel_tx))
-                .await
-                .map_err(|err| {
-                    ATMError::TransportError(format!(
-                        "Could not send get message to ws_handler: {:?}",
-                        err
-                    ))
-                })?;
+            ws_channel.send(WebSocketCommands::GetMessage(msg_id.to_string(), tx)).await.map_err(|err| {
+                ATMError::TransportError(format!(
+                    "Could not send GetMessage({}) Command to websocket: {:?}", msg_id,
+                    err
+                ))
+            })?;
             debug!("sent get request to ws_handler");
 
             // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
             let sleep = tokio::time::sleep(wait);
             tokio::pin!(sleep);
 
-            let return_channel_rx = if use_profile_channel {
-                &mut profile.inner.channel_rx.lock().await
-            } else {
-                &mut atm.inner.ws_handler_recv_stream.lock().await
-            };
-
-            loop {
             select! {
                 _ = &mut sleep, if wait.as_millis() > 0 => {
                     debug!("Timeout reached, no message received");
-                    atm.inner.ws_handler_send_stream.send(WsHandlerCommands::TimeOut(profile.clone(), msg_id.to_string())).await.map_err(|err| {
-                        ATMError::TransportError(format!("Could not send timeout message to ws_handler: {:?}", err))
+                    ws_channel.send(WebSocketCommands::CancelGetMessage(msg_id.to_string())).await.map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send CancelGetMessage command to websocket: {:?}",
+                            err
+                        ))
                     })?;
-                    return Ok(None);
+                    Ok(None)
                 }
-                value = return_channel_rx.recv() => {
-                    match value { Some(msg) => {
-                        match msg {
-                            WsHandlerCommands::MessageReceived(message, meta) => {
-                                // If auto_delete is true, delete the message
-                                if auto_delete {
-                                    atm.delete_message_background(profile, &meta.sha256_hash).await?;
-                                }
-                                return Ok(Some((message, meta)));
+                value = rx => {
+                    match value { 
+                        Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
+                            // If auto_delete is true, delete the message
+                            if auto_delete {
+                                atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                            WsHandlerCommands::NotFound => {
-                                // Do nothing, keep waiting
-                            }
-                            _ => {
-                                return Err(ATMError::MsgReceiveError(format!("Unexpected message type: {:?}", msg)));
-                            }
+                            Ok(Some((msg, meta)))
                         }
-                    } _ => {
-                        return Ok(None);
-                    }}
+                        Err(e) => {
+                            warn!("Error receiving message: {:?}", e);
+                            Err(ATMError::MsgReceiveError(format!(
+                                "Error receiving message: {:?}",
+                                e
+                            )))
+                        }
+                    }
                 }
             }
-        }
     }
         .instrument(_span)
         .await
