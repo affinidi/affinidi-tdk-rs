@@ -1,6 +1,6 @@
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use ssi::{
     JWK,
@@ -94,11 +94,13 @@ async fn main() {
     // Create a service definition
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-            uri: "https://localhost:7037".into(),
-            accept: vec!["didcomm/v2".into()],
-            routing_keys: vec![],
-        }),
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+            PeerServiceEndPointLongMap {
+                uri: "https://localhost:7037".into(),
+                accept: vec!["didcomm/v2".into()],
+                routing_keys: vec![],
+            },
+        )),
         id: None,
     }];
 

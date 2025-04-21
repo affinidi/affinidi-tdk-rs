@@ -8,7 +8,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::errors::Result;
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use ssi::{JWK, dids::DIDKey};
 
@@ -75,11 +75,13 @@ impl DID {
         let services = didcomm_service_uri.map(|service_uri| {
             vec![DIDPeerService {
                 _type: "dm".into(),
-                service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-                    uri: service_uri,
-                    accept: vec!["didcomm/v2".into()],
-                    routing_keys: vec![],
-                }),
+                service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+                    PeerServiceEndPointLongMap {
+                        uri: service_uri,
+                        accept: vec!["didcomm/v2".into()],
+                        routing_keys: vec![],
+                    },
+                )),
                 id: None,
             }]
         });

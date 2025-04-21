@@ -3,9 +3,10 @@
 Only supports did:peer numalgo 0,2 (did:peer:0, did:peer:2)
 
 NOTE:
-  serviceEndpoint.id should be an IRI (e.g. `#service`).
-  Due to a limitation of the SSI Crate Document type, we must use a URI.
-  Instead of `#service` we resolve to `did:peer:#service`
+  The DID Peer Spec incorrectly specifies `VerificationMethod` and `Service`
+  id's as relative URI fragments instead of absolute URI's.
+
+  To address this, we prepend the full DID before the #fragment
 
 ## Build a WebAssembly package
 

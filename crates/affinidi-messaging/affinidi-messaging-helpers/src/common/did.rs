@@ -6,7 +6,7 @@ use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use serde_json::json;
 use sha256::digest;
@@ -78,11 +78,13 @@ pub fn create_did(
         vec![DIDPeerService {
             id: None,
             _type: "dm".into(),
-            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-                uri: service,
-                accept: vec!["didcomm/v2".into()],
-                routing_keys: vec![],
-            }),
+            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+                PeerServiceEndPointLongMap {
+                    uri: service,
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+            )),
         }]
     });
 
@@ -90,11 +92,13 @@ pub fn create_did(
         let auth_service = DIDPeerService {
             id: Some("#auth".into()),
             _type: "Authentication".into(),
-            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-                uri: "https://example.com/auth".into(),
-                accept: vec!["didcomm/v2".into()],
-                routing_keys: vec![],
-            }),
+            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+                PeerServiceEndPointLongMap {
+                    uri: "https://example.com/auth".into(),
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+            )),
         };
     }
 

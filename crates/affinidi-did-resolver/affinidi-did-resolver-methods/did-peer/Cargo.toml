@@ -1,6 +1,6 @@
 [package]
 name = "did-peer"
-version = "0.5.2"
+version = "0.6.0"
 description = "Implementation of the did:peer method in Rust, uses the ssi crate"
 repository.workspace = true
 edition.workspace = true
