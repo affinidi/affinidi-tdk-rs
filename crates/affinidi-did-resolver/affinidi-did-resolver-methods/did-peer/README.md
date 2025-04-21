@@ -12,6 +12,8 @@ NOTE:
 
 **Prerequisite:** [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 
+NOTE: Enable the `uuid` crate in Cargo.toml to get the WASM build to work.
+
 `wasm-pack build --target web --out-dir www/pkg`
 
 this places compiled wasm files into the ./www/pkg/ directory.

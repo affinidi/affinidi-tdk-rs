@@ -100,10 +100,11 @@ pub fn create_did(
                 },
             )),
         };
+        services.as_mut().unwrap().push(auth_service);
     }
 
     let services = services.as_ref();
-
+    eprintln!("TIMTAM services: {:?}", services.unwrap());
     // Create the did:peer DID
     let (did_peer, _) =
         DIDPeer::create_peer_did(&keys, services).expect("Failed to create did:peer");

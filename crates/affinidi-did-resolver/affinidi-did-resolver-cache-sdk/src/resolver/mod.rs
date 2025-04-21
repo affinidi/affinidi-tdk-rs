@@ -220,7 +220,7 @@ mod tests {
         );
 
         assert_eq!(service.len(), 1);
-        assert_eq!(service.first().unwrap().id, "did:peer:#service");
+        assert_eq!(service.first().unwrap().id, [DID_PEER, "#service"].concat());
     }
 
     #[tokio::test]

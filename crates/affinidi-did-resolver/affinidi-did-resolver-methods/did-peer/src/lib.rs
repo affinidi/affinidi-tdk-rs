@@ -79,7 +79,7 @@ pub struct DIDPeer;
 /// DID Peer Service supports two formats:
 /// 1. Short format - uses `a` and `r` for accept and routing keys
 /// 2. Long format - uses `accept` and `routing_keys` for accept and routing keys
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PeerServiceEndPoint {
     Short(PeerServiceEndPointShort),
@@ -112,14 +112,14 @@ impl PeerServiceEndPoint {
 }
 
 /// DID serviceEndPoint structure in short format
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PeerServiceEndPointShort {
     URI(String),
     Map(PeerServiceEndPointShortMap),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerServiceEndPointShortMap {
     pub uri: String,
     pub a: Vec<String>,
@@ -127,14 +127,14 @@ pub struct PeerServiceEndPointShortMap {
 }
 
 /// DID serviceEndPoint structure in long format
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PeerServiceEndPointLong {
     URI(String),
     Map(PeerServiceEndPointLongMap),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeerServiceEndPointLongMap {
     pub uri: String,
     pub accept: Vec<String>,
@@ -156,7 +156,7 @@ impl From<PeerServiceEndPointShort> for PeerServiceEndPointLong {
     }
 }
 /// DID Service structure in abbreviated format
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DIDPeerService {
     #[serde(rename = "t")]
     #[serde(alias = "t")]

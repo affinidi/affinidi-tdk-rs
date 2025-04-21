@@ -25,6 +25,9 @@ thiserror = "2.0"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 
+# NOTE: To get WASM support, enable the following uuid crate. It needs to have a RNG that works in WASM.
+#uuid = { version = "1.16", features = ["v4", "fast-rng", "js"] }
+
 [dev-dependencies]
 askar-crypto = { version = "0.3", features = ["alloc"] }
 tokio = { version = "1.44", features = ["full"] }

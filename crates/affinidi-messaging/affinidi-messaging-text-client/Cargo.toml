@@ -54,4 +54,4 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 tui-input = "0.11.1"
 tui-logger = { version = "0.17", features = ["tracing-support"] }
-uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }

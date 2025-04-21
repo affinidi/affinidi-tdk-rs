@@ -48,7 +48,10 @@ pub(crate) fn convert_service(
 mod test {
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
     use iref::UriBuf;
-    use ssi::{dids::document::service::Endpoint, verification_methods::ssi_core::OneOrMany};
+    use ssi::{
+        dids::document::{Service, service::Endpoint},
+        verification_methods::ssi_core::OneOrMany,
+    };
 
     #[test]
     fn service_single() {
@@ -97,5 +100,35 @@ mod test {
         let service =
             super::convert_service("did:peer:", &encoded, 1).expect("Failed to convert service");
         assert_eq!(service.id.as_str(), "did:peer:#service-1");
+    }
+
+    #[test]
+    fn service_full_map() {
+        let encoded = format!(
+            "S{}",
+            BASE64_URL_SAFE_NO_PAD.encode(r##"{"t":"dm","s":{"uri":"http://example.com/didcomm","a":["didcomm/v2"],"r":["did:example:123456789abcdefghi#key-1"]}}"##)
+        );
+
+        let compare: Service = serde_json::from_str(
+            r##"{
+                "id": "did:peer:#service",
+                "type": "DIDCommMessaging",
+                "serviceEndpoint": {
+                    "uri": "http://example.com/didcomm",
+                    "accept": [
+                    "didcomm/v2"
+                    ],
+                    "routing_keys": [
+                    "did:example:123456789abcdefghi#key-1"
+                    ]
+                }
+            }"##,
+        )
+        .expect("Could not parse JSON");
+
+        let service =
+            super::convert_service("did:peer:", &encoded, 0).expect("Failed to convert service");
+        assert_eq!(service.id.as_str(), "did:peer:#service");
+        assert_eq!(service, compare);
     }
 }
