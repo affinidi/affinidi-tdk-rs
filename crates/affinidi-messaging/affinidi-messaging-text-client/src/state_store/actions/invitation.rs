@@ -249,6 +249,36 @@ pub async fn send_invitation_accept(
         accept_temp_profile_acl_flags.get_access_list_mode().0
     {
         // Add the invite DID to this profile's ACL
+        match protocols
+            .mediator
+            .access_list_add(atm, &accept_temp_profile, None, &[&digest(&invite_did)])
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                state
+                    .accept_invite_popup
+                    .messages
+                    .push(Line::from(Span::styled(
+                        format!(
+                            "Failed to add {} to ACL of temporary profile: {}",
+                            invite_did, e
+                        ),
+                        Style::default().fg(Color::Red),
+                    )));
+                state_tx.send(state.clone())?;
+
+                warn!(
+                    "Failed to add {} to ACL of temporary profile: {}",
+                    invite_did, e
+                );
+                return Err(anyhow::anyhow!(
+                    "Failed to add {} to ACL of temporary profile: {}",
+                    invite_did,
+                    e
+                ));
+            }
+        }
     }
 
     state

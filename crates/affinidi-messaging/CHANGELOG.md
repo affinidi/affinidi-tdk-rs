@@ -16,6 +16,8 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 ### Text Client (0.10.5)
 
 * Support for ACL, Access Lists and Mediator Operating modes added
+* OOB works with full ACL and Access Control enabled
+* DIDComm Problem Reports added, will now appear in chat window
 
 ### Messaging SDK (0.11.0)
 
