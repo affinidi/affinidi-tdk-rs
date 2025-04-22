@@ -13,6 +13,7 @@ use affinidi_messaging_sdk::{
         accounts::AccountType, acls::MediatorACLSet, acls_handler::MediatorACLRequest,
     },
 };
+use http::StatusCode;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tracing::{Instrument, span, warn};
@@ -177,6 +178,52 @@ pub(crate) async fn process(
                         ),
                         false,
                     );
+                }
+
+                // Additional checks for ACL changes for non-admin accounts
+                if session.account_type != AccountType::RootAdmin
+                    && session.account_type != AccountType::Admin
+                {
+                    let current_acls = match state.database.get_did_acl(&did_hash).await {
+                        Ok(Some(response)) => response,
+                        Ok(None) => state.config.security.global_acl_default.clone(),
+                        Err(err) => {
+                            warn!("Error getting ACLs. Reason: {}", err);
+                            return generate_error_response(
+                                state,
+                                session,
+                                &msg.id,
+                                ProblemReport::new(
+                                    ProblemReportSorter::Error,
+                                    ProblemReportScope::Protocol,
+                                    "database_error".into(),
+                                    "Error getting ACLs {1}".into(),
+                                    vec![err.to_string()],
+                                    None,
+                                ),
+                                false,
+                            );
+                        }
+                    };
+
+                    if !acl_change_ok(&current_acls, &MediatorACLSet::from_u64(acls)) {
+                        warn!("Can't change ACLs. Reason: self_change not allowed");
+                        return Err(MediatorError::MediatorError(
+                            80,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Warning,
+                                ProblemReportScope::Message,
+                                "protocol.acls.change.denied".into(),
+                                "A non-admin account tried to change ACL Flags but self-change is not allowed".into(),
+                                vec![],
+                                None,
+                            )),
+                            StatusCode::FORBIDDEN.as_u16(),
+                            "A non-admin account tried to change ACL Flags but self-change is not allowed".to_string(),
+                        ));
+                    }
                 }
 
                 match state
@@ -600,6 +647,69 @@ fn _generate_response_message(
         data: crate::messages::WrapperType::Message(response),
         forward_message: false,
     })
+}
+
+/// Helper method that checks if the ACL change is valid for non-admin accounts
+/// checks if self_change would block any modification of the ACLs
+/// returns true if the ACL change is valid, false otherwise
+fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> bool {
+    if (current_acls.get_access_list_mode().0 != new_acls.get_access_list_mode().0)
+        && !current_acls.get_access_list_mode().1
+    {
+        // Not allowed to change access_list mode
+        return false;
+    }
+
+    if (current_acls.get_send_messages().0 != new_acls.get_send_messages().0)
+        && !current_acls.get_send_messages().1
+    {
+        // Not allowed to change send_messages
+        return false;
+    }
+
+    if (current_acls.get_receive_messages().0 != new_acls.get_receive_messages().0)
+        && !current_acls.get_receive_messages().1
+    {
+        // Not allowed to change receive_messages
+        return false;
+    }
+
+    if (current_acls.get_send_forwarded().0 != new_acls.get_send_forwarded().0)
+        && !current_acls.get_send_forwarded().1
+    {
+        // Not allowed to change send_forwarded
+        return false;
+    }
+
+    if (current_acls.get_receive_forwarded().0 != new_acls.get_receive_forwarded().0)
+        && !current_acls.get_receive_forwarded().1
+    {
+        // Not allowed to change receive_forwarded
+        return false;
+    }
+
+    if (current_acls.get_create_invites().0 != new_acls.get_create_invites().0)
+        && !current_acls.get_create_invites().1
+    {
+        // Not allowed to change create_invites
+        return false;
+    }
+
+    if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
+        && !current_acls.get_anon_receive().1
+    {
+        // Not allowed to change anon_receive
+        return false;
+    }
+
+    if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
+        && !current_acls.get_anon_receive().1
+    {
+        // Not allowed to change anon_receive
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
