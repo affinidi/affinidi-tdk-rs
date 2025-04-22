@@ -10,7 +10,7 @@ use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi::{JWK, dids::DIDKey};
+use ssi::{JWK, dids::DIDKey, verification_methods::ssi_core::OneOrMany};
 
 /// Supported DID Methods
 pub enum DIDMethod {
@@ -76,11 +76,11 @@ impl DID {
             vec![DIDPeerService {
                 _type: "dm".into(),
                 service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                    PeerServiceEndPointLongMap {
+                    OneOrMany::One(PeerServiceEndPointLongMap {
                         uri: service_uri,
                         accept: vec!["didcomm/v2".into()],
                         routing_keys: vec![],
-                    },
+                    }),
                 )),
                 id: None,
             }]

@@ -14,6 +14,7 @@ use ssi::{
     JWK,
     dids::{DIDBuf, DIDKey, document::service::Endpoint},
     jwk::Params,
+    verification_methods::ssi_core::OneOrMany,
 };
 use std::error::Error;
 struct LocalDidPeerKeys {
@@ -79,11 +80,11 @@ pub fn create_did(
             id: None,
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: service,
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
         }]
     });
@@ -93,11 +94,11 @@ pub fn create_did(
             id: Some("#auth".into()),
             _type: "Authentication".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://example.com/auth".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
         };
         services.as_mut().unwrap().push(auth_service);
