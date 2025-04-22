@@ -27,6 +27,11 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 * Breaking Changes
   * protocols.message_pickup.live_stream_get(): Removed the `use_profile_channel` option
 
+### Mediator (0.10.6)
+
+* FIX/FEATURE: Mediator will not let non-admin DID's change their ACL flags if self_change is not enabled.
+  * Expect to see error code 80 `w.m.protocol.acls.change.denied` returned
+  
 ## 16th April 2025 (0.10.5)
 
 ### Mediator (0.10.5)

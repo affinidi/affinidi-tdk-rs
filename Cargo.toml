@@ -48,7 +48,7 @@ did-peer = { version = "0.6.1", path = "crates/affinidi-did-resolver/affinidi-di
 affinidi-meeting-place = { version = "0.1.8", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.10.4", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-helpers = { version = "0.10.5", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
-affinidi-messaging-mediator = { version = "0.10.5", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
+affinidi-messaging-mediator = { version = "0.10.6", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.10.4", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.10.4", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
 affinidi-messaging-sdk = { version = "0.11.0", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
