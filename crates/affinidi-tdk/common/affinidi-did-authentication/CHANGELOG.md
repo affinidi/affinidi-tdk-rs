@@ -1,6 +1,6 @@
 # Affinidi DID Authentication
 
-## 21st April 2025 (0.1.7)
+## 22nd April 2025 (0.1.7)
 
 * Improved logging of error when no auth service is found
 
