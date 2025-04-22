@@ -2,6 +2,10 @@
 
 ## Changelog history
 
+### 22nd April 2025 did-peer (release 0.6.1)
+
+* FEATURE: Array of `serviceEndpoint` supported in service definitions
+
 ### 22nd April 2025 did-peer (release 0.6.0)
 
 * FEATURE: Service definitions didn't support specific id's, added defined id's to Services

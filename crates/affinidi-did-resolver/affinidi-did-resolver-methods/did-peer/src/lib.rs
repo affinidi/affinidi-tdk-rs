@@ -92,13 +92,24 @@ impl PeerServiceEndPoint {
             PeerServiceEndPoint::Short(short) => short.clone(),
             PeerServiceEndPoint::Long(long) => match long {
                 PeerServiceEndPointLong::URI(uri) => PeerServiceEndPointShort::URI(uri.to_string()),
-                PeerServiceEndPointLong::Map(map) => {
-                    PeerServiceEndPointShort::Map(PeerServiceEndPointShortMap {
-                        uri: map.uri.to_string(),
-                        a: map.accept.clone(),
-                        r: map.routing_keys.clone(),
-                    })
-                }
+                PeerServiceEndPointLong::Map(map) => match map {
+                    OneOrMany::One(single) => {
+                        PeerServiceEndPointShort::Map(OneOrMany::One(PeerServiceEndPointShortMap {
+                            uri: single.uri.to_string(),
+                            a: single.accept.clone(),
+                            r: single.routing_keys.clone(),
+                        }))
+                    }
+                    OneOrMany::Many(many) => PeerServiceEndPointShort::Map(OneOrMany::Many(
+                        many.iter()
+                            .map(|m| PeerServiceEndPointShortMap {
+                                uri: m.uri.to_string(),
+                                a: m.accept.clone(),
+                                r: m.routing_keys.clone(),
+                            })
+                            .collect(),
+                    )),
+                },
             },
         }
     }
@@ -116,7 +127,7 @@ impl PeerServiceEndPoint {
 #[serde(untagged)]
 pub enum PeerServiceEndPointShort {
     URI(String),
-    Map(PeerServiceEndPointShortMap),
+    Map(OneOrMany<PeerServiceEndPointShortMap>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,7 +142,7 @@ pub struct PeerServiceEndPointShortMap {
 #[serde(untagged)]
 pub enum PeerServiceEndPointLong {
     URI(String),
-    Map(PeerServiceEndPointLongMap),
+    Map(OneOrMany<PeerServiceEndPointLongMap>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,13 +156,24 @@ impl From<PeerServiceEndPointShort> for PeerServiceEndPointLong {
     fn from(service: PeerServiceEndPointShort) -> Self {
         match service {
             PeerServiceEndPointShort::URI(uri) => PeerServiceEndPointLong::URI(uri),
-            PeerServiceEndPointShort::Map(map) => {
-                PeerServiceEndPointLong::Map(PeerServiceEndPointLongMap {
-                    uri: map.uri,
-                    accept: map.a,
-                    routing_keys: map.r,
-                })
-            }
+            PeerServiceEndPointShort::Map(map) => match map {
+                OneOrMany::One(single) => {
+                    PeerServiceEndPointLong::Map(OneOrMany::One(PeerServiceEndPointLongMap {
+                        uri: single.uri,
+                        accept: single.a,
+                        routing_keys: single.r,
+                    }))
+                }
+                OneOrMany::Many(many) => PeerServiceEndPointLong::Map(OneOrMany::Many(
+                    many.iter()
+                        .map(|m| PeerServiceEndPointLongMap {
+                            uri: m.uri.clone(),
+                            accept: m.a.clone(),
+                            routing_keys: m.r.clone(),
+                        })
+                        .collect(),
+                )),
+            },
         }
     }
 }
@@ -817,6 +839,7 @@ mod test {
     use ssi::{
         JWK,
         dids::{DID, DIDBuf, DIDResolver, document::DIDVerificationMethod},
+        verification_methods::ssi_core::OneOrMany,
     };
 
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
@@ -880,11 +903,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -925,11 +948,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -945,11 +968,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -973,11 +996,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1001,11 +1024,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1030,11 +1053,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1060,11 +1083,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1089,11 +1112,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1204,11 +1227,11 @@ impl From<DIDService> for DIDPeerService {
         DIDPeerService {
             _type: service._type.unwrap_or("DIDCommMessaging".into()),
             service_end_point: PeerServiceEndPoint::Short(PeerServiceEndPointShort::Map(
-                PeerServiceEndPointShortMap {
+                OneOrMany::One(PeerServiceEndPointShortMap {
                     uri: service.uri,
                     a: service.accept,
                     r: service.routing_keys,
-                },
+                }),
             )),
             id: service.id,
         }
