@@ -387,7 +387,7 @@ impl DIDAuthentication {
                 Ok(endpoint)
             } else {
                 Err(DIDAuthError::AuthenticationAbort(
-                    "No service endpoint found".into(),
+                    "No service endpoint found. DID doesn't contain a #auth service".into(),
                 ))
             }
         } else {

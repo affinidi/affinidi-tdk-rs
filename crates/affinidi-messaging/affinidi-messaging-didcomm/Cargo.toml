@@ -39,7 +39,7 @@ tracing = { version = "0.1", features = [
     "release_max_level_info",
     "valuable",
 ] }
-uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }

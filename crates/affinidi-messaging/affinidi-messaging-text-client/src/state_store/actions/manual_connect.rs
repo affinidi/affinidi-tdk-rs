@@ -8,7 +8,7 @@ use affinidi_tdk::secrets_resolver::{
 use anyhow::{Context, Result, anyhow};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use ssi::{JWK, jwk::Params};
 
@@ -77,11 +77,13 @@ pub fn create_did_peer(mediator_did: &str) -> Result<(String, Vec<Secret>)> {
     // Create a service definition
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-            uri: mediator_did.into(),
-            accept: vec!["didcomm/v2".into()],
-            routing_keys: vec![],
-        }),
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+            PeerServiceEndPointLongMap {
+                uri: mediator_did.into(),
+                accept: vec!["didcomm/v2".into()],
+                routing_keys: vec![],
+            },
+        )),
         id: None,
     }];
 

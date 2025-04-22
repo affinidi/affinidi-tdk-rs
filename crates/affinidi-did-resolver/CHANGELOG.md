@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+### 22nd April 2025 did-peer (release 0.6.0)
+
+* FEATURE: Service definitions didn't support specific id's, added defined id's to Services
+  * This is useful where you need to have a named service id, for example DID Authentication service
+* FEATURE: ServiceEndpoint definition can now support a simple URI instead of just JSON Object
+  * Allows for simpler URI's for services that do not need complex definitions
+* Crate dependencies updated to latest versions
+
 ### 19th March 2025 (release 0.5.1)
 
 * FIX: did_example feature resulted in a build error

@@ -47,7 +47,7 @@ tracing = { version = "0.1", features = [
 ] }
 url = "2.5"
 utf-8 = "0.7"
-uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 did-peer.workspace = true

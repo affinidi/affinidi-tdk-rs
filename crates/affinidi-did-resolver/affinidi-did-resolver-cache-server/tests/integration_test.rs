@@ -2,7 +2,7 @@ use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuil
 use affinidi_did_resolver_cache_server::server::start;
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use ssi::{
     JWK,
@@ -76,11 +76,13 @@ fn _create_and_validate_did_peer() -> String {
     let (e_did_key, v_did_key, keys) = _get_keys(DIDPeerKeyType::Secp256k1, true);
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-            uri: "https://localhost:7037".into(),
-            accept: vec!["didcomm/v2".into()],
-            routing_keys: vec![],
-        }),
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+            PeerServiceEndPointLongMap {
+                uri: "https://localhost:7037".into(),
+                accept: vec!["didcomm/v2".into()],
+                routing_keys: vec![],
+            },
+        )),
         id: None,
     }];
 
