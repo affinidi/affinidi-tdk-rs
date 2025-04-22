@@ -39,10 +39,10 @@ publish = true
 rust-version = "1.85.0"
 
 [workspace.dependencies]
-affinidi-did-resolver-cache-sdk = { version = "0.5.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
+affinidi-did-resolver-cache-sdk = { version = "0.5.3", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
     "network",
 ] }
-affinidi-did-resolver-cache-server = { version = "0.5.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
+affinidi-did-resolver-cache-server = { version = "0.5.3", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
 did-example = { version = "0.5.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example" }
 did-peer = { version = "0.6.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer" }
 affinidi-meeting-place = { version = "0.1.8", path = "./crates/affinidi-meeting-place" }
