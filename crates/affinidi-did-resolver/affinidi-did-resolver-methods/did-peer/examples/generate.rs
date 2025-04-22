@@ -7,6 +7,7 @@ use ssi::{
     dids::{DID, DIDResolver},
     jwk::Params,
     multicodec::MultiEncoded,
+    verification_methods::ssi_core::OneOrMany,
 };
 
 #[tokio::main]
@@ -94,13 +95,13 @@ async fn main() {
     // Create a service definition
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
             PeerServiceEndPointLongMap {
                 uri: "https://localhost:7037".into(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             },
-        )),
+        ))),
         id: None,
     }];
 
