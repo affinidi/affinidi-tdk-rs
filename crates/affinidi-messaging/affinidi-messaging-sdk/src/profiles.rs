@@ -9,8 +9,9 @@
 use crate::{
     ATM,
     errors::ATMError,
-    transports::websockets::websocket::{
-        WebSocketCommands, WebSocketResponses, WebSocketTransport,
+    transports::websockets::{
+        WebSocketResponses,
+        websocket::{WebSocketCommands, WebSocketTransport},
     },
 };
 use affinidi_tdk_common::profiles::TDKProfile;
@@ -407,7 +408,12 @@ impl ATM {
 
         debug!("Profile({}): enabling...", profile.inner.alias);
 
-        let (_, ws_channel) = WebSocketTransport::start(profile.clone(), self.inner.clone()).await;
+        let (_, ws_channel) = WebSocketTransport::start(
+            profile.clone(),
+            self.inner.clone(),
+            self.inner.config.inbound_message_channel.clone(),
+        )
+        .await;
         {
             mediator.ws_channel_tx.write().await.replace(ws_channel);
         }

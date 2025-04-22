@@ -10,7 +10,14 @@ Roles:
    - Mediator: The DIDComm Mediator that the websocket connects to
 */
 
+use affinidi_messaging_didcomm::{Message as DidcommMessage, UnpackMetadata};
+
 pub(crate) mod websocket;
 pub(crate) mod ws_cache;
-//pub(crate) mod ws_connection;
-//pub mod ws_handler;
+
+/// Responses to WebSocketCommands
+#[derive(Clone)]
+pub enum WebSocketResponses {
+    /// MessageReceived - sent to SDK when a message is received
+    MessageReceived(DidcommMessage, Box<UnpackMetadata>),
+}

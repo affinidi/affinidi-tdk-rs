@@ -10,7 +10,9 @@ use crate::{
     },
     termination::{Interrupted, Terminator},
 };
-use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder, profiles::ATMProfile};
+use affinidi_messaging_sdk::{
+    ATM, config::ATMConfigBuilder, profiles::ATMProfile, transports::websockets::WebSocketResponses,
+};
 use affinidi_tdk::{common::TDKSharedState, secrets_resolver::SecretsResolver};
 use std::time::Duration;
 use tokio::sync::{
@@ -106,7 +108,7 @@ impl StateStore {
             tokio::select! {
                 message_received = inbound_message_channel.recv() => {
                     match message_received {
-                        Ok((message, meta)) => {
+                        Ok(WebSocketResponses::MessageReceived(message, meta)) => {
                             handle_message(&atm, &mut state, &message, &meta).await;
                         },
                         Err(e) => {

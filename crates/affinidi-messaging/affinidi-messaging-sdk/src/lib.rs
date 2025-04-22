@@ -1,4 +1,3 @@
-use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
 use delete_handler::DeletionHandlerCommands;
@@ -10,6 +9,7 @@ use tokio::sync::{
     mpsc::{self, Receiver, Sender},
 };
 use tracing::debug;
+use transports::websockets::WebSocketResponses;
 
 //pub mod authentication;
 pub mod config;
@@ -109,7 +109,7 @@ impl ATM {
 
     /// If you have set the ATM SDK to be in DirectChannel mode, you can get the inbound channel here
     /// This allows you to directly stream messages from the WebSocket Handler to your own client code
-    pub fn get_inbound_channel(&self) -> Option<broadcast::Receiver<(Message, UnpackMetadata)>> {
+    pub fn get_inbound_channel(&self) -> Option<broadcast::Receiver<WebSocketResponses>> {
         self.inner
             .config
             .inbound_message_channel

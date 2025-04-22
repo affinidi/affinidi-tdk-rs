@@ -3,7 +3,6 @@
  */
 
 use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile, protocols::Protocols};
-use affinidi_messaging_didcomm::{Message as DidcommMessage, UnpackMetadata};
 use ahash::{HashMap, HashMapExt};
 use futures_util::{SinkExt, StreamExt};
 use std::{ collections::VecDeque, sync::Arc, time::Duration};
@@ -22,8 +21,7 @@ use tokio_tungstenite::{
     connect_async, tungstenite::{error::ProtocolError, http::Uri, Bytes, ClientRequestBuilder, Message}, MaybeTlsStream, WebSocketStream
 };
 use tracing::{debug, error, span, warn, Instrument, Level};
-
-use super::ws_cache::MessageCache;
+use super::{ws_cache::MessageCache, WebSocketResponses};
 
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -97,11 +95,6 @@ pub(crate) enum WebSocketCommands {
     CancelGetMessage(String),
 }
 
-/// Responses to WebSocketCommands
-pub enum WebSocketResponses {
-        /// MessageReceived - sent to SDK when a message is received
-        MessageReceived(DidcommMessage, Box<UnpackMetadata>),  
-}
 
 impl WebSocketTransport {
     /// Creates a new WebSocketTransport instance, it auto starts the websocket connection
@@ -109,6 +102,7 @@ impl WebSocketTransport {
     pub(crate) async fn start(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
     ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
         let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
         let handle = tokio::spawn(async move {
@@ -124,7 +118,7 @@ impl WebSocketTransport {
                     fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
                     ..Default::default()
                 },
-                direct_channel: None,
+                direct_channel,
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
             };

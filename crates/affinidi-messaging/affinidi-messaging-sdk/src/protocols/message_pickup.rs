@@ -19,7 +19,7 @@ use tracing::{Instrument, Level, debug, span, warn};
 use uuid::Uuid;
 
 use crate::{
-    errors::ATMError, messages::GenericDataStruct, profiles::ATMProfile, transports::{websockets::websocket::{WebSocketCommands, WebSocketResponses}, SendMessageResponse}, ATM
+    errors::ATMError, messages::GenericDataStruct, profiles::ATMProfile, transports::{websockets::{websocket::WebSocketCommands, WebSocketResponses}, SendMessageResponse}, ATM
 };
 
 #[derive(Default)]

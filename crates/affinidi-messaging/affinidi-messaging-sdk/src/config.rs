@@ -1,5 +1,4 @@
-use crate::errors::ATMError;
-use affinidi_messaging_didcomm::{Message as DidcommMessage, UnpackMetadata};
+use crate::{errors::ATMError, transports::websockets::WebSocketResponses};
 use rustls::pki_types::CertificateDer;
 use std::{fs::File, io::BufReader};
 use tokio::sync::broadcast::Sender;
@@ -20,7 +19,7 @@ pub struct ATMConfig {
     pub(crate) fetch_cache_limit_bytes: u64,
 
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
-    pub(crate) inbound_message_channel: Option<Sender<(DidcommMessage, UnpackMetadata)>>,
+    pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
 }
 
 impl ATMConfig {
@@ -52,7 +51,7 @@ pub struct ATMConfigBuilder {
     ssl_certificates: Vec<String>,
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
-    inbound_message_channel: Option<Sender<(DidcommMessage, UnpackMetadata)>>,
+    inbound_message_channel: Option<Sender<WebSocketResponses>>,
 }
 
 impl Default for ATMConfigBuilder {
