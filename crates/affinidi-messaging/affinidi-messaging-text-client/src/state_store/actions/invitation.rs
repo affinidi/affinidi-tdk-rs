@@ -142,6 +142,8 @@ pub async fn send_invitation_accept(
     state_tx: &UnboundedSender<State>,
     atm: &ATM,
 ) -> anyhow::Result<()> {
+    let protocols = Protocols::default();
+
     // Fetch the Invite message
     let body = reqwest::get(&state.accept_invite_popup.invite_link)
         .await?
@@ -219,6 +221,35 @@ pub async fn send_invitation_accept(
     )
     .await?;
     let accept_temp_profile = atm.profile_add(&accept_temp_profile, true).await?;
+
+    // Set up the ACL for the temporary profile. Allow the invite DID to send messages to this DID
+    let Some(accept_temp_profile_info) = protocols
+        .mediator
+        .account_get(atm, &accept_temp_profile, None)
+        .await?
+    else {
+        state.invite_popup.messages.push(Line::from(Span::styled(
+            "Failed to get temp invite response profile info from mediator",
+            Style::default().fg(Color::Red),
+        )));
+        state_tx.send(state.clone())?;
+
+        warn!("Failed to get temp invite response profile info from mediator");
+        return Err(anyhow::anyhow!(
+            "Failed to get temp invite response profile info from mediator"
+        ));
+    };
+
+    info!(
+        "temp invite response profile info: {:?}",
+        accept_temp_profile_info
+    );
+    let accept_temp_profile_acl_flags = MediatorACLSet::from_u64(accept_temp_profile_info.acls);
+    if let AccessListModeType::ExplicitAllow =
+        accept_temp_profile_acl_flags.get_access_list_mode().0
+    {
+        // Add the invite DID to this profile's ACL
+    }
 
     state
         .chat_list

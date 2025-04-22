@@ -108,7 +108,8 @@ mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_deny}"
 ###    - SELF_MANAGE_SEND_QUEUE_LIMIT: DID can set their send queue limits (between the queued_messages_soft and queued_messages_hard)
 ###    - SELF_MANAGE_RECEIVE_QUEUE_LIMIT: DID can set their receive queue limits (between the queued_messages_soft and queued_messages_hard)
 ###  NOTE: Can be comma separated to allow multiple options
-global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL}"
+#global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL}"
+global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL,MODE_EXPLICIT_ALLOW}"
 
 ### local_direct_delivery_allowed: If true, messages that are addressed to a local DID directly will be delivered
 ### Default: false (all messages must be addressed to the mediator)
