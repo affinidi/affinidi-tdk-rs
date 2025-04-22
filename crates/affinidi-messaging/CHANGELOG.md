@@ -9,7 +9,9 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 
 ### Messaging Helpers (Examples) (0.10.5)
 
-* Examples updated to work with the mediator in different Operating Modes (whether in explicit_allow or explicit_deny they will detect and ensure correct access list management)
+* MAINTENANCE: Examples updated to work with the mediator in different Operating Modes (whether in explicit_allow or explicit_deny they will detect and ensure correct access list management)
+* FIX: `setup_environment` will correctly add `#auth` service definition to generated did:peer mediator DID's
+  * NOTE: Ensure you are using `did-peer` v0.6.0 or above crate!
 
 ### Text Client (0.10.5)
 

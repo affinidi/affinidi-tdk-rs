@@ -10,10 +10,7 @@ use crate::{
     },
     termination::{Interrupted, Terminator},
 };
-use affinidi_messaging_sdk::{
-    ATM, config::ATMConfigBuilder, profiles::ATMProfile,
-    transports::websockets::ws_handler::WsHandlerMode,
-};
+use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder, profiles::ATMProfile};
 use affinidi_tdk::{common::TDKSharedState, secrets_resolver::SecretsResolver};
 use std::time::Duration;
 use tokio::sync::{
@@ -45,8 +42,7 @@ impl StateStore {
         // Setup the initial state
         let atm = match ATM::new(
             ATMConfigBuilder::default()
-                .with_inbound_message_channel(inbound_message_channel)
-                .with_ws_handler_mode(WsHandlerMode::DirectChannel)
+                .with_inbound_message_channel(100)
                 .build()?,
             tdk.clone(),
         )

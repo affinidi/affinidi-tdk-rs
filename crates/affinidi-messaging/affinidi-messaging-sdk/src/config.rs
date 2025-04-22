@@ -95,12 +95,10 @@ impl ATMConfigBuilder {
         self
     }
 
-    /// Set an optional MPSC channel to send inbound messages to
-    /// This is useful if you want to aggregate inbound messages from the SDK to a channel to be used by the client
-    pub fn with_inbound_message_channel(
-        mut self,
-        inbound_message_channel: Sender<(DidcommMessage, UnpackMetadata)>,
-    ) -> Self {
+    /// Create an optional broadcast (MPMC) channel to send inbound messages from websockets to
+    /// This is useful if you want to aggregate inbound messages to the SDK to a single channel to be used by the client
+    pub fn with_inbound_message_channel(mut self, capacity: usize) -> Self {
+        let (inbound_message_channel, _) = tokio::sync::broadcast::channel(capacity);
         self.inbound_message_channel = Some(inbound_message_channel);
         self
     }
