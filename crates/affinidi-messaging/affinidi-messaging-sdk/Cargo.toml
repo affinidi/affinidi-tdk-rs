@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.10.4"
+version = "0.10.5"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -43,7 +43,7 @@ tracing = { version = "0.1", features = [
     "valuable",
 ] }
 url = "2.5"
-uuid = { version = "1.15", features = ["v4", "fast-rng"] }
+uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 web-socket = "0.7"
 
 [dev-dependencies]

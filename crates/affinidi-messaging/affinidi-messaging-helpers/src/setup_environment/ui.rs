@@ -384,7 +384,7 @@ pub(crate) async fn init_local_mediator(
             }
         }
 
-        let response = create_did(Some("https://localhost:7037/v1/mediator".into()))?;
+        let response = create_did(Some("https://localhost:7037/v1/mediator".into()), true)?;
         new_config.mediator_did = Some(response.0.clone());
         new_config.mediator_secrets = Some(response.1);
         println!(

@@ -1,17 +1,18 @@
 use affinidi_messaging_didcomm::MessageBuilder;
 use affinidi_messaging_sdk::{
-    ATM,
-    config::ATMConfig,
     errors::ATMError,
     messages::{DeleteMessageRequest, FetchDeletePolicy, Folder, fetch::FetchOptions},
     profiles::ATMProfile,
-    protocols::Protocols,
+    protocols::{
+        Protocols,
+        mediator::acls::{AccessListModeType, MediatorACLSet},
+    },
 };
-use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
+use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;
 use serde_json::json;
 use std::env;
-use tracing::debug;
+use tracing::info;
 use tracing_subscriber::filter;
 use uuid::Uuid;
 
@@ -39,10 +40,6 @@ async fn main() -> Result<(), ATMError> {
         "default".to_string()
     };
 
-    let mut environment =
-        TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
-
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -51,10 +48,21 @@ async fn main() -> Result<(), ATMError> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    // Instantiate the TDK
-    let tdk = TDKSharedState::default().await;
+    // Instantiate TDK
+    let tdk = TDK::new(
+        TDKConfig::builder()
+            .with_environment_name(environment_name.clone())
+            .build()?,
+        None,
+    )
+    .await?;
 
-    let alice = if let Some(alice) = environment.profiles.get("Alice") {
+    let environment = &tdk.get_shared_state().environment;
+    let atm = tdk.atm.clone().unwrap();
+    let protocols = Protocols::new();
+
+    // Activate Alice Profile
+    let tdk_alice = if let Some(alice) = environment.profiles.get("Alice") {
         tdk.add_profile(alice).await;
         alice
     } else {
@@ -63,7 +71,26 @@ async fn main() -> Result<(), ATMError> {
         ));
     };
 
-    let bob = if let Some(bob) = environment.profiles.get("Bob") {
+    let atm_alice = atm
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
+        .await?;
+
+    let Some(alice_info) = protocols
+        .mediator
+        .account_get(&atm, &atm_alice, None)
+        .await?
+    else {
+        panic!("Alice account not found on mediator");
+    };
+
+    info!("Alice profile active: {:?}", alice_info);
+    let alice_acl_mode = MediatorACLSet::from_u64(alice_info.acls)
+        .get_access_list_mode()
+        .0;
+    info!("Alice ACL Mode Type: {:?}", alice_acl_mode);
+
+    // Activate Bob Profile
+    let tdk_bob = if let Some(bob) = environment.profiles.get("Bob") {
         tdk.add_profile(bob).await;
         bob
     } else {
@@ -71,28 +98,58 @@ async fn main() -> Result<(), ATMError> {
             format!("Bob not found in Environment: {}", environment_name).to_string(),
         ));
     };
-
-    let mut config = ATMConfig::builder();
-
-    config = config.with_ssl_certificates(&mut environment.ssl_certificates);
-
-    // Create a new ATM Client
-    let atm = ATM::new(config.build()?, tdk).await?;
-    let protocols = Protocols::new();
-
-    debug!("Enabling Alice's Profile");
-    let alice = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, alice).await?, false)
+    let atm_bob = atm
+        .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_bob).await?, true)
         .await?;
 
-    debug!("Enabling Bob's Profile");
-    let bob = atm
-        .profile_add(&ATMProfile::from_tdk_profile(&atm, bob).await?, false)
-        .await?;
+    let Some(bob_info) = protocols.mediator.account_get(&atm, &atm_bob, None).await? else {
+        panic!("Bob account not found on mediator");
+    };
+
+    info!("Bob profile active: {:?}", bob_info);
+    let bob_acl_mode = MediatorACLSet::from_u64(bob_info.acls)
+        .get_access_list_mode()
+        .0;
+    info!("Bob ACL Mode Type: {:?}", bob_acl_mode);
+
+    // Reset ACL's as examples can get mixed up with back to back testing
+    info!("Resetting Access Lists");
+
+    // Reset Alice ACL's
+    if let AccessListModeType::ExplicitAllow = alice_acl_mode {
+        // Ensure Bob is added to Alice explicit allow list
+        protocols
+            .mediator
+            .access_list_add(&atm, &atm_alice, None, &[&bob_info.did_hash])
+            .await?;
+    } else {
+        // Ensure Bob is removed from Alice explicit deny list
+        protocols
+            .mediator
+            .access_list_remove(&atm, &atm_alice, None, &[&bob_info.did_hash])
+            .await?;
+    }
+    info!("Alice Access Lists reset");
+
+    // Reset Bob ACL's
+    if let AccessListModeType::ExplicitAllow = bob_acl_mode {
+        // Ensure Bob is added to Bob explicit allow list
+        protocols
+            .mediator
+            .access_list_add(&atm, &atm_bob, None, &[&alice_info.did_hash])
+            .await?;
+    } else {
+        // Ensure Bob is removed from Bob explicit deny list
+        protocols
+            .mediator
+            .access_list_remove(&atm, &atm_bob, None, &[&alice_info.did_hash])
+            .await?;
+    }
+    info!("Bob Access Lists reset");
 
     // Ensure Profile has a valid mediator to forward through
-    let mediator_did = if let Some(mediator) = environment.default_mediator {
-        mediator.clone()
+    let mediator_did = if let Some(mediator) = &environment.default_mediator {
+        mediator.to_string()
     } else {
         return Err(ATMError::ConfigError(
             "Profile Mediator not found".to_string(),
@@ -102,7 +159,7 @@ async fn main() -> Result<(), ATMError> {
     // Delete all messages for Alice
     let response = atm
         .fetch_messages(
-            &alice,
+            &atm_alice,
             &FetchOptions {
                 limit: 100,
                 delete_policy: FetchDeletePolicy::Optimistic,
@@ -119,7 +176,7 @@ async fn main() -> Result<(), ATMError> {
     // Delete all messages for Bob
     let response = atm
         .fetch_messages(
-            &bob,
+            &atm_bob,
             &FetchOptions {
                 limit: 100,
                 delete_policy: FetchDeletePolicy::Optimistic,
@@ -140,8 +197,8 @@ async fn main() -> Result<(), ATMError> {
         "test".to_string(),
         json!("Hello Alice"),
     )
-    .from(bob.inner.did.clone())
-    .to(alice.inner.did.clone())
+    .from(atm_bob.inner.did.clone())
+    .to(atm_alice.inner.did.clone())
     .finalize();
 
     let msg_id = message.id.clone();
@@ -150,9 +207,9 @@ async fn main() -> Result<(), ATMError> {
     let packed = atm
         .pack_encrypted(
             &message,
-            &alice.inner.did,
-            Some(&bob.inner.did),
-            Some(&bob.inner.did),
+            &atm_alice.inner.did,
+            Some(&atm_bob.inner.did),
+            Some(&atm_bob.inner.did),
         )
         .await?;
 
@@ -160,11 +217,11 @@ async fn main() -> Result<(), ATMError> {
         .routing
         .forward_message(
             &atm,
-            &bob,
+            &atm_bob,
             false,
             &packed.0,
             &mediator_did,
-            &alice.inner.did,
+            &atm_alice.inner.did,
             None,
             None,
         )
@@ -175,13 +232,15 @@ async fn main() -> Result<(), ATMError> {
         msg_id, forward.0,
     );
 
-    atm.send_message(&bob, &forward.1, &forward.0, false, false)
+    atm.send_message(&atm_bob, &forward.1, &forward.0, false, false)
         .await?;
 
     println!("Bob sent Alice a message");
 
     // See if Alice has a message waiting
-    let response = atm.fetch_messages(&alice, &FetchOptions::default()).await?;
+    let response = atm
+        .fetch_messages(&atm_alice, &FetchOptions::default())
+        .await?;
 
     if response.success.is_empty() {
         println!("Alice has no messages");
@@ -196,7 +255,7 @@ async fn main() -> Result<(), ATMError> {
     let new_msg_id = response.success.first().unwrap().msg_id.clone();
 
     // See if Bob has a message waiting
-    let response = atm.list_messages(&bob, Folder::Outbox).await?;
+    let response = atm.list_messages(&atm_bob, Folder::Outbox).await?;
 
     println!(
         "Bob sent message msg_id({})",
@@ -206,7 +265,7 @@ async fn main() -> Result<(), ATMError> {
     // Try to delete a fake message
     let response = atm
         .delete_messages_direct(
-            &alice,
+            &atm_alice,
             &DeleteMessageRequest {
                 message_ids: vec!["fake".to_string()],
             },
@@ -218,7 +277,7 @@ async fn main() -> Result<(), ATMError> {
     // Try to delete a real message
     let response = atm
         .delete_messages_direct(
-            &alice,
+            &atm_alice,
             &DeleteMessageRequest {
                 message_ids: vec![new_msg_id],
             },

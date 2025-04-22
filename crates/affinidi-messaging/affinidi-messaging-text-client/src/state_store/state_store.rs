@@ -165,8 +165,14 @@ impl StateStore {
                         }
                     }
                     Action::InvitePopupStart => {
-                        let _ = create_invitation(&mut state, &self.state_tx, &atm).await;
-                        info!("OOB Invitation created and added to Chats");
+                        match create_invitation(&mut state, &self.state_tx, &atm).await {
+                            Ok(_) => {
+                                info!("OOB Invitation created and added to Chats");
+                            },
+                            Err(e) => {
+                                warn!("Failed to create invitation: {}", e);
+                            }
+                        }
                     },
                     Action::InvitePopupStop => {
                         state.invite_popup.show_invite_popup = false;

@@ -6,7 +6,7 @@ use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong,
+    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use serde_json::json;
 use sha256::digest;
@@ -27,7 +27,10 @@ struct LocalDidPeerKeys {
 /// Creates a fully formed DID, with corresponding secrets
 /// - service: Creates a service definition with the provided URI if Some
 ///   - [0] = URI
-pub fn create_did(service: Option<String>) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
+pub fn create_did(
+    service: Option<String>,
+    auth_service: bool,
+) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
     // Generate keys for encryption and verification
     let v_ed25519_key = JWK::generate_ed25519().unwrap();
 
@@ -71,20 +74,37 @@ pub fn create_did(service: Option<String>) -> Result<(String, Vec<Secret>), Box<
     ];
 
     // Create a service definition
-    let services = service.map(|service| {
+    let mut services = service.map(|service| {
         vec![DIDPeerService {
             id: None,
             _type: "dm".into(),
-            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong {
-                uri: service,
-                accept: vec!["didcomm/v2".into()],
-                routing_keys: vec![],
-            }),
+            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+                PeerServiceEndPointLongMap {
+                    uri: service,
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+            )),
         }]
     });
 
-    let services = services.as_ref();
+    if auth_service {
+        let auth_service = DIDPeerService {
+            id: Some("#auth".into()),
+            _type: "Authentication".into(),
+            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+                PeerServiceEndPointLongMap {
+                    uri: "https://example.com/auth".into(),
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+            )),
+        };
+        services.as_mut().unwrap().push(auth_service);
+    }
 
+    let services = services.as_ref();
+    eprintln!("TIMTAM services: {:?}", services.unwrap());
     // Create the did:peer DID
     let (did_peer, _) =
         DIDPeer::create_peer_did(&keys, services).expect("Failed to create did:peer");

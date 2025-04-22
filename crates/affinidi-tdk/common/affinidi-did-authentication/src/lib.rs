@@ -387,7 +387,7 @@ impl DIDAuthentication {
                 Ok(endpoint)
             } else {
                 Err(DIDAuthError::AuthenticationAbort(
-                    "No service endpoint found".into(),
+                    "No service endpoint found. DID doesn't contain a #auth service".into(),
                 ))
             }
         } else {
@@ -583,6 +583,10 @@ where
         .await
         .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
 
+    debug!(
+        "status: {} response body: {}",
+        response_status, response_body
+    );
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
             return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
@@ -594,7 +598,6 @@ where
         }
     }
 
-    debug!("response body: {}", response_body);
     serde_json::from_str::<T>(&response_body).map_err(|e| {
         DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
     })

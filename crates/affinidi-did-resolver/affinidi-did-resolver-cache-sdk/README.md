@@ -110,3 +110,11 @@ Options:
 -V, --version
         Print version
 ```
+
+## Running tests
+
+You must enable the `network` feature when running integration tests
+
+``` bash
+cargo test --features network
+```

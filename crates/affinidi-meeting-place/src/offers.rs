@@ -423,11 +423,13 @@ impl Offer {
     /// Creates the DIDComm OOB Invitation message for the offer
     /// Returns base64 encoded message
     pub fn create_offer_oob_message(from_did: &str) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
         let msg = Message::build(
-            Uuid::new_v4().to_string(),
+            id.clone(),
             "https://didcomm.org/out-of-band/2.0/invitation".to_string(),
             json!({"goal_code": "connect", "goal": "Start relationship", "accept": [ "didcomm/v2"]}),
         ).from(from_did.to_string())
+        .thid(id.clone())
         .finalize();
 
         Ok(
