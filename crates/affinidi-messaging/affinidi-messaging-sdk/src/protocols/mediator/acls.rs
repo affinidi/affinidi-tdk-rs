@@ -131,6 +131,74 @@ impl MediatorACLSet {
                     default_acl.set_self_manage_send_queue_limit(false);
                     default_acl.set_self_manage_receive_queue_limit(false);
                 }
+                "allow_all_self_change" => {
+                    default_acl.set_access_list_mode(
+                        default_acl.get_access_list_mode().0,
+                        true,
+                        true,
+                    )?;
+                    default_acl.set_send_messages(default_acl.get_send_messages().0, true, true)?;
+                    default_acl.set_receive_messages(
+                        default_acl.get_receive_messages().0,
+                        true,
+                        true,
+                    )?;
+                    default_acl.set_send_forwarded(
+                        default_acl.get_send_forwarded().0,
+                        true,
+                        true,
+                    )?;
+                    default_acl.set_receive_forwarded(
+                        default_acl.get_receive_forwarded().0,
+                        true,
+                        true,
+                    )?;
+                    default_acl.set_create_invites(
+                        default_acl.get_create_invites().0,
+                        true,
+                        true,
+                    )?;
+                    default_acl.set_anon_receive(default_acl.get_anon_receive().0, true, true)?;
+                    default_acl.set_self_manage_list(true);
+                    default_acl.set_self_manage_send_queue_limit(true);
+                    default_acl.set_self_manage_receive_queue_limit(true);
+                }
+                "deny_all_self_change" => {
+                    default_acl.set_access_list_mode(
+                        default_acl.get_access_list_mode().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_send_messages(
+                        default_acl.get_send_messages().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_receive_messages(
+                        default_acl.get_receive_messages().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_send_forwarded(
+                        default_acl.get_send_forwarded().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_receive_forwarded(
+                        default_acl.get_receive_forwarded().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_create_invites(
+                        default_acl.get_create_invites().0,
+                        false,
+                        true,
+                    )?;
+                    default_acl.set_anon_receive(default_acl.get_anon_receive().0, false, true)?;
+                    default_acl.set_self_manage_list(false);
+                    default_acl.set_self_manage_send_queue_limit(false);
+                    default_acl.set_self_manage_receive_queue_limit(false);
+                }
                 "mode_explicit_allow" => {
                     default_acl.set_access_list_mode(
                         AccessListModeType::ExplicitAllow,
