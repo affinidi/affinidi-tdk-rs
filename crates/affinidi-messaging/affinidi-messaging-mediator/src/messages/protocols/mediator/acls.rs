@@ -215,7 +215,7 @@ pub(crate) async fn process(
                         let mut s = String::new();
                         let mut i = 1;
                         for _ in &errors {
-                            s.push_str(&format!(" {{{}}}", i));
+                            s.push_str(&format!(" ({{{}}})", i));
                             i += 1;
                         }
 
@@ -686,10 +686,18 @@ fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> Op
         errors.push("access_list_mode not allowed to change".to_string());
     }
 
+    if current_acls.get_access_list_mode().1 != new_acls.get_access_list_mode().1 {
+        errors.push("access_list_mode:self_change can't modify!".to_string());
+    }
+
     if (current_acls.get_send_messages().0 != new_acls.get_send_messages().0)
         && !current_acls.get_send_messages().1
     {
         errors.push("send_messages not allowed to change".to_string());
+    }
+
+    if current_acls.get_send_messages().1 != new_acls.get_send_messages().1 {
+        errors.push("send_messages:self_change can't modify!".to_string());
     }
 
     if (current_acls.get_receive_messages().0 != new_acls.get_receive_messages().0)
@@ -698,10 +706,18 @@ fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> Op
         errors.push("receive_messages not allowed to change".to_string());
     }
 
+    if current_acls.get_receive_messages().1 != new_acls.get_receive_messages().1 {
+        errors.push("receive_messages:self_change can't modify!".to_string());
+    }
+
     if (current_acls.get_send_forwarded().0 != new_acls.get_send_forwarded().0)
         && !current_acls.get_send_forwarded().1
     {
         errors.push("send_forwarded not allowed to change".to_string());
+    }
+
+    if current_acls.get_send_forwarded().1 != new_acls.get_send_forwarded().1 {
+        errors.push("send_forwarded:self_change can't modify!".to_string());
     }
 
     if (current_acls.get_receive_forwarded().0 != new_acls.get_receive_forwarded().0)
@@ -710,22 +726,28 @@ fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> Op
         errors.push("get_receive_forwarded not allowed to change".to_string());
     }
 
+    if current_acls.get_receive_forwarded().1 != new_acls.get_receive_forwarded().1 {
+        errors.push("get_receive_forwarded:self_change can't modify!".to_string());
+    }
+
     if (current_acls.get_create_invites().0 != new_acls.get_create_invites().0)
         && !current_acls.get_create_invites().1
     {
         errors.push("create_invites not allowed to change".to_string());
     }
 
-    if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
-        && !current_acls.get_anon_receive().1
-    {
-        errors.push("get_anon_receive not allowed to change".to_string());
+    if current_acls.get_create_invites().1 != new_acls.get_create_invites().1 {
+        errors.push("create_invites:self_change can't modify!".to_string());
     }
 
     if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
         && !current_acls.get_anon_receive().1
     {
         errors.push("anon_receive not allowed to change".to_string());
+    }
+
+    if current_acls.get_anon_receive().1 != new_acls.get_anon_receive().1 {
+        errors.push("anon_receive:self_change can't modify!".to_string());
     }
 
     if errors.is_empty() {

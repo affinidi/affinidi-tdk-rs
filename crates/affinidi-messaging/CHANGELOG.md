@@ -33,6 +33,8 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 
 * FIX/FEATURE: Mediator will not let non-admin DID's change their ACL flags if self_change is not enabled.
   * Expect to see error code 80 `w.m.protocol.acls.change.denied` returned
+* FIX/FEATURE: Mediator will not let non-admin DID's change their own `self-change` settings (causes self-block that you can't recover from)
+  * There is no scenario where a DID would want to self block itself, will cause support issues when you have self-locked yourself.
 * MAINTENANCE: Improved error reporting on all mediator protocols (brings reporting into line with all other problem reports)
   * mediator/account
   * mediator/acls
