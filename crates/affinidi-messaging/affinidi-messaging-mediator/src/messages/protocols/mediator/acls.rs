@@ -208,8 +208,17 @@ pub(crate) async fn process(
                         }
                     };
 
-                    if !acl_change_ok(&current_acls, &MediatorACLSet::from_u64(acls)) {
+                    if let Some(errors) = acl_change_ok(&current_acls, &MediatorACLSet::from_u64(acls)) {
                         warn!("Can't change ACLs. Reason: self_change not allowed");
+
+                        // Creates a string placement for each error. E.g. {1}, {2}, {3}
+                        let mut s = String::new();
+                        let mut i = 1;
+                        for _ in &errors {
+                            s.push_str(&format!(" {{{}}}", i));
+                            i += 1;
+                        }
+
                         return Err(MediatorError::MediatorError(
                             80,
                             session.session_id.to_string(),
@@ -218,8 +227,8 @@ pub(crate) async fn process(
                                 ProblemReportSorter::Warning,
                                 ProblemReportScope::Message,
                                 "protocol.acls.change.denied".into(),
-                                "A non-admin account tried to change ACL Flags but self-change is not allowed".into(),
-                                vec![],
+                                format!("A non-admin account tried to change ACL Flags but self-change is not allowed:{}", s),
+                                errors,
                                 None,
                             )),
                             StatusCode::FORBIDDEN.as_u16(),
@@ -666,65 +675,64 @@ fn _generate_response_message(
 
 /// Helper method that checks if the ACL change is valid for non-admin accounts
 /// checks if self_change would block any modification of the ACLs
-/// returns true if the ACL change is valid, false otherwise
-fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> bool {
+/// returns None if ok
+/// returns Some(vec) with errors if not ok
+fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> Option<Vec<String>> {
+    let mut errors = Vec::new();
+
     if (current_acls.get_access_list_mode().0 != new_acls.get_access_list_mode().0)
         && !current_acls.get_access_list_mode().1
     {
-        // Not allowed to change access_list mode
-        return false;
+        errors.push("access_list_mode not allowed to change".to_string());
     }
 
     if (current_acls.get_send_messages().0 != new_acls.get_send_messages().0)
         && !current_acls.get_send_messages().1
     {
-        // Not allowed to change send_messages
-        return false;
+        errors.push("send_messages not allowed to change".to_string());
     }
 
     if (current_acls.get_receive_messages().0 != new_acls.get_receive_messages().0)
         && !current_acls.get_receive_messages().1
     {
-        // Not allowed to change receive_messages
-        return false;
+        errors.push("receive_messages not allowed to change".to_string());
     }
 
     if (current_acls.get_send_forwarded().0 != new_acls.get_send_forwarded().0)
         && !current_acls.get_send_forwarded().1
     {
-        // Not allowed to change send_forwarded
-        return false;
+        errors.push("send_forwarded not allowed to change".to_string());
     }
 
     if (current_acls.get_receive_forwarded().0 != new_acls.get_receive_forwarded().0)
         && !current_acls.get_receive_forwarded().1
     {
-        // Not allowed to change receive_forwarded
-        return false;
+        errors.push("get_receive_forwarded not allowed to change".to_string());
     }
 
     if (current_acls.get_create_invites().0 != new_acls.get_create_invites().0)
         && !current_acls.get_create_invites().1
     {
-        // Not allowed to change create_invites
-        return false;
+        errors.push("create_invites not allowed to change".to_string());
     }
 
     if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
         && !current_acls.get_anon_receive().1
     {
-        // Not allowed to change anon_receive
-        return false;
+        errors.push("get_anon_receive not allowed to change".to_string());
     }
 
     if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
         && !current_acls.get_anon_receive().1
     {
-        // Not allowed to change anon_receive
-        return false;
+        errors.push("anon_receive not allowed to change".to_string());
     }
 
-    true
+    if errors.is_empty() {
+        None
+    } else {
+        Some(errors)
+    }
 }
 
 #[cfg(test)]
