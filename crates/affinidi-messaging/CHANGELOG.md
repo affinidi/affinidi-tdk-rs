@@ -12,6 +12,8 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 * MAINTENANCE: Examples updated to work with the mediator in different Operating Modes (whether in explicit_allow or explicit_deny they will detect and ensure correct access list management)
 * FIX: `setup_environment` will correctly add `#auth` service definition to generated did:peer mediator DID's
   * NOTE: Ensure you are using `did-peer` v0.6.0 or above crate!
+* `setup_environment` utility app updated to generate more complex did:peer service definitions
+  * Now supports HTTP, WebSocket and DID-Authentication services out of the box
 
 ### Text Client (0.10.5)
 
@@ -31,6 +33,10 @@ Missing versions on the changelog simply reflect minor deployment changes on our
 
 * FIX/FEATURE: Mediator will not let non-admin DID's change their ACL flags if self_change is not enabled.
   * Expect to see error code 80 `w.m.protocol.acls.change.denied` returned
+* MAINTENANCE: Improved error reporting on all mediator protocols (brings reporting into line with all other problem reports)
+  * mediator/account
+  * mediator/acls
+  * mediator/administration
   
 ## 16th April 2025 (0.10.5)
 

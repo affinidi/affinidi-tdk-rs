@@ -1,11 +1,7 @@
 use std::time::SystemTime;
 
 use super::acls::check_permissions;
-use crate::{
-    SharedData,
-    database::session::Session,
-    messages::{ProcessMessageResponse, error_response::generate_error_response},
-};
+use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
@@ -15,6 +11,7 @@ use affinidi_messaging_sdk::{
         acls::{AccessListModeType, MediatorACLSet},
     },
 };
+use http::StatusCode;
 use serde_json::{Value, json};
 use sha256::digest;
 use subtle::ConstantTimeEq;
@@ -43,38 +40,39 @@ pub(crate) async fn process(
                     || created_time > now
                 {
                     warn!("ADMIN related message has an invalid created_time header.");
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        31,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "expired".into(),
-                            "admin related message does not meet mediator created_time constraints"
-                                .into(),
-                            vec![],
+                            "message.expired".into(),
+                            "Message was created too long ago for admin requests: {1}".into(),
+                            vec![created_time.to_string()],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::BAD_REQUEST.as_u16(),
+                        "Message was created too long ago for admin requests".to_string(),
+                    ));
                 }
             } else {
                 warn!("ADMIN related message has no created_time header. Required.");
-                return generate_error_response(
-                    state,
-                    session,
-                    &msg.id,
-                    ProblemReport::new(
+                return Err(MediatorError::MediatorError(
+                    31,
+                    session.session_id.to_string(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
                         ProblemReportSorter::Error,
                         ProblemReportScope::Protocol,
-                        "missing_expiry".into(),
-                        "missing created_time header on an admin related message".into(),
+                        "message.expired".into(),
+                        "Message missing created_time header".into(),
                         vec![],
                         None,
-                    ),
-                    false,
-                );
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Message missing created_time header".to_string(),
+                ));
             }
         }
 
@@ -86,20 +84,21 @@ pub(crate) async fn process(
                     "Error parsing Mediator Account request. Reason: {}",
                     err
                 );
-                return generate_error_response(
-                    state,
-                    session,
-                    &msg.id,
-                    ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "invalid_request".into(),
-                        "Error parsing Mediator Account request. Reason: {1}".into(),
-                        vec![err.to_string()],
+                return Err(MediatorError::MediatorError(
+                    81,
+                    session.session_id.to_string(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.mediator.accounts.parse".into(),
+                        "Message body couldn't be parsed correctly".into(),
+                        vec![],
                         None,
-                    ),
-                    false,
-                );
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Message body couldn't be parsed correctly".to_string(),
+                ));
             }
         };
         debug!("Received Mediator Account request: {:?}", request);
@@ -110,20 +109,21 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "permission_error".into(),
-                            "Error getting ACLs {1}".into(),
-                            vec!["Permission denied".to_string()],
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 match state.database.account_get(&did_hash).await {
@@ -133,42 +133,44 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(response),
                     ),
-                    Err(err) => {
-                        warn!("Error listing accounts. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("database error account_get(). Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error listing accounts {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
             MediatorAccountRequest::AccountList { cursor, limit } => {
                 if !(session.account_type == AccountType::Admin || session.account_type == AccountType::RootAdmin) {
                     warn!("DID ({}) is not an admin account", session.did_hash);
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "unauthorized".into(),
-                            "unauthorized to access Mediator Account protocol. Must be an administrator for this Mediator!".into(),
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
                             vec![],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 match state.database.account_list(cursor, limit).await {
@@ -178,22 +180,23 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(response),
                     ),
-                    Err(err) => {
-                        warn!("Error listing accounts. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("Error listing accounts. Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error listing accounts {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
@@ -202,20 +205,21 @@ pub(crate) async fn process(
                 // 1. Is mediator in explicit_allow mode and is the requestor an ADMIN?
                 if state.config.security.mediator_acl_mode == AccessListModeType::ExplicitAllow && !(session.account_type == AccountType::Admin || session.account_type == AccountType::RootAdmin) {
                     warn!("DID ({}) is not an admin account", session.did_hash);
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "unauthorized".into(),
-                            "unauthorized to create new accounts. Must be an administrator for this Mediator!".into(),
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
                             vec![],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 // 2. Setup the ACLs correctly if not an admin account
@@ -240,22 +244,23 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(response),
                     ),
-                    Err(err) => {
-                        warn!("Error adding account. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("Error adding account. Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error adding account {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
@@ -263,59 +268,62 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "permission_error".into(),
-                            "Error getting ACLs {1}".into(),
-                            vec!["Permission denied".to_string()],
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
                             None,
-                        ),
-                    false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 // Check if the mediator DID is being removed
                 // Protects accidentally deleting the mediator itself
                 if state.config.mediator_did_hash.as_bytes().ct_eq(did_hash.as_bytes()).unwrap_u8() == 1 {
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "invalid_request".into(),
-                            "Error removing account. Cannot remove the Mediator DID".into(),
+                    return Err(MediatorError::MediatorError(
+                        18,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "database.account.remove.protected".into(),
+                            "Tried to remove a protected account (Mediator, Root-Admin)".into(),
                             vec![],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "Tried to remove a protected account (Mediator, Root-Admin)".to_string(),
+                    ));
                 }
 
                 // Check if the root admin DID is being removed
                 // Protects accidentally deleting the only admin account
                 let root_admin = digest(&state.config.admin_did);
                 if root_admin.as_bytes().ct_eq(did_hash.as_bytes()).unwrap_u8() == 1 {
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "invalid_request".into(),
-                            "Error removing account. Cannot remove root admin account".into(),
+                    return Err(MediatorError::MediatorError(
+                        18,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "database.account.remove.protected".into(),
+                            "Tried to remove a protected account (Mediator, Root-Admin)".into(),
                             vec![],
                             None,
-                        ),
-                        false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "Tried to remove a protected account (Mediator, Root-Admin)".to_string(),
+                    ));
                 }
                 match state.database.account_remove(session,&did_hash, false, false).await {
                     Ok(response) => _generate_response_message(
@@ -324,22 +332,23 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(response),
                     ),
-                    Err(err) => {
-                        warn!("Error removing account. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("Error removing account. Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error removing account {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
@@ -347,25 +356,41 @@ pub(crate) async fn process(
                 // Must be an admin level account to change this
                 if !state.database.check_admin_account(&session.did_hash).await? {
                     warn!("DID ({}) is not an admin account", session.did_hash);
-                    return generate_error_response(state, session, &msg.id, ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "unauthorized".into(),
-                        "unauthorized to change account type. Must be an administrator for this Mediator!".into(),
-                        vec![], None
-                    ), false);
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 // Only RootAdmin account can change account type to RootAdmin
                 if _type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
                     warn!("DID ({}) is not a RootAdmin account", session.did_hash);
-                    return generate_error_response(state, session, &msg.id, ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "unauthorized".into(),
-                        "unauthorized to change account type to RootAdmin. Must be a RootAdmin for this Mediator!".into(),
-                        vec![], None
-                    ), false);
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 // Get current account type and handle any shift to/from admin
@@ -373,13 +398,21 @@ pub(crate) async fn process(
                 if let Some(current) = &current {
                     if current._type == AccountType::RootAdmin && session.account_type != AccountType::RootAdmin {
                         warn!("DID ({}) is not a RootAdmin account", session.did_hash);
-                        return generate_error_response(state, session, &msg.id, ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "unauthorized".into(),
-                            "unauthorized to change account type from RootAdmin. Must be a RootAdmin for this Mediator!".into(),
-                            vec![], None
-                        ), false);
+                        return Err(MediatorError::MediatorError(
+                            45,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "authorization.permission".into(),
+                                "DID does have permission to access the requested resource".into(),
+                                vec![],
+                                None,
+                            )),
+                            StatusCode::FORBIDDEN.as_u16(),
+                            "DID does have permission to access the requested resource".to_string(),
+                        ));
                     } else if current._type == _type {
                         // Types are the same, no need to change.
                         return _generate_response_message(
@@ -423,22 +456,23 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(true),
                     )}
-                    Err(err) => {
-                        warn!("Error Changing account type. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("Error Changing account type. Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error changing account type. Reason: {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
@@ -446,20 +480,21 @@ pub(crate) async fn process(
                  // Check permissions and ACLs
                  if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
-                    return generate_error_response(
-                        state,
-                        session,
-                        &msg.id,
-                        ProblemReport::new(
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
-                            "permission_error".into(),
-                            "Error getting ACLs {1}".into(),
-                            vec!["Permission denied".to_string()],
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
                             None,
-                        ),
-                    false,
-                    );
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
                 }
 
                 // Check ACL's
@@ -512,22 +547,23 @@ pub(crate) async fn process(
                         &state.config.mediator_did,
                         &json!(AccountChangeQueueLimitsResponse { send_queue_limit, receive_queue_limit}),
                     )}
-                    Err(err) => {
-                        warn!("Error Changing account type. Reason: {}", err);
-                        generate_error_response(
-                            state,
-                            session,
-                            &msg.id,
-                            ProblemReport::new(
+                    Err(e) => {
+                        warn!("Error Changing account type. Reason: {}", e);
+                        Err(MediatorError::MediatorError(
+                            14,
+                            session.session_id.to_string(),
+                            Some(msg.id.to_string()),
+                            Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "database_error".into(),
-                                "Error changing account type. Reason: {1}".into(),
-                                vec![err.to_string()],
+                                "me.res.storage.error".into(),
+                                "Database transaction error: {1}".into(),
+                                vec![e.to_string()],
                                 None,
-                            ),
-                            false,
-                        )
+                            )),
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            format!("Database transaction error: {}", e),
+                        ))
                     }
                 }
             }
