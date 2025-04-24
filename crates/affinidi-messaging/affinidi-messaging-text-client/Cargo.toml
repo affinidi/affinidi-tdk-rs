@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.10.5"
+version = "0.10.6"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -27,7 +27,7 @@ base64 = "0.22"
 chrono = "0.4"
 circular-queue = { version = "0.2", features = ["serde_support"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
-image = "0.25.5"
+image = "0.25"
 log = "0.4"
 qrcode = "0.14"
 rand = "0.9"

@@ -2,10 +2,11 @@
  * WebSocket transport implementation for Affinidi Messaging SDK.
  */
 
+use super::{WebSocketResponses, ws_cache::MessageCache};
 use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile, protocols::Protocols};
 use ahash::{HashMap, HashMapExt};
 use futures_util::{SinkExt, StreamExt};
-use std::{ collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     select,
@@ -15,16 +16,15 @@ use tokio::{
         oneshot,
     },
     task::JoinHandle,
-    time::{ interval_at,  Interval},
+    time::{Interval, interval_at},
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::{error::ProtocolError, http::Uri, Bytes, ClientRequestBuilder, Message}, MaybeTlsStream, WebSocketStream
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{Bytes, ClientRequestBuilder, Message, error::ProtocolError, http::Uri},
 };
-use tracing::{debug, error, span, warn, Instrument, Level};
-use super::{ws_cache::MessageCache, WebSocketResponses};
+use tracing::{Instrument, Level, debug, error, span, warn};
 
 type WebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
 
 /// A standalone task that manages the WebSocket connection to a mediator for a DID Profile
 pub(crate) struct WebSocketTransport {
@@ -86,15 +86,11 @@ pub(crate) enum WebSocketCommands {
     CancelNext(u32),
 
     /// Get a specific message from the cache - will only respond if the message is found
-    GetMessage(
-        String,
-        oneshot::Sender<WebSocketResponses>,
-    ),
+    GetMessage(String, oneshot::Sender<WebSocketResponses>),
 
     /// If SDK timesout, then cancel the GetMessage request
     CancelGetMessage(String),
 }
-
 
 impl WebSocketTransport {
     /// Creates a new WebSocketTransport instance, it auto starts the websocket connection
@@ -187,10 +183,8 @@ impl WebSocketTransport {
                                 } else {
                                     notify_connection = Some(sender);
                                 }
-                                
                             },
                             Some(WebSocketCommands::SendMessage(msg)) => {
-                                
                                 if let Some(web_socket) = self.web_socket.as_mut() {
                                     debug!("Sending message to websocket");
                                     match web_socket.send(Message::text(msg)).await {
@@ -260,7 +254,11 @@ impl WebSocketTransport {
 
     // Helper function that conditionally checks if the websocket is connected
     // Allows the use of an Option on the select! macro in the main loop
-    async fn conditional_websocket(web_socket: &mut Option<WebSocket>) -> Option<Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> {
+    async fn conditional_websocket(
+        web_socket: &mut Option<WebSocket>,
+    ) -> Option<
+        Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+    > {
         if let Some(ws) = web_socket.as_mut() {
             ws.next().await
         } else {
@@ -280,35 +278,44 @@ impl WebSocketTransport {
     }
 
     // Handles the inbound messages from the websocket
-    async fn handle_inbound_message(&mut self, atm: &ATM, inbound: Result<Message, tokio_tungstenite::tungstenite::Error>)  {
+    async fn handle_inbound_message(
+        &mut self,
+        atm: &ATM,
+        inbound: Result<Message, tokio_tungstenite::tungstenite::Error>,
+    ) {
         match inbound {
-            Ok(ws_msg) => {
-                match ws_msg {
-                    Message::Text(text) => {
-                        debug!("Received inbound text message",);
-                        self.process_inbound_didcomm_message(atm, text.to_string()).await;
-                    }
-                    Message::Binary(data) => {
-                        warn!("Received inbound binary message");
-                        self.process_inbound_didcomm_message(atm, String::from_utf8_lossy(&data).to_string()).await;
-                    }
-                    Message::Pong(_) => {
-                        debug!("Received pong message");
-                        self.awaiting_pong = false;
-                    }
-                    Message::Close(_) => {
-                        debug!("WebSocket connection closed");
-                    }
-                    _ => {
-                        warn!("Received unknown message type: {:?}", ws_msg);
-                    }
+            Ok(ws_msg) => match ws_msg {
+                Message::Text(text) => {
+                    debug!("Received inbound text message",);
+                    self.process_inbound_didcomm_message(atm, text.to_string())
+                        .await;
+                }
+                Message::Binary(data) => {
+                    warn!("Received inbound binary message");
+                    self.process_inbound_didcomm_message(
+                        atm,
+                        String::from_utf8_lossy(&data).to_string(),
+                    )
+                    .await;
+                }
+                Message::Pong(_) => {
+                    debug!("Received pong message");
+                    self.awaiting_pong = false;
+                }
+                Message::Close(_) => {
+                    debug!("WebSocket connection closed");
+                }
+                _ => {
+                    warn!("Received unknown message type: {:?}", ws_msg);
                 }
             },
-            Err(tokio_tungstenite::tungstenite::Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
+            Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                ProtocolError::ResetWithoutClosingHandshake,
+            )) => {
                 // Connection Dropped
                 warn!("WebSocket connection dropped");
                 self.web_socket = None;
-            },
+            }
             Err(e) => {
                 error!("Generic websocket error: {:?}", e);
                 self.web_socket = None;
@@ -316,28 +323,39 @@ impl WebSocketTransport {
         }
     }
 
-    async fn process_inbound_didcomm_message(&mut self, atm:&ATM, message: String)  {
+    async fn process_inbound_didcomm_message(&mut self, atm: &ATM, message: String) {
         debug!("Received text message ({})", message);
         match atm.unpack(&message).await {
             Ok((message, metadata)) => {
                 if let Some(sender) = self.inbound_cache.message_wanted(&message) {
                     debug!("Message is wanted, sending to requestor");
-                    let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                    let _ = sender.send(WebSocketResponses::MessageReceived(
+                        message,
+                        Box::new(metadata),
+                    ));
                     return;
                 }
                 if let Some(next_request) = self.next_requests_list.pop_front() {
                     debug!("Next message found, sending to requestor");
                     if let Some(sender) = self.next_requests.remove(&next_request) {
-                        let _ = sender.send(WebSocketResponses::MessageReceived(message.clone(), Box::new(metadata)));
+                        let _ = sender.send(WebSocketResponses::MessageReceived(
+                            message.clone(),
+                            Box::new(metadata),
+                        ));
                         return;
                     } else {
-                        error!("Next message requestor not found - bug in the SDK - inbound message may be lost");
+                        error!(
+                            "Next message requestor not found - bug in the SDK - inbound message may be lost"
+                        );
                     }
-                } 
+                }
 
                 if let Some(direct_channel) = self.direct_channel.as_mut() {
                     debug!("Sending message to direct channel");
-                    let _ = direct_channel.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                    let _ = direct_channel.send(WebSocketResponses::MessageReceived(
+                        message,
+                        Box::new(metadata),
+                    ));
                 } else {
                     debug!("Caching message");
                     self.inbound_cache.insert(message, metadata);
@@ -354,7 +372,13 @@ impl WebSocketTransport {
         debug!("Starting websocket connection");
 
         fn _calculate_delay(delay: u8) -> u8 {
-            let delay = if delay == 0 { 1 } else if delay < 60 { delay * 2 } else { delay };
+            let delay = if delay == 0 {
+                1
+            } else if delay < 60 {
+                delay * 2
+            } else {
+                delay
+            };
 
             if delay > 60 { 60 } else { delay }
         }

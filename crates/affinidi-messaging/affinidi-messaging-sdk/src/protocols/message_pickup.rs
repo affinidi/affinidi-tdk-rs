@@ -19,7 +19,14 @@ use tracing::{Instrument, Level, debug, span, warn};
 use uuid::Uuid;
 
 use crate::{
-    errors::ATMError, messages::GenericDataStruct, profiles::ATMProfile, transports::{websockets::{websocket::WebSocketCommands, WebSocketResponses}, SendMessageResponse}, ATM
+    ATM,
+    errors::ATMError,
+    messages::GenericDataStruct,
+    profiles::ATMProfile,
+    transports::{
+        SendMessageResponse,
+        websockets::{WebSocketResponses, websocket::WebSocketCommands},
+    },
 };
 
 #[derive(Default)]
@@ -362,7 +369,7 @@ impl MessagePickup {
                     Ok(None)
                 }
                 value = rx => {
-                    match value { 
+                    match value {
                         Ok(WebSocketResponses::MessageReceived(msg, meta)) => {
                             // If auto_delete is true, delete the message
                             if auto_delete {

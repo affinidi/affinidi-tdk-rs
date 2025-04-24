@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### 22nd April 2025 (affinidi-did-resolver-cache-sdk, affinidi-did-resolver-server)
+### 24th April 2025 (affinidi-did-resolver-cache-sdk, affinidi-did-resolver-server) (release 0.5.3)
 
 * MAINTENANCE: Updating crate dependencies and including updated `did-peer` crate.
 
