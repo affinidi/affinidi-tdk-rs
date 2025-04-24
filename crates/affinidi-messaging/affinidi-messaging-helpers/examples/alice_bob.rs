@@ -237,7 +237,7 @@ async fn main() -> Result<(), ATMError> {
     println!("Bob receiving messages");
     match protocols
         .message_pickup
-        .live_stream_get(&atm, &atm_bob, true, &msg_id, Duration::from_secs(5), true)
+        .live_stream_get(&atm, &atm_bob, &msg_id, Duration::from_secs(5), true)
         .await?
     {
         Some(msg) => {

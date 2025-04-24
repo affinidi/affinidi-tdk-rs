@@ -1,6 +1,7 @@
-use crate::{errors::ATMError, transports::websockets::ws_handler::WsHandlerMode};
+use crate::{errors::ATMError, transports::websockets::WebSocketResponses};
 use rustls::pki_types::CertificateDer;
 use std::{fs::File, io::BufReader};
+use tokio::sync::broadcast::Sender;
 use tracing::error;
 
 /// Configuration for the Affinidi Trusted Messaging (ATM) Service
@@ -16,7 +17,9 @@ pub struct ATMConfig {
     pub(crate) ssl_certificates: Vec<CertificateDer<'static>>,
     pub(crate) fetch_cache_limit_count: u32,
     pub(crate) fetch_cache_limit_bytes: u64,
-    pub(crate) ws_handler_mode: WsHandlerMode,
+
+    /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
+    pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
 }
 
 impl ATMConfig {
@@ -48,7 +51,7 @@ pub struct ATMConfigBuilder {
     ssl_certificates: Vec<String>,
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
-    ws_handler_mode: WsHandlerMode,
+    inbound_message_channel: Option<Sender<WebSocketResponses>>,
 }
 
 impl Default for ATMConfigBuilder {
@@ -57,7 +60,7 @@ impl Default for ATMConfigBuilder {
             ssl_certificates: vec![],
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
-            ws_handler_mode: WsHandlerMode::Cached,
+            inbound_message_channel: None,
         }
     }
 }
@@ -76,6 +79,7 @@ impl ATMConfigBuilder {
     }
 
     /// Set the maximum number of messages to cache in the fetch task
+    /// This is per profile
     /// Default: 100
     pub fn with_fetch_cache_limit_count(mut self, count: u32) -> Self {
         self.fetch_cache_limit_count = count;
@@ -83,18 +87,18 @@ impl ATMConfigBuilder {
     }
 
     /// Set the maximum total size of messages to cache in the fetch task in bytes
+    /// This is per profile
     /// Default: 10MB (1024*1024*10)
     pub fn with_fetch_cache_limit_bytes(mut self, count: u64) -> Self {
         self.fetch_cache_limit_bytes = count;
         self
     }
 
-    /// Set the mode for the websocket handler
-    /// Default: Cached
-    /// Cached: Messages are cached and sent to the SDK when requested (using the message_pickup protocol)
-    /// DirectChannel: Messages are sent directly to the SDK via a channel
-    pub fn with_ws_handler_mode(mut self, mode: WsHandlerMode) -> Self {
-        self.ws_handler_mode = mode;
+    /// Create an optional broadcast (MPMC) channel to send inbound messages from websockets to
+    /// This is useful if you want to aggregate inbound messages to the SDK to a single channel to be used by the client
+    pub fn with_inbound_message_channel(mut self, capacity: usize) -> Self {
+        let (inbound_message_channel, _) = tokio::sync::broadcast::channel(capacity);
+        self.inbound_message_channel = Some(inbound_message_channel);
         self
     }
 
@@ -131,7 +135,7 @@ impl ATMConfigBuilder {
             ssl_certificates: certs,
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
-            ws_handler_mode: self.ws_handler_mode,
+            inbound_message_channel: self.inbound_message_channel,
         })
     }
 }

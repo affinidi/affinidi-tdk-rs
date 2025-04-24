@@ -1,19 +1,20 @@
 /*!
  * Message cache for WebSocket transport
  */
-use super::ws_handler::WsHandlerCommands;
+use super::WebSocketResponses;
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use ahash::AHashMap as HashMap;
 use std::mem::size_of_val;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::oneshot;
 use tracing::{debug, warn};
+
 /// Message cache struct
 /// Holds live-stream messages in a cache so we can get the first available or by a specific message ID
 #[derive(Default)]
 pub(crate) struct MessageCache {
     pub(crate) messages: HashMap<String, (Message, UnpackMetadata)>, // Cache of message data, key is the message ID
     pub(crate) thid_lookup: HashMap<String, String>, // Lookup table for thread ID to message ID
-    pub(crate) search_list: HashMap<String, Sender<WsHandlerCommands>>, // Search list of message IDs key = ID to look up (could be ID or THID)
+    pub(crate) wanted_list: HashMap<String, oneshot::Sender<WebSocketResponses>>, // Message ID's (match by id/thid/pthid) that are wanted by the SDK
     pub(crate) ordered_list: Vec<String>, // Ordered list of message IDs in order as they are received
     pub(crate) total_count: u32,          // Number of messages in cache
     pub(crate) total_bytes: u64, // Total size of messages in cache (approx as based on object size)
@@ -61,13 +62,33 @@ impl MessageCache {
         self.remove(&id)
     }
 
-    /// Can we find a specific message in the cache?
-    /// If not, then we add it to the search list to look up later as messages come in (within the duration of the original get request)
-    pub(crate) fn get(
+    /// Is the inbound message wanted?
+    /// If it exists, will remove from the cache
+    ///
+    /// Logic:
+    /// Try and find if their is an existing search for the message id/thid/pthid
+    pub(crate) fn message_wanted(
         &mut self,
-        msg_id: &str,
-        channel: &Sender<WsHandlerCommands>,
-    ) -> Option<(Message, UnpackMetadata)> {
+        message: &Message,
+    ) -> Option<oneshot::Sender<WebSocketResponses>> {
+        // Can we find a match on thid?
+        if let Some(thid) = &message.thid {
+            if let Some(sender) = self.wanted_list.remove(thid) {
+                return Some(sender);
+            }
+        }
+
+        if let Some(pthid) = &message.pthid {
+            if let Some(sender) = self.wanted_list.remove(pthid) {
+                return Some(sender);
+            }
+        }
+
+        self.wanted_list.remove(&message.id)
+    }
+
+    /// Does this message exist in the cache?
+    pub(crate) fn get(&mut self, msg_id: &str) -> Option<(Message, UnpackMetadata)> {
         let r = if let Some((message, meta)) = self.messages.get(msg_id) {
             Some((message.clone(), meta.clone()))
         } else if let Some(id) = self.thid_lookup.get(msg_id) {
@@ -81,11 +102,6 @@ impl MessageCache {
                 None
             }
         } else {
-            debug!(
-                "Message ID ({}) not found in cache, adding to search list",
-                msg_id
-            );
-            self.search_list.insert(msg_id.to_string(), channel.clone());
             None
         };
 
@@ -96,6 +112,32 @@ impl MessageCache {
         r
     }
 
+    /// Does this message exist in the cache?
+    /// If not, then we add it to the wanted list to look up later as messages come in (within the duration of the original get request)
+    pub(crate) fn get_or_add_wanted(
+        &mut self,
+        msg_id: &str,
+        sender: oneshot::Sender<WebSocketResponses>,
+    ) -> Option<(oneshot::Sender<WebSocketResponses>, Message, UnpackMetadata)> {
+        let r = if let Some((message, metadata)) = self.get(msg_id) {
+            Some((sender, message, metadata))
+        } else {
+            debug!(
+                "Message ID ({}) not found in cache, adding to wanted list",
+                msg_id
+            );
+            self.wanted_list.insert(msg_id.to_string(), sender);
+            None
+        };
+
+        // Remove the message from cache if it was found
+        if let Some((_, message, _)) = &r {
+            self.remove(&message.id);
+        }
+
+        r
+    }
+
     pub(crate) fn remove(&mut self, msg_id: &str) -> Option<(Message, UnpackMetadata)> {
         // remove the message from the ordered list
         if let Some(pos) = self.ordered_list.iter().position(|r| r == msg_id) {
@@ -103,7 +145,7 @@ impl MessageCache {
         }
 
         // Remove from search list
-        self.search_list.remove(msg_id);
+        self.wanted_list.remove(msg_id);
 
         // Get the message and metadata from the cache
         let (message, meta) = if let Some((message, meta)) = self.messages.remove(msg_id) {
@@ -131,33 +173,6 @@ impl MessageCache {
         }
 
         Some((message, meta))
-    }
-
-    /// Search for a message in the cache
-    /// If it exists, will remove and return from the cache
-    ///
-    /// Logic:
-    /// Try and find if their is an existing search for the message id/thid/pthid
-    pub(crate) fn search(
-        &mut self,
-        msg_id: &str,
-        thid: Option<&str>,
-        pthid: Option<&str>,
-    ) -> Option<Sender<WsHandlerCommands>> {
-        // Can we find a match on thid?
-        if let Some(thid) = thid {
-            if let Some(channel) = self.search_list.remove(thid) {
-                return Some(channel);
-            }
-        }
-
-        if let Some(pthid) = pthid {
-            if let Some(channel) = self.search_list.remove(pthid) {
-                return Some(channel);
-            }
-        }
-
-        self.search_list.remove(msg_id)
     }
 
     /// Is the cache full based on limits?

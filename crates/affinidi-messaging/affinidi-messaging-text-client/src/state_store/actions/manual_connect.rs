@@ -10,7 +10,7 @@ use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi::{JWK, jwk::Params};
+use ssi::{JWK, jwk::Params, verification_methods::ssi_core::OneOrMany};
 
 pub async fn manual_connect_setup(
     state: &mut State,
@@ -77,13 +77,13 @@ pub fn create_did_peer(mediator_did: &str) -> Result<(String, Vec<Secret>)> {
     // Create a service definition
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
             PeerServiceEndPointLongMap {
                 uri: mediator_did.into(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             },
-        )),
+        ))),
         id: None,
     }];
 

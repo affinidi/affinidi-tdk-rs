@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.10.5"
+version = "0.11.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -21,8 +21,9 @@ affinidi-did-authentication.workspace = true
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
+futures-util = "0.3"
 regex = "1.11"
-reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+reqwest = { version = "0.12", features = ["rustls-tls-native-roots", "json"] }
 rustls = { version = "0.23", default-features = false, features = [
     "aws_lc_rs",
     "tls12",
@@ -37,14 +38,16 @@ ssi = { version = "0.10" }
 thiserror = "2.0"
 tokio = { version = "1.44", features = ["full"] }
 tokio-rustls = "0.26"
+tokio-stream = "0.1"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 tracing = { version = "0.1", features = [
     "max_level_debug",
     "release_max_level_info",
     "valuable",
 ] }
 url = "2.5"
+utf-8 = "0.7"
 uuid = { version = "1.16", features = ["v4", "fast-rng"] }
-web-socket = "0.7"
 
 [dev-dependencies]
 did-peer.workspace = true

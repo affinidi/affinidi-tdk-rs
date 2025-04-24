@@ -190,7 +190,6 @@ async fn main() -> Result<(), ATMError> {
         .live_stream_get(
             &atm,
             &alice,
-            false,
             &response.message_id,
             Duration::from_secs(10),
             true,
@@ -256,7 +255,6 @@ async fn main() -> Result<(), ATMError> {
         .live_stream_get(
             &atm,
             &alice,
-            false,
             &response.message_id,
             Duration::from_secs(10),
             true,

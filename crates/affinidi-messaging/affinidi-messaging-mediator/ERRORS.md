@@ -101,3 +101,9 @@ How you choose to handle these is left to the client side on how to handle these
 | 77 | 500 | e.p.me.storage.message.error | No | There was in internal error when storing the message |
 | 78 | 500 | e.p.me.res.storage.pubsub.subscribe | Yes | Couldn't subscribe to pubsub channel |
 | 79 | 400 | w.m.message.header.ephemeral.invalid | No | Ephemeral header isn't a JSON bool value. Defaults to false and still sends message |
+| 80 | 403 | w.m.protocol.acls.change.denied | No | A non-admin account tried to change ACL Flags but self-change is not allowed |
+| 81 | 400 | w.m.protocol.mediator.accounts.parse | No | Message body couldn't be parsed correctly |
+| 82 | 400 | w.m.protocol.mediator.acls.parse | No | Message body couldn't be parsed correctly |
+| 82 | 400 | e.p.protocol.mediator.access_list.limit | No | Transaction is limited to 1..100 items   |
+| 83 | 400 | w.m.protocol.mediator.administration.parse | No | Message body couldn't be parsed correctly |
+| 84 | 400 | w.m.protocol.mediator.administration.strip.missing | No | Missing admin DID to strip admin type from |

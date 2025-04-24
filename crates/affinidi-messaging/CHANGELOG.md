@@ -5,6 +5,52 @@
 Why are there skipped version numbers? Sometimes when deploying via CI/CD Pipeline we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our tooling.
 
+## 24th April 2025
+
+### Messaging Helpers (Examples) (0.10.6)
+
+* MAINTENANCE: Examples updated to work with the mediator in different Operating Modes (whether in explicit_allow or explicit_deny they will detect and ensure correct access list management)
+* FIX: `setup_environment` will correctly add `#auth` service definition to generated did:peer mediator DID's
+  * NOTE: Ensure you are using `did-peer` v0.6.0 or above crate!
+* `setup_environment` utility app updated to generate more complex did:peer service definitions
+  * Now supports HTTP, WebSocket and DID-Authentication services out of the box
+
+### Text Client (0.10.6)
+
+* Support for ACL, Access Lists and Mediator Operating modes added
+* OOB works with full ACL and Access Control enabled
+* DIDComm Problem Reports added, will now appear in chat window
+
+### Messaging SDK (0.11.0)
+
+* Re-factoring of WbSocket Handling to allow for greater functionality and more robust failure detection and handling
+  * Able to direct receive some messages while streaming others to common channel (this allows for some commands to operate independently of the stream)
+    * For Example: Getting Account information in the midst of an active stream of messages - you can now pull the individual response out
+* Breaking Changes
+  * protocols.message_pickup.live_stream_get(): Removed the `use_profile_channel` option
+
+### Mediator (0.10.6)
+
+* FIX/FEATURE: Mediator will not let non-admin DID's change their ACL flags if self_change is not enabled.
+  * Expect to see error code 80 `w.m.protocol.acls.change.denied` returned
+* FIX/FEATURE: Mediator will not let non-admin DID's change their own `self-change` settings (causes self-block that you can't recover from)
+  * There is no scenario where a DID would want to self block itself, will cause support issues when you have self-locked yourself.
+* FEATURE: Mediator Configuration for `global_acl_default` now has a convenience feature to allow or deny all `self-change` ACL flags
+  * `ALLOW_ALL_SELF_CHANGE`: Allows all *_SELF_CHANGE flags (explicitly set when ALLOW_ALL is set)
+  * `DENY_ALL_SELF_CHANGE`: Denies all *_SELF_CHANGE flags (explicitly set when DENY_ALL is set)
+* MAINTENANCE: Improved error reporting on all mediator protocols (brings reporting into line with all other problem reports)
+  * mediator/account
+  * mediator/acls
+  * mediator/administration
+* FIX: When storing messages in `direct-delivery` mode, the sender was incorrectly being assigned to the mediator in all cases
+  * Should be set to the sending DID correctly, or mediator when the mediator may be wrapping the message
+* FIX: Depending on inbound message delivery path, the mediator would be sending the inbound message incorrectly back to the sender
+  * Was using the session DID instead of the recipient DID
+  * There is no security related issue with this, as the message is still encrypted and the sender is getting back what they had already sent
+  * But would be still be extra handling on the sender side as to why are you getting messages back to yourself
+  
+## 16th April 2025 (0.10.5)
+
 ### Mediator (0.10.5)
 
 * FEATURE: Will generate a problem report if the `ephemeral` header on a forwarded message is incorrect (i.e. String and not Bool)

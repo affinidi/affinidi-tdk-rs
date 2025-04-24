@@ -4,6 +4,8 @@ use crate::state_store::actions::chat_list::ChatStatus;
 use crate::state_store::actions::invitation::create_new_profile;
 use crate::state_store::chat_message::{ChatEffect, ChatMessage, ChatMessageType};
 use affinidi_messaging_didcomm::{Attachment, AttachmentData, Message, UnpackMetadata};
+use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
+use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
 use affinidi_messaging_sdk::{ATM, protocols::Protocols};
 use base64::prelude::*;
@@ -11,6 +13,7 @@ use rand::Rng;
 use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha256::digest;
 use tracing::error;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -165,14 +168,14 @@ async fn _handle_connection_setup(
     let from: String = message.to.clone().unwrap().first().unwrap().to_string();
     let to: String = message.from.clone().unwrap();
 
-    let new_bob =
+    let remote_secure_did =
         if let Ok(channel_did) = serde_json::from_value::<InviteChannel>(message.body.clone()) {
             channel_did.channel_did
         } else {
             warn!("Failed to parse connection accepted message");
             return;
         };
-    info!("New DID: {}", new_bob);
+    info!("New remote secure DID: {}", remote_secure_did);
 
     let current_profile = {
         profiles
@@ -188,6 +191,50 @@ async fn _handle_connection_setup(
     // Add this new profile to ATM
     let our_new_profile = atm.profile_add(&our_new_did, true).await.unwrap();
     info!("Added new profile to ATM");
+
+    // Add the remote secure DID to the our new secure profile
+    let protocols = Protocols::default();
+
+    let our_new_profile_info = match protocols
+        .mediator
+        .account_get(atm, &our_new_profile, None)
+        .await
+    {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            warn!(
+                "No profile info found for local secure DID ({})",
+                &our_new_profile.inner.did
+            );
+            return;
+        }
+        Err(e) => {
+            warn!(
+                "Failed to get temp invite response profile info from mediator: {}",
+                e
+            );
+            return;
+        }
+    };
+
+    let our_new_profile_acl_flags = MediatorACLSet::from_u64(our_new_profile_info.acls);
+    if let AccessListModeType::ExplicitAllow = our_new_profile_acl_flags.get_access_list_mode().0 {
+        // Add the new remote secure DID to our new secure DID
+        match protocols
+            .mediator
+            .access_list_add(atm, &our_new_profile, None, &[&digest(&remote_secure_did)])
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                warn!(
+                    "Failed to add {} to ACL of new secure profile: {}",
+                    remote_secure_did, e
+                );
+                return;
+            }
+        }
+    }
 
     let vcard = VCard {
         n: Name {
@@ -287,7 +334,7 @@ async fn _handle_connection_setup(
             &new_chat_name,
             &format!("Chatting with {}", new_chat_name),
             &our_new_profile,
-            Some(new_bob.to_string()),
+            Some(remote_secure_did.to_string()),
             None,
             ChatStatus::EstablishedChannel,
         )
@@ -630,6 +677,75 @@ pub async fn handle_message(
                 break 'label_break;
             };
 
+            let profiles = atm.get_profiles();
+            let our_secure_profile = {
+                profiles
+                    .read()
+                    .await
+                    .0
+                    .values()
+                    .find(|p| &p.inner.did == secure_channel_did)
+                    .unwrap()
+                    .clone()
+            };
+
+            // Set up the ACL for the remote secure DID.
+            let protocols = Protocols::default();
+
+            let local_secure_profile_info = match protocols
+                .mediator
+                .account_get(atm, &our_secure_profile, None)
+                .await
+            {
+                Ok(Some(info)) => info,
+                Ok(None) => {
+                    warn!(
+                        "No profile info found for local secure DID ({})",
+                        &profile.inner.did
+                    );
+                    return;
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to get local secure profile info from mediator: {}",
+                        e
+                    );
+                    return;
+                }
+            };
+
+            let local_secure_profile_acl_flags =
+                MediatorACLSet::from_u64(local_secure_profile_info.acls);
+            if let AccessListModeType::ExplicitAllow =
+                local_secure_profile_acl_flags.get_access_list_mode().0
+            {
+                // Add the remote secure DID to this profile's ACL
+                match protocols
+                    .mediator
+                    .access_list_add(
+                        atm,
+                        &our_secure_profile,
+                        None,
+                        &[&digest(&remote_secure_did)],
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            "Added {} to ACL of local secure profile {}",
+                            remote_secure_did, our_secure_profile.inner.did
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to add {} to ACL of new secure profile: {}",
+                            remote_secure_did, e
+                        );
+                        return;
+                    }
+                }
+            }
+
             // We don't need the ephemeral chat anymore - delete it
             state.remove_chat(&chat, atm).await;
 
@@ -665,6 +781,34 @@ pub async fn handle_message(
                 .chat_list
                 .chats
                 .insert(new_chat_name.clone(), new_secure_chat);
+        }
+        "https://didcomm.org/report-problem/2.0/problem-report" => 'label_break: {
+            // Received a problem report message
+            // Show the message in the chat
+            let problem_report: ProblemReport =
+                match serde_json::from_value::<ProblemReport>(message.body.clone()) {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        warn!("Failed to parse problem report: {}", e);
+                        break 'label_break;
+                    }
+                };
+
+            let Some(mut_chat) = state.chat_list.chats.get_mut(&chat.name) else {
+                warn!("Couldn't get mutable chat({})", &chat.name);
+                break 'label_break;
+            };
+
+            if let Some(active_chat) = &state.chat_list.active_chat {
+                if active_chat != &chat.name {
+                    mut_chat.has_unread = true;
+                }
+            }
+
+            mut_chat.messages.push(ChatMessage::new(
+                ChatMessageType::Error,
+                problem_report.to_string(),
+            ));
         }
         _ => {
             warn!("Unknown message type: {}", message.type_);

@@ -38,6 +38,8 @@ pub enum ATMError {
     ProblemReport(String, String, String),
     #[error("DIDComm Mediator error: code({0}), message: ({1})")]
     MediatorError(String, String),
+    #[error("ATM DID Profile error: {0}")]
+    ProfileError(String),
 }
 
 impl ATMError {

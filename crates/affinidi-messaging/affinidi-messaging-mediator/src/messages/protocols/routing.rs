@@ -46,6 +46,7 @@ pub(crate) async fn process(
                 Some(true) => true,
                 Some(false) => false,
                 None => {
+                    // Handle this slightly differently so that the sender gets a notification regardless that they have an incorrect header set
                     let error = generate_error_response(state, session, &msg.id, ProblemReport::new(
                         ProblemReportSorter::Warning,
                         ProblemReportScope::Message,

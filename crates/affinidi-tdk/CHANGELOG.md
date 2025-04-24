@@ -1,5 +1,14 @@
 # Affinidi TDK Changelog
 
+## 24th April 2025 (Release 0.1.8)
+
+* MAINTENANCE: Updating dependencies
+* UPDATE: DID create supports more complex did:peer service definitions
+
+## 24th March 2025 (Release 0.1.7)
+
+* Ensure that AuthenticationCache starts
+
 ## 24th March 2025 (release 0.1.6)
 
 * Added add_profile() to TDK and TDK-Common. Allows for loading of secrets
