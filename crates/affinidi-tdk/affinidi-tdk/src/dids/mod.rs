@@ -5,7 +5,7 @@
  */
 
 use affinidi_secrets_resolver::secrets::Secret;
-use affinidi_tdk_common::errors::Result;
+use affinidi_tdk_common::errors::{Result, TDKError};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
@@ -86,12 +86,18 @@ impl DID {
             }]
         });
 
-        let peer = DIDPeer::create_peer_did(&peer_keys, services.as_ref())?;
+        // cannot rely on indirect from conversion between TDKError and DIDPeerError (via from)
+        // let peer = DIDPeer::create_peer_did(&peer_keys, services.as_ref())?;
 
-        for (id, secret) in secrets.iter_mut().enumerate() {
-            secret.id = [&peer.0, "#key-", (id + 1).to_string().as_str()].concat();
+        match DIDPeer::create_peer_did(&peer_keys, services.as_ref()) {
+            Ok(peer) => {
+                for (id, secret) in secrets.iter_mut().enumerate() {
+                    secret.id = [&peer.0, "#key-", (id + 1).to_string().as_str()].concat();
+                }
+
+                Ok((peer.0, secrets))
+            }
+            Err(err) => Err(TDKError::DIDMethod(err.to_string())),
         }
-
-        Ok((peer.0, secrets))
     }
 }
