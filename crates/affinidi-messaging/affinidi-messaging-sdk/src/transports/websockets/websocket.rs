@@ -233,12 +233,12 @@ impl WebSocketTransport {
                                 self.next_requests_list.retain(|&x| x != id);
 
                             },
-                            Some(WebSocketCommands::GetMessage(_id, sender)) => {
-                                if let Some((sender, message, metadata)) = self.inbound_cache.get_or_add_wanted(&_id, sender) {
+                            Some(WebSocketCommands::GetMessage(id, sender)) => {
+                                if let Some((sender, message, metadata)) = self.inbound_cache.get_or_add_wanted(&id, sender) {
                                     debug!("Message found in cache");
                                     let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
                                 } else {
-                                    debug!("Message not found in cache, added to search list");
+                                    debug!("Message ({}) not found in cache, added to wanted list", id);
                                 }
                             }
                             Some(WebSocketCommands::CancelGetMessage(_id)) => {

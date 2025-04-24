@@ -198,6 +198,8 @@ pub(crate) async fn handle_inbound(
                         ),
                     };
 
+                    debug!("Direct delivery message from({:?}) to({}) msg_hash({})", envelope.from_did, to_did, envelope.sha256_hash);
+
                     store_message(state, session, &data, &UnpackMetadata::default()).await
                 }
             }

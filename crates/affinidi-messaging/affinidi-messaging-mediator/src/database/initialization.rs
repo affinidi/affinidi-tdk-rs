@@ -8,7 +8,7 @@ use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use semver::Version;
 use sha256::digest;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 impl Database {
     /// Initializes the database and ensures minimal configuration required is in place.
@@ -88,12 +88,22 @@ impl Database {
                     self.upgrade_0_10_0(&config.security.global_acl_default)
                         .await?;
                     info!("Database schema version updated to ({})", mediator_version);
-                } else if schema_version < Version::parse("0.10.2").unwrap() {
-                    self.upgrade_0_10_2().await?;
-                } else if schema_version < Version::parse("0.10.3").unwrap() {
-                    self.upgrade_0_10_3().await?;
+                } else if schema_version < Version::parse("0.10.6").unwrap() {
+                    self.upgrade_0_10_6().await?;
+                    info!("Database schema version updated to ({})", mediator_version);
+                } else {
+                    error!(
+                        "Database is in an unknown schema state. Requires an intervention from a human please..."
+                    );
+                    return Err(MediatorError::InternalError(
+                        17,
+                        "NA".into(),
+                        format!(
+                            "Database schema version ({}) is not supported. Please upgrade to ({})",
+                            schema_version, mediator_version
+                        ),
+                    ));
                 }
-                info!("Database schema version updated to ({})", mediator_version);
             }
         } else {
             warn!(

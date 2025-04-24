@@ -42,6 +42,8 @@ Missing versions on the changelog simply reflect minor deployment changes on our
   * mediator/account
   * mediator/acls
   * mediator/administration
+* FIX: When storing messages in `direct-delivery` mode, the sender was incorrectly being assigned to the mediator in all cases
+  * Should be set to the sending DID correctly, or mediator when the mediator may be wrapping the message
   
 ## 16th April 2025 (0.10.5)
 

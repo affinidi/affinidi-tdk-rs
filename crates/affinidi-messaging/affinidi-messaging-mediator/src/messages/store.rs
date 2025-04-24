@@ -21,18 +21,19 @@ async fn _store_message(
     session: &Session,
     response: &ProcessMessageResponse,
     data: &str,
-    to_did: &str,
+    to_did_hash: &str,
+    from_did_hash: Option<&str>,
     expiry: u64,
 ) -> Result<String, MediatorError> {
     // Live stream the message?
     if let Some(stream_uuid) = state
         .database
-        .streaming_is_client_live(&session.did_hash, response.force_live_delivery)
+        .streaming_is_client_live(to_did_hash, response.force_live_delivery)
         .await
     {
         _live_stream(
             &state.database,
-            &session.did_hash,
+            to_did_hash,
             &stream_uuid,
             data,
             response.force_live_delivery,
@@ -45,8 +46,8 @@ async fn _store_message(
         .store_message(
             &session.session_id,
             data,
-            to_did,
-            Some(&state.config.mediator_did_hash),
+            to_did_hash,
+            from_did_hash,
             expiry,
         )
         .await
@@ -109,13 +110,13 @@ pub(crate) async fn store_message(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
                                 "message.recipients.too_many".into(),
-                                "Message has no too any recipients ({1}). Max: {2}"
+                                "Message has too many recipients ({1}). Max: {2}"
                                     .into(),
                                 vec![to_dids.len().to_string(), state.config.limits.to_recipients.to_string()],
                                 None,
                             )),
                             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            format!("Message has no too any recipients ({}). Max: {}", to_dids.len(), state.config.limits.to_recipients),
+                            format!("Message has too many recipients ({}). Max: {}", to_dids.len(), state.config.limits.to_recipients),
                         ));
                     }
 
@@ -159,7 +160,7 @@ pub(crate) async fn store_message(
                             .await?;
 
                         match _store_message(
-                            state, session, response, &packed, recipient, expires_at,
+                            state, session, response, &packed,  &digest(recipient), Some(&state.config.mediator_did_hash), expires_at,
                         )
                         .await
                         {
@@ -183,7 +184,7 @@ pub(crate) async fn store_message(
                 }
                 WrapperType::Envelope(to_did, message, expiry) => {
                     // Message is already packed, likely a direct delivery from a client
-                    match _store_message(state, session, response, message, to_did, *expiry).await {
+                    match _store_message(state, session, response, message,  &digest(to_did), Some(&session.did_hash), *expiry).await {
                         Ok(msg_id) => {
                             debug!(
                                 "message id({}) stored successfully recipient({})",
@@ -323,15 +324,22 @@ pub(crate) async fn store_forwarded_message(
     );
 
     async move {
-        let did_hash = digest(recipient);
+        let recipient_did_hash = digest(recipient);
         // Live stream the message?
         if let Some(stream_uuid) = state
             .database
-            .streaming_is_client_live(&did_hash, false)
+            .streaming_is_client_live(&recipient_did_hash, false)
             .await
         {
-            _live_stream(&state.database, &did_hash, &stream_uuid, message, false).await;
-            debug!("Live streaming message to did_hash: {}", did_hash);
+            _live_stream(
+                &state.database,
+                &recipient_did_hash,
+                &stream_uuid,
+                message,
+                false,
+            )
+            .await;
+            debug!("Live streaming message to did_hash: {}", recipient_did_hash);
         }
 
         let expires_at = if let Some(expires_at) = expires_at {
@@ -358,7 +366,7 @@ pub(crate) async fn store_forwarded_message(
             .store_message(
                 &session.session_id,
                 message,
-                recipient,
+                &recipient_did_hash,
                 sender_hash,
                 expires_at,
             )

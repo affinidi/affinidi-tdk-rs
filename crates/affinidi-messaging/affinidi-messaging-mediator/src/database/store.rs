@@ -21,22 +21,20 @@ impl Database {
         &self,
         session_id: &str,
         message: &str,
-        to_did: &str,
+        to_did_hash: &str,
         from_hash: Option<&str>,
         expires_at: u64,
     ) -> Result<String, MediatorError> {
         let _span = span!(Level::DEBUG, "store_message", session_id = session_id);
         async move {
             let message_hash = digest(message.as_bytes());
-            let to_hash = digest(to_did.as_bytes());
 
             let from_hash = from_hash.unwrap_or("ANONYMOUS");
             debug!(
-                "trying to store msg_id({}), from_hash({:?}) to({}) to_hash({}), bytes({})",
+                "trying to store msg_id({}), from_hash({:?}) to_hash({}), bytes({})",
                 message_hash,
                 from_hash,
-                to_did,
-                &to_hash,
+                to_did_hash,
                 message.len()
             );
 
@@ -48,7 +46,7 @@ impl Database {
                 .arg(message)
                 .arg(expires_at)
                 .arg(message.len())
-                .arg(&to_hash)
+                .arg(to_did_hash)
                 .arg(from_hash)
                 .exec_async(&mut conn)
                 .await
@@ -63,7 +61,7 @@ impl Database {
 
             info!(
                 "Message hash({}) from({}) to({}) stored in database",
-                message_hash, from_hash, to_hash
+                message_hash, from_hash, to_did_hash
             );
 
             Ok(message_hash)

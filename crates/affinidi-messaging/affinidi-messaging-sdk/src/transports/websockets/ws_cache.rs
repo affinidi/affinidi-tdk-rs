@@ -123,7 +123,7 @@ impl MessageCache {
             Some((sender, message, metadata))
         } else {
             debug!(
-                "Message ID ({}) not found in cache, adding to search list",
+                "Message ID ({}) not found in cache, adding to wanted list",
                 msg_id
             );
             self.wanted_list.insert(msg_id.to_string(), sender);
