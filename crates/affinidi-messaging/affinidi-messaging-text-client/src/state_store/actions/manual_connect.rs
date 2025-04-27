@@ -1,16 +1,21 @@
 use super::chat_list::ChatStatus;
 use crate::state_store::State;
-use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
-use affinidi_tdk::secrets_resolver::{
-    SecretsResolver,
-    secrets::{Secret, SecretMaterial, SecretType},
+use affinidi_messaging_sdk::{
+    ATM,
+    profiles::ATMProfile,
+    protocols::{
+        Protocols,
+        mediator::acls::{AccessListModeType, MediatorACLSet},
+    },
 };
-use anyhow::{Context, Result, anyhow};
-use did_peer::{
-    DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
+use affinidi_tdk::{
+    dids::{DID, KeyType},
+    secrets_resolver::SecretsResolver,
 };
-use ssi::{JWK, jwk::Params, verification_methods::ssi_core::OneOrMany};
+use anyhow::anyhow;
+use did_peer::DIDPeerKeys;
+use sha256::digest;
+use tracing::warn;
 
 pub async fn manual_connect_setup(
     state: &mut State,
@@ -24,7 +29,14 @@ pub async fn manual_connect_setup(
     };
 
     // Create a local DID for this connection
-    let (did_peer, mut secrets) = create_did_peer(mediator_did)?;
+    let (did_peer, mut secrets) = DID::generate_did_peer(
+        vec![
+            (DIDPeerKeys::Verification, KeyType::P256),
+            (DIDPeerKeys::Encryption, KeyType::P256),
+            (DIDPeerKeys::Encryption, KeyType::Ed25519),
+        ],
+        Some(mediator_did.clone()),
+    )?;
 
     let profile = ATMProfile::new(
         atm,
@@ -37,6 +49,45 @@ pub async fn manual_connect_setup(
     state.add_secrets(&mut secrets);
 
     let profile = atm.profile_add(&profile, true).await?;
+
+    // Setup Access List Setup
+    // Add the remote secure DID to the our new secure profile
+    let protocols = Protocols::default();
+
+    let profile_info = match protocols.mediator.account_get(atm, &profile, None).await {
+        Ok(Some(info)) => info,
+        Ok(None) => {
+            warn!("No profile info found ({})", &profile.inner.did);
+            return Err(anyhow!("No profile info found"));
+        }
+        Err(e) => {
+            warn!("Failed to get profile info from mediator: {}", e);
+            return Err(anyhow!("Failed to get profile info from mediator: {}", e));
+        }
+    };
+
+    let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
+    if let AccessListModeType::ExplicitAllow = profile_acl_flags.get_access_list_mode().0 {
+        // Add the remote secure DID to our secure DID
+        match protocols
+            .mediator
+            .access_list_add(atm, &profile, None, &[&digest(remote_did)])
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                warn!(
+                    "Failed to add {} to ACL of our secure profile: {}",
+                    remote_did, e
+                );
+                return Err(anyhow!(
+                    "Failed to add {} to ACL of our secure profile: {}",
+                    remote_did,
+                    e
+                ));
+            }
+        }
+    }
 
     state
         .chat_list
@@ -51,71 +102,4 @@ pub async fn manual_connect_setup(
         .await;
 
     Ok(())
-}
-
-/// Creates a DID Peer to use as the DIDComm agent for a Ollama Model
-pub fn create_did_peer(mediator_did: &str) -> Result<(String, Vec<Secret>)> {
-    let e_p256_key = JWK::generate_p256();
-    let v_ed25519_key = JWK::generate_ed25519().unwrap();
-
-    let e_did_key = ssi::dids::DIDKey::generate(&e_p256_key).unwrap();
-    let v_did_key = ssi::dids::DIDKey::generate(&v_ed25519_key).unwrap();
-
-    let keys = vec![
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Verification,
-            type_: None,
-            public_key_multibase: Some(v_did_key[8..].to_string()),
-        },
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Encryption,
-            type_: None,
-            public_key_multibase: Some(e_did_key[8..].to_string()),
-        },
-    ];
-
-    // Create a service definition
-    let services = vec![DIDPeerService {
-        _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
-            PeerServiceEndPointLongMap {
-                uri: mediator_did.into(),
-                accept: vec!["didcomm/v2".into()],
-                routing_keys: vec![],
-            },
-        ))),
-        id: None,
-    }];
-
-    // Create the did:peer DID
-    let (did_peer, _) =
-        DIDPeer::create_peer_did(&keys, Some(&services)).context("Failed to create did:peer")?;
-
-    // Save the private keys to secure storage
-    let mut secrets = Vec::new();
-    if let Params::OKP(map) = v_ed25519_key.params {
-        secrets.push(Secret {
-            id: [&did_peer, "#key-1"].concat(),
-            type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: serde_json::json!({
-                     "crv": map.curve, "kty": "OKP", "x": String::from(map.public_key.clone()), "d": String::from(map.private_key.clone().unwrap())}
-                ),
-            },
-        });
-    }
-
-    if let Params::EC(map) = e_p256_key.params {
-        secrets.push(Secret {
-            id: [&did_peer, "#key-2"].concat(),
-            type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: serde_json::json!({
-                     "crv": map.curve, "kty": "EC", "x": String::from(map.x_coordinate.clone().unwrap()), "y": String::from(map.y_coordinate.clone().unwrap()), "d": String::from(map.ecc_private_key.clone().unwrap())
-                }),
-            },
-        });
-    }
-
-    Ok((did_peer, secrets))
 }

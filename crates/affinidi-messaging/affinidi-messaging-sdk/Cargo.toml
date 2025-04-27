@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.11.0"
+version = "0.11.1"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -23,30 +23,23 @@ ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 futures-util = "0.3"
 regex = "1.11"
-reqwest = { version = "0.12", features = ["rustls-tls-native-roots", "json"] }
 rustls = { version = "0.23", default-features = false, features = [
-    "aws_lc_rs",
-    "tls12",
+  "aws_lc_rs",
+  "tls12",
 ] }
 rustls-pemfile = "2"
-rustls-platform-verifier = "0.5"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-sha1 = "0.10"
 sha256 = "1.6"
 ssi = { version = "0.10" }
 thiserror = "2.0"
 tokio = { version = "1.44", features = ["full"] }
-tokio-rustls = "0.26"
-tokio-stream = "0.1"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 tracing = { version = "0.1", features = [
-    "max_level_debug",
-    "release_max_level_info",
-    "valuable",
+  "max_level_debug",
+  "release_max_level_info",
+  "valuable",
 ] }
-url = "2.5"
-utf-8 = "0.7"
 uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
@@ -57,8 +50,8 @@ console = "0.15"
 dialoguer = "0.11"
 rand = "0.9"
 rcgen = { version = "0.13", default-features = false, features = [
-    "aws_lc_rs",
-    "pem",
+  "aws_lc_rs",
+  "pem",
 ] }
 regex = "1.11"
 ring = { version = "0.17", features = ["std"] }
