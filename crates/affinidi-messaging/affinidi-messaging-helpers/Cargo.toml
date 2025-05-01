@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.10.6"
+version = "0.10.7"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -23,7 +23,7 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # Affinidi Crates
 affinidi-did-resolver-cache-sdk = { workspace = true, features = [
-    "did_example",
+  "did_example",
 ] }
 affinidi-messaging-didcomm.workspace = true
 affinidi-messaging-sdk.workspace = true
@@ -36,8 +36,8 @@ clap = { version = "4.5", features = ["derive"] }
 console = "0.15"
 dialoguer = "0.11"
 rcgen = { version = "0.13", default-features = false, features = [
-    "aws_lc_rs",
-    "pem",
+  "aws_lc_rs",
+  "pem",
 ] }
 regex = "1.11"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
@@ -50,15 +50,15 @@ time = "0.3"
 tokio = { version = "1.44", features = ["full"] }
 toml = "0.8"
 tracing = { version = "0.1", features = [
-    "max_level_debug",
-    "release_max_level_info",
-    "valuable",
+  "max_level_debug",
+  "release_max_level_info",
+  "valuable",
 ] }
 tracing-subscriber = { version = "0.3", features = [
-    "env-filter",
-    "fmt",
-    "json",
-    "valuable",
+  "env-filter",
+  "fmt",
+  "json",
+  "valuable",
 ] }
 uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 

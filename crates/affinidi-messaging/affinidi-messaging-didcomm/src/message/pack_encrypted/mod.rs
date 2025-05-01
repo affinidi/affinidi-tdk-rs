@@ -16,8 +16,7 @@ use crate::{
 };
 
 pub(crate) use self::anoncrypt::anoncrypt;
-
-use self::authcrypt::authcrypt;
+pub(crate) use self::authcrypt::authcrypt;
 
 impl Message {
     /// Produces `DIDComm Encrypted Message`
@@ -92,7 +91,7 @@ impl Message {
 
         // TODO:
         // 1. Extract JWE-related steps to a separate method, so that pack_encrypted uses
-        // the extarcted method for JWE steps and wrap_in_forward_if_needed for Routing steps.
+        // the extracted method for JWE steps and wrap_in_forward_if_needed for Routing steps.
         // 2. Make anoncrypt/authcrypt separate non-public modules (not sub-modules), so that
         // both pack_encrypted and Routing implementation use them (to avoid cross dependencies
         // between message::pack_encrypted and protocols::routing modules).
@@ -140,11 +139,19 @@ impl Message {
             (msg, None, to_kids)
         };
 
-        let (msg, messaging_service) =
-            match wrap_in_forward_if_needed(&msg, to, did_resolver, options).await? {
-                Some((forward_msg, messaging_service)) => (forward_msg, Some(messaging_service)),
-                None => (msg, None),
-            };
+        let (msg, messaging_service) = match wrap_in_forward_if_needed(
+            &msg,
+            to,
+            sign_by,
+            did_resolver,
+            secrets_resolver,
+            options,
+        )
+        .await?
+        {
+            Some((forward_msg, messaging_service)) => (forward_msg, Some(messaging_service)),
+            None => (msg, None),
+        };
 
         let metadata = PackEncryptedMetadata {
             messaging_service,

@@ -1,6 +1,7 @@
 mod forward;
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_secrets_resolver::SecretsResolver;
 use ahash::AHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,10 +14,9 @@ use uuid::Uuid;
 
 use crate::{
     Attachment, AttachmentData, Message, PackEncryptedOptions,
-    algorithms::AnonCryptAlg,
     document::is_did,
     error::{ErrorKind, Result, ResultExt, err_msg},
-    message::{MessagingServiceMetadata, anoncrypt},
+    message::{MessagingServiceMetadata, anoncrypt, authcrypt},
 };
 
 pub use self::forward::ParsedForward;
@@ -334,15 +334,18 @@ pub fn try_parse_forward(msg: &Message) -> Option<ParsedForward> {
 /// - `DIDUrlNotFound` Issuer authentication verification method is not found.
 /// - `Unsupported` Used crypto or method is unsupported.
 /// - `InvalidState` Indicates a library error.
-pub async fn wrap_in_forward(
+pub async fn wrap_in_forward<T>(
     msg: &str,
-    headers: Option<&HashMap<String, Value>>,
+    options: &PackEncryptedOptions,
     to: &str,
+    sign_by: Option<&str>,
     routing_keys: &[String],
-    enc_alg_anon: &AnonCryptAlg,
     did_resolver: &DIDCacheClient,
-    to_kids_limit: usize,
-) -> Result<String> {
+    secrets_resolver: &T,
+) -> Result<String>
+where
+    T: SecretsResolver,
+{
     let mut tos = routing_keys.to_vec();
 
     let mut nexts = tos.clone();
@@ -355,27 +358,48 @@ pub async fn wrap_in_forward(
     let mut msg = msg.to_owned();
 
     for (to_, next_) in tos.iter().zip(nexts.iter()) {
-        msg = build_forward_message(&msg, next_, headers)?;
-        msg = anoncrypt(
-            to_,
-            did_resolver,
-            msg.as_bytes(),
-            enc_alg_anon,
-            to_kids_limit,
-        )
-        .await?
-        .0;
+        msg = build_forward_message(&msg, next_, options.forward_headers.as_ref())?;
+        if let Some(sign_by) = sign_by {
+            msg = authcrypt(
+                to,
+                sign_by,
+                did_resolver,
+                secrets_resolver,
+                msg.as_bytes(),
+                &options.enc_alg_auth,
+                &options.enc_alg_anon,
+                false,
+                options.to_kids_limit,
+            )
+            .await?
+            .0;
+        } else {
+            msg = anoncrypt(
+                to_,
+                did_resolver,
+                msg.as_bytes(),
+                &options.enc_alg_anon,
+                options.to_kids_limit,
+            )
+            .await?
+            .0;
+        }
     }
 
     Ok(msg)
 }
 
-pub(crate) async fn wrap_in_forward_if_needed(
+pub(crate) async fn wrap_in_forward_if_needed<T>(
     msg: &str,
     to: &str,
+    sign_by: Option<&str>,
     did_resolver: &DIDCacheClient,
+    secrets_resolver: &T,
     options: &PackEncryptedOptions,
-) -> Result<Option<(String, MessagingServiceMetadata)>> {
+) -> Result<Option<(String, MessagingServiceMetadata)>>
+where
+    T: SecretsResolver,
+{
     if !options.forward {
         return Ok(None);
     }
@@ -401,12 +425,12 @@ pub(crate) async fn wrap_in_forward_if_needed(
 
     let forward_msg = wrap_in_forward(
         msg,
-        options.forward_headers.as_ref(),
+        options,
         to,
+        sign_by,
         &routing_keys,
-        &options.enc_alg_anon,
         did_resolver,
-        options.to_kids_limit,
+        secrets_resolver,
     )
     .await?;
 

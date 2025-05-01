@@ -278,6 +278,7 @@ async fn _handle_connection_setup(
             message.from.as_ref().unwrap(),
             Some(&from),
             Some(&from),
+            None,
         )
         .await;
 
