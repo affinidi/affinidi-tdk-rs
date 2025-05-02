@@ -447,7 +447,7 @@ pub(crate) async fn process(
                         "DID does have permission to access the requested resource".to_string(),
                     ));
                 }
-                
+
                 // Check if self_change is allowed
                 if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
                     return Err(MediatorError::MediatorError(
