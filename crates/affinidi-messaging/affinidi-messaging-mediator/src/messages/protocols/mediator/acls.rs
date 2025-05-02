@@ -351,6 +351,25 @@ pub(crate) async fn process(
                     ));
                 }
 
+                // Check if self_change is allowed
+                if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
+                }
+
                 if hashes.is_empty() || hashes.len() > 100 {
                     return Err(MediatorError::MediatorError(
                         82,
@@ -428,6 +447,25 @@ pub(crate) async fn process(
                         "DID does have permission to access the requested resource".to_string(),
                     ));
                 }
+                
+                // Check if self_change is allowed
+                if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
+                }
 
                 if hashes.is_empty() || hashes.len() > 100 {
                     return Err(MediatorError::MediatorError(
@@ -483,6 +521,25 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("Clear Access List for DID ({}) failed. ", session.did_hash);
+                    return Err(MediatorError::MediatorError(
+                        45,
+                        session.session_id.to_string(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.permission".into(),
+                            "DID does have permission to access the requested resource".into(),
+                            vec![],
+                            None,
+                        )),
+                        StatusCode::FORBIDDEN.as_u16(),
+                        "DID does have permission to access the requested resource".to_string(),
+                    ));
+                }
+
+                // Check if self_change is allowed
+                if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
                     return Err(MediatorError::MediatorError(
                         45,
                         session.session_id.to_string(),

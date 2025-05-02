@@ -80,7 +80,7 @@ database_timeout = "${DATABASE_TIMEOUT:2}"
 ### Options:
 ###    - explicit_deny: Mediator will allow any DID to connect and forward/deliver messages unless explicitly denied
 ###    - explicit_allow: Mediator will deny all DIDs except for what has been explicitly allowed
-mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_deny}"
+mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_allow}"
 
 ### global_acl_default: Default ACL that is applied to new/unknown DIDs that connect to the mediator
 ### Default: ALLOW_ALL
@@ -111,7 +111,6 @@ mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_deny}"
 ###    - SELF_MANAGE_RECEIVE_QUEUE_LIMIT: DID can set their receive queue limits (between the queued_messages_soft and queued_messages_hard)
 ###  NOTE: Can be comma separated to allow multiple options. ALLOW_ALL or DENY_ALL must always be first!
 global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL}"
-#global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL}"
 
 ### local_direct_delivery_allowed: If true, messages that are addressed to a local DID directly will be delivered
 ### Default: false (all messages must be addressed to the mediator)

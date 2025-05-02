@@ -12,10 +12,10 @@ tooling.
 
 ### Mediator (0.10.7)
 
-* **FIX:** JWT expiry on websocket handler caused a panic if a JWT was borderline on expiry.
+* **FIX:** JWT expiry on websocket handler caused a panic if a JWT was borderline
+on expiry.
 Correct handling of negative delta on JWT expiry is now correctly handled in websockets.
-
-## 27th April 2025
+* **FIX:** Mediator was not correctly applying checks for self_change on access_list modifications
 
 ### DIDComm Library (0.10.7)
 
@@ -37,10 +37,15 @@ could end up with the SDK being put into a disconnected state and becoming stuck
 
 ### Text-Client (0.10.7)
 
-* **MAINTENANCE:** Updated crossterm from 0.28 to 0.29
 * **MAINTENANCE:** Implemented new Messaging SDK API that gives greater control
 of forwarding logic
   * fixes an anonymous forwarding wrapper issue
+
+### Helpers (0.10.7)
+
+* **MAINTENANCE:** Updating `send_message()` fields
+
+## 24th April 2025
 
 ### Messaging Helpers (Examples) (0.10.6)
 
