@@ -7,7 +7,10 @@
  *
  */
 
-use affinidi_did_authentication::{AuthorizationTokens, DIDAuthentication, errors::DIDAuthError};
+use affinidi_did_authentication::{
+    AuthenticationType, AuthorizationTokens, DIDAuthentication, RefreshCheck, errors::DIDAuthError,
+    refresh_check,
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use ahash::{AHasher, RandomState};
@@ -97,6 +100,7 @@ pub enum AuthenticationCommand {
 #[derive(Clone)]
 struct AuthenticationRecord {
     tokens: AuthorizationTokens,
+    type_: AuthenticationType,
 }
 
 // Sets up expiry for the AuthenticationRecord to expire when the refresh token expires
@@ -133,6 +137,7 @@ impl AuthenticationCache {
         // Dummy expiry that is used to set the expiry of the AuthenticationRecord
         let expiry = AuthenticationRecord {
             tokens: AuthorizationTokens::default(),
+            type_: AuthenticationType::Unknown,
         };
         let cache = CacheBuilder::new(max_capacity)
             .expire_after(expiry)
@@ -331,78 +336,98 @@ impl AuthenticationCacheInner {
                     profile_did, service_endpoint_did
                 );
 
-                if let Some(record) = self.cache.get(&hash).await {
+                let mut auth = if let Some(record) = self.cache.get(&hash).await {
                     debug!(
                         "{} is already authenticated against {}",
                         profile_did, service_endpoint_did
                     );
-                    let _ = tx.send(Ok(record.tokens));
+
+                    match refresh_check(&record.tokens) {
+                        RefreshCheck::Ok => {
+                            debug!("Tokens are valid");
+                            let _ = tx.send(Ok(record.tokens));
+                            return false;
+                        }
+                        RefreshCheck::Refresh => {
+                            debug!("Refresh needed");
+                            DIDAuthentication {
+                                type_: record.type_,
+                                tokens: Some(record.tokens.clone()),
+                                authenticated: true,
+                            }
+                        }
+                        RefreshCheck::Expired => {
+                            debug!("Tokens expired");
+                            DIDAuthentication::new()
+                        }
+                    }
                 } else {
-                    let did_resolver = self.did_resolver.clone();
-                    let secrets_resolver = self.secrets_resolver.clone();
-                    let client = self.client.clone();
-                    let profile_copy = profile_did.clone();
-                    let service_copy = service_endpoint_did.clone();
+                    DIDAuthentication::new()
+                };
 
-                    let handle = tokio::spawn(async move {
-                        let mut auth = DIDAuthentication::new();
-                        match auth
-                            .authenticate(
-                                &profile_copy,
-                                &service_copy,
-                                &did_resolver,
-                                &secrets_resolver,
-                                &client,
-                                retry_limit as i32,
-                            )
-                            .await
-                        {
-                            Ok(_) => Ok(auth.tokens),
-                            Err(e) => Err(e),
-                        }
-                    });
+                let did_resolver = self.did_resolver.clone();
+                let secrets_resolver = self.secrets_resolver.clone();
+                let client = self.client.clone();
+                let profile_copy = profile_did.clone();
+                let service_copy = service_endpoint_did.clone();
 
-                    let timeout = tokio::time::sleep(timeout);
-                    tokio::pin!(timeout);
+                let handle = tokio::spawn(async move {
+                    match auth
+                        .authenticate(
+                            &profile_copy,
+                            &service_copy,
+                            &did_resolver,
+                            &secrets_resolver,
+                            &client,
+                            retry_limit as i32,
+                        )
+                        .await
+                    {
+                        Ok(_) => Ok(auth),
+                        Err(e) => Err(e),
+                    }
+                });
 
-                    tokio::select! {
-                        value = handle => {
-                            match value {
-                                Ok(result) => {
-                                    match result {
-                                        Ok(tokens) => {
-                                            if let Some(tokens) = &tokens {
-                                                self.cache.insert(hash, AuthenticationRecord {  tokens: tokens.clone() }).await;
-                                                let _ = tx.send(Ok(tokens.clone()));
-                                            } else {
-                                                let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(
-                                                    "Internal Error: Authenticated ok, but no tokens!"
-                                                        .to_string(),
-                                                )));
-                                            }
+                let timeout = tokio::time::sleep(timeout);
+                tokio::pin!(timeout);
+
+                tokio::select! {
+                    value = handle => {
+                        match value {
+                            Ok(result) => {
+                                match result {
+                                    Ok(auth) => {
+                                        if let Some(tokens) = &auth.tokens {
+                                            self.cache.insert(hash, AuthenticationRecord {  tokens: tokens.clone(), type_: auth.type_ }).await;
+                                            let _ = tx.send(Ok(tokens.clone()));
+                                        } else {
+                                            let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(
+                                                "Internal Error: Authenticated ok, but no tokens!"
+                                                    .to_string(),
+                                            )));
                                         }
-                                        Err(e) => {
-                                            warn!(
-                                                "Failed to authenticate {} against {}: {}",
-                                                profile_did, service_endpoint_did, e
-                                            );
-                                            let _ = tx.send(Err(e));
                                     }
-                                }
-                            }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to authenticate {} against {}: {}",
-                                        profile_did, service_endpoint_did, e
-                                    );
-                                    let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(format!("JoinHandle Error on spawned Authentication task: {}", e))));
+                                    Err(e) => {
+                                        warn!(
+                                            "Failed to authenticate {} against {}: {}",
+                                            profile_did, service_endpoint_did, e
+                                        );
+                                        let _ = tx.send(Err(e));
                                 }
                             }
                         }
-                        _ = &mut timeout => {
-                            warn!("Timeout reached");
-                            let _ = tx.send(Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string())));
+                            Err(e) => {
+                                warn!(
+                                    "Failed to authenticate {} against {}: {}",
+                                    profile_did, service_endpoint_did, e
+                                );
+                                let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(format!("JoinHandle Error on spawned Authentication task: {}", e))));
+                            }
                         }
+                    }
+                    _ = &mut timeout => {
+                        warn!("Timeout reached");
+                        let _ = tx.send(Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string())));
                     }
                 }
             }
@@ -437,7 +462,7 @@ fn hash(profile_did: &str, service_endpoint_did: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::tasks::authentication::AuthenticationRecord;
-    use affinidi_did_authentication::AuthorizationTokens;
+    use affinidi_did_authentication::{AuthenticationType, AuthorizationTokens};
     use moka::future::CacheBuilder;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -446,6 +471,7 @@ mod tests {
     async fn check_cache_expiry_good() {
         let expiry = AuthenticationRecord {
             tokens: AuthorizationTokens::default(),
+            type_: AuthenticationType::Unknown,
         };
         let cache = CacheBuilder::new(1)
             .expire_after(expiry)
@@ -462,6 +488,7 @@ mod tests {
                         refresh_token: "refresh".to_string(),
                         refresh_expires_at: now.as_secs() + 1,
                     },
+                    type_: AuthenticationType::Unknown,
                 },
             )
             .await;

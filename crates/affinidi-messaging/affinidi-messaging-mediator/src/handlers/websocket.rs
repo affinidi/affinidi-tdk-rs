@@ -96,7 +96,12 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         info!("Websocket connection established");
 
         // Set a timeout for the websocket connection for when the JWT Auth token expires
-        let auth_timeout = tokio::time::sleep(Duration::from_secs(session.expires_at -  SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()));
+        let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        if session.expires_at <= epoch {
+            warn!("JWT access token has expired. Closing Session");
+            return;
+        }
+        let auth_timeout = tokio::time::sleep(Duration::from_secs(session.expires_at - epoch));
         tokio::pin!(auth_timeout);
         debug!("WebSocket will timeout in {:?}", auth_timeout);
 

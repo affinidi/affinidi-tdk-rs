@@ -9,14 +9,20 @@ impl ATM {
     /// Pack a message for sending to a recipient
     /// from: if None, then will use anonymous encryption
     /// sign_by: If None, then will not sign the message
+    /// NOTE: If the recipient DID contains a service endpoint,
+    /// the message could be auto-forwarded which default to anonymous
+    /// If you want to disable this, configure in options
     pub async fn pack_encrypted(
         &self,
         message: &Message,
         to: &str,
         from: Option<&str>,
         sign_by: Option<&str>,
+        options: Option<&PackEncryptedOptions>,
     ) -> Result<(String, PackEncryptedMetadata), ATMError> {
-        self.inner.pack_encrypted(message, to, from, sign_by).await
+        self.inner
+            .pack_encrypted(message, to, from, sign_by, options)
+            .await
     }
 }
 
@@ -24,16 +30,26 @@ impl SharedState {
     /// Pack a message for sending to a recipient
     /// from: if None, then will use anonymous encryption
     /// sign_by: If None, then will not sign the message
+    /// NOTE: If the recipient DID contains a service endpoint,
+    /// the message could be auto-forwarded which default to anonymous
+    /// If you want to disable this, configure in options
     pub async fn pack_encrypted(
         &self,
         message: &Message,
         to: &str,
         from: Option<&str>,
         sign_by: Option<&str>,
+        options: Option<&PackEncryptedOptions>,
     ) -> Result<(String, PackEncryptedMetadata), ATMError> {
         let _span = span!(Level::DEBUG, "pack_encrypted",);
 
         async move {
+            let options = if let Some(options) = options {
+                options
+            } else {
+                &PackEncryptedOptions::default()
+            };
+
             message
                 .pack_encrypted(
                     to,
@@ -41,7 +57,7 @@ impl SharedState {
                     sign_by,
                     &self.tdk_common.did_resolver,
                     &self.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
+                    options,
                 )
                 .await
         }

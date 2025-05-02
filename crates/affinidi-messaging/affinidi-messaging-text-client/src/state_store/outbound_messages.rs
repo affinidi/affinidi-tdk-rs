@@ -60,7 +60,7 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
 
     // Pack the message
     let (packed, packed_meta) = match atm
-        .pack_encrypted(&msg, remote_did, Some(our_did), Some(our_did))
+        .pack_encrypted(&msg, remote_did, Some(our_did), Some(our_did), None)
         .await
     {
         Ok(packed) => packed,

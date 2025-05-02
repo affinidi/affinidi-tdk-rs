@@ -210,6 +210,7 @@ async fn main() -> Result<(), ATMError> {
             &atm_alice.inner.did,
             Some(&atm_bob.inner.did),
             Some(&atm_bob.inner.did),
+            None,
         )
         .await?;
 

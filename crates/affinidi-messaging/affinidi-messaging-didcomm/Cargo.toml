@@ -1,10 +1,10 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.10.6"
+version = "0.10.7"
 description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
-    'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
-    'Glenn Gore <glenn@affinidi.com>',
+  'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
+  'Glenn Gore <glenn@affinidi.com>',
 ]
 edition.workspace = true
 license = 'Apache-2.0'
@@ -35,9 +35,9 @@ thiserror = "2.0"
 varint = "0.9"
 tokio = { version = "1.44", features = ["rt", "macros"] }
 tracing = { version = "0.1", features = [
-    "max_level_debug",
-    "release_max_level_info",
-    "valuable",
+  "max_level_debug",
+  "release_max_level_info",
+  "valuable",
 ] }
 uuid = { version = "1.16", features = ["v4", "fast-rng"] }
 

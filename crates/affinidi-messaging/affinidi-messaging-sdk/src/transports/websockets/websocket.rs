@@ -304,6 +304,7 @@ impl WebSocketTransport {
                 }
                 Message::Close(_) => {
                     debug!("WebSocket connection closed");
+                    self.web_socket = None;
                 }
                 _ => {
                     warn!("Received unknown message type: {:?}", ws_msg);

@@ -426,6 +426,7 @@ pub async fn send_invitation_accept(
             &invite_did,
             Some(&accept_temp_profile.inner.did.clone()),
             Some(&accept_temp_profile.inner.did.clone()),
+            None,
         )
         .await?;
 
