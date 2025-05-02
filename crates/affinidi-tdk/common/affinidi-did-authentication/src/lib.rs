@@ -135,7 +135,7 @@ pub struct AuthRefreshResponse {
 }
 
 #[derive(Clone, Debug)]
-enum AuthenticationType {
+pub enum AuthenticationType {
     AffinidiMessaging,
     MeetingPlace,
     Unknown,
@@ -152,7 +152,7 @@ impl AuthenticationType {
 pub struct DIDAuthentication {
     /// There are two different DID authentication methods that need to be supported for now
     /// Set to true if
-    type_: AuthenticationType,
+    pub type_: AuthenticationType,
 
     /// Authorization tokens received from the authentication service
     pub tokens: Option<AuthorizationTokens>,
@@ -475,22 +475,14 @@ impl DIDAuthentication {
             ));
         };
 
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        // Check if the access token has or is going to expire in next 5 seconds
-        if tokens.access_expires_at - 5 <= now {
-            // Need to refresh the token
-            if tokens.refresh_expires_at <= now {
-                // Refresh token has also expired
-                Err(DIDAuthError::Authentication(
-                    "Refresh token has expired".to_owned(),
-                ))
-            } else {
-                // Refresh the token
-
+        match refresh_check(tokens) {
+            RefreshCheck::Ok => {
+                // Tokens are valid, do not need to refresh
+                Ok(())
+            }
+            RefreshCheck::Refresh => {
+                // Access token has expired, refresh it
+                debug!("Refreshing tokens");
                 let refresh_msg = self
                     ._create_refresh_request(
                         profile_did,
@@ -518,8 +510,12 @@ impl DIDAuthentication {
                 debug!("JWT successfully refreshed");
                 Ok(())
             }
-        } else {
-            Ok(())
+            RefreshCheck::Expired => {
+                // Access and refresh tokens have expired, need to re-authenticate
+                Err(DIDAuthError::Authentication(
+                    "Access and refresh tokens have expired".to_owned(),
+                ))
+            }
         }
     }
 
@@ -601,4 +597,98 @@ where
     serde_json::from_str::<T>(&response_body).map_err(|e| {
         DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
     })
+}
+
+/// Possible responses from checking authentication JWT tokens
+#[derive(PartialEq, Debug)]
+pub enum RefreshCheck {
+    /// Tokens are valid, do not need to bre refreshed
+    Ok,
+    /// Access Token has expired and needs to be refreshed
+    Refresh,
+    /// Access and Refresh Tokens have expired, need to re-authenticate from scratch
+    Expired,
+}
+
+/// Checks if the tokens need to be refreshed?
+pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    debug!(
+        "checking auth expiry: now({}), access_expires_at({}), delta({}), expired?({}), refresh_expires_at({}), delta({}), expired?({})",
+        now,
+        tokens.access_expires_at,
+        tokens.access_expires_at - now,
+        tokens.access_expires_at - 5 <= now,
+        tokens.refresh_expires_at,
+        tokens.refresh_expires_at - now,
+        tokens.refresh_expires_at <= now
+    );
+
+    if tokens.access_expires_at - 5 <= now {
+        if tokens.refresh_expires_at <= now {
+            // Both access and refresh tokens have expired
+            RefreshCheck::Expired
+        } else {
+            // Only the access token has expired
+            RefreshCheck::Refresh
+        }
+    } else {
+        // Tokens are still valid
+        RefreshCheck::Ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{AuthorizationTokens, RefreshCheck, refresh_check};
+    use std::time::SystemTime;
+
+    #[test]
+    fn refresh_check_valid() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = AuthorizationTokens {
+            access_expires_at: now + 900,
+            refresh_expires_at: now + 1800,
+            ..Default::default()
+        };
+
+        assert_eq!(refresh_check(&tokens), RefreshCheck::Ok);
+    }
+
+    #[test]
+    fn refresh_check_refresh() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = AuthorizationTokens {
+            access_expires_at: now,
+            refresh_expires_at: now + 1800,
+            ..Default::default()
+        };
+
+        assert_eq!(refresh_check(&tokens), RefreshCheck::Refresh);
+    }
+
+    #[test]
+    fn refresh_check_expired() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = AuthorizationTokens {
+            access_expires_at: now,
+            refresh_expires_at: now,
+            ..Default::default()
+        };
+
+        assert_eq!(refresh_check(&tokens), RefreshCheck::Expired);
+    }
 }

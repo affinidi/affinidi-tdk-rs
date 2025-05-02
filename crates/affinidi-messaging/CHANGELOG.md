@@ -8,6 +8,13 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 2nd May 2025
+
+### Mediator (0.10.7)
+
+* **FIX:** JWT expiry on websocket handler caused a panic if a JWT was borderline on expiry.
+Correct handling of negative delta on JWT expiry is now correctly handled in websockets.
+
 ## 27th April 2025
 
 ### DIDComm Library (0.10.7)
