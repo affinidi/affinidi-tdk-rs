@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-meeting-place"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
