@@ -248,6 +248,7 @@ impl AuthenticationCache {
         timeout: Option<Duration>,
     ) -> Result<AuthorizationTokens, DIDAuthError> {
         let (tx, rx) = oneshot::channel();
+        debug!("TIMTAM: capacity: {}", self.tx.capacity());
         match self.tx.try_send(AuthenticationCommand::Authenticate {
             profile_did: Arc::new(profile_did),
             service_endpoint_did: Arc::new(service_endpoint_did),

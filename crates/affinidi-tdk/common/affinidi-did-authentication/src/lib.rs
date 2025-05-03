@@ -614,10 +614,10 @@ pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
         "checking auth expiry: now({}), access_expires_at({}), delta({}), expired?({}), refresh_expires_at({}), delta({}), expired?({})",
         now,
         tokens.access_expires_at,
-        tokens.access_expires_at - now,
+        tokens.access_expires_at as i64 - now as i64,
         tokens.access_expires_at - 5 <= now,
         tokens.refresh_expires_at,
-        tokens.refresh_expires_at - now,
+        tokens.refresh_expires_at as i64 - now as i64,
         tokens.refresh_expires_at <= now
     );
 
