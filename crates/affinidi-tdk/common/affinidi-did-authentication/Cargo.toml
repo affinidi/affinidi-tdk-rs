@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-did-authentication"
 description = "Using proof of DID ownership to authenticate to services"
-version = "0.1.8"
+version = "0.1.9"
 edition.workspace = true
 authors.workspace = true
 readme.workspace = true
@@ -26,7 +26,7 @@ ssi = { version = "0.10" }
 thiserror = "2.0"
 tokio = { version = "1.44", features = ["full"] }
 tracing = { version = "0.1", features = [
-    "max_level_debug",
-    "release_max_level_info",
+  "max_level_debug",
+  "release_max_level_info",
 ] }
 uuid = { version = "1.16", features = ["v4", "fast-rng"] }

@@ -1,5 +1,9 @@
 # Affinidi TDK Changelog
 
+## 3rd May 2025 (Release 0.1.9 and 0.1.10)
+
+* **FIX:** Addressing DID Authentication retries and refresh errors
+
 ## 24th April 2025 (Release 0.1.8)
 
 * MAINTENANCE: Updating dependencies

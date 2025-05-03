@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-common"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
