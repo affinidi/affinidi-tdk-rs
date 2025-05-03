@@ -1,9 +1,18 @@
 # Affinidi DID Authentication
 
-##  May 2025 (0.1.8)
+## 3rd May 2025 (0.1.9)
 
-* **FEATURE:** Adding improved debug messaging for troubleshooting of refreshing auth credentials
-* **FEATURE:** Splitting refresh logic to be more granular so that `tdk-common` authentication task
+* **FIX:** building the refresh HTTP request was incorrectly using the DID and
+not the REST API URL
+* **FIX:** Refresh was using wrong DIDComm message type
+* **FIX:** Debug log message could cause a panic in the authentication task due to a negative `u64` value
+
+## 2nd May 2025 (0.1.8)
+
+* **FEATURE:** Adding improved debug messaging for troubleshooting of refreshing
+auth credentials
+* **FEATURE:** Splitting refresh logic to be more granular so that `tdk-common`
+authentication task
 has improved handling of refresh logic
 * **FEATURE:** Added unit tests for token expiry
 

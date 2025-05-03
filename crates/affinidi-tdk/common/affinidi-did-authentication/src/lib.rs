@@ -41,42 +41,34 @@ pub struct AuthorizationTokens {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
-enum DidChallenge {
+enum DidChallenges {
     /// Affinidi Messaging Challenge
-    Complex(ComplexDidChallenge),
+    Complex(HTTPResponse<DidChallenge>),
 
     /// Affinidi MeetingPlace Challenge
-    Simple(SimpleDidChallenge),
+    Simple(DidChallenge),
 }
 
-impl DidChallenge {
+impl DidChallenges {
     pub fn challenge(&self) -> &str {
         match self {
-            DidChallenge::Simple(s) => &s.challenge,
-            DidChallenge::Complex(c) => &c.data.challenge,
+            DidChallenges::Simple(s) => &s.challenge,
+            DidChallenges::Complex(c) => &c.data.challenge,
         }
     }
 }
 
-/// Challenge received from MeetingPlace, flattened structure
+/// Authentication Challenge
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct SimpleDidChallenge {
+struct DidChallenge {
     /// Challenge string from the authentication service
     pub challenge: String,
-}
-
-/// Challenge received from Affinidi Messaging, it is a nested structure
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct ComplexDidChallenge {
-    #[serde(alias = "sessionId")]
-    pub session_id: String,
-    pub data: SimpleDidChallenge,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 enum TokensType {
-    AffinidiMessaging(ComplexAuthorizationTokens),
+    AffinidiMessaging(HTTPResponse<AuthorizationTokens>),
     MeetingPlace(MPAuthorizationTokens),
 }
 
@@ -111,11 +103,11 @@ impl TokensType {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-struct ComplexAuthorizationTokens {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct HTTPResponse<T> {
     #[serde(alias = "sessionId")]
     pub session_id: String,
-    pub data: AuthorizationTokens,
+    pub data: T,
 }
 
 /// The authorization tokens received in the fourth step of the DID authentication process
@@ -308,7 +300,7 @@ impl DIDAuthentication {
             debug!("Retrieving authentication challenge...");
 
             // Step 1. Get the challenge
-            let step1_response = _http_post::<DidChallenge>(
+            let step1_response = _http_post::<DidChallenges>(
                 client,
                 &[&endpoint, "/challenge"].concat(),
                 &format!("{{\"did\": \"{}\"}}", profile_did).to_string(),
@@ -316,10 +308,10 @@ impl DIDAuthentication {
             .await?;
 
             match step1_response {
-                DidChallenge::Simple(_) => {
+                DidChallenges::Simple(_) => {
                     self.type_ = AuthenticationType::MeetingPlace;
                 }
-                DidChallenge::Complex(_) => {
+                DidChallenges::Complex(_) => {
                     self.type_ = AuthenticationType::AffinidiMessaging;
                 }
             }
@@ -348,7 +340,7 @@ impl DIDAuthentication {
 
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
-            let step2_body = if let DidChallenge::Complex(_) = step1_response {
+            let step2_body = if let DidChallenges::Complex(_) = step1_response {
                 auth_msg
             } else {
                 json!({"challenge_response":
@@ -410,10 +402,6 @@ impl DIDAuthentication {
     where
         S: SecretsResolver,
     {
-        let endpoint = self
-            ._get_endpoint_address(endpoint_did, did_resolver)
-            .await?;
-
         let refresh_token = if let Some(tokens) = &self.tokens {
             &tokens.refresh_token
         } else {
@@ -429,7 +417,7 @@ impl DIDAuthentication {
 
         let refresh_message = Message::build(
             Uuid::new_v4().into(),
-            [&endpoint, "/refresh"].concat(),
+            "https://affinidi.com/atm/1.0/authenticate/refresh".to_string(),
             json!({"refresh_token": refresh_token}),
         )
         .to(endpoint_did.to_string())
@@ -491,9 +479,14 @@ impl DIDAuthentication {
                         secrets_resolver,
                     )
                     .await?;
-                let new_tokens = _http_post::<AuthRefreshResponse>(
+
+                let endpoint = self
+                    ._get_endpoint_address(endpoint_did, did_resolver)
+                    .await?;
+
+                let new_tokens = _http_post::<HTTPResponse<AuthRefreshResponse>>(
                     client,
-                    &[endpoint_did, "/refresh"].concat(),
+                    &[&endpoint, "/refresh"].concat(),
                     &refresh_msg,
                 )
                 .await?;
@@ -504,8 +497,8 @@ impl DIDAuthentication {
                     ));
                 };
 
-                tokens.access_token = new_tokens.access_token;
-                tokens.access_expires_at = new_tokens.access_expires_at;
+                tokens.access_token = new_tokens.data.access_token;
+                tokens.access_expires_at = new_tokens.data.access_expires_at;
 
                 debug!("JWT successfully refreshed");
                 Ok(())
@@ -531,14 +524,14 @@ impl DIDAuthentication {
         &self,
         profile_did: &str,
         endpoint_did: &str,
-        body: &DidChallenge,
+        body: &DidChallenges,
     ) -> Result<Message> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
-        let body = if let DidChallenge::Complex(c) = body {
+        let body = if let DidChallenges::Complex(c) = body {
             json!({"challenge": c.data.challenge, "session_id": c.session_id})
         } else {
             json!({"challenge": body.challenge()})
@@ -621,10 +614,10 @@ pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
         "checking auth expiry: now({}), access_expires_at({}), delta({}), expired?({}), refresh_expires_at({}), delta({}), expired?({})",
         now,
         tokens.access_expires_at,
-        tokens.access_expires_at - now,
+        tokens.access_expires_at as i64 - now as i64,
         tokens.access_expires_at - 5 <= now,
         tokens.refresh_expires_at,
-        tokens.refresh_expires_at - now,
+        tokens.refresh_expires_at as i64 - now as i64,
         tokens.refresh_expires_at <= now
     );
 
