@@ -15,6 +15,7 @@ pub mod config;
 pub mod environments;
 pub mod errors;
 pub mod profiles;
+pub mod secrets;
 pub mod tasks;
 
 //pub use affinidi_did_authentication as did_authentication;
