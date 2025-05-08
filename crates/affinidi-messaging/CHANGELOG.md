@@ -21,6 +21,7 @@ tooling.
 ### Mediator-common (0.10.7)
 
 * **FEATURE:** Redis 8.0 support added
+* **FIX:** Error messages were not being correctly formatted
 
 ## 2nd May 2025
 
