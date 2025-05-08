@@ -159,8 +159,52 @@ pub(crate) async fn handle_inbound(
                         ));
                     }
 
-                    // Check if the message will pass ACL Checks
                     let from_hash = envelope.from_did.as_ref().map(digest);
+                    // Check if the message will pass ACL Checks
+                    if let Some(from) = &envelope.from_did {
+                        let from_acls = if let Some(acl) = state
+                            .database
+                            .get_did_acl(&digest(from))
+                            .await? {
+                                acl
+                        } else {
+                            state.config.security.global_acl_default.clone()
+                        };
+
+                        if !from_acls.get_send_messages().0 {
+                            return Err(MediatorError::MediatorError(
+                                44,
+                                session.session_id.to_string(),
+                                None,
+                                Box::new(ProblemReport::new(
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "direct_delivery.recipient.unknown".into(),
+                                "DID does not have authorization to send messages".into(),
+                                vec![],
+                                None,
+                                )),
+                                StatusCode::FORBIDDEN.as_u16(),
+                                    "DID does not have authorization to send messages".into(),
+                            ));
+                        }
+                    } else if !state.config.security.local_direct_delivery_allow_anon {
+                        return Err(MediatorError::MediatorError(
+                            50,
+                            session.session_id.to_string(),
+                            None,
+                            Box::new(ProblemReport::new(
+                                ProblemReportSorter::Warning,
+                                ProblemReportScope::Message,
+                                "anonymous".into(),
+                                "DIDComm message appears to be anonymous, yet this transaction will not allow for an anonymous message".into(),
+                                vec![],
+                                None,
+                            )),
+                            StatusCode::FORBIDDEN.as_u16(),
+                            "DIDComm message appears to be anonymous, yet this transaction will not allow for an anonymous message".to_string(),
+                        ));
+                    }
                     if !state
                         .database
                         .access_list_allowed(&digest(to_did), from_hash.as_deref())

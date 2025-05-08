@@ -8,6 +8,20 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 9th May 2025
+
+### Mediator (0.10.8)
+
+* **FEATURE:** Redis 8.0 support added
+* **FEATURE:** New config option `local_direct_delivery_allow_anon`
+  * are anon messages allowed when in direct delivery mode? defaults to `false`
+* **FIX:** direct delivery mode was not correctly checking the ACL for the sender
+  * `send_message` wasn't correctly being checked
+
+### Mediator-common (0.10.7)
+
+* **FEATURE:** Redis 8.0 support added
+
 ## 2nd May 2025
 
 ### Mediator (0.10.7)
@@ -15,7 +29,8 @@ tooling.
 * **FIX:** JWT expiry on websocket handler caused a panic if a JWT was borderline
 on expiry.
 Correct handling of negative delta on JWT expiry is now correctly handled in websockets.
-* **FIX:** Mediator was not correctly applying checks for self_change on access_list modifications
+* **FIX:** Mediator was not correctly applying checks for self_change on
+  access list and self-change flags access_list modifications
 
 ### DIDComm Library (0.10.7)
 

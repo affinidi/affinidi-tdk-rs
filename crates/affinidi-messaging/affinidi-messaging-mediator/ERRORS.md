@@ -65,7 +65,7 @@ How you choose to handle these is left to the client side on how to handle these
 | 41 | 400 | e.p.api.inbox_fetch.limit | No | Invalid number of messages requested to retrieve  (1 - 100)|
 | 42 | 400 | e.p.api.inbox_fetch.start_id | No | Invalid start_id. Must be a UNIX EPOCH timestamp in milliseconds + `-(0-999)` |
 | 43 | 400 | e.p.api.message_delete.limit | No | Invalid number of messages to delete. Max 100 |
-| 44 | 403 | e.p.authorization.send | No | DID does have authorization to send messages |
+| 44 | 403 | e.p.authorization.send | No | DID does not have authorization to send messages |
 | 45 | 403 | e.p.authorization.permission | No | DID does have permission to access the requested resource |
 | 46 | 500 | e.p.oob.store | No | Could not store Out-Of-Band (OOB) invitation |
 | 47 | 500 | e.p.message.pack | No | Couldn't pack DIDComm message |
