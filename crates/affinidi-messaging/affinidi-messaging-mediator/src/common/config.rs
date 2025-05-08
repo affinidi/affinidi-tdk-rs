@@ -53,6 +53,7 @@ pub struct SecurityConfigRaw {
     pub mediator_acl_mode: String,
     pub global_acl_default: String,
     pub local_direct_delivery_allowed: String,
+    pub local_direct_delivery_allow_anon: String,
     pub mediator_secrets: String,
     pub use_ssl: String,
     pub ssl_certificate_file: String,
@@ -72,6 +73,7 @@ pub struct SecurityConfig {
     pub mediator_acl_mode: AccessListModeType,
     pub global_acl_default: MediatorACLSet,
     pub local_direct_delivery_allowed: bool,
+    pub local_direct_delivery_allow_anon: bool,
     #[serde(skip_serializing)]
     pub mediator_secrets: Arc<ThreadedSecretsResolver>,
     pub use_ssl: bool,
@@ -101,6 +103,10 @@ impl Debug for SecurityConfig {
                 "local_direct_delivery_allowed",
                 &self.local_direct_delivery_allowed,
             )
+            .field(
+                "local_direct_delivery_allow_anon",
+                &self.local_direct_delivery_allow_anon,
+            )
             .field("use_ssl", &self.use_ssl)
             .field("ssl_certificate_file", &self.ssl_certificate_file)
             .field("ssl_key_file", &self.ssl_key_file)
@@ -126,6 +132,7 @@ impl SecurityConfig {
             mediator_acl_mode: AccessListModeType::ExplicitDeny,
             global_acl_default: MediatorACLSet::default(),
             local_direct_delivery_allowed: false,
+            local_direct_delivery_allow_anon: false,
             mediator_secrets: secrets_resolver,
             use_ssl: true,
             ssl_certificate_file: "".into(),
@@ -180,6 +187,10 @@ impl SecurityConfigRaw {
             },
             local_direct_delivery_allowed: self
                 .local_direct_delivery_allowed
+                .parse()
+                .unwrap_or(false),
+            local_direct_delivery_allow_anon: self
+                .local_direct_delivery_allow_anon
                 .parse()
                 .unwrap_or(false),
             use_ssl: self.use_ssl.parse().unwrap_or(true),

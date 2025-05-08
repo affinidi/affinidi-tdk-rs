@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.10.6"
+version = "0.10.7"
 description = "Affinidi Messaging Mediator Common Library"
 edition.workspace = true
 authors.workspace = true

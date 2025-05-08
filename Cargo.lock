@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.10.6"
+version = "0.10.7"
 dependencies = [
  "affinidi-messaging-sdk",
  "axum",
