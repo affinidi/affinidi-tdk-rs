@@ -17,6 +17,7 @@ use common::{config::TDKConfig, environments::TDKEnvironment};
 use std::sync::Arc;
 
 pub mod dids;
+pub mod secrets;
 
 // Re-export required crates for convenience to applications
 #[cfg(feature = "meeting-place")]

@@ -43,45 +43,45 @@ pub enum ProcessorError {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum MediatorError {
-    #[error("Error in handling errors! {1}")]
+    #[error("Error in handling errors! {2}")]
     ErrorHandlingError(ErrorCode, SessId, String),
-    #[error("{1}")]
+    #[error("{2}")]
     InternalError(ErrorCode, SessId, String),
-    #[error("Couldn't parse ({1}). Reason: {2}")]
+    #[error("Couldn't parse ({2}). Reason: {3}")]
     ParseError(ErrorCode, SessId, String, String),
-    #[error("Permission Error: {1}")]
+    #[error("Permission Error: {2}")]
     PermissionError(ErrorCode, SessId, String),
-    #[error("Request is invalid: {1}")]
+    #[error("Request is invalid: {2}")]
     RequestDataError(ErrorCode, SessId, String),
-    #[error("Service Limit exceeded: {1}")]
+    #[error("Service Limit exceeded: {2}")]
     ServiceLimitError(ErrorCode, SessId, String),
-    #[error("ErrorCode, Unauthorized: {1}")]
+    #[error("ErrorCode, Unauthorized: {2}")]
     Unauthorized(ErrorCode, SessId, String),
-    #[error("DID Error: did({1}) Error: {2}")]
+    #[error("DID Error: did({2}) Error: {3}")]
     DIDError(ErrorCode, SessId, String, String),
-    #[error("Configuration Error: {1}")]
+    #[error("Configuration Error: {2}")]
     ConfigError(ErrorCode, SessId, String),
-    #[error("Database Error: {1}")]
+    #[error("Database Error: {2}")]
     DatabaseError(ErrorCode, SessId, String),
-    #[error("Message unpack error: {1}")]
+    #[error("Message unpack error: {2}")]
     MessageUnpackError(ErrorCode, SessId, String),
-    #[error("MessageExpired: expiry({1}) now({2})")]
+    #[error("MessageExpired: expiry({2}) now({3})")]
     MessageExpired(ErrorCode, SessId, String, String),
-    #[error("Message pack error: {1}")]
+    #[error("Message pack error: {2}")]
     MessagePackError(ErrorCode, SessId, String),
-    #[error("Feature not implemented: {1}")]
+    #[error("Feature not implemented: {2}")]
     NotImplemented(ErrorCode, SessId, String),
-    #[error("Authorization Session ({0}) error: {1}")]
+    #[error("Authorization Session ({1}) error: {2}")]
     SessionError(ErrorCode, SessId, String),
-    #[error("Anonymous message error: {1}")]
+    #[error("Anonymous message error: {2}")]
     AnonymousMessageError(ErrorCode, SessId, String),
-    #[error("Forwarding/Routing message error: {1}")]
+    #[error("Forwarding/Routing message error: {2}")]
     ForwardMessageError(ErrorCode, SessId, String),
-    #[error("Authentication error: {0}")]
+    #[error("Authentication error: {1}")]
     AuthenticationError(ErrorCode, String),
-    #[error("ACL Denied: {0}")]
+    #[error("ACL Denied: {1}")]
     ACLDenied(ErrorCode, String),
-    #[error("Processor ({0}) error: {1}")]
+    #[error("Processor ({1}) error: {2}")]
     ProcessorError(ErrorCode, ProcessorError, String),
 
     /// This is a catch-all for any error that is using DIDComm Problem Reports

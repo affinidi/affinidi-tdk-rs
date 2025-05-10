@@ -1,5 +1,9 @@
 # Affinidi TDK Changelog
 
+## 10th May 2025 (Release 0.1.11)
+
+* **FEATURE:** Added `secrets` storage and retrieval to TDK
+
 ## 3rd May 2025 (Release 0.1.9 and 0.1.10)
 
 * **FIX:** Addressing DID Authentication retries and refresh errors

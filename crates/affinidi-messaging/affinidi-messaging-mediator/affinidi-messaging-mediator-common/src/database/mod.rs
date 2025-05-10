@@ -19,7 +19,7 @@ pub struct DatabaseHandler {
     redis_url: String,
 }
 
-const REDIS_VERSION_REQ: &str = ">=7.1, <8.0";
+const REDIS_VERSION_REQ: &str = ">=7.1, <9.0";
 
 impl DatabaseHandler {
     pub async fn new(config: &DatabaseConfig) -> Result<Self, MediatorError> {
