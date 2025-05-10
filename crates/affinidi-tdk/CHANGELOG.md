@@ -1,6 +1,6 @@
 # Affinidi TDK Changelog
 
-## May 2025 (Release 0.1.11)
+## 10th May 2025 (Release 0.1.11)
 
 * **FEATURE:** Added `secrets` storage and retrieval to TDK
 
