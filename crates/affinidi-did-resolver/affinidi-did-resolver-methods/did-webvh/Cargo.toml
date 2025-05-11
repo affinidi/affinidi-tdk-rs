@@ -16,6 +16,7 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+ssi = { version = "0.10", features = ["secp384r1"] }
 thiserror = "2.0"
 
 [dev-dependencies]

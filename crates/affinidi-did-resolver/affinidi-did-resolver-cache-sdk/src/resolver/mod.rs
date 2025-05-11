@@ -1,5 +1,6 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use did_peer::DIDPeer;
+use did_webvh::DIDWebVH;
 use ssi::dids::{DID, DIDEthr, DIDJWK, DIDKey, DIDPKH, DIDResolver, DIDWeb, Document};
 use tracing::error;
 
@@ -94,6 +95,17 @@ impl DIDCacheClient {
             }
             "web" => {
                 let method = DIDWeb;
+
+                match method.resolve(DID::new::<str>(did).unwrap()).await {
+                    Ok(res) => Ok(res.document.into_document()),
+                    Err(e) => {
+                        error!("Error: {:?}", e);
+                        Err(DIDCacheError::DIDError(e.to_string()))
+                    }
+                }
+            }
+            "webvh" => {
+                let method = DIDWebVH;
 
                 match method.resolve(DID::new::<str>(did).unwrap()).await {
                     Ok(res) => Ok(res.document.into_document()),

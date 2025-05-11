@@ -2640,6 +2640,7 @@ dependencies = [
 name = "did-webvh"
 version = "0.1.0"
 dependencies = [
+ "ssi",
  "thiserror 2.0.12",
 ]
 
