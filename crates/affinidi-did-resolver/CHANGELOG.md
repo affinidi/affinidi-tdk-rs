@@ -2,19 +2,35 @@
 
 ## Changelog history
 
-### 24th April 2025 (affinidi-did-resolver-cache-sdk, affinidi-did-resolver-server) (release 0.5.3)
+### 16th May 2025
 
-* MAINTENANCE: Updating crate dependencies and including updated `did-peer` crate.
+## DID Resolver Cache (release 0.5.4)
+
+* **MAINTENANCE:** Bumping crate dependencies
+* **FEATURE:** Added `did:webvh` method
+
+## DID webvh method (release 0.1.0)
+
+* Initial release of the `did:webvh` method
+  * This is a new method for resolving DIDs using the WebVH protocol
+  * The WebVH method is designed to be used with the Affinidi DID Resolver Cache
+  
+### 24th April 2025 (release 0.5.3)
+
+* **MAINTENANCE:** Updating crate dependencies and including updated `did-peer` crate.
 
 ### 22nd April 2025 did-peer (release 0.6.1)
 
-* FEATURE: Array of `serviceEndpoint` supported in service definitions
+* **FEATURE:** Array of `serviceEndpoint` supported in service definitions
 
 ### 22nd April 2025 did-peer (release 0.6.0)
 
-* FEATURE: Service definitions didn't support specific id's, added defined id's to Services
-  * This is useful where you need to have a named service id, for example DID Authentication service
-* FEATURE: ServiceEndpoint definition can now support a simple URI instead of just JSON Object
+* **FEATURE:** Service definitions didn't support specific id's, added defined id's
+to Services
+  * This is useful where you need to have a named service id, for example DID
+  Authentication service
+* **FEATURE:** ServiceEndpoint definition can now support a simple URI instead of
+just JSON Object
   * Allows for simpler URI's for services that do not need complex definitions
 * Crate dependencies updated to latest versions
 
@@ -24,14 +40,14 @@
 
 ### 19th March 2025 (release 0.5.0)
 
-* MAINTENANCE: Crates updated
-* CHANGE: Hashing functions streamlined and changed from blake3 to highway
+* **MAINTENANCE:** Crates updated
+* **CHANGE:** Hashing functions streamlined and changed from blake3 to highway
   * Includes HashMap usage (using aHash)
-* BREAKING Changes:
+* ***BREAKING Changes:***
   * Config option with_max_did_size_in_kb --> with_max_did_size_in_bytes
   * Hash key used changed from String to u128
 
-NOTE:
+**NOTE:**
 Network Performance has increased by approx 82% in this release
 
 ### 4th March 2025 (release 0.4.1)
@@ -40,35 +56,37 @@ Network Performance has increased by approx 82% in this release
 
 ### 4th March 2025 (release 0.4.0)
 
-* MAINTENANCE: Crates updated
+* **MAINTENANCE:** Crates updated
 * Added Minimum Supported Rust Version 1.85
-* Breaking Change: ClientConfig and ClientConfigBuilder renamed
+* ***Breaking Change:*** ClientConfig and ClientConfigBuilder renamed
   * ClientConfig --> DIDCacheConfig
   * ClientConfigBuilder --> DIDCacheConfigBuilder
   
 ### 22nd February 2025 (release 0.3.0)
 
-* MAINTENANCE: Rust 2024 Edition enabled by default (2021 --> 2024)
-* MAINTENANCE: Crates updated
-* UPDATE: affinidi-did-resolver-cache-sdk
+* **MAINTENANCE:** Rust 2024 Edition enabled by default (2021 --> 2024)
+* **MAINTENANCE:** Crates updated
+* **UPDATE:** affinidi-did-resolver-cache-sdk
   * tokio-tungstenite removed and replaced via web-socket crate
-  * Enables better low level error handling of the WebSocket. Especially when a device sleeps and detecting the WebSocket Channel has been closed.
+  * Enables better low level error handling of the WebSocket. Especially when a
+  device sleeps and detecting the WebSocket Channel has been closed.
 
 ### 12th February 2025 (release 0.2.9)
 
-* FIX: SDK Network loop would not exit when the MPSC Channel was closed.
-* MAINTENANCE: Crates updated
+* **FIX:** SDK Network loop would not exit when the MPSC Channel was closed.
+* **MAINTENANCE:** Crates updated
 
 ### 30th January 2025 (release 0.2.8)
 
-* FEATURE: add_did_document() added to manually load DID Documents into the cache.
-  * Can be used when you want to pre-load a DID Document or for testing purposes load non-public documents
-* MAINTENANCE: Crates updated (rand 0.8 --> 0.9)
+* **FEATURE:** add_did_document() added to manually load DID Documents into the cache.
+  * Can be used when you want to pre-load a DID Document or for testing purposes
+  load non-public documents
+* **MAINTENANCE:** Crates updated (rand 0.8 --> 0.9)
 
 ### 23rd January 2025 (release 0.2.5)
 
 * Updating crates
-* Added did:example method to help with local development/testing
+* **Added** did:example method to help with local development/testing
 
 ### 7th January 2025 (release 0.2.4)
 
@@ -102,28 +120,35 @@ Network Performance has increased by approx 82% in this release
 
 ### 18th September 2024 (release 0.1.10)
 
-* fix: example did-peer `generate` added a trailing `/` on the serviceEndpoint URI
-* removed `did-peer` LICENCE and CHANGELOG files, all contained in the parent crate `affinidi-did-resolver`
+* **fix:** example did-peer `generate` added a trailing `/` on the
+serviceEndpoint URI
+* removed `did-peer` LICENCE and CHANGELOG files, all contained in the parent
+crate `affinidi-did-resolver`
 * Bumping crate versions
 
 ### 15th September 2024 (release 0.1.9)
 
-* clarity: Added a note regarding serviceEndpoint Id's being a URI vs a IRI (SSI Crate limitation)
-  * This changes serviceEndpoint.id from `#service` to `did:peer:#service` so that it passes Uri checks
-* fix: If more than a single service was specified, then this would crash due to `#service-n` not being a valid URI
-  * Changed so that all serviceEndpoint Id's are `did:peer:#service` as the starting string
-* update: `tokio-tungstenite` crate updated from 0.23 to 0.24
+* **clarity:** Added a note regarding serviceEndpoint Id's being a URI vs a IRI (SSI
+Crate limitation)
+  * This changes serviceEndpoint.id from `#service` to `did:peer:#service` so
+  that it passes Uri checks
+* **fix:** If more than a single service was specified, then this would crash due
+to `#service-n` not being a valid URI
+  * Changed so that all serviceEndpoint Id's are `did:peer:#service` as the
+  starting string
+* **update:** `tokio-tungstenite` crate updated from 0.23 to 0.24
 
 ### 9th September 2024 (release 0.1.5)
 
 * Renaming crate names
-* Setting publich to true for crates.io
+* Setting publish to true for crates.io
 * Bumping crate versions
 
 ### 5th September 2024 (release 0.1.4)
 
 * Updated crates
-* did-peer added missing types and support for peer implementation type 0 (supports 0 and 2).
+* did-peer added missing types and support for peer implementation type 0
+(supports 0 and 2).
 
 ### 3rd September 2024 (release 0.1.3)
 
