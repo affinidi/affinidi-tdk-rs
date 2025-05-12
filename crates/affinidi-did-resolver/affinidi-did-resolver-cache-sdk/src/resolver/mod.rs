@@ -107,11 +107,15 @@ impl DIDCacheClient {
             "webvh" => {
                 let method = DIDWebVH;
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => Ok(res.document.into_document()),
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
+                // due to how webvh can handle more complex URLs, we need to pass the raw URL
+                // all url related checks are handled in the webvh method
+                unsafe {
+                    match method.resolve(DID::new_unchecked(did.as_bytes())).await {
+                        Ok(res) => Ok(res.document.into_document()),
+                        Err(e) => {
+                            error!("Error: {:?}", e);
+                            Err(DIDCacheError::DIDError(e.to_string()))
+                        }
                     }
                 }
             }

@@ -2640,8 +2640,11 @@ dependencies = [
 name = "did-webvh"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "ssi",
  "thiserror 2.0.12",
+ "tokio",
 ]
 
 [[package]]
