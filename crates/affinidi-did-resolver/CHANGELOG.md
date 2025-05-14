@@ -7,6 +7,7 @@
 ## DID Resolver Cache (release 0.5.4)
 
 * **MAINTENANCE:** Bumping crate dependencies
+  * SSI crate updated to 0.12
 * **FEATURE:** Added `did:webvh` method
 
 ## DID webvh method (release 0.1.0)
@@ -15,6 +16,16 @@
   * This is a new method for resolving DIDs using the WebVH protocol
   * The WebVH method is designed to be used with the Affinidi DID Resolver Cache
   
+## DID peer method (release 0.6.2)
+
+* **MAINTENANCE:** Bumping crate dependencies
+  * SSI crate updated to 0.12
+
+## DID example method (release 0.5.3)
+
+* **MAINTENANCE:** Bumping crate dependencies
+  * SSI crate updated to 0.12
+
 ### 24th April 2025 (release 0.5.3)
 
 * **MAINTENANCE:** Updating crate dependencies and including updated `did-peer` crate.
