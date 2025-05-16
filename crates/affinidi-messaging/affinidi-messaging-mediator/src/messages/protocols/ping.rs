@@ -159,7 +159,7 @@ pub(crate) fn process(
         Ok(ProcessMessageResponse {
             store_message: true,
             force_live_delivery: false,
-            data: WrapperType::Message(response_msg),
+            data: WrapperType::Message(Box::new(response_msg)),
             forward_message: false,
         })
     } else {

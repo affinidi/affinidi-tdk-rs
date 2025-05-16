@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-text-client"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -358,7 +358,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "circular-queue",
- "crossterm 0.28.1",
+ "crossterm 0.29.0",
  "did-peer",
  "image",
  "log",
@@ -370,7 +370,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha256",
- "ssi 0.10.2",
+ "ssi 0.11.0",
  "textwrap",
  "tokio",
  "tokio-stream",
@@ -2094,7 +2094,6 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.9.1",
  "crossterm_winapi",
- "futures-core",
  "mio",
  "parking_lot",
  "rustix 0.38.44",
@@ -2113,6 +2112,7 @@ dependencies = [
  "crossterm_winapi",
  "derive_more",
  "document-features",
+ "futures-core",
  "mio",
  "parking_lot",
  "rustix 1.0.7",

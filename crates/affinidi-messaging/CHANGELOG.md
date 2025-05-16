@@ -8,6 +8,12 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## May 2025
+
+### Text-Client (0.10.8)
+
+* **MAINTENANCE:** Crate dependencies updated
+
 ## 9th May 2025
 
 ### Mediator (0.10.8)

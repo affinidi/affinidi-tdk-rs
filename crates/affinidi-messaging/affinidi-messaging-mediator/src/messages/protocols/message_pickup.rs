@@ -228,7 +228,7 @@ async fn generate_status_reply(
         Ok(ProcessMessageResponse {
             store_message: false,
             force_live_delivery,
-            data: crate::messages::WrapperType::Message(status_msg),
+            data: crate::messages::WrapperType::Message(Box::new(status_msg)),
             forward_message: false,
         })
     }
@@ -442,7 +442,7 @@ pub(crate) async fn delivery_request(
             Ok(ProcessMessageResponse {
                 store_message: false,
                 force_live_delivery: false,
-                data: crate::messages::WrapperType::Message(response_msg),
+                data: crate::messages::WrapperType::Message(Box::new(response_msg)),
                 forward_message: false,
             })
         } else {
