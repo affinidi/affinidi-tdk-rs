@@ -40,11 +40,14 @@ pub struct WebVHURL {
 
 impl WebVHURL {
     /// Parses a WebVH URL and returns a WebVHURL struct
-    pub fn parse_url(url: &str) -> Result<WebVHURL, DIDWebVHError> {
+    pub fn parse_did_url(url: &str) -> Result<WebVHURL, DIDWebVHError> {
+        // may already have the did prefix stripped
         let url = if let Some(prefix) = url.strip_prefix("did:webvh:") {
             prefix
-        } else {
+        } else if url.starts_with("did:") {
             return Err(DIDWebVHError::UnsupportedMethod);
+        } else {
+            url
         };
 
         // split fragment from the rest of the URL
@@ -158,12 +161,12 @@ mod tests {
 
     #[test]
     fn wrong_method() {
-        assert!(WebVHURL::parse_url("did:wrong:method").is_err())
+        assert!(WebVHURL::parse_did_url("did:wrong:method").is_err())
     }
 
     #[test]
     fn url_with_fragment() {
-        let parsed = match WebVHURL::parse_url("did:webvh:scid:example.com#key-fragment") {
+        let parsed = match WebVHURL::parse_did_url("did:webvh:scid:example.com#key-fragment") {
             Ok(parsed) => parsed,
             Err(_) => panic!("Failed to parse URL"),
         };
@@ -173,7 +176,7 @@ mod tests {
 
     #[test]
     fn url_with_query() {
-        let parsed = match WebVHURL::parse_url("did:webvh:scid:example.com?versionId=1-xyz") {
+        let parsed = match WebVHURL::parse_did_url("did:webvh:scid:example.com?versionId=1-xyz") {
             Ok(parsed) => parsed,
             Err(_) => panic!("Failed to parse URL"),
         };
@@ -183,24 +186,24 @@ mod tests {
 
     #[test]
     fn missing_parts() {
-        assert!(WebVHURL::parse_url("did:webvh:domain").is_err());
-        assert!(WebVHURL::parse_url("did:webvh:domain#test").is_err());
+        assert!(WebVHURL::parse_did_url("did:webvh:domain").is_err());
+        assert!(WebVHURL::parse_did_url("did:webvh:domain#test").is_err());
     }
 
     #[test]
     fn url_with_port() {
-        assert!(WebVHURL::parse_url("did:webvh:scid:domain%3A8000").is_ok());
+        assert!(WebVHURL::parse_did_url("did:webvh:scid:domain%3A8000").is_ok());
     }
 
     #[test]
     fn url_with_bad_port() {
-        assert!(WebVHURL::parse_url("did:webvh:scid:domain%3A8bad").is_err());
-        assert!(WebVHURL::parse_url("did:webvh:scid:domain%3A999999").is_err());
+        assert!(WebVHURL::parse_did_url("did:webvh:scid:domain%3A8bad").is_err());
+        assert!(WebVHURL::parse_did_url("did:webvh:scid:domain%3A999999").is_err());
     }
 
     #[test]
     fn url_with_whois() -> Result<(), DIDWebVHError> {
-        let result = WebVHURL::parse_url("did:webvh:scid:domain%3A8000:whois")?;
+        let result = WebVHURL::parse_did_url("did:webvh:scid:domain%3A8000:whois")?;
         assert_eq!(result.type_, URLType::WhoIs);
         assert_eq!(result.path, "/.well-known/whois.vp");
         Ok(())
@@ -208,7 +211,7 @@ mod tests {
 
     #[test]
     fn url_with_whois_path() -> Result<(), DIDWebVHError> {
-        let result = WebVHURL::parse_url("did:webvh:scid:domain%3A8000:custom:path:whois")?;
+        let result = WebVHURL::parse_did_url("did:webvh:scid:domain%3A8000:custom:path:whois")?;
         assert_eq!(result.type_, URLType::WhoIs);
         assert_eq!(result.path, "/custom/path/whois.vp");
         Ok(())
@@ -216,7 +219,7 @@ mod tests {
 
     #[test]
     fn url_with_default_path() -> Result<(), DIDWebVHError> {
-        let result = WebVHURL::parse_url("did:webvh:scid:domain%3A8000")?;
+        let result = WebVHURL::parse_did_url("did:webvh:scid:domain%3A8000")?;
         assert_eq!(result.type_, URLType::DIDDoc);
         assert_eq!(result.path, "/.well-known/did.jsonl");
         Ok(())
@@ -224,7 +227,7 @@ mod tests {
 
     #[test]
     fn url_with_custom_path() -> Result<(), DIDWebVHError> {
-        let result = WebVHURL::parse_url("did:webvh:scid:domain%3A8000:custom:path")?;
+        let result = WebVHURL::parse_did_url("did:webvh:scid:domain%3A8000:custom:path")?;
         assert_eq!(result.type_, URLType::DIDDoc);
         assert_eq!(result.path, "/custom/path/did.jsonl");
         Ok(())
@@ -232,7 +235,7 @@ mod tests {
 
     #[test]
     fn to_url_from_basic() -> Result<(), DIDWebVHError> {
-        let webvh = WebVHURL::parse_url("did:webvh:scid:example.com")?;
+        let webvh = WebVHURL::parse_did_url("did:webvh:scid:example.com")?;
         assert_eq!(
             webvh.get_url()?.to_string().as_str(),
             "https://example.com/.well-known/did.jsonl"
@@ -242,7 +245,7 @@ mod tests {
 
     #[test]
     fn to_url_from_basic_whois() -> Result<(), DIDWebVHError> {
-        let webvh = WebVHURL::parse_url("did:webvh:scid:example.com:whois")?;
+        let webvh = WebVHURL::parse_did_url("did:webvh:scid:example.com:whois")?;
         assert_eq!(
             webvh.get_url()?.to_string().as_str(),
             "https://example.com/.well-known/whois.vp"
@@ -252,7 +255,7 @@ mod tests {
 
     #[test]
     fn to_url_from_complex() -> Result<(), DIDWebVHError> {
-        let webvh = WebVHURL::parse_url(
+        let webvh = WebVHURL::parse_did_url(
             "did:webvh:scid:example.com%3A8080:custom:path?versionId=1-xyz#fragment",
         )?;
         assert_eq!(

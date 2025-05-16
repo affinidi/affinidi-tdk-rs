@@ -65,11 +65,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
 
                                         match state.resolver.resolve(&request.did).await {
                                             Ok(response) => {
-                                                let message = WSResponseType::Response(WSResponse {
+                                                let message = WSResponseType::Response(Box::new(WSResponse {
                                                     did: response.did.clone(),
                                                     hash: response.did_hash,
                                                     document: response.doc,
-                                                });
+                                                }));
                                                 let mut stats = state.stats().await;
                                                 stats.increment_resolver_success();
                                                 if response.cache_hit { stats.increment_cache_hit();}
@@ -107,11 +107,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
 
                                         match state.resolver.resolve(&request.did).await {
                                             Ok(response) => {
-                                                let message = WSResponseType::Response(WSResponse {
+                                                let message = WSResponseType::Response(Box::new(WSResponse {
                                                     did: response.did.clone(),
                                                     hash: response.did_hash,
                                                     document: response.doc,
-                                                });
+                                                }));
                                                 let mut stats = state.stats().await;
                                                 stats.increment_resolver_success();
                                                 if response.cache_hit { stats.increment_cache_hit();}
