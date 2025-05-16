@@ -83,7 +83,7 @@ database_timeout = "${DATABASE_TIMEOUT:2}"
 mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_allow}"
 
 ### global_acl_default: Default ACL that is applied to new/unknown DIDs that connect to the mediator
-### Default: ALLOW_ALL
+### Default: DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES
 ### NOTE: When building a default ACL, the starting point is all actions are denied unless explicitly allowed
 ### Options:
 ###    - ALLOW_ALL: Allow all operations (sets ACL mode to explicit_deny per DID, DID can self manage their own ACLs)
