@@ -1,0 +1,16 @@
+[package]
+name = "affinidi-data-integrity"
+description = "W3C Data Integrity Implementation"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme.workspace = true
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = "2.0"
