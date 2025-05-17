@@ -13,5 +13,10 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json_canonicalizer = "0.3.0"
 thiserror = "2.0"
+
+[dev-dependencies]
+affinidi-tdk.workspace = true
+tokio = { version = "1.45", features = ["full"] }
