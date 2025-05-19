@@ -76,10 +76,15 @@ name = "affinidi-data-integrity"
 version = "0.1.0"
 dependencies = [
  "affinidi-tdk",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "multibase 0.9.1",
  "serde",
  "serde_json_canonicalizer",
+ "sha2 0.10.9",
  "thiserror 2.0.12",
  "tokio",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]
@@ -214,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-helpers"
-version = "0.10.7"
+version = "0.10.8"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
@@ -234,7 +239,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha256",
- "ssi 0.10.2",
+ "ssi 0.11.0",
  "time",
  "tokio",
  "toml 0.8.22",
@@ -245,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator"
-version = "0.10.8"
+version = "0.10.9"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
@@ -397,6 +402,7 @@ name = "affinidi-secrets-resolver"
 version = "0.1.9"
 dependencies = [
  "ahash 0.8.12",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "ssi 0.11.0",
@@ -1744,7 +1750,7 @@ dependencies = [
  "multihash",
  "serde",
  "serde_bytes",
- "unsigned-varint",
+ "unsigned-varint 0.7.2",
 ]
 
 [[package]]
@@ -4886,7 +4892,7 @@ dependencies = [
  "serde-big-array",
  "sha2 0.10.9",
  "sha3",
- "unsigned-varint",
+ "unsigned-varint 0.7.2",
 ]
 
 [[package]]
@@ -5955,9 +5961,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-image"
-version = "5.0.0"
+version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9e2b311a4215ae53a10d57d541c80e103347294650b4d5501a6a3b41ecd8dff"
+checksum = "d3f1d31464920104b247593f008158372d2fdb8165e93a4299cdd6f994448c9a"
 dependencies = [
  "base64 0.21.7",
  "icy_sixel",
@@ -7800,7 +7806,7 @@ dependencies = [
  "p256",
  "p384",
  "thiserror 1.0.69",
- "unsigned-varint",
+ "unsigned-varint 0.7.2",
 ]
 
 [[package]]
@@ -9058,6 +9064,12 @@ name = "unsigned-varint"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6889a77d49f1f013504cec6bf97a2c730394adedaeb1deb5ea08949a50541105"
+
+[[package]]
+name = "unsigned-varint"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb066959b24b5196ae73cb057f45598450d2c5f71460e98c49b738086eff9c06"
 
 [[package]]
 name = "untrusted"

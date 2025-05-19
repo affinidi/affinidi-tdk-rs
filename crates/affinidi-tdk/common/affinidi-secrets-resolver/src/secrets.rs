@@ -4,7 +4,10 @@ Handles Secrets - mainly used for internal representation and for saving to file
 */
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ssi::{JWK, jwk::Params};
+use ssi::{
+    JWK,
+    jwk::{Base64urlUInt, Params},
+};
 
 use crate::errors::{Result, SecretsResolverError};
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -19,13 +22,36 @@ pub struct Secret {
     /// Value of the secret (private key)
     #[serde(flatten)]
     pub secret_material: SecretMaterial,
+
+    /// Performance cheat to hold private key material in a single field
+    #[serde(skip)]
+    private_bytes: Vec<u8>,
+
+    /// Performance cheat to hold public key material in a single field
+    #[serde(skip)]
+    public_bytes: Vec<u8>,
 }
 
 impl Secret {
+    /// Helper function to get raw bytes
+    fn convert_to_raw(input: Option<Base64urlUInt>) -> Result<Vec<u8>> {
+        if let Some(a) = input {
+            Ok(a.0)
+        } else {
+            Err(SecretsResolverError::KeyError(
+                "Failed to convert key to raw bytes".into(),
+            ))
+        }
+    }
+
     pub fn from_jwk(jwk: &JWK) -> Result<Self> {
         match &jwk.params {
             Params::EC(params) => {
                 if let Some(curve) = &params.curve {
+                    let mut x = Secret::convert_to_raw(params.x_coordinate.clone())?;
+                    let mut y = Secret::convert_to_raw(params.y_coordinate.clone())?;
+
+                    x.append(&mut y);
                     Ok(Secret {
                         id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
                         type_: SecretType::JsonWebKey2020,
@@ -38,6 +64,8 @@ impl Secret {
                                 "y": params.y_coordinate
                             }),
                         },
+                        private_bytes: Secret::convert_to_raw(params.ecc_private_key.clone())?,
+                        public_bytes: x,
                     })
                 } else {
                     Err(SecretsResolverError::KeyError(
@@ -56,6 +84,8 @@ impl Secret {
                         "x": params.public_key
                     }),
                 },
+                private_bytes: Secret::convert_to_raw(params.private_key.clone())?,
+                public_bytes: Secret::convert_to_raw(Some(params.public_key.clone()))?,
             }),
             _ => Err(SecretsResolverError::KeyError(format!(
                 "Unsupported key type: {:?}",
@@ -81,14 +111,22 @@ impl Secret {
     ///
     /// let secret = Secret::from_str(key_id, key_str)?;
     /// ```
-    pub fn from_str(key_id: &str, jwk: &Value) -> Secret {
-        Secret {
-            id: key_id.to_string(),
-            type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: jwk.clone(),
-            },
-        }
+    pub fn from_str(key_id: &str, jwk: &Value) -> Result<Self> {
+        let mut jwk: JWK = serde_json::from_value(jwk.to_owned())
+            .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {}", e)))?;
+
+        jwk.key_id = Some(key_id.to_string());
+        Self::from_jwk(&jwk)
+    }
+
+    /// Get the public key bytes
+    pub fn get_public_bytes(&self) -> &[u8] {
+        self.public_bytes.as_slice()
+    }
+
+    /// Get the private key bytes
+    pub fn get_private_bytes(&self) -> &[u8] {
+        self.private_bytes.as_slice()
     }
 }
 

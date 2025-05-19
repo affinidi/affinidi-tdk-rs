@@ -1,26 +1,21 @@
-use affinidi_secrets_resolver::secrets::{Secret, SecretMaterial, SecretType};
+use affinidi_secrets_resolver::secrets::Secret;
 use lazy_static::lazy_static;
 use serde_json::json;
 
 lazy_static! {
-    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_X25519_1: Secret = Secret {
-        id: "did:example:mediator3#key-x25519-1".into(),
-        type_: SecretType::JsonWebKey2020,
-        secret_material: SecretMaterial::JWK {
-            private_key_jwk: json!(
+    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_X25519_1: Secret = Secret::from_str (
+"did:example:mediator3#key-x25519-1",
+            &json!(
             {
                 "kty": "OKP",
                 "d": "b9NnuOCB0hm7YGNvaE9DMhwH_wjZA1-gWD6dA0JWdL0",
                 "crv": "X25519",
                 "x": "GDTrI66K0pFfO54tlCSvfjjNapIs44dzpneBgyx0S3E",
             })
-        },
-    };
-    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P256_1: Secret = Secret {
-        id: "did:example:mediator3#key-p256-1".into(),
-        type_: SecretType::JsonWebKey2020,
-        secret_material: SecretMaterial::JWK {
-            private_key_jwk: json!(
+    ).expect("Failed to create secret");
+    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P256_1: Secret = Secret::from_str (
+"did:example:mediator3#key-p256-1",
+            &json!(
             {
                 "kty": "EC",
                 "d": "PgwHnlXxt8pwR6OCTUwwWx-P51BiLkFZyqHzquKddXQ",
@@ -28,13 +23,10 @@ lazy_static! {
                 "x": "FQVaTOksf-XsCUrt4J1L2UGvtWaDwpboVlqbKBY2AIo",
                 "y": "6XFB9PYo7dyC5ViJSO9uXNYkxTJWn0d_mqJ__ZYhcNY",
             })
-        },
-    };
-    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P384_1: Secret = Secret {
-        id: "did:example:mediator3#key-p384-1".into(),
-        type_: SecretType::JsonWebKey2020,
-        secret_material: SecretMaterial::JWK {
-            private_key_jwk: json!(
+    ).expect("Failed to create secret");
+    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P384_1: Secret = Secret::from_str (
+"did:example:mediator3#key-p384-1",
+            &json!(
             {
                 "kty": "EC",
                 "d": "ajqcWbYA0UDBKfAhkSkeiVjMMt8l-5rcknvEv9t_Os6M8s-HisdywvNCX4CGd_xY",
@@ -42,13 +34,10 @@ lazy_static! {
                 "x": "MvnE_OwKoTcJVfHyTX-DLSRhhNwlu5LNoQ5UWD9Jmgtdxp_kpjsMuTTBnxg5RF_Y",
                 "y": "X_3HJBcKFQEG35PZbEOBn8u9_z8V1F9V1Kv-Vh0aSzmH-y9aOuDJUE3D4Hvmi5l7",
             })
-        },
-    };
-    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P521_1: Secret = Secret {
-        id: "did:example:mediator3#key-p521-1".into(),
-        type_: SecretType::JsonWebKey2020,
-        secret_material: SecretMaterial::JWK {
-            private_key_jwk: json!(
+    ).expect("Failed to create secret");
+    pub static ref MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P521_1: Secret = Secret::from_str (
+"did:example:mediator3#key-p521-1",
+            &json!(
             {
                 "kty": "EC",
                 "d": "AV5ocjvy7PkPgNrSuvCxtG70NMj6iTabvvjSLbsdd8OdI9HlXYlFR7RdBbgLUTruvaIRhjEAE9gNTH6rWUIdfuj6",
@@ -56,8 +45,7 @@ lazy_static! {
                 "x": "Af9O5THFENlqQbh2Ehipt1Yf4gAd9RCa3QzPktfcgUIFADMc4kAaYVViTaDOuvVS2vMS1KZe0D5kXedSXPQ3QbHi",
                 "y": "ATZVigRQ7UdGsQ9j-omyff6JIeeUv3CBWYsZ0l6x3C_SYqhqVV7dEG-TafCCNiIxs8qeUiXQ8cHWVclqkH4Lo1qH",
             })
-        },
-    };
+    ).expect("Failed to create secret");
     pub static ref MEDIATOR3_SECRETS: Vec<Secret> = vec![
         MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_X25519_1.clone(),
         MEDIATOR3_SECRET_KEY_AGREEMENT_KEY_P256_1.clone(),
