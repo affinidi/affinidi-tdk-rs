@@ -2,14 +2,19 @@
 Handles Secrets - mainly used for internal representation and for saving to files (should always be encrypted)
 
 */
+use crate::errors::{Result, SecretsResolverError};
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssi::{
     JWK,
     jwk::{Base64urlUInt, Params},
+    multicodec::{
+        ED25519_PRIV, ED25519_PUB, MultiEncoded, P256_PRIV, P256_PUB, P384_PRIV, P384_PUB,
+        P521_PRIV, P521_PUB,
+    },
 };
 
-use crate::errors::{Result, SecretsResolverError};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Secret {
     /// A key ID identifying a secret (private key).
@@ -30,6 +35,10 @@ pub struct Secret {
     /// Performance cheat to hold public key material in a single field
     #[serde(skip)]
     public_bytes: Vec<u8>,
+
+    /// What crypto type is this secret
+    #[serde(skip)]
+    key_type: KeyType,
 }
 
 impl Secret {
@@ -44,6 +53,7 @@ impl Secret {
         }
     }
 
+    /// Converts a JWK to a Secret
     pub fn from_jwk(jwk: &JWK) -> Result<Self> {
         match &jwk.params {
             Params::EC(params) => {
@@ -66,6 +76,7 @@ impl Secret {
                         },
                         private_bytes: Secret::convert_to_raw(params.ecc_private_key.clone())?,
                         public_bytes: x,
+                        key_type: KeyType::try_from(curve.as_str())?,
                     })
                 } else {
                     Err(SecretsResolverError::KeyError(
@@ -86,6 +97,7 @@ impl Secret {
                 },
                 private_bytes: Secret::convert_to_raw(params.private_key.clone())?,
                 public_bytes: Secret::convert_to_raw(Some(params.public_key.clone()))?,
+                key_type: KeyType::try_from(params.curve.as_str())?,
             }),
             _ => Err(SecretsResolverError::KeyError(format!(
                 "Unsupported key type: {:?}",
@@ -119,6 +131,61 @@ impl Secret {
         Self::from_jwk(&jwk)
     }
 
+    pub fn from_multibase(key_id: &str, public: &str, private: &str) -> Result<Self> {
+        let public_bytes = multibase::decode(public).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to decode public key: {}", e))
+        })?;
+        let private_bytes = multibase::decode(private).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to decode private key: {}", e))
+        })?;
+
+        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice()).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to decode public key: {}", e))
+        })?;
+        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice()).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to decode private key: {}", e))
+        })?;
+
+        let jwk = match (public_bytes.codec(), private_bytes.codec()) {
+            (ED25519_PUB, ED25519_PRIV) => {
+                json!({"crv": "Ed25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
+            }
+            (P256_PUB, P256_PRIV) => {
+                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
+                    json!({"crv": "P-256", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
+                } else {
+                    return Err(SecretsResolverError::KeyError(
+                        "Failed to split public key".into(),
+                    ));
+                }
+            }
+            (P384_PUB, P384_PRIV) => {
+                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
+                    json!({"crv": "P-384", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
+                } else {
+                    return Err(SecretsResolverError::KeyError(
+                        "Failed to split public key".into(),
+                    ));
+                }
+            }
+            (P521_PUB, P521_PRIV) => {
+                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
+                    json!({"crv": "P-521", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
+                } else {
+                    return Err(SecretsResolverError::KeyError(
+                        "Failed to split public key".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(SecretsResolverError::KeyError(
+                    "Unsupported key type".into(),
+                ));
+            }
+        };
+        Secret::from_str(key_id, &jwk)
+    }
+
     /// Get the public key bytes
     pub fn get_public_bytes(&self) -> &[u8] {
         self.public_bytes.as_slice()
@@ -127,6 +194,11 @@ impl Secret {
     /// Get the private key bytes
     pub fn get_private_bytes(&self) -> &[u8] {
         self.private_bytes.as_slice()
+    }
+
+    /// What crypto type is this secret
+    pub fn get_key_type(&self) -> KeyType {
+        self.key_type
     }
 }
 
@@ -140,6 +212,36 @@ pub enum SecretType {
     Ed25519VerificationKey2020,
     EcdsaSecp256k1VerificationKey2019,
     Other,
+}
+
+/// Known Crypto types
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
+pub enum KeyType {
+    Ed25519,
+    P256,
+    P384,
+    P521,
+    Secp256k1,
+    #[default]
+    Unknown,
+}
+
+impl TryFrom<&str> for KeyType {
+    type Error = SecretsResolverError;
+
+    fn try_from(value: &str) -> Result<Self> {
+        match value {
+            "Ed25519" => Ok(KeyType::Ed25519),
+            "P-256" => Ok(KeyType::P256),
+            "P-384" => Ok(KeyType::P384),
+            "P-521" => Ok(KeyType::P521),
+            "secp256k1" => Ok(KeyType::Secp256k1),
+            _ => Err(SecretsResolverError::KeyError(format!(
+                "Unknown key type: {}",
+                value
+            ))),
+        }
+    }
 }
 
 /// Represents secret crypto material.
