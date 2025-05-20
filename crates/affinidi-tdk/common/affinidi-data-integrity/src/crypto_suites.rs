@@ -2,15 +2,17 @@
 *   Recognized crypto suites
 */
 
-use affinidi_tdk_common::secrets_resolver::secrets::KeyType;
+use affinidi_tdk_common::secrets_resolver::secrets::{KeyType, Secret};
+use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
 use serde::{Deserialize, Serialize};
 
 use crate::DataIntegrityError;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum CryptoSuite {
     /// EDDSA JCS 2022 spec
     /// https://www.w3.org/TR/vc-di-eddsa/
+    #[serde(rename = "eddsa-jcs-2022")]
     EddsaJcs2022,
 }
 
@@ -56,6 +58,18 @@ impl TryFrom<KeyType> for CryptoSuite {
                 "Unsupported key type: {:?}",
                 value
             ))),
+        }
+    }
+}
+
+impl CryptoSuite {
+    pub fn sign(&self, secret: &Secret, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
+        match self {
+            CryptoSuite::EddsaJcs2022 => {
+                let mut signing_key =
+                    SigningKey::from_bytes(secret.get_private_bytes().try_into().unwrap());
+                Ok(signing_key.sign(data).to_vec())
+            }
         }
     }
 }

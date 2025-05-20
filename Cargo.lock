@@ -78,6 +78,7 @@ dependencies = [
  "affinidi-tdk",
  "affinidi-tdk-common",
  "base64 0.22.1",
+ "chrono",
  "ed25519-dalek",
  "multibase 0.9.1",
  "serde",
