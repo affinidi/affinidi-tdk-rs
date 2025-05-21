@@ -2723,6 +2723,7 @@ name = "did-webvh"
 version = "0.1.0"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
+ "ahash 0.8.12",
  "iref",
  "reqwest 0.12.15",
  "serde",
