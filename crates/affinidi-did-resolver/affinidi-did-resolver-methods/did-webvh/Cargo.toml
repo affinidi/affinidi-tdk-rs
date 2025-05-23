@@ -22,9 +22,23 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 ssi = { version = "0.11", features = ["secp384r1"] }
 thiserror = "2.0"
+tracing = { version = "0.1", features = [
+  "max_level_debug",
+  "release_max_level_info",
+] }
 url = "2.5"
 
 [dev-dependencies]
-tokio = { version = "1.45", features = ["full"] }
-iref = { version = "3.2.2", features = ["serde"] }
 affinidi-did-resolver-cache-sdk.workspace = true
+
+anyhow = "1.0"
+console = "0.15"
+dialoguer = "0.11"
+iref = { version = "3.2.2", features = ["serde"] }
+tokio = { version = "1.45", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "fmt",
+  "json",
+  "valuable",
+] }

@@ -29,14 +29,14 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.6"
-aws-sdk-secretsmanager = "1.72"
-aws-sdk-ssm = "1.76"
+aws-sdk-secretsmanager = "1.74"
+aws-sdk-ssm = "1.78"
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
-deadpool-redis = { version = "0.20", features = ["rt_tokio_1"] }
+deadpool-redis = { version = "0.21", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
 jsonwebtoken = "9.3"
@@ -44,7 +44,7 @@ itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
 # Redis can only be updated when deadpool-redis supports the new version
-redis = { version = "0.29", features = [
+redis = { version = "0.31", features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
   "ahash",
@@ -59,9 +59,9 @@ semver = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-ssi = { version = "0.10" }
+ssi = { version = "0.11" }
 subtle = "2.6"
-tokio = { version = "1.44", features = ["full"] }
+tokio = { version = "1.45", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
@@ -76,7 +76,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.16", features = ["v4", "fast-rng"] }
+uuid = { version = "1.17", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 console = "0.15"

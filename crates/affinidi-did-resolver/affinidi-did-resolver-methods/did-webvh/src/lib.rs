@@ -15,6 +15,8 @@ use url::{URLType, WebVHURL};
 pub mod create;
 pub mod url;
 
+const SCID_HOLDER: &str = "{scid}";
+
 /// Error types for WebVH method
 #[derive(Error, Debug)]
 pub enum DIDWebVHError {
@@ -137,6 +139,7 @@ pub struct Witnesses {
     pub witnesses: AHashSet<Witness>,
 }
 
+/// Single Witness Node
 #[derive(Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Witness {
     pub id: String,

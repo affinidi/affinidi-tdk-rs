@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use url::Url;
 
 use crate::DIDWebVHError;
@@ -120,7 +122,8 @@ impl WebVHURL {
         })
     }
 
-    pub fn get_url(&self) -> Result<Url, DIDWebVHError> {
+    /// Creates a HTTP URL from webvh DID
+    pub fn get_http_url(&self) -> Result<Url, DIDWebVHError> {
         let mut url_string = String::new();
 
         if self.domain == "localhost" {
@@ -149,6 +152,32 @@ impl WebVHURL {
                 err
             ))),
         }
+    }
+}
+
+impl Display for WebVHURL {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut url_string = String::new();
+        url_string.push_str("did:webvh:");
+        url_string.push_str(&self.scid);
+        url_string.push(':');
+        url_string.push_str(&self.domain);
+        if let Some(port) = self.port {
+            url_string.push_str(&format!("%3A{}", port));
+        }
+        if !self.path.is_empty() {
+            url_string.push(':');
+            url_string.push_str(&self.path);
+        }
+        if let Some(query) = &self.query {
+            url_string.push('?');
+            url_string.push_str(query);
+        }
+        if let Some(fragment) = &self.fragment {
+            url_string.push('#');
+            url_string.push_str(fragment);
+        }
+        write!(f, "{}", url_string)
     }
 }
 
@@ -237,7 +266,7 @@ mod tests {
     fn to_url_from_basic() -> Result<(), DIDWebVHError> {
         let webvh = WebVHURL::parse_did_url("did:webvh:scid:example.com")?;
         assert_eq!(
-            webvh.get_url()?.to_string().as_str(),
+            webvh.get_http_url()?.to_string().as_str(),
             "https://example.com/.well-known/did.jsonl"
         );
         Ok(())
@@ -247,7 +276,7 @@ mod tests {
     fn to_url_from_basic_whois() -> Result<(), DIDWebVHError> {
         let webvh = WebVHURL::parse_did_url("did:webvh:scid:example.com:whois")?;
         assert_eq!(
-            webvh.get_url()?.to_string().as_str(),
+            webvh.get_http_url()?.to_string().as_str(),
             "https://example.com/.well-known/whois.vp"
         );
         Ok(())
@@ -259,7 +288,7 @@ mod tests {
             "did:webvh:scid:example.com%3A8080:custom:path?versionId=1-xyz#fragment",
         )?;
         assert_eq!(
-            webvh.get_url()?.to_string().as_str(),
+            webvh.get_http_url()?.to_string().as_str(),
             "https://example.com:8080/custom/path/did.jsonl?versionId=1-xyz#fragment"
         );
         Ok(())

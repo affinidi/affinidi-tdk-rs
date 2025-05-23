@@ -28,14 +28,14 @@ tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
 ] }
+unsigned-varint = "0.8"
+
+[dev-dependencies]
+affinidi-tdk.workspace = true
+tokio = { version = "1.45", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",
   "json",
   "valuable",
 ] }
-unsigned-varint = "0.8"
-
-[dev-dependencies]
-affinidi-tdk.workspace = true
-tokio = { version = "1.45", features = ["full"] }
