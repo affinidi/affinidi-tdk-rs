@@ -4,9 +4,10 @@
 
 use anyhow::Result;
 use console::style;
-use dialoguer::{Input, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use did_webvh::url::WebVHURL;
 use tracing_subscriber::filter;
+use url::Url;
 
 /// Display a fun banner
 fn show_banner() {
@@ -122,8 +123,8 @@ fn get_address() -> Result<(String, String)> {
         let input: String = input.interact_text()?;
 
         // Check address
-        let (http_url, did_url): (String, String) = if input.starts_with("did:") {
-            let did_url = match WebVHURL::parse_did_url(&input) {
+        let did_url = if input.starts_with("did:") {
+            match WebVHURL::parse_did_url(&input) {
                 Ok(did_url) => did_url,
                 Err(e) => {
                     println!(
@@ -134,22 +135,65 @@ fn get_address() -> Result<(String, String)> {
                     initial_text = input;
                     continue;
                 }
-            };
-            let http_url = match did_url.get_http_url() {
-                Ok(http_url) => http_url,
+            }
+        } else {
+            // User entered a URL
+            let url = match Url::parse(&input) {
+                Ok(url) => url,
                 Err(e) => {
                     println!(
                         "{}  {}",
-                        style("Invalid DID URL, please try again:").color256(196),
+                        style("Invalid URL, please try again:").color256(196),
                         style(e.to_string()).color256(9),
                     );
                     initial_text = input;
                     continue;
                 }
             };
-            break Ok((http_url.to_string(), did_url.to_string()));
-        } else {
-            break Ok(("url".to_string(), "did".to_string()));
+
+            match WebVHURL::parse_url(&url) {
+                Ok(did_url) => did_url,
+                Err(e) => {
+                    println!(
+                        "{}  {}",
+                        style("Invalid URL, please try again:").color256(196),
+                        style(e.to_string()).color256(9),
+                    );
+                    initial_text = input;
+                    continue;
+                }
+            }
         };
+
+        let http_url = match did_url.get_http_url() {
+            Ok(http_url) => http_url,
+            Err(e) => {
+                println!(
+                    "{}  {}",
+                    style("Invalid DID URL, please try again:").color256(196),
+                    style(e.to_string()).color256(9),
+                );
+                initial_text = input;
+                continue;
+            }
+        };
+
+        println!(
+            "{} {}",
+            style("DID:").color256(69),
+            style(&did_url).color256(141)
+        );
+        println!(
+            "{} {}",
+            style("URL:").color256(69),
+            style(&http_url).color256(45)
+        );
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("are you sure?")
+            .default(true)
+            .interact()?
+        {
+            break Ok((http_url.to_string(), did_url.to_string()));
+        }
     }
 }

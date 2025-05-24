@@ -122,6 +122,44 @@ impl WebVHURL {
         })
     }
 
+    /// Parses a http URL and returns a WebVHURL struct
+    pub fn parse_url(url: &Url) -> Result<WebVHURL, DIDWebVHError> {
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err(DIDWebVHError::InvalidMethodIdentifier(
+                "Invalid URL: Must be http or https".to_string(),
+            ));
+        }
+
+        let fragment = url.fragment();
+        let query = url.query();
+        let Some(domain) = url.domain() else {
+            return Err(DIDWebVHError::InvalidMethodIdentifier(
+                "Invalid URL: Must contain domain".to_string(),
+            ));
+        };
+        let port = url.port();
+
+        let (type_, path) = if url.path() == "/" {
+            (URLType::DIDDoc, "/.well-known/did.jsonl".to_string())
+        } else if url.path().ends_with("/whois") {
+            (URLType::WhoIs, "/whois.vp".to_string())
+        } else if url.path().ends_with("/did.jsonl") {
+            (URLType::DIDDoc, url.path().to_string())
+        } else {
+            (URLType::DIDDoc, [url.path(), "/did.jsonl"].concat())
+        };
+
+        Ok(WebVHURL {
+            type_,
+            did_url: url.to_string(),
+            scid: "{scid}".to_string(),
+            domain: domain.to_string(),
+            port,
+            path,
+            fragment: fragment.map(|s| s.to_string()),
+            query: query.map(|s| s.to_string()),
+        })
+    }
     /// Creates a HTTP URL from webvh DID
     pub fn get_http_url(&self) -> Result<Url, DIDWebVHError> {
         let mut url_string = String::new();
@@ -165,9 +203,10 @@ impl Display for WebVHURL {
         if let Some(port) = self.port {
             url_string.push_str(&format!("%3A{}", port));
         }
-        if !self.path.is_empty() {
-            url_string.push(':');
-            url_string.push_str(&self.path);
+        if !self.path.is_empty() && self.path != "/.well-known/did.jsonl" {
+            let s = self.path.strip_suffix("/did.jsonl").unwrap();
+            let s = s.replace("/", ":");
+            url_string.push_str(&s);
         }
         if let Some(query) = &self.query {
             url_string.push('?');
