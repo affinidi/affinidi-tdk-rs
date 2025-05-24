@@ -4,6 +4,7 @@
 
 * **MAINTENANCE:** Crate dependencies updated
 * **FEATURE:** `get_public_bytes()` and `get_private_bytes()` methods added
+* **FEATURE:** `get_public_multibase()` and `get_private_multibase()` methods added
 
 ## Release 0.1.7
 

@@ -30,6 +30,8 @@ url = "2.5"
 
 [dev-dependencies]
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-secrets-resolver.workspace = true
+affinidi-tdk.workspace = true
 
 anyhow = "1.0"
 console = "0.15"

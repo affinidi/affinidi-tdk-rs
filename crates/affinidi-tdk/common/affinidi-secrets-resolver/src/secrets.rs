@@ -10,8 +10,8 @@ use ssi::{
     JWK,
     jwk::{Base64urlUInt, Params},
     multicodec::{
-        ED25519_PRIV, ED25519_PUB, MultiEncoded, P256_PRIV, P256_PUB, P384_PRIV, P384_PUB,
-        P521_PRIV, P521_PUB,
+        ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
+        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB,
     },
 };
 
@@ -131,6 +131,8 @@ impl Secret {
         Self::from_jwk(&jwk)
     }
 
+    /// Creates a secret from a multibase encoded key
+    /// Requires a key ID, public key, and private key
     pub fn from_multibase(key_id: &str, public: &str, private: &str) -> Result<Self> {
         let public_bytes = multibase::decode(public).map_err(|e| {
             SecretsResolverError::KeyError(format!("Failed to decode public key: {}", e))
@@ -184,6 +186,48 @@ impl Secret {
             }
         };
         Secret::from_str(key_id, &jwk)
+    }
+
+    /// Get the multibase (Base58btc) encoded public key
+    pub fn get_public_keymultibase(&self) -> Result<String> {
+        let encoded = match self.key_type {
+            KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
+            KeyType::P256 => MultiEncodedBuf::encode_bytes(P256_PUB, &self.public_bytes),
+            KeyType::P384 => MultiEncodedBuf::encode_bytes(P384_PUB, &self.public_bytes),
+            KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PUB, &self.public_bytes),
+            KeyType::Secp256k1 => MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &self.public_bytes),
+            _ => {
+                return Err(SecretsResolverError::KeyError(
+                    "Unsupported key type".into(),
+                ));
+            }
+        };
+        Ok(multibase::encode(
+            multibase::Base::Base58Btc,
+            encoded.into_bytes(),
+        ))
+    }
+
+    /// Get the multibase (Base58btc) encoded private key
+    pub fn get_private_keymultibase(&self) -> Result<String> {
+        let encoded = match self.key_type {
+            KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PRIV, &self.private_bytes),
+            KeyType::P256 => MultiEncodedBuf::encode_bytes(P256_PRIV, &self.private_bytes),
+            KeyType::P384 => MultiEncodedBuf::encode_bytes(P384_PRIV, &self.private_bytes),
+            KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PRIV, &self.private_bytes),
+            KeyType::Secp256k1 => {
+                MultiEncodedBuf::encode_bytes(SECP256K1_PRIV, &self.private_bytes)
+            }
+            _ => {
+                return Err(SecretsResolverError::KeyError(
+                    "Unsupported key type".into(),
+                ));
+            }
+        };
+        Ok(multibase::encode(
+            multibase::Base::Base58Btc,
+            encoded.into_bytes(),
+        ))
     }
 
     /// Get the public key bytes

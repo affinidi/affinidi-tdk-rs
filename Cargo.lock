@@ -2720,6 +2720,8 @@ name = "did-webvh"
 version = "0.1.0"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
+ "affinidi-secrets-resolver",
+ "affinidi-tdk",
  "ahash 0.8.12",
  "anyhow",
  "console",

@@ -152,7 +152,7 @@ impl WebVHURL {
         Ok(WebVHURL {
             type_,
             did_url: url.to_string(),
-            scid: "{scid}".to_string(),
+            scid: "{SCID}".to_string(),
             domain: domain.to_string(),
             port,
             path,
