@@ -2,7 +2,7 @@
 *   Recognized crypto suites
 */
 
-use affinidi_tdk_common::secrets_resolver::secrets::{KeyType, Secret};
+use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
 use serde::{Deserialize, Serialize};
 

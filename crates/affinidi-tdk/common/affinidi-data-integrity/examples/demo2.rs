@@ -62,7 +62,7 @@ async fn main() {
     let vm = did_doc.find_resource(&DIDURL::new("did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2#z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2").unwrap()).unwrap();
 
     println!("vm: {:?}", vm);
-    let a = sign_data_jcs(&tdk.get_shared_state(), &unsecured, vm_id)
+    let a = sign_data_jcs(&tdk.get_shared_state().secrets_resolver, &unsecured, vm_id)
         .await
         .unwrap();
     println!(" *************** ");

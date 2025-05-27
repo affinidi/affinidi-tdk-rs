@@ -1,4 +1,4 @@
-use affinidi_tdk_common::{TDKSharedState, secrets_resolver::SecretsResolver};
+use affinidi_secrets_resolver::SecretsResolver;
 use chrono::Utc;
 use crypto_suites::CryptoSuite;
 use multibase::Base;
@@ -50,16 +50,17 @@ pub struct DataIntegrityProof {
 /// data_doc: An object that can be serialized to JSON.
 ///
 /// Returns a Result containing the signature as a String or an error.
-pub async fn sign_data_jcs<D>(
-    tdk: &TDKSharedState,
+pub async fn sign_data_jcs<D, S>(
+    secrets_resolver: &S,
     data_doc: &D,
     vm_id: &str,
 ) -> Result<Value, DataIntegrityError>
 where
     D: Serialize,
+    S: SecretsResolver,
 {
     // Initialise as required
-    let Some(secret) = tdk.secrets_resolver.get_secret(vm_id).await else {
+    let Some(secret) = secrets_resolver.get_secret(vm_id).await else {
         return Err(DataIntegrityError::SecretsError(format!(
             "Cannot find secret for {}",
             vm_id

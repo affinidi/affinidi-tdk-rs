@@ -3,14 +3,18 @@
 */
 
 use affinidi_secrets_resolver::secrets::Secret;
-use affinidi_tdk::{
-    dids::{DID, KeyType},
-    meeting_place::find_api_service_endpoint,
-};
+use affinidi_tdk::dids::{DID, KeyType};
+use ahash::AHashSet;
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
-use did_webvh::url::WebVHURL;
+use did_webvh::{
+    SCID_HOLDER,
+    log_entry::LogEntry,
+    parameters::{FieldAction, Parameters},
+    url::WebVHURL,
+    witness::{Witness, Witnesses},
+};
 use serde_json::{Value, json};
 use tracing_subscriber::filter;
 use url::Url;
@@ -122,7 +126,7 @@ async fn main() -> Result<()> {
     // ************************************************************************
     let did_document = loop {
         match create_did_document(&webvh_did) {
-            Ok(keys) => break keys,
+            Ok(doc) => break doc,
             Err(_) => {
                 println!(
                     "{}",
@@ -149,6 +153,36 @@ async fn main() -> Result<()> {
         style(&serde_json::to_string_pretty(&did_document).unwrap()).color256(141)
     );
 
+    // ************************************************************************
+    // Step 4: Configure Parameters
+    // ************************************************************************
+    let parameters = loop {
+        match configure_parameters(&webvh_did, &authorizing_keys) {
+            Ok(keys) => break keys,
+            Err(_) => {
+                println!(
+                    "{}",
+                    style("Invalid did document, please try again").color256(196)
+                );
+                continue;
+            }
+        }
+    };
+
+    // ************************************************************************
+    // Step 5: Create preliminary JSON Log Entry
+    // ************************************************************************
+
+    let log_entry = LogEntry::create_first_entry(
+        None, // No version time, defaults to now
+        &did_document,
+        &parameters,
+    )?;
+
+    println!(
+        "Log Entry:\n{}",
+        serde_json::to_string_pretty(&log_entry).unwrap()
+    );
     Ok(())
 }
 
@@ -723,4 +757,230 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
             service_id += 1;
         }
     }
+}
+
+fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<Parameters> {
+    println!(
+        "{} {}",
+        style("Configuring Parameters for:").color256(69),
+        style(webvh_did).color256(141),
+    );
+
+    let mut parameters = Parameters {
+        scid: Some(SCID_HOLDER.to_string()),
+        deactivated: Some(false),
+        ..Default::default()
+    };
+
+    // Update Keys
+    let mut update_keys = Vec::new();
+    for key in authorizing_keys {
+        update_keys.push(key.get_public_keymultibase()?);
+    }
+    parameters.update_keys = FieldAction::Value(update_keys);
+
+    // Portable
+    println!(
+        "{}",
+        style("A webvh DID can be portable, allowing for it to move to another web address.")
+            .color256(69)
+    );
+    println!(
+        "\t{}",
+        style("Portability can only be enabled on the initial creation of the DID!").color256(214)
+    );
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Is this DID portable?")
+        .default(true)
+        .interact()?
+    {
+        parameters.portable = Some(true);
+    } else {
+        parameters.portable = None;
+    }
+
+    // Next Key Hashes
+    println!(
+        "{}",
+        style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
+            .color256(69)
+    );
+    let mut next_key_hashes = Vec::new();
+    loop {
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Generate a pre-rotated key?")
+            .default(true)
+            .interact()?
+        {
+            // Generate a new key
+            let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
+            println!(
+                "{} {} {} {}",
+                style("publicKeyMultibase:").color256(69),
+                style(&key.get_public_keymultibase()?).color256(34),
+                style("privateKeyMultibase:").color256(69),
+                style(&key.get_private_keymultibase()?).color256(214)
+            );
+            next_key_hashes.push(key.get_public_keymultibase()?);
+        } else {
+            break;
+        }
+    }
+    if next_key_hashes.is_empty() {
+        parameters.next_key_hashes = FieldAction::Absent;
+    } else {
+        parameters.next_key_hashes = FieldAction::Value(next_key_hashes);
+    }
+
+    // Witness Nodes
+    manage_witnesses(&mut parameters)?;
+
+    // Watchers?
+    manage_watchers(&mut parameters)?;
+
+    // TTL
+    println!(
+        "{}",
+        style("Setting a Time To Live (TTL) in seconds can help resolvers cache a resolved webvh DID correctly.")
+            .color256(69));
+    println!(
+        "\t{}",
+        style(
+            "Not setting a TTL leaves it up to the DID resolver to determine how long to cache for."
+        )
+        .color256(69)
+    );
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Do you want to use a TTL?")
+        .default(true)
+        .interact()?
+    {
+        let ttl: u32 = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("TTL in Seconds?")
+            .interact()
+            .unwrap();
+        parameters.ttl = Some(ttl);
+    }
+
+    Ok(parameters)
+}
+
+fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
+    println!(
+        "{}",
+        style("To protect against compromised controller authorization keys, use witness nodes which can offer additional protection!")
+            .color256(69)
+    );
+    if !Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Do you want to use witnesses?")
+        .default(true)
+        .interact()?
+    {
+        return Ok(());
+    }
+
+    // Using Witnesses
+    println!(
+        "{}",
+        style("What is the minimum number (threshold) of witnesses required to witness a change?")
+            .color256(69)
+    );
+    println!(
+        "\t{}",
+        style("Number of witnesses should be higher than threshold to handle failure of a witness node(s)")
+            .color256(69)
+    );
+    let threshold: u32 = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Witness Threshold Count?")
+        .interact()
+        .unwrap();
+
+    let mut witnesses = Witnesses {
+        threshold,
+        witnesses: AHashSet::new(),
+    };
+
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Generate witness DIDs for you?")
+        .default(true)
+        .interact()?
+    {
+        for i in 0..(threshold + 1) {
+            let (did, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
+            println!(
+                "{} {}",
+                style(format!("Witness #{:02}:", i)).color256(69),
+                style(&did).color256(141)
+            );
+            println!(
+                "\t{} {} {} {}",
+                style("publicKeyMultibase:").color256(69),
+                style(&key.get_public_keymultibase()?).color256(34),
+                style("privateKeyMultibase:").color256(69),
+                style(&key.get_private_keymultibase()?).color256(214)
+            );
+            witnesses.witnesses.insert(Witness { id: did });
+        }
+    } else {
+        loop {
+            let did: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!("Witness #{:02} DID?", witnesses.witnesses.len()))
+                .interact()
+                .unwrap();
+
+            witnesses.witnesses.insert(Witness { id: did });
+
+            if !Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt(format!(
+                    "Add another witness: current:({:02}) threashold:({:02})?",
+                    witnesses.witnesses.len(),
+                    threshold
+                ))
+                .default(true)
+                .interact()?
+            {
+                break;
+            }
+        }
+    }
+
+    parameters.witness = FieldAction::Value(witnesses);
+    Ok(())
+}
+
+fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
+    println!(
+        "{}",
+        style("For reliability and durability, you should nominate watchers for this DID")
+            .color256(69)
+    );
+    if !Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Do you want to add watchers??")
+        .default(true)
+        .interact()?
+    {
+        return Ok(());
+    }
+
+    let mut watchers = Vec::new();
+
+    loop {
+        let did: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("Watcher DID?")
+            .interact()
+            .unwrap();
+
+        watchers.push(did);
+
+        if !Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Add another watcher?")
+            .default(true)
+            .interact()?
+        {
+            break;
+        }
+    }
+
+    parameters.watchers = FieldAction::Value(watchers);
+    Ok(())
 }
