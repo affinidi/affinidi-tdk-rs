@@ -10,7 +10,6 @@ use ssi::dids::{
 use thiserror::Error;
 use url::{URLType, WebVHURL};
 
-pub mod create;
 pub mod log_entry;
 pub mod parameters;
 pub mod url;
@@ -39,7 +38,7 @@ impl DIDMethodResolver for DIDWebVH {
     async fn resolve_method_representation<'a>(
         &'a self,
         method_specific_id: &'a str,
-        options: Options,
+        _: Options,
     ) -> Result<Output<Vec<u8>>, Error> {
         let parsed_did_url = WebVHURL::parse_did_url(method_specific_id)
             .map_err(|err| Error::Internal(format!("webvh error: {}", err)))?;

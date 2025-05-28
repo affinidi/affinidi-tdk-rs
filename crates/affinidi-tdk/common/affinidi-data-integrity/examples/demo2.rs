@@ -1,4 +1,4 @@
-use affinidi_data_integrity::sign_data_jcs;
+use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_tdk::{
     TDK,
     common::config::TDKConfig,
@@ -51,7 +51,10 @@ async fn main() {
     )
     .await
     .unwrap();
-    tdk.get_shared_state().secrets_resolver.insert(secret).await;
+    tdk.get_shared_state()
+        .secrets_resolver
+        .insert(secret.clone())
+        .await;
 
     let resolved = tdk.did_resolver().resolve(did).await.unwrap();
     let did_doc = resolved.doc;
@@ -59,10 +62,10 @@ async fn main() {
     let vm = did_doc.verification_relationships.assertion_method.first();
     println!("vm: {:?}", vm);
 
-    let vm = did_doc.find_resource(&DIDURL::new("did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2#z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2").unwrap()).unwrap();
+    let vm = did_doc.find_resource(DIDURL::new("did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2#z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2").unwrap()).unwrap();
 
     println!("vm: {:?}", vm);
-    let a = sign_data_jcs(&tdk.get_shared_state().secrets_resolver, &unsecured, vm_id)
+    let a = DataIntegrityProof::sign_data_jcs(&unsecured, vm_id, &secret)
         .await
         .unwrap();
     println!(" *************** ");

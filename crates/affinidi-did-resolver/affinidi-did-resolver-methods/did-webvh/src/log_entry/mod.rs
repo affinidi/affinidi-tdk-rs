@@ -2,6 +2,7 @@
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
 use affinidi_data_integrity::DataIntegrityProof;
+use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use multibase::Base;
 use multihash::Multihash;
@@ -10,7 +11,10 @@ use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
 
-use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
+use crate::{
+    DIDWebVHError, SCID_HOLDER,
+    parameters::{FieldAction, Parameters},
+};
 
 /// Each version of the DID gets a new log entry
 /// [Log Entries](https://identity.foundation/didwebvh/v1.0/#the-did-log-file)
@@ -39,19 +43,46 @@ impl LogEntry {
     ///
     /// Inputs:
     /// - version_time: Optional ISO 8601 date string, If not given, defaults to now.
+    /// - document: The DID Document as a JSON Value.
+    /// - parameters: The Parameters for the Log Entry.
+    /// - secret: The Secret used to sign the Log Entry.
     ///
     /// Returns:
     /// - A valid Log Entry
-    pub fn create_first_entry(
+    pub async fn create_first_entry(
         version_time: Option<String>,
         document: &Value,
         parameters: &Parameters,
+        secret: &Secret,
     ) -> Result<LogEntry, DIDWebVHError> {
         let now = Utc::now();
 
         // Ensure SCID field is set correctly
         let mut parameters = parameters.clone();
         parameters.scid = Some(SCID_HOLDER.to_string());
+
+        // Create a VerificationMethod ID from the first updatekey
+        let vm_id = if let FieldAction::Value(value) = &parameters.update_keys {
+            if let Some(key) = value.first() {
+                // Create a VerificationMethod ID from the first update key
+                ["did:key:", key, "#", key].concat()
+            } else {
+                return Err(DIDWebVHError::SCIDError(
+                    "No update keys provided in parameters".to_string(),
+                ));
+            }
+        } else {
+            return Err(DIDWebVHError::SCIDError(
+                "No update keys provided in parameters".to_string(),
+            ));
+        };
+        // Check that the vm_id matches the secret key id
+        if secret.id != vm_id {
+            return Err(DIDWebVHError::SCIDError(format!(
+                "Secret key ID {} does not match VerificationMethod ID {}",
+                secret.id, vm_id
+            )));
+        }
 
         let log_entry = LogEntry {
             version_id: SCID_HOLDER.to_string(),
@@ -73,11 +104,6 @@ impl LogEntry {
             ))
         })?;
 
-        println!("{}", &le_str);
-        println!();
-        println!(" ******************* ");
-        println!();
-        println!("{}", &le_str.replace(SCID_HOLDER, &scid));
         let mut log_entry: LogEntry = serde_json::from_str(&le_str.replace(SCID_HOLDER, &scid))
             .map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
@@ -96,6 +122,23 @@ impl LogEntry {
 
         log_entry.version_id = ["1-", &entry_hash].concat();
 
+        // Generate the proof for the log entry
+        let log_entry = serde_json::from_value(
+            DataIntegrityProof::sign_data_jcs(&log_entry, &vm_id, secret)
+                .await
+                .map_err(|e| {
+                    DIDWebVHError::SCIDError(format!(
+                        "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                        e
+                    ))
+                })?,
+        )
+        .map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't deserialize signed LogEntry. Reason: {}",
+                e
+            ))
+        })?;
         Ok(log_entry)
     }
 

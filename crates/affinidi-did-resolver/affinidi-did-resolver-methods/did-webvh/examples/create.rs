@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     // ************************************************************************
     // Step 1: Get the URLs for this DID
     // ************************************************************************
-    let (http_url, webvh_did) = loop {
+    let (_, webvh_did) = loop {
         match get_address() {
             Ok((url, did)) => break (url, did),
             Err(_) => {
@@ -177,7 +177,9 @@ async fn main() -> Result<()> {
         None, // No version time, defaults to now
         &did_document,
         &parameters,
-    )?;
+        authorizing_keys.first().unwrap(),
+    )
+    .await?;
 
     println!(
         "Log Entry:\n{}",
