@@ -214,8 +214,8 @@ impl Secret {
     pub fn get_public_keymultibase_hash(&self) -> Result<String> {
         let key = self.get_public_keymultibase()?;
 
-        // SHA_256 code = 0x12, length of SHA256 is 32 bytes
-        let hash_encoded = Multihash::<32>::wrap(0x12, key.as_bytes()).map_err(|e| {
+        // SHA_256 code = 0x12
+        let hash_encoded = Multihash::<64>::wrap(0x12, key.as_bytes()).map_err(|e| {
             SecretsResolverError::KeyError(format!(
                 "Couldn't create multihash encoding for Public Key. Reason: {}",
                 e
