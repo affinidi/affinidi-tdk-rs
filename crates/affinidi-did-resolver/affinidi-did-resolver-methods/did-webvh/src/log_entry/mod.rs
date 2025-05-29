@@ -1,6 +1,10 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
+use crate::{
+    DIDWebVHError, SCID_HOLDER,
+    parameters::{FieldAction, Parameters},
+};
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
@@ -11,14 +15,11 @@ use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    DIDWebVHError, SCID_HOLDER,
-    parameters::{FieldAction, Parameters},
-};
+pub mod read;
 
 /// Each version of the DID gets a new log entry
 /// [Log Entries](https://identity.foundation/didwebvh/v1.0/#the-did-log-file)
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct LogEntry {
     /// format integer-prev_hash
     pub version_id: String,
@@ -63,7 +64,7 @@ impl LogEntry {
 
         // Create a VerificationMethod ID from the first updatekey
         let vm_id = if let FieldAction::Value(value) = &parameters.update_keys {
-            if let Some(key) = value.first() {
+            if let Some(key) = value.iter().next() {
                 // Create a VerificationMethod ID from the first update key
                 ["did:key:", key, "#", key].concat()
             } else {
@@ -172,5 +173,16 @@ impl LogEntry {
         })?;
 
         Ok(multibase::encode(Base::Base58Btc, hash_encoded.to_bytes()))
+    }
+
+    /// Takes a LogEntry and creates a new set of LogEntries to revoke the webvh DID
+    /// Returns one or more Log Entries
+    /// NOTE: May return more than a single log entry if updateKeys need to be revoked first.
+    pub fn revoke(&self) -> Result<Vec<LogEntry>, DIDWebVHError> {
+        let mut revoked_entry: LogEntry = self.clone();
+        revoked_entry.proof = None;
+        revoked_entry.parameters.deactivated = Some(true);
+        revoked_entry.parameters.update_keys = FieldAction::None;
+        Ok(Vec::new())
     }
 }

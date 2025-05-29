@@ -2,7 +2,7 @@
 *   Handling of witnessing changes to the log entries
 */
 
-use ahash::AHashSet;
+use ahash::HashSet;
 use serde::{Deserialize, Serialize};
 /// Witness nodes
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -12,7 +12,7 @@ pub struct Witnesses {
     pub threshold: u32,
 
     /// Set of witness nodes
-    pub witnesses: AHashSet<Witness>,
+    pub witnesses: HashSet<Witness>,
 }
 
 /// Single Witness Node

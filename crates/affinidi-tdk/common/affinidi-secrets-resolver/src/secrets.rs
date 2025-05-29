@@ -4,6 +4,7 @@ Handles Secrets - mainly used for internal representation and for saving to file
 */
 use crate::errors::{Result, SecretsResolverError};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ssi::{
@@ -205,6 +206,24 @@ impl Secret {
         Ok(multibase::encode(
             multibase::Base::Base58Btc,
             encoded.into_bytes(),
+        ))
+    }
+
+    /// Generates a hash of the multikey - useful where you want to pre-rotate keys
+    /// but not disclose the actual public key itself!
+    pub fn get_public_keymultibase_hash(&self) -> Result<String> {
+        let key = self.get_public_keymultibase()?;
+
+        // SHA_256 code = 0x12, length of SHA256 is 32 bytes
+        let hash_encoded = Multihash::<32>::wrap(0x12, key.as_bytes()).map_err(|e| {
+            SecretsResolverError::KeyError(format!(
+                "Couldn't create multihash encoding for Public Key. Reason: {}",
+                e
+            ))
+        })?;
+        Ok(multibase::encode(
+            multibase::Base::Base58Btc,
+            hash_encoded.to_bytes(),
         ))
     }
 

@@ -3,7 +3,8 @@
 *   used when processing the current and previous Log Entry
 */
 
-use crate::witness::Witnesses;
+use crate::{DIDWebVHError, witness::Witnesses};
+use ahash::{HashSet, HashSetExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, de::DeserializeAsWrap};
 
@@ -110,6 +111,10 @@ where
 /// Parameters that help with the resolution of a webvh DID
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Parameters {
+    /// Is key pre-rotation active?
+    #[serde(skip)]
+    pub pre_rotation_active: bool,
+
     /// DID version specification
     /// Default: `did:webvh:1.0`
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,7 +129,12 @@ pub struct Parameters {
         skip_serializing_if = "FieldAction::is_absent",
         serialize_with = "se_field_action"
     )]
-    pub update_keys: FieldAction<Vec<String>>,
+    pub update_keys: FieldAction<HashSet<String>>,
+
+    /// Depending on if pre-rotation is active,
+    /// the set of active updateKeys can change
+    #[serde(skip)]
+    pub active_update_keys: HashSet<String>,
 
     /// Can you change the web address for this DID?
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,7 +145,7 @@ pub struct Parameters {
         skip_serializing_if = "FieldAction::is_absent",
         serialize_with = "se_field_action"
     )]
-    pub next_key_hashes: FieldAction<Vec<String>>,
+    pub next_key_hashes: FieldAction<HashSet<String>>,
 
     /// Parameters for witness nodes
     #[serde(
@@ -143,6 +153,12 @@ pub struct Parameters {
         serialize_with = "se_field_action"
     )]
     pub witness: FieldAction<Witnesses>,
+
+    /// witness doesn't take effect till after this log entry
+    /// Store the next value so it can be updated on the next log entry
+    /// Only used for processing the next log entry
+    #[serde(skip)]
+    pub witness_after: FieldAction<Witnesses>,
 
     /// DID watchers for this DID
     #[serde(
@@ -163,15 +179,108 @@ pub struct Parameters {
 impl Default for Parameters {
     fn default() -> Self {
         Parameters {
+            pre_rotation_active: false,
             method: Some("did:webvh:1.0".to_string()),
             scid: None,
             update_keys: FieldAction::Absent,
+            active_update_keys: HashSet::new(),
             portable: None,
             next_key_hashes: FieldAction::Absent,
             witness: FieldAction::Absent,
+            witness_after: FieldAction::Absent,
             watchers: FieldAction::Absent,
             deactivated: None,
             ttl: None,
         }
+    }
+}
+
+impl Parameters {
+    /// validate and update a Parameters object based on the Log Entry
+    pub fn validate_udpate(
+        &self,
+        previous: Option<&Parameters>,
+    ) -> Result<Parameters, DIDWebVHError> {
+        let mut new_parameters = Parameters {
+            scid: self.scid.clone(),
+            ..Default::default()
+        };
+
+        // Handle previous values
+        if let Some(previous) = previous {
+            new_parameters.pre_rotation_active = previous.pre_rotation_active;
+            new_parameters.witness = previous.witness_after.clone();
+            new_parameters.portable = previous.portable;
+            new_parameters.next_key_hashes = previous.next_key_hashes.clone();
+        }
+
+        // Validate and process nextKeyHashes
+        match &self.next_key_hashes {
+            FieldAction::Absent => {
+                // If absent, keep the previous value
+            }
+            FieldAction::None => {
+                // If None, turn off key rotation
+                new_parameters.next_key_hashes = FieldAction::None;
+                new_parameters.pre_rotation_active = false; // If None, pre-rotation is not active
+            }
+            FieldAction::Value(next_key_hashes) => {
+                if next_key_hashes.is_empty() {
+                    return Err(DIDWebVHError::ParametersError(
+                        "nextKeyHashes cannot be empty".to_string(),
+                    ));
+                }
+                new_parameters.next_key_hashes = FieldAction::Value(next_key_hashes.clone());
+                new_parameters.pre_rotation_active = true; // If Value, pre-rotation is active
+            }
+        }
+
+        // Validate and update UpdateKeys
+        if previous.is_none() {
+            // First Log Entry checks
+            if let FieldAction::Value(update_keys) = &self.update_keys {
+                if update_keys.is_empty() {
+                    return Err(DIDWebVHError::ParametersError(
+                        "updateKeys cannot be empty".to_string(),
+                    ));
+                }
+                new_parameters.update_keys = FieldAction::Value(update_keys.clone());
+            } else {
+                return Err(DIDWebVHError::ParametersError(
+                    "updateKeys must be provided on first Log Entry".to_string(),
+                ));
+            }
+        } else if let FieldAction::Value(update_keys) = &self.update_keys {
+            if update_keys.is_empty() {
+                return Err(DIDWebVHError::ParametersError(
+                    "updateKeys cannot be empty".to_string(),
+                ));
+            }
+        }
+
+        // Check Portability
+        if let Some(portable) = self.portable {
+            if previous.is_none() {
+                new_parameters.portable = self.portable;
+            } else if portable {
+                return Err(DIDWebVHError::ParametersError(
+                    "Portable is being set to true after the first Log Entry".to_string(),
+                ));
+            } else {
+                // Can only be set to false after first Log Entry
+                new_parameters.portable = Some(false);
+            }
+        } else if previous.is_none() {
+            // First Log entry, if portable not specified then defaults to false
+            new_parameters.portable = Some(false)
+        }
+
+        Ok(new_parameters)
+    }
+
+    /// Has this DID been deactivated?
+    /// returns TRUE if deactivated
+    pub fn did_deactivated(&self) -> bool {
+        self.deactivated.unwrap_or(false)
     }
 }

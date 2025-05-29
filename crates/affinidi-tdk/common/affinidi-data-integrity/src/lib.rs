@@ -23,7 +23,7 @@ pub enum DataIntegrityError {
     SecretsError(String),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataIntegrityProof {
     /// Must be 'DataIntegrityProof'

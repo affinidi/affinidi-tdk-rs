@@ -30,6 +30,10 @@ pub enum DIDWebVHError {
     NotImplemented(String),
     #[error("SCIDError: {0}")]
     SCIDError(String),
+    #[error("LogEntryError: {0}")]
+    LogEntryError(String),
+    #[error("ParametersError: {0}")]
+    ParametersError(String),
 }
 
 pub struct DIDWebVH;
@@ -60,17 +64,22 @@ impl DIDMethod for DIDWebVH {
 
 #[cfg(test)]
 mod tests {
+    use ahash::{HashSet, HashSetExt};
+
     use crate::parameters::{FieldAction, Parameters};
 
     #[test]
     fn check_serialization_field_action() {
         let params = Parameters {
+            pre_rotation_active: false,
             method: None,
             scid: None,
             update_keys: FieldAction::Absent,
+            active_update_keys: HashSet::new(),
             portable: None,
             next_key_hashes: FieldAction::Absent,
             witness: FieldAction::None,
+            witness_after: FieldAction::None,
             watchers: FieldAction::Value(vec!["url".to_string()]),
             deactivated: None,
             ttl: None,

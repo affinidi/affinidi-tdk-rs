@@ -4,7 +4,7 @@
 
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
-use ahash::AHashSet;
+use ahash::{HashSet, HashSetExt};
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -775,9 +775,9 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
     };
 
     // Update Keys
-    let mut update_keys = Vec::new();
+    let mut update_keys = HashSet::new();
     for key in authorizing_keys {
-        update_keys.push(key.get_public_keymultibase()?);
+        update_keys.insert(key.get_public_keymultibase()?);
     }
     parameters.update_keys = FieldAction::Value(update_keys);
 
@@ -807,7 +807,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
             .color256(69)
     );
-    let mut next_key_hashes = Vec::new();
+    let mut next_key_hashes: HashSet<String> = HashSet::new();
     loop {
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Generate a pre-rotated key?")
@@ -817,13 +817,15 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
             // Generate a new key
             let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
             println!(
-                "{} {} {} {}",
+                "{} {} {} {}\n\t{} {}",
                 style("publicKeyMultibase:").color256(69),
                 style(&key.get_public_keymultibase()?).color256(34),
                 style("privateKeyMultibase:").color256(69),
-                style(&key.get_private_keymultibase()?).color256(214)
+                style(&key.get_private_keymultibase()?).color256(214),
+                style("key hash:").color256(69),
+                style(&key.get_public_keymultibase_hash()?).color256(214)
             );
-            next_key_hashes.push(key.get_public_keymultibase()?);
+            next_key_hashes.insert(key.get_public_keymultibase_hash()?);
         } else {
             break;
         }
@@ -899,7 +901,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
 
     let mut witnesses = Witnesses {
         threshold,
-        witnesses: AHashSet::new(),
+        witnesses: HashSet::new(),
     };
 
     if Confirm::with_theme(&ColorfulTheme::default())
