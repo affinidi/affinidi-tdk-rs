@@ -73,6 +73,10 @@ pub struct RegisterOffer {
     #[serde(rename = "mediatorEndpoint")]
     mediator_endpoint: String,
 
+    /// DID of the DIDComm mediator service for this offer
+    #[serde(rename = "mediatorDid")]
+    mediator_did: String,
+
     /// WebSocket(S) endpoint of the DIDComm mediator service to be used for this offer
     #[serde(rename = "mediatorWSSEndpoint")]
     mediator_websocket_endpoint: String,
@@ -323,6 +327,7 @@ impl RegisterOfferBuilder {
             device_token: self.device_token.clone(),
             platform_type: self.platform_type.clone(),
             mediator_endpoint,
+            mediator_did: self.mediator_did.clone(),
             mediator_websocket_endpoint,
             custom_phrase: self.custom_phrase.clone(),
             contact_attributes: self.contact_attributes,
