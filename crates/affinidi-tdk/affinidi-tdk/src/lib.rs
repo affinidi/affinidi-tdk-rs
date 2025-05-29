@@ -152,4 +152,9 @@ impl TDK {
             .insert_vec(&profile.secrets)
             .await;
     }
+
+    /// Access shared DID resolver
+    pub fn did_resolver(&self) -> &DIDCacheClient {
+        &self.inner.did_resolver
+    }
 }

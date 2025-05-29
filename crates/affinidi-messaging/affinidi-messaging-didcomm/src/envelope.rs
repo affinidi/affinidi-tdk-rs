@@ -24,7 +24,7 @@ use std::str::FromStr;
 pub enum Envelope {
     Jwe(Jwe),
     Jws(Jws),
-    Message(Message),
+    Message(Box<Message>),
 }
 impl FromStr for Envelope {
     type Err = Error;
@@ -39,7 +39,7 @@ impl Envelope {
         match self {
             Envelope::Jwe(jwe) => Ok(ParsedEnvelope::Jwe(jwe.to_owned().parse()?)),
             Envelope::Jws(jws) => Ok(ParsedEnvelope::Jws(jws.parse()?)),
-            Envelope::Message(msg) => Ok(ParsedEnvelope::Message(msg.to_owned())),
+            Envelope::Message(msg) => Ok(ParsedEnvelope::Message(*msg.to_owned())),
         }
     }
 }

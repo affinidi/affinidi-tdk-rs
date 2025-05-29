@@ -12,6 +12,7 @@ You can use this SDK in either local (resolving occurs locally) or in network (r
 - did:pkh
 - did:peer
 - did:web
+- did:webvh
 - did:example
   - NOTE: This is enabled using Rust feature `did:example`
   - NOTE: did:example must be manually loaded into the resolver as the DID DOC is NOT deterministic!

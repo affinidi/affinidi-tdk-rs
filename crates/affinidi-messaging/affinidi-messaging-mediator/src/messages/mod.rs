@@ -157,7 +157,7 @@ impl MessageType {
 pub enum WrapperType {
     /// to_did, message, expires_at
     Envelope(String, String, u64),
-    Message(Message),
+    Message(Box<Message>),
     #[default]
     None,
 }
