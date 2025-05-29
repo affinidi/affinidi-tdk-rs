@@ -725,7 +725,7 @@ fn _generate_response_message(
     Ok(ProcessMessageResponse {
         store_message: true,
         force_live_delivery: false,
-        data: crate::messages::WrapperType::Message(response),
+        data: crate::messages::WrapperType::Message(Box::new(response)),
         forward_message: false,
     })
 }

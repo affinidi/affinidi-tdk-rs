@@ -51,6 +51,7 @@ pub enum DIDMethod {
     PEER,
     PKH,
     WEB,
+    WEBVH,
     EXAMPLE,
 }
 
@@ -64,6 +65,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::PEER => write!(f, "peer"),
             DIDMethod::PKH => write!(f, "pkh"),
             DIDMethod::WEB => write!(f, "web"),
+            DIDMethod::WEBVH => write!(f, "webvh"),
             DIDMethod::EXAMPLE => write!(f, "example"),
         }
     }
@@ -89,6 +91,7 @@ impl TryFrom<&str> for DIDMethod {
             "peer" => Ok(DIDMethod::PEER),
             "pkh" => Ok(DIDMethod::PKH),
             "web" => Ok(DIDMethod::WEB),
+            "webvh" => Ok(DIDMethod::WEBVH),
             #[cfg(feature = "did_example")]
             "example" => Ok(DIDMethod::EXAMPLE),
             _ => Err(DIDCacheError::UnsupportedMethod(value.to_string())),

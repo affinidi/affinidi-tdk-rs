@@ -1,5 +1,10 @@
 # Meeting Place Changelog
 
+## 29th May 2025 (0.1.10)
+
+* **MAINTENANCE:** Updating dependencies (mainly SSI crate)
+* **UPDATE:** Meeting Place API changed, requiring mediator DID to be specified
+
 ## 3rd May 2025 (0.1.9)
 
 * **MAINTENANCE:** Updating dependencies, especially due to changes with DID
@@ -13,7 +18,7 @@ authentication
 
 ## 29th March 2025 (0.1.7)
 
-* FEATURE: MeetingPlace API's added
+* **FEATURE:** MeetingPlace API's added
   * query-offer
   * check-offer
   * register-offer

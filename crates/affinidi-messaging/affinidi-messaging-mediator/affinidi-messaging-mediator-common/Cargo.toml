@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.10.7"
+version = "0.10.8"
 description = "Affinidi Messaging Mediator Common Library"
 edition.workspace = true
 authors.workspace = true
@@ -15,24 +15,24 @@ repository.workspace = true
 [dependencies]
 affinidi-messaging-sdk.workspace = true
 axum = { version = "0.8", features = ["ws"] }
-deadpool-redis = { version = "0.20", features = ["rt_tokio_1"] }
+deadpool-redis = { version = "0.21", features = ["rt_tokio_1"] }
 rand = "0.9"
 # Redis can only be updated when deadpool-redis supports the new version
-redis = { version = "0.29", features = [
-    "tokio-rustls-comp",
-    "tls-rustls-insecure",
-    "ahash",
+redis = { version = "0.31", features = [
+  "tokio-rustls-comp",
+  "tls-rustls-insecure",
+  "ahash",
 ] }
 rustls = { version = "0.23", default-features = false, features = [
-    "aws_lc_rs",
-    "tls12",
+  "aws_lc_rs",
+  "tls12",
 ] }
 semver = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tracing = { version = "0.1", features = [
-    "max_level_debug",
-    "release_max_level_info",
-    "valuable",
+  "max_level_debug",
+  "release_max_level_info",
+  "valuable",
 ] }

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.10.7"
+version = "0.10.8"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -45,9 +45,9 @@ ring = { version = "0.17", features = ["std"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-ssi = { version = "0.10" }
+ssi = { version = "0.11" }
 time = "0.3"
-tokio = { version = "1.44", features = ["full"] }
+tokio = { version = "1.45", features = ["full"] }
 toml = "0.8"
 tracing = { version = "0.1", features = [
   "max_level_debug",
@@ -60,7 +60,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.16", features = ["v4", "fast-rng"] }
+uuid = { version = "1.17", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-tdk.workspace = true

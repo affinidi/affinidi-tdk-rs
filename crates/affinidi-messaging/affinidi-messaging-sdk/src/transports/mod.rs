@@ -33,7 +33,7 @@ pub struct WebSocketSendResponse {
 #[derive(Debug)]
 pub enum SendMessageResponse {
     RestAPI(Value),
-    Message(Message),
+    Message(Box<Message>),
     EmptyResponse,
 }
 
@@ -106,7 +106,7 @@ impl ATM {
                     if let MessageType::ProblemReport = type_ {
                         Err(ATMError::from_problem_report(&message))
                     } else {
-                        Ok(SendMessageResponse::Message(message))
+                        Ok(SendMessageResponse::Message(Box::new(message)))
                     }
                 } else {
                     Err(ATMError::MsgSendError("No response from API".into()))
@@ -136,7 +136,7 @@ impl ATM {
                     if let Some(msg) = &first.msg {
                         let unpack = self.unpack(msg).await?;
 
-                        Ok(SendMessageResponse::Message(unpack.0))
+                        Ok(SendMessageResponse::Message(Box::new(unpack.0)))
                     } else {
                         Err(ATMError::MsgReceiveError(
                             "Received message response, but no actual message".into(),

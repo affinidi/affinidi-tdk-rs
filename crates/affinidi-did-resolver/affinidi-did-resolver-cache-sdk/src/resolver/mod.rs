@@ -1,5 +1,6 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use did_peer::DIDPeer;
+use did_webvh::DIDWebVH;
 use ssi::dids::{DID, DIDEthr, DIDJWK, DIDKey, DIDPKH, DIDResolver, DIDWeb, Document};
 use tracing::error;
 
@@ -100,6 +101,21 @@ impl DIDCacheClient {
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
+                    }
+                }
+            }
+            "webvh" => {
+                let method = DIDWebVH;
+
+                // due to how webvh can handle more complex URLs, we need to pass the raw URL
+                // all url related checks are handled in the webvh method
+                unsafe {
+                    match method.resolve(DID::new_unchecked(did.as_bytes())).await {
+                        Ok(res) => Ok(res.document.into_document()),
+                        Err(e) => {
+                            error!("Error: {:?}", e);
+                            Err(DIDCacheError::DIDError(e.to_string()))
+                        }
                     }
                 }
             }

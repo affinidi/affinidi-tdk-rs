@@ -8,10 +8,7 @@ use affinidi_messaging_sdk::{
         mediator::acls::{AccessListModeType, MediatorACLSet},
     },
 };
-use affinidi_tdk::secrets_resolver::{
-    SecretsResolver,
-    secrets::{Secret, SecretMaterial, SecretType},
-};
+use affinidi_tdk::secrets_resolver::{SecretsResolver, secrets::Secret};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use image::Luma;
 use log::info;
@@ -88,19 +85,16 @@ pub async fn create_new_profile(
         }
     };
 
-    let secret = Secret {
-        id: format!("{}#{}", did_key, did_key.to_string().split_at(8).1),
-        type_: SecretType::JsonWebKey2020,
-        secret_material: SecretMaterial::JWK {
-            private_key_jwk: json!({
-                "crv": "P-256",
-                "d":  d,
-                "kty": "EC",
-                "x": x,
-                "y": y
-            }),
-        },
-    };
+    let secret = Secret::from_str(
+        &format!("{}#{}", did_key, did_key.to_string().split_at(8).1),
+        &json!({
+            "crv": "P-256",
+            "d":  d,
+            "kty": "EC",
+            "x": x,
+            "y": y
+        }),
+    )?;
 
     let mut alias = if let Some(alias) = alias {
         alias

@@ -1,5 +1,11 @@
 # Affinidi TDK Changelog
 
+## 29th May 2025 (Release 0.1.12)
+
+* **MAINTENANCE:** Crate dependencies updated
+  * SSI crate 0.10 to 0.11
+* **FEATURE:** W3C data integrity library added
+
 ## 10th May 2025 (Release 0.1.11)
 
 * **FEATURE:** Added `secrets` storage and retrieval to TDK

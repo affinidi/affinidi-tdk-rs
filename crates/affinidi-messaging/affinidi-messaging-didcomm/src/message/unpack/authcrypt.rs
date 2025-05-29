@@ -172,7 +172,19 @@ where
         .kind(ErrorKind::Malformed, "Authcrypt payload is invalid utf8")?;
     debug!("payload = {}", payload);
 
-    let e = Envelope::from_str(&payload)?.parse()?.verify_didcomm()?;
+    let e = match Envelope::from_str(&payload) {
+        Ok(envelope) => envelope.parse()?.verify_didcomm()?,
+        Err(e) => {
+            return Err(err_msg(
+                ErrorKind::Malformed,
+                format!(
+                    "decrypted envelope successfully, but payload contents don't match a defined DIDComm format: {}",
+                    e
+                ),
+            ));
+        }
+    };
+
     debug!("returning envelope type ({})", e.get_type());
     Ok(Some(e))
 }

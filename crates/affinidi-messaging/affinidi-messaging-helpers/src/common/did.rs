@@ -1,7 +1,7 @@
 //! Methods relating to working with DID's
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_tdk::secrets_resolver::secrets::{Secret, SecretMaterial, SecretType};
+use affinidi_tdk::secrets_resolver::secrets::Secret;
 use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 use did_peer::{
@@ -112,31 +112,25 @@ pub fn create_did(
         DIDPeer::create_peer_did(&keys, services).expect("Failed to create did:peer");
 
     let secrets_json = vec![
-        Secret {
-            id: format!("{}#key-1", did_peer),
-            type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "Ed25519",
-                    "d":  local_did_peer_keys.v_d,
-                    "kty": "OKP",
-                    "x": local_did_peer_keys.v_x
-                }),
-            },
-        },
-        Secret {
-            id: format!("{}#key-2", did_peer),
-            type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "secp256k1",
-                    "d": local_did_peer_keys.e_d,
-                    "kty": "EC",
-                    "x": local_did_peer_keys.e_x,
-                    "y": local_did_peer_keys.e_y,
-                }),
-            },
-        },
+        Secret::from_str(
+            &format!("{}#key-1", did_peer),
+            &json!({
+                "crv": "Ed25519",
+                "d":  local_did_peer_keys.v_d,
+                "kty": "OKP",
+                "x": local_did_peer_keys.v_x
+            }),
+        )?,
+        Secret::from_str(
+            &format!("{}#key-2", did_peer),
+            &json!({
+                "crv": "secp256k1",
+                "d": local_did_peer_keys.e_d,
+                "kty": "EC",
+                "x": local_did_peer_keys.e_x,
+                "y": local_did_peer_keys.e_y,
+            }),
+        )?,
     ];
 
     Ok((did_peer, secrets_json))

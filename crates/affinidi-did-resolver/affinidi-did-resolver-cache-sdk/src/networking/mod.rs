@@ -53,7 +53,7 @@ pub struct WSResponseError {
 /// Error: An error response
 #[derive(Debug, Deserialize, Serialize)]
 pub enum WSResponseType {
-    Response(WSResponse),
+    Response(Box<WSResponse>),
     Error(WSResponseError),
 }
 
