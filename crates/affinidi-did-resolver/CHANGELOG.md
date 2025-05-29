@@ -2,6 +2,10 @@
 
 ## Changelog history
 
+### June 2025
+
+## DID webvh method (0.1.1)
+
 ### 29th May 2025
 
 ## DID Resolver Cache (release 0.5.4)

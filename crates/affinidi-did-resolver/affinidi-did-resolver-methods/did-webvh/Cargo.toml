@@ -1,6 +1,6 @@
 [package]
 name = "did-webvh"
-version = "0.1.0"
+version = "0.1.1"
 description = "Implementation of the did:webvh method in Rust, uses the ssi crate"
 repository.workspace = true
 edition.workspace = true
