@@ -159,10 +159,11 @@ async fn main() -> Result<()> {
     let parameters = loop {
         match configure_parameters(&webvh_did, &authorizing_keys) {
             Ok(keys) => break keys,
-            Err(_) => {
+            Err(e) => {
                 println!(
-                    "{}",
-                    style("Invalid did document, please try again").color256(196)
+                    "{} {}",
+                    style("Parameters Failed, please try again:").color256(196),
+                    style(e).color256(9)
                 );
                 continue;
             }
