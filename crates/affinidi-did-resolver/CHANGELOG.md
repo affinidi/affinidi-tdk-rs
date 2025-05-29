@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### 16th May 2025
+### 29th May 2025
 
 ## DID Resolver Cache (release 0.5.4)
 

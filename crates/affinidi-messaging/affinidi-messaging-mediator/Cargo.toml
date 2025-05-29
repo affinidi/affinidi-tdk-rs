@@ -29,8 +29,8 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.6"
-aws-sdk-secretsmanager = "1.74"
-aws-sdk-ssm = "1.78"
+aws-sdk-secretsmanager = "1.75"
+aws-sdk-ssm = "1.79"
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }

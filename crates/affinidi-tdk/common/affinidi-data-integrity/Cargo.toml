@@ -14,7 +14,6 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-secrets-resolver.workspace = true
-base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.1"
 multibase = "0.9"
@@ -28,7 +27,6 @@ tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
 ] }
-unsigned-varint = "0.8"
 
 [dev-dependencies]
 affinidi-tdk.workspace = true

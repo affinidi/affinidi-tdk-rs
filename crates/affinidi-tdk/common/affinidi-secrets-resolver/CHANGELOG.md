@@ -1,10 +1,14 @@
 # Affinidi Secrets Manager
 
-## xx May 2025 (0.1.8)
+## 29th May 2025 (0.1.9)
 
 * **MAINTENANCE:** Crate dependencies updated
 * **FEATURE:** `get_public_bytes()` and `get_private_bytes()` methods added
 * **FEATURE:** `get_public_multibase()` and `get_private_multibase()` methods added
+  * Returns a MultiKey format String
+* **FEATURE:** `get_public_multibase_hash()` method added
+  * Returns a Base58btc encoded Multihash of the MultiKey Public Key
+  * Useful for checks against pre-shared keys without disclosing the key itself
 
 ## Release 0.1.7
 

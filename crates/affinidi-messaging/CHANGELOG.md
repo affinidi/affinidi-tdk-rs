@@ -8,7 +8,7 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
-## May 2025
+## 29th May 2025
 
 ### DIDComm Library (0.10.8)
 
@@ -24,6 +24,10 @@ a payload successfully
 
 * **MAINTENANCE:** Crate dependencies updated (crate SSI)
   * **MAINTENANCE:** Includes `affinidi-messaging-meditor-comoon` and `affinidi-messaging-mediator-processors`
+
+### SDK (0.11.2)
+
+* **MAINTENANCE:** Crate dependencies updated (crate SSI)
 
 ### Text-Client (0.10.8)
 

@@ -1,6 +1,6 @@
 # Affinidi TDK Changelog
 
-## xxyy May 2025 (Release 0.1.12)
+## 29th May 2025 (Release 0.1.12)
 
 * **MAINTENANCE:** Crate dependencies updated
   * SSI crate 0.10 to 0.11
