@@ -11,7 +11,7 @@ use serde_with::{DeserializeAs, de::DeserializeAsWrap};
 
 /// This helps with serializing parameters into null, skipping or content
 /// webvh parameters can be missing(Absent), None(null) or contains content(Value)
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub enum FieldAction<T> {
     #[default]
     Absent,
@@ -202,7 +202,7 @@ impl Default for Parameters {
             witness: FieldAction::Absent,
             active_witness: FieldAction::Absent,
             watchers: FieldAction::Absent,
-            deactivated: None,
+            deactivated: Some(false),
             ttl: None,
         }
     }
@@ -226,6 +226,19 @@ impl Parameters {
             pre_rotation_previous_value = previous.pre_rotation_active;
             new_parameters.portable = previous.portable;
             new_parameters.next_key_hashes = previous.next_key_hashes.clone();
+            if let Some(deactivated) = previous.deactivated {
+                if deactivated {
+                    // If previous is deactivated, then no more log entries can be made
+                    return Err(DIDWebVHError::DeactivatedError(
+                        "DID was deactivated previous Log Entry, no more log entries are allowed."
+                            .to_string(),
+                    ));
+                } else {
+                    new_parameters.deactivated = Some(deactivated)
+                }
+            } else {
+                new_parameters.deactivated = Some(false);
+            }
         }
 
         // Validate and process nextKeyHashes
@@ -388,6 +401,25 @@ impl Parameters {
                     new_parameters.watchers = FieldAction::Value(watchers.clone());
                 }
             }
+        }
+
+        // Check deactivation status
+        if let Some(deactivated) = self.deactivated {
+            println!(
+                "deactivated ({}) update_keys = {:#?}",
+                deactivated, new_parameters.update_keys
+            );
+            if deactivated && previous.is_none() {
+                // Can't be deactivated on the first log entry
+                return Err(DIDWebVHError::DeactivatedError(
+                    "DID cannot be deactivated on the first Log Entry".to_string(),
+                ));
+            } else if deactivated && (new_parameters.update_keys != FieldAction::None) {
+                return Err(DIDWebVHError::DeactivatedError(
+                    "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
+                ));
+            }
+            new_parameters.deactivated = Some(deactivated);
         }
 
         Ok(new_parameters)

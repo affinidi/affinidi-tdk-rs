@@ -37,6 +37,8 @@ pub enum DIDWebVHError {
     /// There was an error in validating the DID
     #[error("ValidationError: {0}")]
     ValidationError(String),
+    #[error("DeactivatedError: {0}")]
+    DeactivatedError(String),
 }
 
 pub struct DIDWebVH;

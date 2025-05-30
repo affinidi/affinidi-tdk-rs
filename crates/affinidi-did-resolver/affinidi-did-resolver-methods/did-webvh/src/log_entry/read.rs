@@ -29,10 +29,14 @@ impl LogEntry {
         P: AsRef<Path>,
     {
         if let Ok(lines) = LogEntry::read_from_json_file(file_path) {
+            let mut previous: Option<LogEntry> = None;
             for line in lines.map_while(Result::ok) {
-                let log_entry = serde_json::to_value(&line).map_err(|e| {
+                let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
                     DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
                 })?;
+                log_entry.verify_log_entry(previous.as_ref())?;
+
+                previous = Some(log_entry);
             }
         }
 
@@ -43,9 +47,20 @@ impl LogEntry {
 
     pub fn verify_log_entry(
         &self,
-        parameters: Option<&Parameters>,
+        previous: Option<&LogEntry>,
     ) -> Result<Parameters, DIDWebVHError> {
-        //
+        let parameters = match self
+            .parameters
+            .validate_udpate(previous.map(|p| &p.parameters))
+        {
+            Ok(params) => params,
+            Err(e) => {
+                return Err(DIDWebVHError::LogEntryError(format!(
+                    "Failed to validate parameters: {}",
+                    e
+                )));
+            }
+        };
 
         Ok(Parameters::default())
     }
