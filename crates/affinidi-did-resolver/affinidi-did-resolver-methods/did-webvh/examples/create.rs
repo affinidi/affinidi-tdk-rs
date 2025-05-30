@@ -2,6 +2,8 @@
 *   creates a new webvh DID
 */
 
+use std::{fs::File, io::Write};
+
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
 use ahash::{HashSet, HashSetExt};
@@ -186,6 +188,16 @@ async fn main() -> Result<()> {
         "Log Entry:\n{}",
         serde_json::to_string_pretty(&log_entry).unwrap()
     );
+
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Save to file did.jsonl?")
+        .default(true)
+        .interact()?
+    {
+        let mut file = File::create("did.jsonl")?;
+        file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
+    }
+
     Ok(())
 }
 

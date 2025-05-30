@@ -7,6 +7,7 @@ use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use ssi::{
     JWK,
     jwk::{Base64urlUInt, Params},
@@ -214,8 +215,14 @@ impl Secret {
     pub fn get_public_keymultibase_hash(&self) -> Result<String> {
         let key = self.get_public_keymultibase()?;
 
+        Secret::hash_string(&key)
+    }
+
+    /// Will convert a string to a base58btc encoded multihash (SHA256) representation
+    pub fn hash_string(key: &str) -> Result<String> {
+        let hash = Sha256::digest(key.as_bytes());
         // SHA_256 code = 0x12
-        let hash_encoded = Multihash::<64>::wrap(0x12, key.as_bytes()).map_err(|e| {
+        let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!(
                 "Couldn't create multihash encoding for Public Key. Reason: {}",
                 e
@@ -319,4 +326,22 @@ pub enum SecretMaterial {
 
     #[serde(rename_all = "camelCase")]
     Base58 { private_key_base58: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Secret;
+
+    #[test]
+    fn check_hash() {
+        let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD3";
+        let output = Secret::hash_string(input).expect("Hash of input");
+        assert_eq!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
+    }
+    #[test]
+    fn check_hash_bad() {
+        let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD4";
+        let output = Secret::hash_string(input).expect("Hash of input");
+        assert_ne!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
+    }
 }

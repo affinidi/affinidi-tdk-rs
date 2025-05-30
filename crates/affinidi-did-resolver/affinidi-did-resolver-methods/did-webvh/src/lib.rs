@@ -34,6 +34,9 @@ pub enum DIDWebVHError {
     LogEntryError(String),
     #[error("ParametersError: {0}")]
     ParametersError(String),
+    /// There was an error in validating the DID
+    #[error("ValidationError: {0}")]
+    ValidationError(String),
 }
 
 pub struct DIDWebVH;
@@ -79,7 +82,7 @@ mod tests {
             portable: None,
             next_key_hashes: FieldAction::Absent,
             witness: FieldAction::None,
-            witness_after: FieldAction::None,
+            active_witness: FieldAction::None,
             watchers: FieldAction::Value(vec!["url".to_string()]),
             deactivated: None,
             ttl: None,

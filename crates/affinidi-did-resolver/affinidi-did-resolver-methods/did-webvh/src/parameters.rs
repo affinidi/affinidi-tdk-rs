@@ -4,6 +4,7 @@
 */
 
 use crate::{DIDWebVHError, witness::Witnesses};
+use affinidi_secrets_resolver::secrets::Secret;
 use ahash::{HashSet, HashSetExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, de::DeserializeAsWrap};
@@ -16,6 +17,19 @@ pub enum FieldAction<T> {
     Absent,
     None,
     Value(T),
+}
+
+impl<T> FieldAction<T> {
+    /// If possible, get the value from the FieldAction
+    pub fn get_value(&self) -> Result<&T, DIDWebVHError> {
+        if let FieldAction::Value(value) = self {
+            Ok(value)
+        } else {
+            Err(DIDWebVHError::ParametersError(
+                "Expecting a value, but field is missing or null".to_string(),
+            ))
+        }
+    }
 }
 
 impl<T> FieldAction<T>
@@ -155,10 +169,9 @@ pub struct Parameters {
     pub witness: FieldAction<Witnesses>,
 
     /// witness doesn't take effect till after this log entry
-    /// Store the next value so it can be updated on the next log entry
-    /// Only used for processing the next log entry
+    /// This is the active witnesses for this log entry
     #[serde(skip)]
-    pub witness_after: FieldAction<Witnesses>,
+    pub active_witness: FieldAction<Witnesses>,
 
     /// DID watchers for this DID
     #[serde(
@@ -187,7 +200,7 @@ impl Default for Parameters {
             portable: None,
             next_key_hashes: FieldAction::Absent,
             witness: FieldAction::Absent,
-            witness_after: FieldAction::Absent,
+            active_witness: FieldAction::Absent,
             watchers: FieldAction::Absent,
             deactivated: None,
             ttl: None,
@@ -207,9 +220,10 @@ impl Parameters {
         };
 
         // Handle previous values
+        let mut pre_rotation_previous_value: bool = false;
         if let Some(previous) = previous {
             new_parameters.pre_rotation_active = previous.pre_rotation_active;
-            new_parameters.witness = previous.witness_after.clone();
+            pre_rotation_previous_value = previous.pre_rotation_active;
             new_parameters.portable = previous.portable;
             new_parameters.next_key_hashes = previous.next_key_hashes.clone();
         }
@@ -217,7 +231,12 @@ impl Parameters {
         // Validate and process nextKeyHashes
         match &self.next_key_hashes {
             FieldAction::Absent => {
-                // If absent, keep the previous value
+                // If absent, but is in pre-rotation state. This is an error
+                if new_parameters.pre_rotation_active {
+                    return Err(DIDWebVHError::ParametersError(
+                        "nextKeyHashes cannot be absent when pre-rotation is active".to_string(),
+                    ));
+                }
             }
             FieldAction::None => {
                 // If None, turn off key rotation
@@ -225,6 +244,7 @@ impl Parameters {
                 new_parameters.pre_rotation_active = false; // If None, pre-rotation is not active
             }
             FieldAction::Value(next_key_hashes) => {
+                // Replace nextKeyHashes with the new value
                 if next_key_hashes.is_empty() {
                     return Err(DIDWebVHError::ParametersError(
                         "nextKeyHashes cannot be empty".to_string(),
@@ -236,7 +256,37 @@ impl Parameters {
         }
 
         // Validate and update UpdateKeys
-        if previous.is_none() {
+        if let Some(previous) = previous {
+            if let FieldAction::Value(update_keys) = &self.update_keys {
+                // If pre-rotation is enabled, then validate and add immediately to active keys
+                if update_keys.is_empty() {
+                    return Err(DIDWebVHError::ParametersError(
+                        "updateKeys cannot be empty".to_string(),
+                    ));
+                }
+                if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
+                    // Key pre-rotation has been turned off
+                    // Update keys must be part of the previous nextKeyHashes
+                    Parameters::validate_pre_rotation_keys(
+                        previous.next_key_hashes.get_value()?,
+                        update_keys,
+                    )?;
+                    new_parameters.active_update_keys = update_keys.clone();
+                } else if new_parameters.pre_rotation_active {
+                    // Key pre-rotation is active
+                    // Update keys must be part of the previous nextKeyHashes
+                    Parameters::validate_pre_rotation_keys(
+                        previous.next_key_hashes.get_value()?,
+                        update_keys,
+                    )?;
+                    new_parameters.active_update_keys = update_keys.clone();
+                } else {
+                    // No Key pre-rotation is active
+                    new_parameters.active_update_keys = previous.update_keys.get_value()?.clone();
+                    new_parameters.update_keys = FieldAction::Value(update_keys.clone());
+                }
+            }
+        } else {
             // First Log Entry checks
             if let FieldAction::Value(update_keys) = &self.update_keys {
                 if update_keys.is_empty() {
@@ -248,12 +298,6 @@ impl Parameters {
             } else {
                 return Err(DIDWebVHError::ParametersError(
                     "updateKeys must be provided on first Log Entry".to_string(),
-                ));
-            }
-        } else if let FieldAction::Value(update_keys) = &self.update_keys {
-            if update_keys.is_empty() {
-                return Err(DIDWebVHError::ParametersError(
-                    "updateKeys cannot be empty".to_string(),
                 ));
             }
         }
@@ -275,7 +319,103 @@ impl Parameters {
             new_parameters.portable = Some(false)
         }
 
+        // Validate witness
+        if let Some(previous) = previous {
+            match &self.witness {
+                FieldAction::Absent => {
+                    // If absent, keep current witnesses
+                    new_parameters.active_witness = previous.witness.clone();
+                    new_parameters.witness = previous.witness.clone();
+                }
+                FieldAction::None => {
+                    // If None, turn off witness
+                    new_parameters.witness = FieldAction::None;
+                    // Still needs to be witnessed
+                    new_parameters.active_witness = previous.witness.clone();
+                }
+                FieldAction::Value(witnesses) => {
+                    // Replace witness with the new value
+                    witnesses.validate()?;
+                    new_parameters.witness = FieldAction::Value(witnesses.clone());
+                    new_parameters.active_witness = previous.witness.clone();
+                }
+            }
+        } else {
+            // First Log Entry
+            match &self.witness {
+                FieldAction::Absent | FieldAction::None => {
+                    new_parameters.active_witness = FieldAction::None;
+                    new_parameters.witness = FieldAction::None;
+                }
+                FieldAction::Value(witnesses) => {
+                    // Replace witness with the new value
+                    witnesses.validate()?;
+                    new_parameters.witness = FieldAction::Value(witnesses.clone());
+                    new_parameters.active_witness = FieldAction::Value(witnesses.clone());
+                }
+            }
+        }
+
+        // Validate Watchers
+        if let Some(previous) = previous {
+            match &self.watchers {
+                FieldAction::Absent => {
+                    // If absent, keep current watchers
+                    new_parameters.watchers = previous.watchers.clone();
+                }
+                FieldAction::None => {
+                    // If None, turn off watchers
+                    new_parameters.watchers = FieldAction::None;
+                }
+                FieldAction::Value(watchers) => {
+                    // Replace watchers with the new value
+                    new_parameters.watchers = FieldAction::Value(watchers.clone());
+                }
+            }
+        } else {
+            // First Log Entry
+            match &self.watchers {
+                FieldAction::Absent | FieldAction::None => {
+                    new_parameters.watchers = FieldAction::None;
+                }
+                FieldAction::Value(watchers) => {
+                    // Replace watchers with the new value
+                    if watchers.is_empty() {
+                        return Err(DIDWebVHError::ParametersError(
+                            "watchers cannot be empty".to_string(),
+                        ));
+                    }
+                    new_parameters.watchers = FieldAction::Value(watchers.clone());
+                }
+            }
+        }
+
         Ok(new_parameters)
+    }
+
+    /// When pre-rotation is enabled, check that each updateKey was defined in the previous
+    /// nextKeyHashes
+    /// Returns an error if validation fails
+    fn validate_pre_rotation_keys(
+        next_key_hashes: &HashSet<String>,
+        update_keys: &HashSet<String>,
+    ) -> Result<(), DIDWebVHError> {
+        for key in update_keys.iter() {
+            // Convert the key to the hash value
+            let check_hash = Secret::hash_string(key).map_err(|e| {
+                DIDWebVHError::ValidationError(format!(
+                    "Couldn't hash updateKeys key ({}). Reason: {}",
+                    key, e
+                ))
+            })?;
+            if !next_key_hashes.contains(&check_hash) {
+                return Err(DIDWebVHError::ValidationError(format!(
+                    "updateKey ({}) hash({}) was not specified in the previous nextKeyHashes!",
+                    key, check_hash
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Has this DID been deactivated?
@@ -283,4 +423,11 @@ impl Parameters {
     pub fn did_deactivated(&self) -> bool {
         self.deactivated.unwrap_or(false)
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn validate_good_first_log_entry() {}
 }
