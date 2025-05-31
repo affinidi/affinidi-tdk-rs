@@ -3,10 +3,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
-use sha2::{Digest, Sha256};
 use ssi::security::MultibaseBuf;
 
-use crate::{DataIntegrityError, DataIntegrityProof, GenericDocument, crypto_suites::CryptoSuite};
+use crate::{
+    DataIntegrityError, DataIntegrityProof, GenericDocument, crypto_suites::CryptoSuite,
+    hashing_eddsa_jcs,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,9 +107,7 @@ pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, Da
         })?);
 
     // Hash the fields and join
-    let mut jcs_doc_hash = Sha256::digest(jcs_doc.as_bytes()).to_vec();
-    let mut jcs_proof_hash = Sha256::digest(jcs_proof_config.as_bytes()).to_vec();
-    jcs_proof_hash.append(&mut jcs_doc_hash);
+    let hash_data = hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config);
 
     // Create public key bytes from Verification Material
     if !proof_options.verification_method.starts_with("did:key:") {
@@ -128,7 +128,7 @@ pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, Da
     crypto
         .verify(
             secret.as_slice(),
-            jcs_proof_hash.as_slice(),
+            hash_data.as_slice(),
             proof_value.1.as_slice(),
         )
         .map_err(|e| {

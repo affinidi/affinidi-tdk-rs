@@ -450,11 +450,8 @@ mod tests {
             ..Default::default()
         };
 
-        println!("parameters: {:#?}", parameters);
         let values = serde_json::to_value(parameters).unwrap();
 
-        println!("values: {:#?}", values);
-        println!("watchers: {:#?}", values.get("watchers"));
         assert!(values.get("watchers").is_none())
     }
 }

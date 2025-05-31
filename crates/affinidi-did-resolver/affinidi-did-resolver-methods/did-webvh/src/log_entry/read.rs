@@ -2,6 +2,8 @@
 *  Reads a JSON Log file, all functions related to reading and verifying Log Entries are here
 */
 
+use affinidi_data_integrity::verification_proof::verify_data;
+
 use super::LogEntry;
 use crate::{DIDWebVHError, parameters::Parameters};
 use std::{
@@ -62,6 +64,26 @@ impl LogEntry {
             }
         };
 
-        Ok(Parameters::default())
+        // Verify Signature
+        let values = serde_json::to_value(self).map_err(|e| {
+            DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {}", e))
+        })?;
+
+        let verified = verify_data(&serde_json::from_value(values).map_err(|e| {
+            DIDWebVHError::LogEntryError(format!(
+                "Failed to convert log entry to GenericDocument: {}",
+                e
+            ))
+        })?)
+        .map_err(|e| {
+            DIDWebVHError::LogEntryError(format!("Signature verification failed: {}", e))
+        })?;
+        if !verified.verified {
+            return Err(DIDWebVHError::LogEntryError(
+                "Signature verification failed".to_string(),
+            ));
+        }
+
+        Ok(parameters)
     }
 }

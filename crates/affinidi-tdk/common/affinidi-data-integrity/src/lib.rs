@@ -98,11 +98,7 @@ impl DataIntegrityProof {
             }
         };
 
-        // Step 2: Create a SHA-256 hash of the canonical JSON string
-        let mut jcs_hash = Sha256::digest(jcs).to_vec();
-        debug!("JCS Hash: {:02x?}", &jcs_hash);
-
-        // Step 3: Create a Proof Options struct
+        // Create a Proof Options struct
         let now = Utc::now();
         let mut proof_options = DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
@@ -125,15 +121,10 @@ impl DataIntegrityProof {
         };
         debug!("{}", proof_jcs);
 
-        // Step 4: Create a SHA-256 hash of the canonical proof options string
-        let mut proof_hash = Sha256::digest(proof_jcs).to_vec();
-        debug!("Proof Hash: {:02x?}", &proof_hash);
-
-        // Step 5: Combine hashes
-        proof_hash.append(&mut jcs_hash);
+        let hash_data = hashing_eddsa_jcs(&jcs, &proof_jcs);
 
         // Step 6: Sign the final hash
-        let signed = crypto_suite.sign(secret, proof_hash.as_slice())?;
+        let signed = crypto_suite.sign(secret, hash_data.as_slice())?;
         debug!("{}", format!("signed: {:02x?}", &signed));
 
         // Step 7: Encode using base58btc
@@ -150,5 +141,56 @@ impl DataIntegrityProof {
                 e
             ))
         })
+    }
+}
+
+/// Hashing Algorithm for EDDSA JCS
+fn hashing_eddsa_jcs(transformed_document: &str, canonical_proof_config: &str) -> Vec<u8> {
+    [
+        Sha256::digest(canonical_proof_config),
+        Sha256::digest(transformed_document),
+    ]
+    .concat()
+}
+
+#[cfg(test)]
+mod tests {
+    use affinidi_secrets_resolver::secrets::Secret;
+    use serde_json::json;
+
+    use crate::{DataIntegrityProof, GenericDocument, hashing_eddsa_jcs};
+
+    #[test]
+    fn hashing_working() {
+        let hash = hashing_eddsa_jcs("test1", "test2");
+        let mut output = String::new();
+        for x in hash {
+            output.push_str(&format!("{:02x}", x));
+        }
+
+        assert_eq!(
+            output.as_str(),
+            "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c7521b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d83567014",
+        );
+    }
+
+    #[test]
+    fn test_sign_data_jcs() {
+        let generic_doc: GenericDocument = serde_json::from_value(json!({"test": "test_data"}))
+            .expect("Couldn't deserialize test data");
+
+        let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
+        let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
+        let secret = Secret::from_multibase(
+            &format!("did:key:{}#{}", pub_key, pub_key),
+            pub_key,
+            pri_key,
+        )
+        .expect("Couldn't create test key data");
+
+        assert!(
+            DataIntegrityProof::sign_data_jcs(&generic_doc, &secret.id, &secret).is_ok(),
+            "Signing failed"
+        );
     }
 }
