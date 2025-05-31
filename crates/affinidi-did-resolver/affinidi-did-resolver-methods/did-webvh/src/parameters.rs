@@ -8,6 +8,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use ahash::{HashSet, HashSetExt};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_with::{DeserializeAs, de::DeserializeAsWrap};
+use std::ops::Not;
 
 /// This helps with serializing parameters into null, skipping or content
 /// webvh parameters can be missing(Absent), None(null) or contains content(Value)
@@ -30,16 +31,12 @@ impl<T> FieldAction<T> {
             ))
         }
     }
-}
 
-impl<T> FieldAction<T>
-where
-    T: Serialize,
-{
     pub fn is_absent(&self) -> bool {
         matches!(self, FieldAction::Absent)
     }
 }
+
 fn se_field_action<T, S>(field: &FieldAction<T>, serializer: S) -> Result<S::Ok, S::Error>
 where
     T: Serialize,
@@ -181,8 +178,8 @@ pub struct Parameters {
     pub watchers: FieldAction<Vec<String>>,
 
     /// Has this DID been revoked?
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deactivated: Option<bool>,
+    #[serde(skip_serializing_if = "<&bool>::not", default)]
+    pub deactivated: bool,
 
     /// time to live in seconds for a resolved DID document
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,7 +199,7 @@ impl Default for Parameters {
             witness: FieldAction::Absent,
             active_witness: FieldAction::Absent,
             watchers: FieldAction::Absent,
-            deactivated: Some(false),
+            deactivated: false,
             ttl: None,
         }
     }
@@ -226,18 +223,14 @@ impl Parameters {
             pre_rotation_previous_value = previous.pre_rotation_active;
             new_parameters.portable = previous.portable;
             new_parameters.next_key_hashes = previous.next_key_hashes.clone();
-            if let Some(deactivated) = previous.deactivated {
-                if deactivated {
-                    // If previous is deactivated, then no more log entries can be made
-                    return Err(DIDWebVHError::DeactivatedError(
-                        "DID was deactivated previous Log Entry, no more log entries are allowed."
-                            .to_string(),
-                    ));
-                } else {
-                    new_parameters.deactivated = Some(deactivated)
-                }
+            if previous.deactivated {
+                // If previous is deactivated, then no more log entries can be made
+                return Err(DIDWebVHError::DeactivatedError(
+                    "DID was deactivated previous Log Entry, no more log entries are allowed."
+                        .to_string(),
+                ));
             } else {
-                new_parameters.deactivated = Some(false);
+                new_parameters.deactivated = previous.deactivated
             }
         }
 
@@ -404,23 +397,17 @@ impl Parameters {
         }
 
         // Check deactivation status
-        if let Some(deactivated) = self.deactivated {
-            println!(
-                "deactivated ({}) update_keys = {:#?}",
-                deactivated, new_parameters.update_keys
-            );
-            if deactivated && previous.is_none() {
-                // Can't be deactivated on the first log entry
-                return Err(DIDWebVHError::DeactivatedError(
-                    "DID cannot be deactivated on the first Log Entry".to_string(),
-                ));
-            } else if deactivated && (new_parameters.update_keys != FieldAction::None) {
-                return Err(DIDWebVHError::DeactivatedError(
-                    "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
-                ));
-            }
-            new_parameters.deactivated = Some(deactivated);
+        if self.deactivated && previous.is_none() {
+            // Can't be deactivated on the first log entry
+            return Err(DIDWebVHError::DeactivatedError(
+                "DID cannot be deactivated on the first Log Entry".to_string(),
+            ));
+        } else if self.deactivated && (new_parameters.update_keys != FieldAction::None) {
+            return Err(DIDWebVHError::DeactivatedError(
+                "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
+            ));
         }
+        new_parameters.deactivated = self.deactivated;
 
         Ok(new_parameters)
     }
@@ -449,17 +436,25 @@ impl Parameters {
         }
         Ok(())
     }
-
-    /// Has this DID been deactivated?
-    /// returns TRUE if deactivated
-    pub fn did_deactivated(&self) -> bool {
-        self.deactivated.unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Parameters;
 
     #[test]
-    fn validate_good_first_log_entry() {}
+    fn watchers_absent_serialize() {
+        // Tests to ensure that watchers set to absent won't serialize
+        let parameters = Parameters {
+            watchers: super::FieldAction::Absent,
+            ..Default::default()
+        };
+
+        println!("parameters: {:#?}", parameters);
+        let values = serde_json::to_value(parameters).unwrap();
+
+        println!("values: {:#?}", values);
+        println!("watchers: {:#?}", values.get("watchers"));
+        assert!(values.get("watchers").is_none())
+    }
 }

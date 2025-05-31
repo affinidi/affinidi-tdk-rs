@@ -190,6 +190,17 @@ impl Secret {
         Secret::from_str(key_id, &jwk)
     }
 
+    /// Decodes a multikey to raw bytes
+    pub fn decode_multikey(key: &str) -> Result<Vec<u8>> {
+        let bytes = multibase::decode(key).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {}", e))
+        })?;
+        let bytes = MultiEncoded::new(bytes.1.as_slice()).map_err(|e| {
+            SecretsResolverError::KeyError(format!("Failed to load decoded key: {}", e))
+        })?;
+        Ok(bytes.data().to_vec())
+    }
+
     /// Get the multibase (Base58btc) encoded public key
     pub fn get_public_keymultibase(&self) -> Result<String> {
         let encoded = match self.key_type {

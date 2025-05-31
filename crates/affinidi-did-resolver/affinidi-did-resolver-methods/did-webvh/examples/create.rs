@@ -783,7 +783,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
 
     let mut parameters = Parameters {
         scid: Some(SCID_HOLDER.to_string()),
-        deactivated: Some(false),
+        deactivated: false,
         ..Default::default()
     };
 

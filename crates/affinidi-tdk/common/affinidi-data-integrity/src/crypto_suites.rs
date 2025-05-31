@@ -3,12 +3,12 @@
 */
 
 use affinidi_secrets_resolver::secrets::{KeyType, Secret};
-use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey, ed25519::signature::SignerMut};
 use serde::{Deserialize, Serialize};
 
 use crate::DataIntegrityError;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum CryptoSuite {
     /// EDDSA JCS 2022 spec
     /// https://www.w3.org/TR/vc-di-eddsa/
@@ -69,6 +69,29 @@ impl CryptoSuite {
                 let mut signing_key =
                     SigningKey::from_bytes(secret.get_private_bytes().try_into().unwrap());
                 Ok(signing_key.sign(data).to_vec())
+            }
+        }
+    }
+
+    pub fn verify(
+        &self,
+        key: &[u8],
+        data: &[u8],
+        signature: &[u8],
+    ) -> Result<(), DataIntegrityError> {
+        match self {
+            CryptoSuite::EddsaJcs2022 => {
+                let verifying_key = VerifyingKey::try_from(key).map_err(|_| {
+                    DataIntegrityError::CryptoError("Invalid public key bytes".to_string())
+                })?;
+                let signature = Signature::from_slice(signature).map_err(|_| {
+                    DataIntegrityError::VerificationError("Invalid signature format".to_string())
+                })?;
+                Ok(verifying_key.verify_strict(data, &signature).map_err(|_| {
+                    DataIntegrityError::VerificationError(
+                        "Signature verification failed".to_string(),
+                    )
+                })?)
             }
         }
     }

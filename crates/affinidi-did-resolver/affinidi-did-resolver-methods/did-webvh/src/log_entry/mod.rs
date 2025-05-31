@@ -10,7 +10,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use multibase::Base;
 use multihash::Multihash;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
@@ -124,15 +124,30 @@ impl LogEntry {
         log_entry.version_id = ["1-", &entry_hash].concat();
 
         // Generate the proof for the log entry
+        let log_entry_values = serde_json::to_value(&log_entry).map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
+                e
+            ))
+        })?;
+
         let log_entry = serde_json::from_value(
-            DataIntegrityProof::sign_data_jcs(&log_entry, &vm_id, secret)
-                .await
-                .map_err(|e| {
+            DataIntegrityProof::sign_data_jcs(
+                &serde_json::from_value(log_entry_values).map_err(|e| {
                     DIDWebVHError::SCIDError(format!(
-                        "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                        "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
                         e
                     ))
                 })?,
+                &vm_id,
+                secret,
+            )
+            .map_err(|e| {
+                DIDWebVHError::SCIDError(format!(
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                    e
+                ))
+            })?,
         )
         .map_err(|e| {
             DIDWebVHError::SCIDError(format!(
@@ -181,7 +196,7 @@ impl LogEntry {
     pub fn revoke(&self) -> Result<Vec<LogEntry>, DIDWebVHError> {
         let mut revoked_entry: LogEntry = self.clone();
         revoked_entry.proof = None;
-        revoked_entry.parameters.deactivated = Some(true);
+        revoked_entry.parameters.deactivated = true;
         revoked_entry.parameters.update_keys = FieldAction::None;
         Ok(Vec::new())
     }

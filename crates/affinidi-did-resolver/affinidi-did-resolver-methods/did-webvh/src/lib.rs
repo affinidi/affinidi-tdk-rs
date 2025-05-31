@@ -86,7 +86,7 @@ mod tests {
             witness: FieldAction::None,
             active_witness: FieldAction::None,
             watchers: FieldAction::Value(vec!["url".to_string()]),
-            deactivated: None,
+            deactivated: false,
             ttl: None,
         };
 

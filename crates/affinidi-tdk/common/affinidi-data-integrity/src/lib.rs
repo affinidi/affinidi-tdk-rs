@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use crypto_suites::CryptoSuite;
@@ -11,6 +13,7 @@ use thiserror::Error;
 use tracing::debug;
 
 pub mod crypto_suites;
+pub mod verification_proof;
 
 /// Affinidi Data Integrity Library Errors
 #[derive(Error, Debug)]
@@ -21,6 +24,20 @@ pub enum DataIntegrityError {
     CryptoError(String),
     #[error("Secrets Error: {0}")]
     SecretsError(String),
+    #[error("Verification Error: {0}")]
+    VerificationError(String),
+}
+
+/// Generic Document structure that can be used for converting any Serializable document
+/// into a format this library can understand.
+/// Works with both signed and unsigned Documents.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GenericDocument {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<DataIntegrityProof>,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -48,26 +65,25 @@ pub struct DataIntegrityProof {
 
 impl DataIntegrityProof {
     /// Creates a signature for the given data using the specified key.
-    /// data_doc: An object that can be serialized to JSON.
+    /// data_doc: JSON Schema
     ///
     /// Returns a Result containing a signed document
-    pub async fn sign_data_jcs<D>(
-        data_doc: &D,
+    pub fn sign_data_jcs(
+        data_doc: &GenericDocument,
         vm_id: &str,
         secret: &Secret,
-    ) -> Result<Value, DataIntegrityError>
-    where
-        D: Serialize,
-    {
+    ) -> Result<Value, DataIntegrityError> {
         // Initialise as required
         let crypto_suite: CryptoSuite = secret.get_key_type().try_into()?;
         debug!(
             "CryptoSuite: {}",
             <CryptoSuite as TryInto<String>>::try_into(crypto_suite.clone()).unwrap()
         );
+
         // final doc
-        let mut signed_doc: Value = serde_json::to_value(data_doc).unwrap();
+        let mut signed_doc = data_doc.clone();
         let context: Option<Vec<String>> = signed_doc
+            .extra
             .get("@context")
             .map(|context| serde_json::from_value(context.to_owned()).unwrap());
 
@@ -123,8 +139,16 @@ impl DataIntegrityProof {
         // Step 7: Encode using base58btc
         proof_options.proof_value =
             Some(MultibaseBuf::encode(Base::Base58Btc, &signed).to_string());
-        signed_doc["proof"] = serde_json::to_value(proof_options).unwrap();
+        signed_doc.extra.insert(
+            "proof".to_string(),
+            serde_json::to_value(proof_options).unwrap(),
+        );
 
-        Ok(signed_doc)
+        serde_json::to_value(&signed_doc).map_err(|e| {
+            DataIntegrityError::InputDataError(format!(
+                "Failed to serialize signed document: {}",
+                e
+            ))
+        })
     }
 }
