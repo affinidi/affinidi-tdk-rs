@@ -16,7 +16,7 @@ pub mod crypto_suites;
 pub mod verification_proof;
 
 /// Affinidi Data Integrity Library Errors
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq)]
 pub enum DataIntegrityError {
     #[error("Input Data Error: {0}")]
     InputDataError(String),
@@ -175,9 +175,27 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_data_jcs() {
+    fn test_sign_data_jcs_bad_key() {
         let generic_doc: GenericDocument = serde_json::from_value(json!({"test": "test_data"}))
             .expect("Couldn't deserialize test data");
+
+        let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
+        let pri_key = "z42tmXtqqQBLmEEwn8tfi1bA2ghBx9cBo6wo8a44kVJEiqyA";
+        let secret = Secret::from_multibase(
+            &format!("did:key:{}#{}", pub_key, pub_key),
+            pub_key,
+            pri_key,
+        )
+        .expect("Couldn't create test key data");
+
+        assert!(DataIntegrityProof::sign_data_jcs(&generic_doc, &secret.id, &secret).is_err());
+    }
+    #[test]
+    fn test_sign_data_jcs_good() {
+        let generic_doc: GenericDocument = serde_json::from_value(
+            json!({"test": "test_data", "@context": ["context1", "context2", "context3"]}),
+        )
+        .expect("Couldn't deserialize test data");
 
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
         let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";

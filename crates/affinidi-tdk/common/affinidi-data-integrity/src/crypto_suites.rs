@@ -96,3 +96,45 @@ impl CryptoSuite {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use affinidi_secrets_resolver::secrets::KeyType;
+
+    use super::CryptoSuite;
+
+    #[test]
+    fn try_from_str_bad() {
+        assert!(CryptoSuite::try_from("bad-suite").is_err());
+    }
+
+    #[test]
+    fn try_from_string_bad() {
+        assert!(CryptoSuite::try_from("bad-suite".to_string()).is_err());
+    }
+
+    #[test]
+    fn try_from_str_good() {
+        assert!(CryptoSuite::try_from("eddsa-jcs-2022").is_ok());
+    }
+
+    #[test]
+    fn try_from_string_good() {
+        assert!(CryptoSuite::try_from("eddsa-jcs-2022".to_string()).is_ok());
+    }
+
+    #[test]
+    fn try_from_cryptosuite_good() {
+        assert!(String::try_from(CryptoSuite::EddsaJcs2022).is_ok());
+    }
+
+    #[test]
+    fn try_from_key_type_bad() {
+        assert!(CryptoSuite::try_from(KeyType::P521).is_err());
+    }
+
+    #[test]
+    fn try_from_key_type_good() {
+        assert!(CryptoSuite::try_from(KeyType::Ed25519).is_ok());
+    }
+}
