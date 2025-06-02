@@ -23,14 +23,14 @@ impl LogEntry {
     /// Get either latest LogEntry or the specific version if specified.
     pub fn get_log_entry_from_file<P>(
         file_path: P,
-        version: Option<u32>,
+        _version: Option<u32>,
     ) -> Result<LogEntry, DIDWebVHError>
     where
         P: AsRef<Path>,
     {
         if let Ok(lines) = LogEntry::read_from_json_file(file_path) {
             for line in lines.map_while(Result::ok) {
-                let log_entry = serde_json::to_value(&line).map_err(|e| {
+                let _log_entry = serde_json::to_value(&line).map_err(|e| {
                     DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
                 })?;
             }
@@ -43,7 +43,7 @@ impl LogEntry {
 
     pub fn verify_log_entry(
         &self,
-        parameters: Option<&Parameters>,
+        _parameters: Option<&Parameters>,
     ) -> Result<Parameters, DIDWebVHError> {
         //
 
