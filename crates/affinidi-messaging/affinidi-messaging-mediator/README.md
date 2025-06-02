@@ -1,7 +1,5 @@
 # Affinidi Messaging - Mediator Service
 
-## Overview
-
 A DIDComm Messaging v2 mediator & relay service that listens to send &receive messages over https.
 
 ## Dependencies
