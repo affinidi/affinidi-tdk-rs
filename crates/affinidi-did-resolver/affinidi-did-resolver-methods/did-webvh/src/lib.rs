@@ -71,7 +71,7 @@ impl DIDMethod for DIDWebVH {
 mod tests {
     use ahash::{HashSet, HashSetExt};
 
-    use crate::parameters::{FieldAction, Parameters};
+    use crate::parameters::Parameters;
 
     #[test]
     fn check_serialization_field_action() {
@@ -79,13 +79,13 @@ mod tests {
             pre_rotation_active: false,
             method: None,
             scid: None,
-            update_keys: FieldAction::Absent,
+            update_keys: None,
             active_update_keys: HashSet::new(),
             portable: None,
-            next_key_hashes: FieldAction::Absent,
-            witness: FieldAction::None,
-            active_witness: FieldAction::None,
-            watchers: FieldAction::Value(vec!["url".to_string()]),
+            next_key_hashes: None,
+            witness: Some(None),
+            active_witness: Some(None),
+            watchers: Some(Some(vec!["url".to_string()])),
             deactivated: false,
             ttl: None,
         };

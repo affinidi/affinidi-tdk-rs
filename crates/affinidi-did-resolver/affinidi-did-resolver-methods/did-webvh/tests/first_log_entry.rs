@@ -11,7 +11,7 @@ fn test_first_log_entry_good() {
     let first_log_entry: LogEntry =
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    assert!(first_log_entry.parameters.validate_udpate(None).is_ok());
+    assert!(first_log_entry.parameters.validate(None).is_ok());
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn test_first_log_entry_deactivated_error() {
     let first_log_entry: LogEntry =
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    assert!(first_log_entry.parameters.validate_udpate(None).is_err());
+    assert!(first_log_entry.parameters.validate(None).is_err());
 }
 
 #[test]
@@ -53,7 +53,9 @@ fn test_first_log_entry_verify_full() {
     let first_log_entry: LogEntry =
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    assert!(first_log_entry.verify_log_entry(None).is_ok());
+    let result = first_log_entry.verify_log_entry(None);
+    println!("{:#?}", result);
+    assert!(result.is_ok());
 }
 
 #[test]

@@ -1,16 +1,13 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
-use crate::{
-    DIDWebVHError, SCID_HOLDER,
-    parameters::{FieldAction, Parameters},
-};
+use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use multibase::Base;
 use multihash::Multihash;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
@@ -63,7 +60,7 @@ impl LogEntry {
         parameters.scid = Some(SCID_HOLDER.to_string());
 
         // Create a VerificationMethod ID from the first updatekey
-        let vm_id = if let FieldAction::Value(value) = &parameters.update_keys {
+        let vm_id = if let Some(Some(value)) = &parameters.update_keys {
             if let Some(key) = value.iter().next() {
                 // Create a VerificationMethod ID from the first update key
                 ["did:key:", key, "#", key].concat()
@@ -114,9 +111,9 @@ impl LogEntry {
             })?;
 
         // Create the entry hash for this Log Entry
-        let entry_hash = log_entry.generate_scid().map_err(|e| {
+        let entry_hash = log_entry.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate SCID for first LogEntry. Reason: {}",
+                "Couldn't generate entryHash for first LogEntry. Reason: {}",
                 e
             ))
         })?;
@@ -161,6 +158,7 @@ impl LogEntry {
     /// Generates a SCID from a preliminary LogEntry
     /// This only needs to be called once when the DID is first created.
     fn generate_scid(&self) -> Result<String, DIDWebVHError> {
+        println!("TIMTAM:\n{}", serde_json::to_string_pretty(self).unwrap());
         self.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate SCID from preliminary LogEntry. Reason: {}",
@@ -197,7 +195,7 @@ impl LogEntry {
         let mut revoked_entry: LogEntry = self.clone();
         revoked_entry.proof = None;
         revoked_entry.parameters.deactivated = true;
-        revoked_entry.parameters.update_keys = FieldAction::None;
+        revoked_entry.parameters.update_keys = Some(None);
         Ok(Vec::new())
     }
 }

@@ -13,7 +13,7 @@ use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulThem
 use did_webvh::{
     SCID_HOLDER,
     log_entry::LogEntry,
-    parameters::{FieldAction, Parameters},
+    parameters::Parameters,
     url::WebVHURL,
     witness::{Witness, Witnesses},
 };
@@ -792,7 +792,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
     for key in authorizing_keys {
         update_keys.insert(key.get_public_keymultibase()?);
     }
-    parameters.update_keys = FieldAction::Value(update_keys);
+    parameters.update_keys = Some(Some(update_keys));
 
     // Portable
     println!(
@@ -844,9 +844,9 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         }
     }
     if next_key_hashes.is_empty() {
-        parameters.next_key_hashes = FieldAction::Absent;
+        parameters.next_key_hashes = None;
     } else {
-        parameters.next_key_hashes = FieldAction::Value(next_key_hashes);
+        parameters.next_key_hashes = Some(Some(next_key_hashes));
     }
 
     // Witness Nodes
@@ -961,7 +961,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
         }
     }
 
-    parameters.witness = FieldAction::Value(witnesses);
+    parameters.witness = Some(Some(witnesses));
     Ok(())
 }
 
@@ -998,6 +998,6 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
         }
     }
 
-    parameters.watchers = FieldAction::Value(watchers);
+    parameters.watchers = Some(Some(watchers));
     Ok(())
 }

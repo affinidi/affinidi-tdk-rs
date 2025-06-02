@@ -6,120 +6,16 @@
 use crate::{DIDWebVHError, witness::Witnesses};
 use affinidi_secrets_resolver::secrets::Secret;
 use ahash::{HashSet, HashSetExt};
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_with::{DeserializeAs, de::DeserializeAsWrap};
+use serde::{Deserialize, Serialize};
 use std::ops::Not;
-
-/// This helps with serializing parameters into null, skipping or content
-/// webvh parameters can be missing(Absent), None(null) or contains content(Value)
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
-pub enum FieldAction<T> {
-    #[default]
-    Absent,
-    None,
-    Value(T),
-}
-
-impl<T> FieldAction<T> {
-    /// If possible, get the value from the FieldAction
-    pub fn get_value(&self) -> Result<&T, DIDWebVHError> {
-        if let FieldAction::Value(value) = self {
-            Ok(value)
-        } else {
-            Err(DIDWebVHError::ParametersError(
-                "Expecting a value, but field is missing or null".to_string(),
-            ))
-        }
-    }
-
-    pub fn is_absent(&self) -> bool {
-        matches!(self, FieldAction::Absent)
-    }
-}
-
-fn se_field_action<T, S>(field: &FieldAction<T>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    T: Serialize,
-    S: serde::Serializer,
-{
-    match field {
-        FieldAction::None => serializer.serialize_none(),
-        FieldAction::Absent => serializer.serialize_none(),
-        FieldAction::Value(content) => content.serialize(serializer),
-    }
-}
-
-pub(crate) struct FieldActionVisitor<T> {
-    marker: std::marker::PhantomData<T>,
-}
-impl<'de, T> Deserialize<'de> for FieldAction<T>
-where
-    T: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_option(FieldActionVisitor::<T> {
-            marker: std::marker::PhantomData,
-        })
-    }
-}
-impl<'de, T> serde::de::Visitor<'de> for FieldActionVisitor<T>
-where
-    T: Deserialize<'de>,
-{
-    type Value = FieldAction<T>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("FieldAction<T>")
-    }
-
-    #[inline]
-    fn visit_none<E>(self) -> Result<FieldAction<T>, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(FieldAction::None)
-    }
-
-    #[inline]
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        T::deserialize(deserializer).map(FieldAction::Value)
-    }
-
-    #[inline]
-    fn visit_unit<E>(self) -> Result<FieldAction<T>, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(FieldAction::None)
-    }
-}
-
-impl<'de, T, U> DeserializeAs<'de, FieldAction<T>> for FieldAction<U>
-where
-    U: DeserializeAs<'de, T>,
-{
-    fn deserialize_as<D>(deserializer: D) -> Result<FieldAction<T>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(
-            match FieldAction::<DeserializeAsWrap<T, U>>::deserialize(deserializer)? {
-                FieldAction::Value(v) => FieldAction::Value(v.into_inner()),
-                FieldAction::None => FieldAction::None,
-                FieldAction::Absent => FieldAction::Absent,
-            },
-        )
-    }
-}
 
 /// [https://identity.foundation/didwebvh/v1.0/#didwebvh-did-method-parameters]
 /// Parameters that help with the resolution of a webvh DID
+///
+/// Thin uses double options to allow for the following:
+/// None = field wasn't specified
+/// Some(None) = field was specified, but set to null
+/// Some(Some(value)) = field was specified with a value
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Parameters {
     /// Is key pre-rotation active?
@@ -137,10 +33,11 @@ pub struct Parameters {
 
     /// Keys that are authorized to update future log entries
     #[serde(
-        skip_serializing_if = "FieldAction::is_absent",
-        serialize_with = "se_field_action"
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
     )]
-    pub update_keys: FieldAction<HashSet<String>>,
+    pub update_keys: Option<Option<HashSet<String>>>,
 
     /// Depending on if pre-rotation is active,
     /// the set of active updateKeys can change
@@ -153,29 +50,36 @@ pub struct Parameters {
 
     /// pre-rotation keys that must be shared prior to updating update keys
     #[serde(
-        skip_serializing_if = "FieldAction::is_absent",
-        serialize_with = "se_field_action"
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
     )]
-    pub next_key_hashes: FieldAction<HashSet<String>>,
+    pub next_key_hashes: Option<Option<HashSet<String>>>,
 
     /// Parameters for witness nodes
     #[serde(
-        skip_serializing_if = "FieldAction::is_absent",
-        serialize_with = "se_field_action"
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
     )]
-    pub witness: FieldAction<Witnesses>,
+    pub witness: Option<Option<Witnesses>>,
 
     /// witness doesn't take effect till after this log entry
     /// This is the active witnesses for this log entry
-    #[serde(skip)]
-    pub active_witness: FieldAction<Witnesses>,
+    #[serde(
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
+    )]
+    pub active_witness: Option<Option<Witnesses>>,
 
     /// DID watchers for this DID
     #[serde(
-        skip_serializing_if = "FieldAction::is_absent",
-        serialize_with = "se_field_action"
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
     )]
-    pub watchers: FieldAction<Vec<String>>,
+    pub watchers: Option<Option<Vec<String>>>,
 
     /// Has this DID been revoked?
     #[serde(skip_serializing_if = "<&bool>::not", default)]
@@ -192,13 +96,13 @@ impl Default for Parameters {
             pre_rotation_active: false,
             method: Some("did:webvh:1.0".to_string()),
             scid: None,
-            update_keys: FieldAction::Absent,
+            update_keys: None,
             active_update_keys: HashSet::new(),
             portable: None,
-            next_key_hashes: FieldAction::Absent,
-            witness: FieldAction::Absent,
-            active_witness: FieldAction::Absent,
-            watchers: FieldAction::Absent,
+            next_key_hashes: None,
+            witness: None,
+            active_witness: None,
+            watchers: None,
             deactivated: false,
             ttl: None,
         }
@@ -206,11 +110,9 @@ impl Default for Parameters {
 }
 
 impl Parameters {
-    /// validate and update a Parameters object based on the Log Entry
-    pub fn validate_udpate(
-        &self,
-        previous: Option<&Parameters>,
-    ) -> Result<Parameters, DIDWebVHError> {
+    /// validate and return a Parameters object based on the Log Entry that reflects the current
+    /// state of the parameters
+    pub fn validate(&self, previous: Option<&Parameters>) -> Result<Parameters, DIDWebVHError> {
         let mut new_parameters = Parameters {
             scid: self.scid.clone(),
             ..Default::default()
@@ -236,7 +138,7 @@ impl Parameters {
 
         // Validate and process nextKeyHashes
         match &self.next_key_hashes {
-            FieldAction::Absent => {
+            None => {
                 // If absent, but is in pre-rotation state. This is an error
                 if new_parameters.pre_rotation_active {
                     return Err(DIDWebVHError::ParametersError(
@@ -244,26 +146,26 @@ impl Parameters {
                     ));
                 }
             }
-            FieldAction::None => {
+            Some(None) => {
                 // If None, turn off key rotation
-                new_parameters.next_key_hashes = FieldAction::None;
+                new_parameters.next_key_hashes = None;
                 new_parameters.pre_rotation_active = false; // If None, pre-rotation is not active
             }
-            FieldAction::Value(next_key_hashes) => {
+            Some(next_key_hashes) => {
                 // Replace nextKeyHashes with the new value
-                if next_key_hashes.is_empty() {
+                if next_key_hashes.is_none() {
                     return Err(DIDWebVHError::ParametersError(
                         "nextKeyHashes cannot be empty".to_string(),
                     ));
                 }
-                new_parameters.next_key_hashes = FieldAction::Value(next_key_hashes.clone());
+                new_parameters.next_key_hashes = Some(next_key_hashes.clone());
                 new_parameters.pre_rotation_active = true; // If Value, pre-rotation is active
             }
         }
 
         // Validate and update UpdateKeys
         if let Some(previous) = previous {
-            if let FieldAction::Value(update_keys) = &self.update_keys {
+            if let Some(Some(update_keys)) = &self.update_keys {
                 // If pre-rotation is enabled, then validate and add immediately to active keys
                 if update_keys.is_empty() {
                     return Err(DIDWebVHError::ParametersError(
@@ -273,34 +175,29 @@ impl Parameters {
                 if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
                     // Key pre-rotation has been turned off
                     // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(
-                        previous.next_key_hashes.get_value()?,
-                        update_keys,
-                    )?;
+                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
                     new_parameters.active_update_keys = update_keys.clone();
                 } else if new_parameters.pre_rotation_active {
                     // Key pre-rotation is active
                     // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(
-                        previous.next_key_hashes.get_value()?,
-                        update_keys,
-                    )?;
+                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
                     new_parameters.active_update_keys = update_keys.clone();
                 } else {
                     // No Key pre-rotation is active
-                    new_parameters.active_update_keys = previous.update_keys.get_value()?.clone();
-                    new_parameters.update_keys = FieldAction::Value(update_keys.clone());
+                    new_parameters.active_update_keys = update_keys.clone();
+                    new_parameters.update_keys = Some(Some(update_keys.clone()));
                 }
             }
         } else {
             // First Log Entry checks
-            if let FieldAction::Value(update_keys) = &self.update_keys {
+            if let Some(Some(update_keys)) = &self.update_keys {
                 if update_keys.is_empty() {
                     return Err(DIDWebVHError::ParametersError(
                         "updateKeys cannot be empty".to_string(),
                     ));
                 }
-                new_parameters.update_keys = FieldAction::Value(update_keys.clone());
+                new_parameters.update_keys = Some(Some(update_keys.clone()));
+                new_parameters.active_update_keys = update_keys.clone();
             } else {
                 return Err(DIDWebVHError::ParametersError(
                     "updateKeys must be provided on first Log Entry".to_string(),
@@ -328,36 +225,36 @@ impl Parameters {
         // Validate witness
         if let Some(previous) = previous {
             match &self.witness {
-                FieldAction::Absent => {
+                None => {
                     // If absent, keep current witnesses
                     new_parameters.active_witness = previous.witness.clone();
                     new_parameters.witness = previous.witness.clone();
                 }
-                FieldAction::None => {
+                Some(None) => {
                     // If None, turn off witness
-                    new_parameters.witness = FieldAction::None;
+                    new_parameters.witness = None;
                     // Still needs to be witnessed
                     new_parameters.active_witness = previous.witness.clone();
                 }
-                FieldAction::Value(witnesses) => {
+                Some(Some(witnesses)) => {
                     // Replace witness with the new value
                     witnesses.validate()?;
-                    new_parameters.witness = FieldAction::Value(witnesses.clone());
+                    new_parameters.witness = Some(Some(witnesses.clone()));
                     new_parameters.active_witness = previous.witness.clone();
                 }
             }
         } else {
             // First Log Entry
             match &self.witness {
-                FieldAction::Absent | FieldAction::None => {
-                    new_parameters.active_witness = FieldAction::None;
-                    new_parameters.witness = FieldAction::None;
+                None | Some(None) => {
+                    new_parameters.active_witness = None;
+                    new_parameters.witness = None;
                 }
-                FieldAction::Value(witnesses) => {
+                Some(Some(witnesses)) => {
                     // Replace witness with the new value
                     witnesses.validate()?;
-                    new_parameters.witness = FieldAction::Value(witnesses.clone());
-                    new_parameters.active_witness = FieldAction::Value(witnesses.clone());
+                    new_parameters.witness = Some(Some(witnesses.clone()));
+                    new_parameters.active_witness = Some(Some(witnesses.clone()));
                 }
             }
         }
@@ -365,33 +262,33 @@ impl Parameters {
         // Validate Watchers
         if let Some(previous) = previous {
             match &self.watchers {
-                FieldAction::Absent => {
+                None => {
                     // If absent, keep current watchers
                     new_parameters.watchers = previous.watchers.clone();
                 }
-                FieldAction::None => {
+                Some(None) => {
                     // If None, turn off watchers
-                    new_parameters.watchers = FieldAction::None;
+                    new_parameters.watchers = None;
                 }
-                FieldAction::Value(watchers) => {
+                Some(Some(watchers)) => {
                     // Replace watchers with the new value
-                    new_parameters.watchers = FieldAction::Value(watchers.clone());
+                    new_parameters.watchers = Some(Some(watchers.clone()));
                 }
             }
         } else {
             // First Log Entry
             match &self.watchers {
-                FieldAction::Absent | FieldAction::None => {
-                    new_parameters.watchers = FieldAction::None;
+                None | Some(None) => {
+                    new_parameters.watchers = None;
                 }
-                FieldAction::Value(watchers) => {
+                Some(Some(watchers)) => {
                     // Replace watchers with the new value
                     if watchers.is_empty() {
                         return Err(DIDWebVHError::ParametersError(
                             "watchers cannot be empty".to_string(),
                         ));
                     }
-                    new_parameters.watchers = FieldAction::Value(watchers.clone());
+                    new_parameters.watchers = Some(Some(watchers.clone()));
                 }
             }
         }
@@ -402,7 +299,7 @@ impl Parameters {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID cannot be deactivated on the first Log Entry".to_string(),
             ));
-        } else if self.deactivated && (new_parameters.update_keys != FieldAction::None) {
+        } else if self.deactivated && (new_parameters.update_keys != Some(None)) {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
             ));
@@ -416,9 +313,14 @@ impl Parameters {
     /// nextKeyHashes
     /// Returns an error if validation fails
     fn validate_pre_rotation_keys(
-        next_key_hashes: &HashSet<String>,
+        next_key_hashes: &Option<Option<HashSet<String>>>,
         update_keys: &HashSet<String>,
     ) -> Result<(), DIDWebVHError> {
+        let Some(Some(next_key_hashes)) = next_key_hashes else {
+            return Err(DIDWebVHError::ValidationError(
+                "nextKeyHashes must be defined when pre-rotation is active".to_string(),
+            ));
+        };
         for key in update_keys.iter() {
             // Convert the key to the hash value
             let check_hash = Secret::hash_string(key).map_err(|e| {
@@ -446,7 +348,7 @@ mod tests {
     fn watchers_absent_serialize() {
         // Tests to ensure that watchers set to absent won't serialize
         let parameters = Parameters {
-            watchers: super::FieldAction::Absent,
+            watchers: None,
             ..Default::default()
         };
 
