@@ -75,7 +75,18 @@ impl LogEntry {
                     }
                 }
 
-                // TODO: Add versionNumber checks
+                // Check Version number
+                if let Some(version_number) = version_number {
+                    // Check if the version_id starts with the version_number
+                    if let Some((id, _)) = current_metadata.version_id.split_once('-') {
+                        if let Ok(id) = id.parse::<u32>() {
+                            if id == version_number {
+                                // Found the query version number
+                                return Ok((log_entry, current_metadata));
+                            }
+                        }
+                    }
+                }
 
                 // Check if this log_entry is older than the version_time
                 // if so, then return the previous info
@@ -96,9 +107,13 @@ impl LogEntry {
             }
 
             // End of file
-            // FIX: Check if query is being use, return NotFound if nothing matched
             if let Some(log_entry) = previous_log_entry {
                 if let Some(metadata) = previous_metadata {
+                    // If a specific version was requested, then return NotFound
+                    if version_id.is_some() || version_number.is_some() {
+                        return Err(DIDWebVHError::NotFound);
+                    }
+
                     // Return last known good LogEntry
                     return Ok((log_entry, metadata));
                 }

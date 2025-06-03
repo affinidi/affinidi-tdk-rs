@@ -155,6 +155,79 @@ impl Message {
                 )
             })?;
 
+        // Check Message Layer Addressing Consistency
+        if let Some(skid) = envelope.metadata.encrypted_from_kid.as_ref() {
+            // Encrypted message, must have a from field
+            if let Some(from) = msg.from.as_ref() {
+                if !skid.starts_with(from) {
+                    return Err(err_msg(
+                        ErrorKind::InvalidState,
+                        format!(
+                            "Message 'from' ({}) doesn't match encrypted_from_kid ({})",
+                            from, skid
+                        ),
+                    ));
+                }
+            } else {
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    "Encrypted message must have 'from' field",
+                ));
+            }
+        }
+
+        if envelope.metadata.encrypted {
+            let Some(to) = msg.to.as_ref() else {
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    "Encrypted message must have 'to' field",
+                ));
+            };
+            let mut found_flag = false;
+            for kid in envelope.metadata.encrypted_to_kids.iter() {
+                let Some((did, _)) = kid.split_once("#") else {
+                    return Err(err_msg(
+                        ErrorKind::InvalidState,
+                        format!("Invalid encrypted_to_kids ({})", kid),
+                    ));
+                };
+
+                if to.contains(&did.to_string()) {
+                    found_flag = true;
+                    break;
+                }
+            }
+            if !found_flag {
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    format!(
+                        "Message 'to' doesn't match encrypted_to_kids ({})",
+                        envelope.metadata.encrypted_to_kids.join(", ")
+                    ),
+                ));
+            }
+        }
+
+        if let Some(skid) = envelope.metadata.sign_from.as_ref() {
+            // Signed message, must have a from field
+            if let Some(from) = msg.from.as_ref() {
+                if !skid.starts_with(from) {
+                    return Err(err_msg(
+                        ErrorKind::InvalidState,
+                        format!(
+                            "Message 'from' ({}) doesn't match sign_from ({})",
+                            from, skid
+                        ),
+                    ));
+                }
+            } else {
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    "Signed message must have 'from' field",
+                ));
+            }
+        }
+
         envelope.metadata.sha256_hash = envelope.sha256_hash.clone();
 
         Ok((msg, envelope.metadata.to_owned()))

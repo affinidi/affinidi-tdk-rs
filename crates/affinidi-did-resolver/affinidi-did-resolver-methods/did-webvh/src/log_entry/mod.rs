@@ -1,7 +1,10 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
-use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
+use crate::{
+    DIDWebVHError, SCID_HOLDER,
+    parameters::{self, Parameters},
+};
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
@@ -187,6 +190,23 @@ impl LogEntry {
         })?;
 
         Ok(multibase::encode(Base::Base58Btc, hash_encoded.to_bytes()))
+    }
+
+    /// Creates a new LogEntry based on the previous one, with updated parameters and document.
+    /// If previous is None, it creates the first log entry.
+    /// If previous is None, sets to the current time.
+    pub fn create_log_entry(
+        previous: &Option<LogEntry>,
+        parameters: &Parameters,
+        document: &Value,
+        version_time: Option<String>,
+        secret: &Secret,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        let mut parameters = parameters.clone();
+
+        Err(DIDWebVHError::SCIDError(
+            "create_log_entry is not implemented".to_string(),
+        ))
     }
 
     /// Takes a LogEntry and creates a new set of LogEntries to revoke the webvh DID
