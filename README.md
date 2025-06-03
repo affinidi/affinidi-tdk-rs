@@ -2,7 +2,7 @@
 
 Affinidi Messaging Framework is a secure, private, and verifiable digital communication framework.
 
-Affinidi Messaging Framework provides the libraries and tools for implementing the [DIDComm Messaging](https://identity.foundation/didcomm-messaging/spec/) protocol, which is built on top of the decentralised design of the [Decentralised Identifier (DID)](https://www.w3.org/TR/did-1.0/) standard. This framework provides packages for secure and private messages and discovering and connecting with others, whether a person, a business, or an AI agent.
+Affinidi Messaging Framework provides the libraries and tools for implementing the [DIDComm Messaging](https://identity.foundation/didcomm-messaging/spec/) protocol, which is built on top of the decentralised design of the [Decentralised Identifier (DID)](https://www.w3.org/TR/did-1.0/) standard. This framework provides packages for secure and private messages and for discovering and connecting with others, whether a person, a business, or an AI agent.
 
 > **IMPORTANT:**
 > affinidi-tdk crate is provided "as is" without any warranties or guarantees, and by using this framework, users agree to assume all risks associated with its deployment and use including implementing security, and privacy measures in their applications. Affinidi assumes no liability for any issues arising from the use or modification of the project.
@@ -17,7 +17,7 @@ Affinidi Messaging Framework provides the libraries and tools for implementing t
 
 ## Core Concepts
 
-The Affinidi Messaging Framework utilises existing open standards and cryptographic techniques to provide a secure, private, and verifiable communication.
+The Affinidi Messaging Framework utilises existing open standards and cryptographic techniques to provide secure, private, and verifiable communication.
 
 - **Decentralised Identifier (DID)** - A globally unique identifier that enables secure interactions. The DID is the cornerstone of Self-Sovereign Identity (SSI), a concept that aims to put individuals or entities in control of their digital identities.
 
