@@ -97,6 +97,7 @@ impl DataIntegrityProof {
                 )));
             }
         };
+        debug!("Document: {}", jcs);
 
         // Create a Proof Options struct
         let now = Utc::now();
@@ -119,7 +120,7 @@ impl DataIntegrityProof {
                 )));
             }
         };
-        debug!("{}", proof_jcs);
+        debug!("proof options: {}", proof_jcs);
 
         let hash_data = hashing_eddsa_jcs(&jcs, &proof_jcs);
 

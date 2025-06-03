@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use ssi::security::MultibaseBuf;
+use tracing::debug;
 
 use crate::{
     DataIntegrityError, DataIntegrityProof, GenericDocument, crypto_suites::CryptoSuite,
@@ -78,9 +79,12 @@ pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, Da
     })?;
     verification_proof_result.verified_document = Some(validation_doc.clone());
 
+    debug!("Document: {:#?}", validation_doc);
+
     let jcs_doc = to_string(&validation_doc).map_err(|e| {
         DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {}", e))
     })?;
+    debug!("Document: {}", jcs_doc);
 
     // Run proof Configuration
     // Check Dates
@@ -102,6 +106,7 @@ pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, Da
     let jcs_proof_config = to_string(&proof_config).map_err(|e| {
         DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {}", e))
     })?;
+    debug!("proof options: {}", jcs_proof_config);
 
     // Hash the fields and join
     let hash_data = hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config);

@@ -2,7 +2,6 @@
 *   Handling of witnessing changes to the log entries
 */
 
-use ahash::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::DIDWebVHError;
@@ -14,7 +13,7 @@ pub struct Witnesses {
     pub threshold: u32,
 
     /// Set of witness nodes
-    pub witnesses: HashSet<Witness>,
+    pub witnesses: Vec<Witness>,
 }
 
 impl Witnesses {

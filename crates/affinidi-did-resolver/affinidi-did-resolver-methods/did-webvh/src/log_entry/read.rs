@@ -2,12 +2,10 @@
 *  Reads a JSON Log file, all functions related to reading and verifying Log Entries are here
 */
 
-use affinidi_data_integrity::verification_proof::verify_data;
-use ahash::HashSet;
-use chrono::{DateTime, Utc};
-
 use super::LogEntry;
-use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
+use crate::{DIDWebVHError, MetaData, SCID_HOLDER};
+use affinidi_data_integrity::verification_proof::verify_data;
+use chrono::{DateTime, Utc};
 use std::{
     fs::File,
     io::{self, BufRead},
@@ -25,34 +23,101 @@ impl LogEntry {
     }
 
     /// Get either latest LogEntry or the specific version if specified.
+    /// version_id: Must match the full versionId (1-z6M....)
+    /// version_ number: Will only match on the leading integer of versionId
+    /// version_time: Will match on a Version where the query_time is when that LogEntry was active
     pub fn get_log_entry_from_file<P>(
         file_path: P,
-        version: Option<u32>,
-    ) -> Result<LogEntry, DIDWebVHError>
+        version_id: Option<&str>,
+        version_number: Option<u32>,
+        version_time: Option<&DateTime<Utc>>,
+    ) -> Result<(LogEntry, MetaData), DIDWebVHError>
     where
         P: AsRef<Path>,
     {
         if let Ok(lines) = LogEntry::read_from_json_file(file_path) {
-            let mut previous: Option<LogEntry> = None;
+            let mut previous_log_entry: Option<LogEntry> = None;
+            let mut previous_metadata: Option<MetaData> = None;
             for line in lines.map_while(Result::ok) {
                 let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
                     DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
                 })?;
-                log_entry.verify_log_entry(previous.as_ref())?;
+                let current_metadata = match log_entry
+                    .verify_log_entry(previous_log_entry.as_ref(), previous_metadata.as_ref())
+                {
+                    Ok(metadata) => metadata,
+                    Err(e) => {
+                        if let Some(log_entry) = previous_log_entry {
+                            if let Some(metadata) = previous_metadata {
+                                // Return last known good LogEntry
+                                return Ok((log_entry, metadata));
+                            }
+                        }
+                        return Err(DIDWebVHError::ValidationError(format!(
+                            "No valid LogEntry found! Reason: {}",
+                            e
+                        )));
+                    }
+                };
 
-                previous = Some(log_entry);
+                // Check if this valid LogEntry has been deactivated, if so then ignore any other
+                // Entries
+                if current_metadata.deactivated {
+                    // Deactivated, return the current LogEntry and MetaData
+                    return Ok((log_entry, current_metadata));
+                }
+
+                // Check if we are looking for this version-id
+                if let Some(version_id) = version_id {
+                    if current_metadata.version_id == version_id {
+                        // Found the query version versionID
+                        return Ok((log_entry, current_metadata));
+                    }
+                }
+
+                // TODO: Add versionNumber checks
+
+                // Check if this log_entry is older than the version_time
+                // if so, then return the previous info
+                if let Some(version_time) = version_time {
+                    let current_time: DateTime<Utc> =
+                        current_metadata.version_time.parse().unwrap();
+                    let create_time: DateTime<Utc> = current_metadata.created.parse().unwrap();
+
+                    // Is the query versionTime in the range of this LogEntry?
+                    if (&create_time < version_time) && (&current_time > version_time) {
+                        return Ok((log_entry, current_metadata));
+                    }
+                }
+
+                // Set the next previous records
+                previous_log_entry = Some(log_entry);
+                previous_metadata = Some(current_metadata);
             }
-        }
 
-        Err(DIDWebVHError::LogEntryError(
-            "Failed to read log entry from file".to_string(),
-        ))
+            // End of file
+            // FIX: Check if query is being use, return NotFound if nothing matched
+            if let Some(log_entry) = previous_log_entry {
+                if let Some(metadata) = previous_metadata {
+                    // Return last known good LogEntry
+                    return Ok((log_entry, metadata));
+                }
+            }
+            Err(DIDWebVHError::ValidationError(
+                "Empty LogEntry returned for DID".to_string(),
+            ))
+        } else {
+            Err(DIDWebVHError::LogEntryError(
+                "Failed to read log entry from file".to_string(),
+            ))
+        }
     }
 
     pub fn verify_log_entry(
         &self,
-        previous: Option<&LogEntry>,
-    ) -> Result<Parameters, DIDWebVHError> {
+        previous_log_entry: Option<&LogEntry>,
+        previous_meta_data: Option<&MetaData>,
+    ) -> Result<MetaData, DIDWebVHError> {
         // Ensure we are dealing with a signed LogEntry
         let Some(proof) = &self.proof else {
             return Err(DIDWebVHError::ValidationError(
@@ -61,7 +126,10 @@ impl LogEntry {
         };
 
         // Ensure the Parameters are correctly setup
-        let parameters = match self.parameters.validate(previous.map(|p| &p.parameters)) {
+        let parameters = match self
+            .parameters
+            .validate(previous_log_entry.map(|p| &p.parameters))
+        {
             Ok(params) => params,
             Err(e) => {
                 return Err(DIDWebVHError::LogEntryError(format!(
@@ -112,27 +180,59 @@ impl LogEntry {
         // TODO: Implement Witness verification
 
         // Verify the version ID
-        working_entry.verify_version_id(previous)?;
+        working_entry.verify_version_id(previous_log_entry)?;
 
         // Validate the version timestamp
-        self.verify_version_time(previous)?;
+        self.verify_version_time(previous_log_entry)?;
 
         // Do we need to calculate the SCID for the first logEntry?
-        if previous.is_none() {
+        if previous_log_entry.is_none() {
             // First LogEntry and we must validate the SCID
             working_entry.verify_scid()?;
         }
 
-        Ok(parameters)
+        let (created, portable, scid) = if let Some(metadata) = previous_meta_data {
+            (
+                metadata.created.clone(),
+                metadata.portable,
+                metadata.scid.clone(),
+            )
+        } else {
+            (
+                self.version_time.clone(),
+                parameters.portable.unwrap_or(false),
+                parameters.scid.unwrap(),
+            )
+        };
+
+        Ok(MetaData {
+            version_id: self.version_id.clone(),
+            version_time: self.version_time.clone(),
+            created,
+            updated: self.version_time.clone(),
+            deactivated: parameters.deactivated,
+            portable,
+            scid,
+            watchers: if let Some(Some(watchers)) = parameters.watchers {
+                Some(watchers)
+            } else {
+                None
+            },
+            witness: if let Some(Some(witnesses)) = parameters.active_witness {
+                Some(witnesses)
+            } else {
+                None
+            },
+        })
     }
 
     /// Ensures that the signing key exists in the currently aothorized keys
     /// Format of authorized keys will be a multikey E.g. z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15
     /// Format of proof_key will be a DID (only supports DID:key)
     /// Returns true if key is authorized or false if not
-    fn check_signing_key_authorized(authorized_keys: &HashSet<String>, proof_key: &str) -> bool {
+    fn check_signing_key_authorized(authorized_keys: &[String], proof_key: &str) -> bool {
         if let Some((_, key)) = proof_key.split_once('#') {
-            authorized_keys.contains(key)
+            authorized_keys.iter().any(|f| f.as_str() == key)
         } else {
             false
         }
@@ -267,7 +367,6 @@ impl LogEntry {
                 DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
             })?;
 
-        println!("{}", serde_json::to_string_pretty(&scid_entry).unwrap());
         let verify_scid = scid_entry.generate_scid()?;
         if scid != verify_scid {
             return Err(DIDWebVHError::ValidationError(format!(
@@ -282,13 +381,11 @@ impl LogEntry {
 
 #[cfg(test)]
 mod tests {
-    use ahash::{HashSet, HashSetExt};
-
     use crate::log_entry::LogEntry;
 
     #[test]
     fn test_authorized_keys_fail() {
-        let authorized_keys: HashSet<String> = HashSet::new();
+        let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
             &authorized_keys,
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15#z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
@@ -297,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_authorized_keys_missing_key_id_fail() {
-        let authorized_keys: HashSet<String> = HashSet::new();
+        let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
             &authorized_keys,
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
@@ -306,8 +403,8 @@ mod tests {
 
     #[test]
     fn test_authorized_keys_ok() {
-        let mut authorized_keys: HashSet<String> = HashSet::new();
-        authorized_keys.insert("z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15".to_string());
+        let authorized_keys: Vec<String> =
+            vec!["z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15".to_string()];
 
         assert!(LogEntry::check_signing_key_authorized(
             &authorized_keys,

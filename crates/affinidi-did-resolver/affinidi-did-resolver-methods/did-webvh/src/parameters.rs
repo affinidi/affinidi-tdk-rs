@@ -5,7 +5,6 @@
 
 use crate::{DIDWebVHError, witness::Witnesses};
 use affinidi_secrets_resolver::secrets::Secret;
-use ahash::{HashSet, HashSetExt};
 use serde::{Deserialize, Serialize};
 use std::ops::Not;
 
@@ -37,12 +36,12 @@ pub struct Parameters {
         skip_serializing_if = "Option::is_none",    // <- important for serialization
         with = "::serde_with::rust::double_option",
     )]
-    pub update_keys: Option<Option<HashSet<String>>>,
+    pub update_keys: Option<Option<Vec<String>>>,
 
     /// Depending on if pre-rotation is active,
     /// the set of active updateKeys can change
     #[serde(skip)]
-    pub active_update_keys: HashSet<String>,
+    pub active_update_keys: Vec<String>,
 
     /// Can you change the web address for this DID?
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,7 +53,7 @@ pub struct Parameters {
         skip_serializing_if = "Option::is_none",    // <- important for serialization
         with = "::serde_with::rust::double_option",
     )]
-    pub next_key_hashes: Option<Option<HashSet<String>>>,
+    pub next_key_hashes: Option<Option<Vec<String>>>,
 
     /// Parameters for witness nodes
     #[serde(
@@ -97,7 +96,7 @@ impl Default for Parameters {
             method: Some("did:webvh:1.0".to_string()),
             scid: None,
             update_keys: None,
-            active_update_keys: HashSet::new(),
+            active_update_keys: Vec::new(),
             portable: None,
             next_key_hashes: None,
             witness: None,
@@ -313,8 +312,8 @@ impl Parameters {
     /// nextKeyHashes
     /// Returns an error if validation fails
     fn validate_pre_rotation_keys(
-        next_key_hashes: &Option<Option<HashSet<String>>>,
-        update_keys: &HashSet<String>,
+        next_key_hashes: &Option<Option<Vec<String>>>,
+        update_keys: &[String],
     ) -> Result<(), DIDWebVHError> {
         let Some(Some(next_key_hashes)) = next_key_hashes else {
             return Err(DIDWebVHError::ValidationError(

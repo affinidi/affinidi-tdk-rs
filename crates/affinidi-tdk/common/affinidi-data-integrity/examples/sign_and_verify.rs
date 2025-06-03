@@ -78,7 +78,7 @@ fn main() {
     let signed = DataIntegrityProof::sign_data_jcs(&unsigned_values, &secret.id, &secret)
         .expect("Couldn't sign Document");
 
-    let result = verify_data(
+    let _ = verify_data(
         &serde_json::from_value(signed.clone()).expect("Couldn't convert genericDocument"),
     )
     .expect("Couldn't validate doc");

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
+use tracing::debug;
 
 pub mod read;
 
@@ -158,7 +159,6 @@ impl LogEntry {
     /// Generates a SCID from a preliminary LogEntry
     /// This only needs to be called once when the DID is first created.
     fn generate_scid(&self) -> Result<String, DIDWebVHError> {
-        println!("TIMTAM:\n{}", serde_json::to_string_pretty(self).unwrap());
         self.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate SCID from preliminary LogEntry. Reason: {}",
@@ -175,6 +175,7 @@ impl LogEntry {
                 e
             ))
         })?;
+        debug!("JCS for LogEntry hash: {}", jcs);
 
         // SHA_256 code = 0x12, length of SHA256 is 32 bytes
         let hash_encoded = Multihash::<32>::wrap(0x12, Sha256::digest(jcs.as_bytes()).as_slice())

@@ -2,11 +2,8 @@
 *   creates a new webvh DID
 */
 
-use std::{fs::File, io::Write};
-
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
-use ahash::{HashSet, HashSetExt};
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -18,6 +15,7 @@ use did_webvh::{
     witness::{Witness, Witnesses},
 };
 use serde_json::{Value, json};
+use std::{fs::File, io::Write};
 use tracing_subscriber::filter;
 use url::Url;
 
@@ -185,8 +183,18 @@ async fn main() -> Result<()> {
     .await?;
 
     println!(
-        "Log Entry:\n{}",
-        serde_json::to_string_pretty(&log_entry).unwrap()
+        "{}\n{}",
+        style("Log Entry:").color256(69),
+        style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
+    );
+
+    // Validate the Log Entry
+    let meta_data = log_entry.verify_log_entry(None, None)?;
+    println!(
+        "{}\n{}\n{}",
+        style("Log Entry Metadata:").color256(69),
+        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(69),
+        style("Successfully Validated").color256(34).blink(),
     );
 
     if Confirm::with_theme(&ColorfulTheme::default())
@@ -788,9 +796,9 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
     };
 
     // Update Keys
-    let mut update_keys = HashSet::new();
+    let mut update_keys = Vec::new();
     for key in authorizing_keys {
-        update_keys.insert(key.get_public_keymultibase()?);
+        update_keys.push(key.get_public_keymultibase()?);
     }
     parameters.update_keys = Some(Some(update_keys));
 
@@ -820,7 +828,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
             .color256(69)
     );
-    let mut next_key_hashes: HashSet<String> = HashSet::new();
+    let mut next_key_hashes: Vec<String> = Vec::new();
     loop {
         if Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Generate a pre-rotated key?")
@@ -838,7 +846,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
                 style("key hash:").color256(69),
                 style(&key.get_public_keymultibase_hash()?).color256(214)
             );
-            next_key_hashes.insert(key.get_public_keymultibase_hash()?);
+            next_key_hashes.push(key.get_public_keymultibase_hash()?);
         } else {
             break;
         }
@@ -914,7 +922,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
 
     let mut witnesses = Witnesses {
         threshold,
-        witnesses: HashSet::new(),
+        witnesses: Vec::new(),
     };
 
     if Confirm::with_theme(&ColorfulTheme::default())
@@ -936,7 +944,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
                 style("privateKeyMultibase:").color256(69),
                 style(&key.get_private_keymultibase()?).color256(214)
             );
-            witnesses.witnesses.insert(Witness { id: did });
+            witnesses.witnesses.push(Witness { id: did });
         }
     } else {
         loop {
@@ -945,7 +953,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
                 .interact()
                 .unwrap();
 
-            witnesses.witnesses.insert(Witness { id: did });
+            witnesses.witnesses.push(Witness { id: did });
 
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
