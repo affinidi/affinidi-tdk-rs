@@ -76,7 +76,6 @@ name = "affinidi-data-integrity"
 version = "0.1.1"
 dependencies = [
  "affinidi-secrets-resolver",
- "affinidi-tdk",
  "chrono",
  "clap",
  "ed25519-dalek",
