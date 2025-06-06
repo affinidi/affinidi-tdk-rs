@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::DIDWebVHError;
 /// Witness nodes
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Witnesses {
     /// Number of witnesses required to witness a change
     /// Must be 1 or greater

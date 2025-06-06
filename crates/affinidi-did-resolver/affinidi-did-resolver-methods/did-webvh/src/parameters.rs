@@ -337,10 +337,225 @@ impl Parameters {
         }
         Ok(())
     }
+
+    /// Compares two sets of Parameters and returns a new Parameters object only with the
+    /// differences
+    /// Will check and verify to spec, will return an error if there is an issue
+    pub fn diff(&self, new_params: &Parameters) -> Result<Parameters, DIDWebVHError> {
+        // Only did:webvh:1.0 is supported, so set method to None to ignore any changes
+        let mut diff = Parameters {
+            method: None,
+            ..Default::default()
+        };
+
+        // Calculated fields can be left at defaults as they are ignored in serialization
+        // pre_rotation_active, active_update_keys, active_witness
+        // scid can not be changed, so leave it at default None
+
+        // updateKeys may have changed
+        match new_params.update_keys {
+            None => {
+                // If None, then keep current parameter updateKeys
+                diff.update_keys = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the updateKeys
+                match self.update_keys {
+                    None => {
+                        // If current updateKeys is also None, then no change
+                        diff.update_keys = None;
+                    }
+                    Some(Some(_)) => {
+                        // If current updateKeys is Some(Some(_)), then set to None
+                        diff.update_keys = Some(None);
+                    }
+                    Some(None) => {
+                        // If current updateKeys is Some(None), then no change
+                        diff.update_keys = None;
+                    }
+                }
+            }
+            Some(Some(ref update_keys)) => {
+                if self.update_keys == new_params.update_keys {
+                    // If updateKeys are the same, no change
+                    diff.update_keys = None;
+                } else if self.pre_rotation_active && self.next_key_hashes.is_none() {
+                    // If pre-rotation is active, but nextKeyHashes is None, then error
+                    return Err(DIDWebVHError::ParametersError(
+                        "nextKeyHashes must be defined when pre-rotation is active".to_string(),
+                    ));
+                } else {
+                    // If Some(Some(update_keys)), then set the new update keys
+                    if update_keys.is_empty() {
+                        return Err(DIDWebVHError::ParametersError(
+                            "updateKeys cannot be empty".to_string(),
+                        ));
+                    }
+                    // Ensure they are included in the previous nextKeyHashes
+                    Parameters::validate_pre_rotation_keys(&self.next_key_hashes, update_keys)?;
+                    diff.update_keys = Some(Some(update_keys.clone()));
+                }
+            }
+        }
+
+        // Check if portable has been turned off (can never be turned on except on first log entry)
+        if self.portable != new_params.portable {
+            if new_params.portable == Some(true) {
+                return Err(DIDWebVHError::ParametersError(
+                    "Portable cannot be set to true after the first Log Entry".to_string(),
+                ));
+            }
+            diff.portable = new_params.portable;
+        }
+
+        // nextKeyHashes checks
+        match new_params.next_key_hashes {
+            None => {
+                // If None, then keep current parameter nextKeyHashes
+                diff.next_key_hashes = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the nextKeyHashes
+                match self.next_key_hashes {
+                    None => {
+                        // If current nextKeyHashes is also None, then no change
+                        diff.next_key_hashes = None;
+                    }
+                    Some(Some(_)) => {
+                        // If current nextKeyHashes is Some(Some(_)), then set to None
+                        diff.next_key_hashes = Some(None);
+                    }
+                    Some(None) => {
+                        // If current nextKeyHashes is Some(None), then no change
+                        diff.next_key_hashes = None;
+                    }
+                }
+            }
+            Some(Some(ref next_key_hashes)) => {
+                if self.next_key_hashes == new_params.next_key_hashes {
+                    // If nextKeyHashes are the same, no change
+                    diff.next_key_hashes = None;
+                } else {
+                    // If Some(Some(next_key_hashes)), then set the new next key hashes
+                    if next_key_hashes.is_empty() {
+                        return Err(DIDWebVHError::ParametersError(
+                            "nextKeyHashes cannot be empty".to_string(),
+                        ));
+                    }
+                    diff.next_key_hashes = Some(Some(next_key_hashes.clone()));
+                }
+            }
+        }
+
+        // Witness checks
+        match new_params.witness {
+            None => {
+                // If None, then keep current parameter witness
+                diff.witness = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the witness
+                match self.witness {
+                    None => {
+                        // If current witness is also None, then no change
+                        diff.witness = None;
+                    }
+                    Some(Some(_)) => {
+                        // If current witness is Some(Some(_)), then set to None
+                        diff.witness = Some(None);
+                    }
+                    Some(None) => {
+                        // If current witness is Some(None), then no change
+                        diff.witness = None;
+                    }
+                }
+            }
+            Some(Some(ref witnesses)) => {
+                // If Some(Some(witnesses)), then set the new witnesses
+                witnesses.validate()?;
+                if self.witness == new_params.witness {
+                    // If witnesses are the same, no change
+                    diff.witness = None;
+                } else if witnesses.is_empty() {
+                    return Err(DIDWebVHError::ParametersError(
+                        "witnesses cannot be empty".to_string(),
+                    ));
+                } else {
+                    // If witnesses are different, set the new witnesses
+                    diff.witness = Some(Some(witnesses.clone()));
+                }
+            }
+        }
+
+        // Watcher checks
+        match new_params.watchers {
+            None => {
+                // If None, then keep current parameter watchers
+                diff.watchers = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the watchers
+                match self.watchers {
+                    None => {
+                        // If current watchers is also None, then no change
+                        diff.watchers = None;
+                    }
+                    Some(Some(_)) => {
+                        // If current watchers is Some(Some(_)), then set to None
+                        diff.watchers = Some(None);
+                    }
+                    Some(None) => {
+                        // If current watchers is Some(None), then no change
+                        diff.watchers = None;
+                    }
+                }
+            }
+            Some(Some(ref watchers)) => {
+                // If Some(Some(watchers)), then set the new watchers
+                if watchers.is_empty() {
+                    return Err(DIDWebVHError::ParametersError(
+                        "watchers cannot be empty".to_string(),
+                    ));
+                }
+                if self.watchers == new_params.watchers {
+                    // If watchers are the same, no change
+                    diff.watchers = None;
+                } else {
+                    // If watchers are different, set the new watchers
+                    diff.watchers = Some(Some(watchers.clone()));
+                }
+            }
+        }
+
+        // Deactivated
+        if new_params.deactivated && self.pre_rotation_active {
+            return Err(DIDWebVHError::DeactivatedError(
+                "DID cannot be deactivated while pre-rotation is active".to_string(),
+            ));
+        } else {
+            diff.deactivated = new_params.deactivated;
+        }
+
+        // TTL Checks
+        if new_params.ttl != self.ttl {
+            if let Some(ttl) = new_params.ttl {
+                if ttl == 0 {
+                    return Err(DIDWebVHError::ParametersError(
+                        "TTL cannot be zero".to_string(),
+                    ));
+                }
+            }
+            diff.ttl = new_params.ttl;
+        }
+
+        Ok(diff)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::witness::{Witness, Witnesses};
+
     use super::Parameters;
 
     #[test]
@@ -354,5 +569,55 @@ mod tests {
         let values = serde_json::to_value(parameters).unwrap();
 
         assert!(values.get("watchers").is_none())
+    }
+
+    #[test]
+    fn diff_no_changes_full() {
+        let old_params = Parameters {
+            method: Some("did:webvh:1.0".to_string()),
+            scid: Some("scid123".to_string()),
+            update_keys: Some(Some(vec![
+                "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
+                "z6MkqUa1LbqZ7EpevqrFC7XHAWM8CE49AKFWVjyu543NfVAp".to_string(),
+            ])),
+            portable: Some(true),
+            next_key_hashes: Some(Some(vec![
+                "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
+                "zQmctZhRGCKrE2R58K9rkfA1aUL74mecrrJRvicz42resii".to_string(),
+            ])),
+            witness: Some(Some(Witnesses {
+                threshold: 2,
+                witnesses: vec![
+                    Witness {
+                        id: "witness1".to_string(),
+                    },
+                    Witness {
+                        id: "witness2".to_string(),
+                    },
+                ],
+            })),
+            watchers: Some(Some(vec!["watcher1".to_string()])),
+            deactivated: false,
+            ttl: Some(3600),
+            ..Default::default()
+        };
+
+        let new_params = old_params.clone();
+
+        let result = old_params.diff(&new_params).expect("Diff failed");
+        assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
+    }
+
+    #[test]
+    fn diff_no_changes_empty() {
+        let old_params = Parameters {
+            method: None,
+            ..Default::default()
+        };
+
+        let new_params = old_params.clone();
+
+        let result = old_params.diff(&new_params).expect("Diff failed");
+        assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
     }
 }
