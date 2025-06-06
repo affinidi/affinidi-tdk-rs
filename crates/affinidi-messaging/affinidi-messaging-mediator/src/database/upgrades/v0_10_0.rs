@@ -62,7 +62,7 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) async fn upgrade_0_10_8(&self) -> Result<(), MediatorError> {
-        self.upgrade_change_schema_version("0.10.8").await
+    pub(crate) async fn upgrade_0_10_9(&self) -> Result<(), MediatorError> {
+        self.upgrade_change_schema_version("0.10.9").await
     }
 }
