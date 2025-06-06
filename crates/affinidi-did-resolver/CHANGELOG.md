@@ -2,9 +2,14 @@
 
 ## Changelog history
 
-### June 2025
+### 6th June 2025
 
 ## DID webvh method (0.1.1)
+
+* **FEATURE:** Validation of LogEntry in place
+  * Checks Parameters across LogEntries
+* **TESTS:** 26 Unit tests added for webvh method
+  * Tests cover all aspects of the webvh method, including validation and resolution
 
 ### 29th May 2025
 
