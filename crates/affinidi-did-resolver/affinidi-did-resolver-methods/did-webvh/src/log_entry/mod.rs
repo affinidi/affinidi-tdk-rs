@@ -1,10 +1,7 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
-use crate::{
-    DIDWebVHError, SCID_HOLDER,
-    parameters::{FieldAction, Parameters},
-};
+use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
@@ -14,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
+use tracing::debug;
 
 pub mod read;
 
@@ -63,7 +61,7 @@ impl LogEntry {
         parameters.scid = Some(SCID_HOLDER.to_string());
 
         // Create a VerificationMethod ID from the first updatekey
-        let vm_id = if let FieldAction::Value(value) = &parameters.update_keys {
+        let vm_id = if let Some(Some(value)) = &parameters.update_keys {
             if let Some(key) = value.iter().next() {
                 // Create a VerificationMethod ID from the first update key
                 ["did:key:", key, "#", key].concat()
@@ -114,9 +112,9 @@ impl LogEntry {
             })?;
 
         // Create the entry hash for this Log Entry
-        let entry_hash = log_entry.generate_scid().map_err(|e| {
+        let entry_hash = log_entry.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate SCID for first LogEntry. Reason: {}",
+                "Couldn't generate entryHash for first LogEntry. Reason: {}",
                 e
             ))
         })?;
@@ -124,15 +122,30 @@ impl LogEntry {
         log_entry.version_id = ["1-", &entry_hash].concat();
 
         // Generate the proof for the log entry
+        let log_entry_values = serde_json::to_value(&log_entry).map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
+                e
+            ))
+        })?;
+
         let log_entry = serde_json::from_value(
-            DataIntegrityProof::sign_data_jcs(&log_entry, &vm_id, secret)
-                .await
-                .map_err(|e| {
+            DataIntegrityProof::sign_data_jcs(
+                &serde_json::from_value(log_entry_values).map_err(|e| {
                     DIDWebVHError::SCIDError(format!(
-                        "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                        "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
                         e
                     ))
                 })?,
+                &vm_id,
+                secret,
+            )
+            .map_err(|e| {
+                DIDWebVHError::SCIDError(format!(
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                    e
+                ))
+            })?,
         )
         .map_err(|e| {
             DIDWebVHError::SCIDError(format!(
@@ -162,6 +175,7 @@ impl LogEntry {
                 e
             ))
         })?;
+        debug!("JCS for LogEntry hash: {}", jcs);
 
         // SHA_256 code = 0x12, length of SHA256 is 32 bytes
         let hash_encoded = Multihash::<32>::wrap(0x12, Sha256::digest(jcs.as_bytes()).as_slice())
@@ -175,14 +189,38 @@ impl LogEntry {
         Ok(multibase::encode(Base::Base58Btc, hash_encoded.to_bytes()))
     }
 
+    /*
+    /// Creates a new LogEntry based on the previous one, with updated parameters and document.
+    /// If previous is None, it creates the first log entry.
+    /// If previous is None, sets to the current time.
+    pub fn create_log_entry(
+        previous: &Option<LogEntry>,
+        parameters: &Parameters,
+        document: &Value,
+        version_time: Option<String>,
+        secret: &Secret,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        // create a new parameters based on previous or first log entry
+        let parameters = if let Some(previous) = previous {
+            // create diff of the previous parameters and new parameters
+            previous.parameters.diff(parameters)
+        } else {
+            // Setup first entry parameters
+        };
+
+        Err(DIDWebVHError::SCIDError(
+            "create_log_entry is not implemented".to_string(),
+        ))
+    }*/
+
     /// Takes a LogEntry and creates a new set of LogEntries to revoke the webvh DID
     /// Returns one or more Log Entries
     /// NOTE: May return more than a single log entry if updateKeys need to be revoked first.
     pub fn revoke(&self) -> Result<Vec<LogEntry>, DIDWebVHError> {
         let mut revoked_entry: LogEntry = self.clone();
         revoked_entry.proof = None;
-        revoked_entry.parameters.deactivated = Some(true);
-        revoked_entry.parameters.update_keys = FieldAction::None;
+        revoked_entry.parameters.deactivated = true;
+        revoked_entry.parameters.update_keys = Some(None);
         Ok(Vec::new())
     }
 }

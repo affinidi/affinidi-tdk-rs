@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     {
 
         fn _create_friend(alias: &str, mediator: Option<&str>) -> TDKProfile {
-            let (did, secrets) = DID::generate_did_peer(vec![(DIDPeerKeys::Verification, KeyType::Ed25519), (DIDPeerKeys::Encryption, KeyType::Secp256k1)], None).unwrap();
+            let (did, secrets) = DID::generate_did_peer(vec![(DIDPeerKeys::Verification, KeyType::P256), (DIDPeerKeys::Verification, KeyType::Ed25519), (DIDPeerKeys::Encryption, KeyType::Secp256k1), (DIDPeerKeys::Encryption, KeyType::P256)], None).unwrap();
             TDKProfile {
                 alias: alias.to_string(),
                 did,

@@ -115,12 +115,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -172,12 +172,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -285,12 +285,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -342,12 +342,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -361,12 +361,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -439,12 +439,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -458,12 +458,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -529,12 +529,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -548,12 +548,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 
@@ -604,12 +604,12 @@ pub(crate) async fn process(
                             ProblemReportSorter::Error,
                             ProblemReportScope::Protocol,
                             "authorization.permission".into(),
-                            "DID does have permission to access the requested resource".into(),
+                            "DID does not have permission to access the requested resource".into(),
                             vec![],
                             None,
                         )),
                         StatusCode::FORBIDDEN.as_u16(),
-                        "DID does have permission to access the requested resource".to_string(),
+                        "DID does not have permission to access the requested resource".to_string(),
                     ));
                 }
 

@@ -3,12 +3,14 @@
 *   See [WebVH Spec](https://identity.foundation/didwebvh/v1.0)
 */
 
+use serde::{Deserialize, Serialize};
 use ssi::dids::{
     DIDMethod, DIDMethodResolver,
     resolution::{Error, Options, Output},
 };
 use thiserror::Error;
 use url::{URLType, WebVHURL};
+use witness::Witnesses;
 
 pub mod log_entry;
 pub mod parameters;
@@ -20,6 +22,8 @@ pub const SCID_HOLDER: &str = "{SCID}";
 /// Error types for WebVH method
 #[derive(Error, Debug)]
 pub enum DIDWebVHError {
+    #[error("DID Query NotFound")]
+    NotFound,
     #[error("UnsupportedMethod: Must be did:webvh")]
     UnsupportedMethod,
     #[error("Invalid method identifier: {0}")]
@@ -34,9 +38,30 @@ pub enum DIDWebVHError {
     LogEntryError(String),
     #[error("ParametersError: {0}")]
     ParametersError(String),
+    /// There was an error in validating the DID
+    #[error("ValidationError: {0}")]
+    ValidationError(String),
+    #[error("DeactivatedError: {0}")]
+    DeactivatedError(String),
 }
 
 pub struct DIDWebVH;
+
+/// Resolved Document MetaData
+/// Returned as reolved Document MetaData on a successful resolve
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaData {
+    pub version_id: String,
+    pub version_time: String,
+    pub created: String,
+    pub updated: String,
+    pub scid: String,
+    pub portable: bool,
+    pub deactivated: bool,
+    pub witness: Option<Witnesses>,
+    pub watchers: Option<Vec<String>>,
+}
 
 impl DIDMethodResolver for DIDWebVH {
     async fn resolve_method_representation<'a>(
@@ -64,24 +89,23 @@ impl DIDMethod for DIDWebVH {
 
 #[cfg(test)]
 mod tests {
-    use ahash::{HashSet, HashSetExt};
-
-    use crate::parameters::{FieldAction, Parameters};
+    use crate::parameters::Parameters;
 
     #[test]
     fn check_serialization_field_action() {
+        let watchers = vec!["did:webvh:watcher1".to_string()];
         let params = Parameters {
             pre_rotation_active: false,
             method: None,
             scid: None,
-            update_keys: FieldAction::Absent,
-            active_update_keys: HashSet::new(),
+            update_keys: None,
+            active_update_keys: Vec::new(),
             portable: None,
-            next_key_hashes: FieldAction::Absent,
-            witness: FieldAction::None,
-            witness_after: FieldAction::None,
-            watchers: FieldAction::Value(vec!["url".to_string()]),
-            deactivated: None,
+            next_key_hashes: None,
+            witness: Some(None),
+            active_witness: Some(None),
+            watchers: Some(Some(watchers)),
+            deactivated: false,
             ttl: None,
         };
 

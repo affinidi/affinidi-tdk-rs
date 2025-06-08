@@ -1,5 +1,12 @@
 # Affinidi Secrets Manager
 
+## 6th June 2025 (0.1.10)
+
+* **FIX:** Generating a hash of the public key `multibase` was incorrect
+* **FEATURE:** Added `get_hash()` to `Secrets` allowing for easier hashing of keys
+without converting to a secret
+* **TESTS:** Added more unit tests to test functionality of `get_hash()`
+
 ## 29th May 2025 (0.1.9)
 
 * **MAINTENANCE:** Crate dependencies updated

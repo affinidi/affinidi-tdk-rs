@@ -47,5 +47,4 @@ lazy_static = { version = "1.5" }
 tracing-test = "0.2"
 
 [features]
-uniffi = []
 testvectors = ["lazy_static"]
