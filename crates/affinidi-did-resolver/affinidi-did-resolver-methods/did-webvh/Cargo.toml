@@ -1,6 +1,6 @@
 [package]
 name = "did-webvh"
-version = "0.1.1"
+version = "0.1.2"
 description = "Implementation of the did:webvh method in Rust, uses the ssi crate"
 repository.workspace = true
 edition.workspace = true
@@ -16,8 +16,11 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-affinidi-data-integrity.workspace = true
-affinidi-secrets-resolver.workspace = true
+# cannot use workspace due to cyclic dependencies
+# affinidi-data-integrity.workspace = true
+# affinidi-secrets-resolver.workspace = true
+affinidi-data-integrity = { version = "0.1.1" }
+affinidi-secrets-resolver = { version = "0.1.10" }
 
 ahash = { version = "0.8", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -38,9 +41,8 @@ tracing = { version = "0.1", features = [
 url = "2.5"
 
 [dev-dependencies]
-# cannot use workspace due to cyclic dependencies
 # affinidi-tdk.workspace = true
-# affinidi-tdk = { version = "0.1.12" }
+affinidi-tdk = { version = "0.1.12" }
 
 anyhow = "1.0"
 console = "0.15"
