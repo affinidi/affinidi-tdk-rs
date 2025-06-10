@@ -159,7 +159,7 @@ dependencies = [
  "clap",
  "did-example",
  "did-peer 0.6.2",
- "did-webvh 0.1.1",
+ "did-webvh 0.1.2",
  "futures-util",
  "highway",
  "moka",
@@ -194,7 +194,7 @@ dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "did-peer 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "did-webvh 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "did-webvh 0.1.1",
  "futures-util",
  "highway",
  "moka",
@@ -2945,6 +2945,30 @@ dependencies = [
 [[package]]
 name = "did-webvh"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "796913f7ab5a18b0c06e686c0b3755ee180b2d7cf853107ba634298971a8f561"
+dependencies = [
+ "affinidi-data-integrity 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "affinidi-secrets-resolver 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "ahash 0.8.12",
+ "chrono",
+ "multibase 0.9.1",
+ "multihash 0.19.3",
+ "reqwest 0.12.18",
+ "serde",
+ "serde_json",
+ "serde_json_canonicalizer",
+ "serde_with 3.12.0",
+ "sha2 0.10.9",
+ "ssi 0.12.0",
+ "thiserror 2.0.12",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "did-webvh"
+version = "0.1.2"
 dependencies = [
  "affinidi-data-integrity 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "affinidi-secrets-resolver 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2968,30 +2992,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "url",
-]
-
-[[package]]
-name = "did-webvh"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "796913f7ab5a18b0c06e686c0b3755ee180b2d7cf853107ba634298971a8f561"
-dependencies = [
- "affinidi-data-integrity 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "affinidi-secrets-resolver 0.1.10 (registry+https://github.com/rust-lang/crates.io-index)",
- "ahash 0.8.12",
- "chrono",
- "multibase 0.9.1",
- "multihash 0.19.3",
- "reqwest 0.12.18",
- "serde",
- "serde_json",
- "serde_json_canonicalizer",
- "serde_with 3.12.0",
- "sha2 0.10.9",
- "ssi 0.12.0",
- "thiserror 2.0.12",
- "tracing",
  "url",
 ]
 
