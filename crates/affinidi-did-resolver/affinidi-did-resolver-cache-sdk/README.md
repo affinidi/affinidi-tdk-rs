@@ -94,7 +94,7 @@ A reference benchmark example is included that can be used to measure performanc
 
 Run the above from the $affinidi-did-resolver/affinidi-did-resolver-cache-sdk directory
 
-``` bash
+```bash
 Affinidi DID Cache SDK
 
 Usage: benchmark [OPTIONS] --generate-count <GENERATE_COUNT> --resolve-count <RESOLVE_COUNT>
@@ -116,6 +116,6 @@ Options:
 
 You must enable the `network` feature when running integration tests
 
-``` bash
+```bash
 cargo test --features network
 ```

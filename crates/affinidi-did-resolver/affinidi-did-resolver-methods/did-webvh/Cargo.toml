@@ -38,8 +38,9 @@ tracing = { version = "0.1", features = [
 url = "2.5"
 
 [dev-dependencies]
-affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-tdk.workspace = true
+# cannot use workspace due to cyclic dependencies
+# affinidi-tdk.workspace = true
+# affinidi-tdk = { version = "0.1.12" }
 
 anyhow = "1.0"
 console = "0.15"

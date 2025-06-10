@@ -2720,9 +2720,7 @@ name = "did-webvh"
 version = "0.1.1"
 dependencies = [
  "affinidi-data-integrity",
- "affinidi-did-resolver-cache-sdk",
  "affinidi-secrets-resolver",
- "affinidi-tdk",
  "ahash 0.8.12",
  "anyhow",
  "chrono",
