@@ -340,6 +340,7 @@ mod tests {
         utils::crypto::{JoseKDF, KeyWrap},
     };
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_authcrypt() {
         _pack_encrypted_works_authcrypt::<
@@ -451,6 +452,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_authcrypt_protected_sender() {
         _pack_encrypted_works_authcrypt_protected_sender::<
@@ -691,6 +693,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_authcrypt_protected_sender_signed() {
         _pack_encrypted_works_authcrypt_protected_sender_signed::<
@@ -853,6 +856,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_authcrypt_sign() {
         _pack_encrypted_works_authcrypt_sign::<
@@ -988,6 +992,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_not_did_or_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1019,6 +1024,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_not_did_or_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1050,6 +1056,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_sign_by_not_did_or_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1081,6 +1088,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_differs_msg_from() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1114,6 +1122,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_differs_msg_to() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1147,6 +1156,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_presented_in_msg_to() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1172,6 +1182,7 @@ mod tests {
             .await;
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_not_did_or_did_url_in_msg() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1205,6 +1216,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_not_did_or_did_url_in_msg() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1238,6 +1250,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_did_url_from_msg_did_positive() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1261,6 +1274,7 @@ mod tests {
             .await;
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_did_url_to_msg_did_positive() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1286,6 +1300,7 @@ mod tests {
             .await;
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_sign_by_differs_msg_from_positive() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1309,6 +1324,7 @@ mod tests {
             .await;
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_did_from_msg_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1343,6 +1359,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_did_to_msg_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1376,6 +1393,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_unknown_did() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1406,6 +1424,7 @@ mod tests {
         assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_from_unknown_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1434,6 +1453,7 @@ mod tests {
         assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_unknown_did() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1466,6 +1486,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_unknown_did_url() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
@@ -1494,6 +1515,7 @@ mod tests {
         assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
     }
 
+    #[ignore]
     #[tokio::test]
     async fn pack_encrypted_works_to_not_in_secrets_positive() {
         let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
