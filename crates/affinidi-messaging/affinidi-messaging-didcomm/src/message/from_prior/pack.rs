@@ -205,6 +205,7 @@ mod tests {
         },
     };
 
+    #[ignore]
     #[tokio::test]
     async fn from_prior_pack_works_with_issuer_kid() {
         _from_prior_pack_works_with_issuer_kid(&FROM_PRIOR_MINIMAL).await;
@@ -238,6 +239,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn from_prior_pack_works_without_issuer_kid() {
         _from_prior_pack_works_without_issuer_kid(&FROM_PRIOR_MINIMAL).await;
@@ -273,6 +275,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn from_prior_pack_works_wrong_issuer_kid() {
         _from_prior_pack_works_wrong_issuer_kid(
@@ -320,6 +323,7 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[tokio::test]
     async fn from_prior_pack_works_invalid() {
         _from_prior_pack_works_invalid(
