@@ -620,4 +620,17 @@ mod tests {
         let result = old_params.diff(&new_params).expect("Diff failed");
         assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
     }
+
+    #[test]
+    fn diff_no_changes_method() {
+        let old_params = Parameters::default();
+
+        let new_params = Parameters {
+            method: None,
+            ..Default::default()
+        };
+
+        let result = old_params.diff(&new_params).expect("Diff failed");
+        assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
+    }
 }

@@ -35,7 +35,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-rustls-platform-verifier = "0.5"
+rustls-platform-verifier = "0.6"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"

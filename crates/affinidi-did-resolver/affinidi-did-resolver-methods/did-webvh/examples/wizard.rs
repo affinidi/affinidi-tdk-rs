@@ -14,10 +14,18 @@ use did_webvh::{
     url::WebVHURL,
     witness::{Witness, Witnesses},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fs::File, io::Write};
 use tracing_subscriber::filter;
 use url::Url;
+
+/// Stores information relating to the configusation of the DID
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ConfigInfo {
+    /// Associated secrets that were used to create the version of the DID
+    pub version: Vec<Secret>,
+}
 
 /// Display a fun banner
 fn show_banner() {
@@ -75,6 +83,43 @@ async fn main() -> Result<()> {
 
     show_banner();
 
+    // ************************************************************************
+    // Show main menu
+    // ************************************************************************
+    let menu = vec!["Create a new webvh DID", "Update existing DID", "Exit"];
+
+    loop {
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What would you like to do?")
+            .items(&menu)
+            .default(0)
+            .interact()
+            .unwrap();
+
+        match selection {
+            0 => {
+                println!("{}", style("Creating a new webvh DID").color256(69));
+                create_new_did().await?;
+            }
+            1 => {
+                println!("{}", style("Updating an existing webvh DID").color256(69));
+                edit_did().await?;
+            }
+            2 => {
+                println!("{}", style("Exiting the wizard, goodbye!").color256(69));
+                break;
+            }
+            _ => {
+                println!("{}", style("Invalid selection...").color256(196));
+                continue;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 1: Get the URLs for this DID
     // ************************************************************************
@@ -204,6 +249,63 @@ async fn main() -> Result<()> {
     {
         let mut file = File::create("did.jsonl")?;
         file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+async fn edit_did() -> Result<()> {
+    let file_path: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("DID LogEntry File?")
+        .default("did.jsonl".to_string())
+        .interact()
+        .unwrap();
+
+    let (log_entry, meta_data) = LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
+
+    println!(
+        "{}\n{}\n{}",
+        style("Log Entry Metadata:").color256(69),
+        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(69),
+        style("Successfully Loaded").color256(34).blink(),
+    );
+
+    println!();
+
+    let menu = vec![
+        "Modify DID",
+        "Move to a new domain (portability)?",
+        "Revoke this DID?",
+        "back",
+    ];
+
+    loop {
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Editing DID")
+            .items(&menu)
+            .default(0)
+            .interact()
+            .unwrap();
+
+        match selection {
+            0 => {
+                println!("{}", style("Modifying...").color256(69));
+                create_new_did().await?;
+            }
+            1 => {
+                println!("{}", style("Migrating to a new domain").color256(69));
+            }
+            2 => {
+                println!("{}", style("Revoking DID").color256(69));
+            }
+            3 => {
+                break;
+            }
+            _ => {
+                println!("{}", style("Invalid selection...").color256(196));
+                continue;
+            }
+        }
     }
 
     Ok(())
