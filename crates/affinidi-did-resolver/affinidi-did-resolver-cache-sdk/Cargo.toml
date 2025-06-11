@@ -46,12 +46,12 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ], optional = true }
-rustls-platform-verifier = { version = "0.5", optional = true }
+rustls-platform-verifier = { version = "0.6", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 serde-wasm-bindgen = "0.6.5"
 sha1 = { version = "0.10", optional = true }
-ssi = { version = "0.11", features = ["secp384r1"] }
+ssi = { version = "0.12", features = ["secp384r1"] }
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
 tokio-rustls = { version = "0.26", optional = true }
