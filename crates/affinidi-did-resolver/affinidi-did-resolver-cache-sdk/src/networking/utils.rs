@@ -123,7 +123,11 @@ pub async fn connect(
             }
         };
 
-        let connector = TlsConnector::from(Arc::new(ClientConfig::with_platform_verifier()));
+        let connector = TlsConnector::from(Arc::new(
+            ClientConfig::with_platform_verifier().map_err(|e| {
+                DIDCacheError::TransportError(format!("TLS Platform Configuration failed: {}", e))
+            })?,
+        ));
         Box::pin(
             connector
                 .connect(ServerName::DnsName(dns_name), stream)
