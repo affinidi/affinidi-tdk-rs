@@ -1,5 +1,10 @@
 # Affinidi Secrets Manager
 
+## 14th June 2025 (0.1.11)
+
+* **MAINTENANCE:** Updated SSI crate from 0.11 to 0.12
+* **FEATURE:** Loading JWK format keys will support public/private byte methods
+
 ## 6th June 2025 (0.1.10)
 
 * **FIX:** Generating a hash of the public key `multibase` was incorrect
