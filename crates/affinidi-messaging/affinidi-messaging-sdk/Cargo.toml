@@ -34,7 +34,7 @@ sha256 = "1.6"
 ssi = { version = "0.12" }
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-native-roots"] }
 tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
