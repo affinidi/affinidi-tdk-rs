@@ -405,7 +405,6 @@ fn update_authorization_keys(
     new_params: &mut Parameters,
 ) -> Result<Vec<Secret>> {
     let mut secrets = Vec::new();
-    println!("{:#?}", old_params);
 
     // What mode are we operating in?
     if old_params.pre_rotation_active {
@@ -431,7 +430,8 @@ fn update_authorization_keys(
 fn pick_update_key(existing: &[Secret]) -> Result<&Secret> {
     let mut keys = Vec::new();
     for s in existing {
-        keys.push(s.id.clone());
+        println!("SECRET: {:#?}", s);
+        keys.push(s.get_public_keymultibase_hash()?);
     }
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Which Authorized Key do you want to use for this update?")
