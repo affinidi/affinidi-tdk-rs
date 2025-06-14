@@ -3,7 +3,7 @@
 */
 
 use super::LogEntry;
-use crate::{DIDWebVHError, MetaData, SCID_HOLDER};
+use crate::{DIDWebVHError, MetaData, SCID_HOLDER, parameters::Parameters};
 use affinidi_data_integrity::verification_proof::verify_data;
 use chrono::{DateTime, Utc};
 use std::{
@@ -39,13 +39,13 @@ impl LogEntry {
             let mut previous_log_entry: Option<LogEntry> = None;
             let mut previous_metadata: Option<MetaData> = None;
             for line in lines.map_while(Result::ok) {
-                let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
+                let mut log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
                     DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
                 })?;
-                let current_metadata = match log_entry
+                let (validated_parameters, current_metadata) = match log_entry
                     .verify_log_entry(previous_log_entry.as_ref(), previous_metadata.as_ref())
                 {
-                    Ok(metadata) => metadata,
+                    Ok((parameters, metadata)) => (parameters, metadata),
                     Err(e) => {
                         if let Some(log_entry) = previous_log_entry {
                             if let Some(metadata) = previous_metadata {
@@ -59,6 +59,7 @@ impl LogEntry {
                         )));
                     }
                 };
+                log_entry.parameters = validated_parameters;
 
                 // Check if this valid LogEntry has been deactivated, if so then ignore any other
                 // Entries
@@ -128,11 +129,13 @@ impl LogEntry {
         }
     }
 
+    /// Verify a LogEntry against a previous entry if it exists
+    /// Returns validated current-state Parameters and MetaData
     pub fn verify_log_entry(
         &self,
         previous_log_entry: Option<&LogEntry>,
         previous_meta_data: Option<&MetaData>,
-    ) -> Result<MetaData, DIDWebVHError> {
+    ) -> Result<(Parameters, MetaData), DIDWebVHError> {
         // Ensure we are dealing with a signed LogEntry
         let Some(proof) = &self.proof else {
             return Err(DIDWebVHError::ValidationError(
@@ -216,29 +219,32 @@ impl LogEntry {
             (
                 self.version_time.clone(),
                 parameters.portable.unwrap_or(false),
-                parameters.scid.unwrap(),
+                parameters.scid.clone().unwrap(),
             )
         };
 
-        Ok(MetaData {
-            version_id: self.version_id.clone(),
-            version_time: self.version_time.clone(),
-            created,
-            updated: self.version_time.clone(),
-            deactivated: parameters.deactivated,
-            portable,
-            scid,
-            watchers: if let Some(Some(watchers)) = parameters.watchers {
-                Some(watchers)
-            } else {
-                None
+        Ok((
+            parameters.clone(),
+            MetaData {
+                version_id: self.version_id.clone(),
+                version_time: self.version_time.clone(),
+                created,
+                updated: self.version_time.clone(),
+                deactivated: parameters.deactivated,
+                portable,
+                scid,
+                watchers: if let Some(Some(watchers)) = parameters.watchers {
+                    Some(watchers)
+                } else {
+                    None
+                },
+                witness: if let Some(Some(witnesses)) = parameters.active_witness {
+                    Some(witnesses)
+                } else {
+                    None
+                },
             },
-            witness: if let Some(Some(witnesses)) = parameters.active_witness {
-                Some(witnesses)
-            } else {
-                None
-            },
-        })
+        ))
     }
 
     /// Ensures that the signing key exists in the currently aothorized keys

@@ -4,11 +4,12 @@
 
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
+use ahash::{AHashMap, HashMap, HashMapExt};
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
-    SCID_HOLDER,
+    DIDWebVHError, SCID_HOLDER,
     log_entry::LogEntry,
     parameters::Parameters,
     url::WebVHURL,
@@ -23,8 +24,23 @@ use url::Url;
 /// Stores information relating to the configusation of the DID
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ConfigInfo {
-    /// Associated secrets that were used to create the version of the DID
-    pub version: Vec<Secret>,
+    /// Authorization keys used to manage the DID
+    /// Key for HashMap is the version-id
+    pub update_keys: HashMap<String, Vec<Secret>>,
+}
+
+impl ConfigInfo {
+    pub fn read_from_file(file_path: &str) -> Result<Self> {
+        let file = File::open(file_path)?;
+        let config_info: ConfigInfo = serde_json::from_reader(file)?;
+        Ok(config_info)
+    }
+
+    pub fn save_to_file(&self, file_path: &str) -> Result<()> {
+        let file = File::create(file_path)?;
+        serde_json::to_writer_pretty(file, self)?;
+        Ok(())
+    }
 }
 
 /// Display a fun banner
@@ -249,6 +265,17 @@ async fn create_new_did() -> Result<()> {
     {
         let mut file = File::create("did.jsonl")?;
         file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
+
+        // Save the authorization keys
+        let mut update_keys = HashMap::new();
+        update_keys.insert(log_entry.version_id.clone(), authorizing_keys.clone());
+        let keys = ConfigInfo { update_keys };
+        keys.save_to_file("secrets.json")?;
+        println!(
+            "{} {}",
+            style("Authorization secrets saved to :").color256(69),
+            style("secrets.json").color256(214),
+        );
     }
 
     Ok(())
@@ -263,10 +290,24 @@ async fn edit_did() -> Result<()> {
 
     let (log_entry, meta_data) = LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
 
+    // Load the secrets
+    let mut config_info = ConfigInfo::read_from_file("secrets.json")
+        .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e)))?;
+
+    let existing_auth_keys = config_info.update_keys.get(&log_entry.version_id).ok_or(
+        DIDWebVHError::ParametersError("No authorization keys found for this version".to_string()),
+    )?;
+
     println!(
-        "{}\n{}\n{}",
+        "{}\n{}",
+        style("Log Entry Parameters:").color256(69),
+        style(serde_json::to_string_pretty(&log_entry.parameters).unwrap()).color256(34),
+    );
+    println!();
+    println!(
+        "{}\n{}\n\n{}",
         style("Log Entry Metadata:").color256(69),
-        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(69),
+        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(34),
         style("Successfully Loaded").color256(34).blink(),
     );
 
@@ -276,7 +317,7 @@ async fn edit_did() -> Result<()> {
         "Modify DID",
         "Move to a new domain (portability)?",
         "Revoke this DID?",
-        "back",
+        "Back",
     ];
 
     loop {
@@ -289,14 +330,21 @@ async fn edit_did() -> Result<()> {
 
         match selection {
             0 => {
-                println!("{}", style("Modifying...").color256(69));
-                create_new_did().await?;
+                println!(
+                    "{}",
+                    style("Modifying DID Document and/or Parameters").color256(69)
+                );
+                let new_state = edit_did_document(&log_entry.state)?;
+                let (new_params, new_auth_keys) =
+                    update_parameters(existing_auth_keys, &log_entry.parameters)?;
+                let diff_params = log_entry.parameters.diff(&new_params)?;
+                println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
             }
             1 => {
-                println!("{}", style("Migrating to a new domain").color256(69));
+                println!("{}", style("Migrate to a new domain").color256(69));
             }
             2 => {
-                println!("{}", style("Revoking DID").color256(69));
+                println!("{}", style("Revoke this DID").color256(69));
             }
             3 => {
                 break;
@@ -309,6 +357,113 @@ async fn edit_did() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Run UI for creating new parameter set
+/// Returns: New Parameters and any new Auhtorization Keys
+fn update_parameters(
+    existing_auth_keys: &[Secret],
+    old_params: &Parameters,
+) -> Result<(Parameters, Vec<Secret>)> {
+    let mut new_params = Parameters::default();
+
+    // Update Keys
+    let new_auth_keys = update_authorization_keys(existing_auth_keys, old_params, &mut new_params)?;
+
+    // Turn portability off
+    if let Some(portable) = old_params.portable {
+        if portable {
+            // Portable
+            if Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Disable portability for this DID?")
+                .default(false)
+                .interact()
+                .map_err(|e| {
+                    DIDWebVHError::ParametersError(format!(
+                        "Invalid selection on portability: {}",
+                        e
+                    ))
+                })?
+            {
+                // Disable portability
+                new_params.portable = Some(false);
+            } else {
+                // Keep portability
+                new_params.portable = Some(true);
+            }
+        }
+    }
+
+    Ok((new_params, new_auth_keys))
+}
+
+/// Handles all possible states of updating updateKeys including pre-rotation and non-pre-rotation
+/// modes
+fn update_authorization_keys(
+    existing_auth_keys: &[Secret],
+    old_params: &Parameters,
+    new_params: &mut Parameters,
+) -> Result<Vec<Secret>> {
+    let mut secrets = Vec::new();
+    println!("{:#?}", old_params);
+
+    // What mode are we operating in?
+    if old_params.pre_rotation_active {
+        // Pre-Rotation mode
+
+        // Disable pre-rotation mode?
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Disable pre-rotation mode?")
+            .default(false)
+            .interact()?
+        {
+            // Disabling pre-rotation mode
+            new_params.next_key_hashes = Some(None);
+            let update_key = pick_update_key(existing_auth_keys)?;
+        }
+    } else {
+        // Non pre-rotation mode
+    }
+    Ok(secrets)
+}
+
+/// What update key will we use? Must be from an existing set of keys authorized keys
+fn pick_update_key(existing: &[Secret]) -> Result<&Secret> {
+    let mut keys = Vec::new();
+    for s in existing {
+        keys.push(s.id.clone());
+    }
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which Authorized Key do you want to use for this update?")
+        .items(&keys)
+        .default(0)
+        .interact()
+        .unwrap();
+
+    Ok(&existing[selection])
+}
+
+/// Open an editor to edit the DID Document
+fn edit_did_document(did_document: &Value) -> Result<Value, DIDWebVHError> {
+    if let Some(document) = Editor::new()
+        .extension("json")
+        .edit(&serde_json::to_string_pretty(&did_document).unwrap())
+        .unwrap()
+    {
+        match serde_json::from_str(&document) {
+            Ok(document) => Ok(document),
+            Err(e) => {
+                println!("{}", style("Invalid DID Document!").color256(196));
+                println!("\t{}", style(e.to_string()).color256(196));
+                Err(DIDWebVHError::DIDError(format!(
+                    "DID Document isn't valid. Reason: {}",
+                    e
+                )))
+            }
+        }
+    } else {
+        Ok(did_document.to_owned())
+    }
 }
 
 /// Step 1: Get the URL and the DID Identifier
@@ -581,22 +736,7 @@ fn create_did_document(webvh_did: &str) -> Result<Value> {
         .interact()
         .unwrap()
     {
-        if let Some(document) = Editor::new()
-            .extension("json")
-            .edit(&serde_json::to_string_pretty(&did_document).unwrap())
-            .unwrap()
-        {
-            match serde_json::from_str(&document) {
-                Ok(document) => document,
-                Err(e) => {
-                    println!("{}", style("Invalid DID Document!").color256(196));
-                    println!("\t{}", style(e.to_string()).color256(196));
-                    did_document
-                }
-            }
-        } else {
-            did_document
-        }
+        edit_did_document(&did_document)?
     } else {
         did_document
     };

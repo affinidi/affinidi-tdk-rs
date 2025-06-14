@@ -633,4 +633,24 @@ mod tests {
         let result = old_params.diff(&new_params).expect("Diff failed");
         assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
     }
+
+    #[test]
+    fn test_pre_rotation_active() {
+        // On first LogEntry, if next_hashes is configured, then pre-rotation is active
+        let first_params = Parameters {
+            update_keys: Some(Some(vec![
+                "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
+            ])),
+            next_key_hashes: Some(Some(vec![
+                "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
+            ])),
+            ..Default::default()
+        };
+
+        let validated = first_params
+            .validate(None)
+            .expect("First Log Entry should be valid");
+
+        assert!(validated.pre_rotation_active);
+    }
 }

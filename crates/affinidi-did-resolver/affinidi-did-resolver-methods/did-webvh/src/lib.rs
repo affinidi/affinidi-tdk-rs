@@ -43,6 +43,8 @@ pub enum DIDWebVHError {
     ValidationError(String),
     #[error("DeactivatedError: {0}")]
     DeactivatedError(String),
+    #[error("DIDError: {0}")]
+    DIDError(String),
 }
 
 pub struct DIDWebVH;

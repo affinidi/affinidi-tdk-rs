@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+### June 2025
+
+## DID webvh method (0.1.3)
+
+* **CHANGE:** `create` example moved to `wizard`
+* **FEATURE:** `wizard` supports updating the DID and creating new LogEntry records
+* **FEATURE:** `wizard` will now store authorization keys in  secrets.json
+  * **SECURITY:** This is an example wizard, production use should have more
+  robust handling of your secret key material!!!
+
 ### 6th June 2025
 
 ## DID webvh method (0.1.1)
