@@ -17,7 +17,20 @@ use ssi::{
     },
 };
 
+/// A Shadow inner struct that helps with deserializing
+/// Allows for post-processing of the JWK material
+#[derive(Deserialize)]
+struct SecretShadow {
+    id: String,
+    #[serde(rename = "type")]
+    type_: SecretType,
+    #[serde(flatten)]
+    secret_material: SecretMaterial,
+}
+
+/// Public Structure that manages everything to do with Keys and Secrets
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(try_from = "SecretShadow")]
 pub struct Secret {
     /// A key ID identifying a secret (private key).
     pub id: String,
@@ -41,6 +54,29 @@ pub struct Secret {
     /// What crypto type is this secret
     #[serde(skip)]
     key_type: KeyType,
+}
+
+/// Converts the inner Secret Shadow to a public Shadow Struct
+/// Handles post-deserializing crypto functions to populate a full Secret Struct
+impl TryFrom<SecretShadow> for Secret {
+    type Error = SecretsResolverError;
+
+    fn try_from(shadow: SecretShadow) -> Result<Self> {
+        match shadow.secret_material {
+            SecretMaterial::JWK { private_key_jwk } => {
+                let jwk: JWK = serde_json::from_value(private_key_jwk).map_err(|e| {
+                    SecretsResolverError::KeyError(format!("Failed to parse JWK: {}", e))
+                })?;
+                let mut secret = Secret::from_jwk(&jwk)?;
+                secret.id = shadow.id;
+                secret.type_ = shadow.type_;
+                Ok(secret)
+            }
+            _ => Err(SecretsResolverError::KeyError(
+                "Unsupported secret material type".into(),
+            )),
+        }
+    }
 }
 
 impl Secret {
