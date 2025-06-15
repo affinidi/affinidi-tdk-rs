@@ -2,6 +2,8 @@
 *   Handling of witnessing changes to the log entries
 */
 
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 
 use crate::DIDWebVHError;
@@ -49,4 +51,10 @@ impl Witnesses {
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Witness {
     pub id: String,
+}
+
+impl Display for Witness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
 }

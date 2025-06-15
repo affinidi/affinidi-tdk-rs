@@ -1,7 +1,10 @@
 /*!
 *   Tasks relating to editing an existing webvh DID go here
 */
-use crate::{ConfigInfo, edit_did_document, updating::authorization::update_authorization_keys};
+use crate::{
+    ConfigInfo, edit_did_document,
+    updating::{authorization::update_authorization_keys, witness::modify_witness_params},
+};
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
@@ -158,6 +161,13 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // Witnesses
     // ************************************************************************
+    let old_witness = if let Some(witnesses) = &old_log_entry.parameters.witness {
+        witnesses
+    } else {
+        &None
+    };
+
+    modify_witness_params(old_witness.as_ref(), &mut new_params, secrets)?;
 
     // ************************************************************************
     // Watchers

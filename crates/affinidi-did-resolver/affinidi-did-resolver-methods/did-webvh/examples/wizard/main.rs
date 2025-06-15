@@ -34,6 +34,9 @@ struct ConfigInfo {
 
     /// Map public_key multibase to the multibase_hash
     pub key_map: HashMap<String, String>,
+
+    /// Secrets relating to Witness Nodes
+    pub witnesses: HashMap<String, Secret>,
 }
 
 impl ConfigInfo {
@@ -957,7 +960,7 @@ fn configure_parameters(
     }
 
     // Witness Nodes
-    manage_witnesses(&mut parameters)?;
+    manage_witnesses(&mut parameters, keys)?;
 
     // Watchers?
     manage_watchers(&mut parameters)?;
@@ -1020,7 +1023,7 @@ fn create_next_key_hashes(existing_secrets: &mut ConfigInfo) -> Result<Vec<Strin
     Ok(next_key_hashes)
 }
 
-fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
+fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Result<()> {
     println!(
         "{}",
         style("To protect against compromised controller authorization keys, use witness nodes which can offer additional protection!")
@@ -1074,7 +1077,8 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
                 style("privateKeyMultibase:").color256(69),
                 style(&key.get_private_keymultibase()?).color256(214)
             );
-            witnesses.witnesses.push(Witness { id: did });
+            witnesses.witnesses.push(Witness { id: did.clone() });
+            secrets.witnesses.insert(did, key);
         }
     } else {
         loop {
@@ -1087,7 +1091,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
 
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
-                    "Add another witness: current:({:02}) threashold:({:02})?",
+                    "Add another witness: current:({:02}) threshold:({:02})?",
                     witnesses.witnesses.len(),
                     threshold
                 ))
