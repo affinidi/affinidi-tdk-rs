@@ -4,8 +4,8 @@
 
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
-use ahash::{AHashMap, HashMap, HashMapExt};
-use anyhow::Result;
+use ahash::{HashMap, HashMapExt};
+use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
@@ -40,6 +40,27 @@ impl ConfigInfo {
         let file = File::create(file_path)?;
         serde_json::to_writer_pretty(file, self)?;
         Ok(())
+    }
+
+    /// Finds a secret by version and hash
+    pub fn find_secret_by_version(&self, version_id: &str, hash: &str) -> Option<Secret> {
+        if let Some(secrets) = self.update_keys.get(version_id) {
+            return Self::find_secret(hash, secrets);
+        }
+        // Nothing found
+        None
+    }
+
+    pub fn find_secret(hash: &str, secrets: &[Secret]) -> Option<Secret> {
+        for secret in secrets {
+            if let Ok(s_hash) = secret.get_public_keymultibase_hash() {
+                if s_hash == hash {
+                    return Some(secret.clone());
+                }
+            }
+        }
+        // Nothing found
+        None
     }
 }
 
@@ -217,9 +238,9 @@ async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 4: Configure Parameters
     // ************************************************************************
-    let parameters = loop {
+    let (parameters, next_keys) = loop {
         match configure_parameters(&webvh_did, &authorizing_keys) {
-            Ok(keys) => break keys,
+            Ok((parameters, keys)) => break (parameters, keys),
             Err(e) => {
                 println!(
                     "{} {}",
@@ -267,8 +288,14 @@ async fn create_new_did() -> Result<()> {
         file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
 
         // Save the authorization keys
+        // Store keys that we want to use for updates
         let mut update_keys = HashMap::new();
+
         update_keys.insert(log_entry.version_id.clone(), authorizing_keys.clone());
+        update_keys
+            .get_mut(&log_entry.version_id)
+            .unwrap()
+            .extend(next_keys);
         let keys = ConfigInfo { update_keys };
         keys.save_to_file("secrets.json")?;
         println!(
@@ -293,10 +320,6 @@ async fn edit_did() -> Result<()> {
     // Load the secrets
     let mut config_info = ConfigInfo::read_from_file("secrets.json")
         .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e)))?;
-
-    let existing_auth_keys = config_info.update_keys.get(&log_entry.version_id).ok_or(
-        DIDWebVHError::ParametersError("No authorization keys found for this version".to_string()),
-    )?;
 
     println!(
         "{}\n{}",
@@ -335,8 +358,7 @@ async fn edit_did() -> Result<()> {
                     style("Modifying DID Document and/or Parameters").color256(69)
                 );
                 let new_state = edit_did_document(&log_entry.state)?;
-                let (new_params, new_auth_keys) =
-                    update_parameters(existing_auth_keys, &log_entry.parameters)?;
+                let new_params = update_parameters(&log_entry, &mut config_info)?;
                 let diff_params = log_entry.parameters.diff(&new_params)?;
                 println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
             }
@@ -360,18 +382,15 @@ async fn edit_did() -> Result<()> {
 }
 
 /// Run UI for creating new parameter set
-/// Returns: New Parameters and any new Auhtorization Keys
-fn update_parameters(
-    existing_auth_keys: &[Secret],
-    old_params: &Parameters,
-) -> Result<(Parameters, Vec<Secret>)> {
+/// Returns: New Parameters
+fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Result<Parameters> {
     let mut new_params = Parameters::default();
 
     // Update Keys
-    let new_auth_keys = update_authorization_keys(existing_auth_keys, old_params, &mut new_params)?;
+    update_authorization_keys(old_log_entry, &mut new_params, secrets)?;
 
     // Turn portability off
-    if let Some(portable) = old_params.portable {
+    if let Some(portable) = old_log_entry.parameters.portable {
         if portable {
             // Portable
             if Confirm::with_theme(&ColorfulTheme::default())
@@ -394,20 +413,19 @@ fn update_parameters(
         }
     }
 
-    Ok((new_params, new_auth_keys))
+    Ok(new_params)
 }
 
 /// Handles all possible states of updating updateKeys including pre-rotation and non-pre-rotation
-/// modes
+/// modes. updateKeys and NextKeyHashes are modified here
+/// Returns authorization key for this update
 fn update_authorization_keys(
-    existing_auth_keys: &[Secret],
-    old_params: &Parameters,
+    old_log_entry: &LogEntry,
     new_params: &mut Parameters,
-) -> Result<Vec<Secret>> {
-    let mut secrets = Vec::new();
-
+    existing_secrets: &mut ConfigInfo,
+) -> Result<()> {
     // What mode are we operating in?
-    if old_params.pre_rotation_active {
+    if old_log_entry.parameters.pre_rotation_active {
         // Pre-Rotation mode
 
         // Disable pre-rotation mode?
@@ -418,29 +436,55 @@ fn update_authorization_keys(
         {
             // Disabling pre-rotation mode
             new_params.next_key_hashes = Some(None);
-            let update_key = pick_update_key(existing_auth_keys)?;
+            let update_keys = select_update_keys_from_next_hashes(
+                &old_log_entry.parameters.next_key_hashes,
+                &existing_secrets
+                    .update_keys
+                    .get(&old_log_entry.version_id)
+                    .unwrap_or(&Vec::new()),
+            )?;
+            let mut tmp_keys = Vec::new();
+            for key in update_keys {
+                tmp_keys.push(key.get_public_keymultibase()?);
+            }
+            new_params.update_keys = Some(Some(tmp_keys));
+            return Ok(());
         }
     } else {
         // Non pre-rotation mode
     }
-    Ok(secrets)
+    Ok(())
 }
 
 /// What update key will we use? Must be from an existing set of keys authorized keys
-fn pick_update_key(existing: &[Secret]) -> Result<&Secret> {
-    let mut keys = Vec::new();
-    for s in existing {
-        println!("SECRET: {:#?}", s);
-        keys.push(s.get_public_keymultibase_hash()?);
-    }
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which Authorized Key do you want to use for this update?")
-        .items(&keys)
-        .default(0)
+/// Returns array of Secrets
+fn select_update_keys_from_next_hashes(
+    next_key_hashes: &Option<Option<Vec<String>>>,
+    existing_secrets: &[Secret],
+) -> Result<Vec<Secret>> {
+    let Some(Some(hashes)) = next_key_hashes else {
+        bail!("No next key hashes found for pre-rotation mode".to_string());
+    };
+
+    let selected = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Which pre-rotated keys do you want to use for this LogEntry update?")
+        .items(hashes)
         .interact()
         .unwrap();
 
-    Ok(&existing[selection])
+    let mut selected_secrets = Vec::new();
+    for i in selected {
+        ConfigInfo::find_secret(&hashes[i], existing_secrets)
+            .map(|secret| selected_secrets.push(secret))
+            .ok_or_else(|| {
+                DIDWebVHError::ParametersError(format!(
+                    "Couldn't find a matching Secret key for hash: {}",
+                    hashes[i]
+                ))
+            })?;
+    }
+
+    Ok(selected_secrets)
 }
 
 /// Open an editor to edit the DID Document
@@ -1024,7 +1068,10 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
     }
 }
 
-fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<Parameters> {
+fn configure_parameters(
+    webvh_did: &str,
+    authorizing_keys: &[Secret],
+) -> Result<(Parameters, Vec<Secret>)> {
     println!(
         "{} {}",
         style("Configuring Parameters for:").color256(69),
@@ -1070,6 +1117,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
             .color256(69)
     );
+    let mut next_key_secrets = Vec::new();
     let mut next_key_hashes: Vec<String> = Vec::new();
     loop {
         if Confirm::with_theme(&ColorfulTheme::default())
@@ -1089,6 +1137,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
                 style(&key.get_public_keymultibase_hash()?).color256(214)
             );
             next_key_hashes.push(key.get_public_keymultibase_hash()?);
+            next_key_secrets.push(key);
         } else {
             break;
         }
@@ -1129,7 +1178,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         parameters.ttl = Some(ttl);
     }
 
-    Ok(parameters)
+    Ok((parameters, next_key_secrets))
 }
 
 fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {

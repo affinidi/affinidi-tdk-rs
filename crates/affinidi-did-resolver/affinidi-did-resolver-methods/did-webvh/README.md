@@ -6,6 +6,9 @@ method in Rust. Supports version 1.0 spec.
 This implementation is part of the [affinidi-did-resolver](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver)
 and works with the [Rust SSI Library](https://github.com/spruceid/ssi/)
 
+A helpful implementation site is the [webvh DID Method Information](https://didwebvh.info/)
+site
+
 ## Everyone likes a wizard
 
 Getting started with webvh at first can be daunting given the complexity of the
