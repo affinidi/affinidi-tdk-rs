@@ -4,7 +4,7 @@
 
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
-use ahash::{HashMap, HashMapExt};
+use ahash::HashMap;
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -29,8 +29,11 @@ mod updating;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ConfigInfo {
     /// Authorization keys used to manage the DID
-    /// Key for HashMap is the version-id
-    pub update_keys: HashMap<String, Vec<Secret>>,
+    /// Key is the hash of the public key
+    pub keys_hash: HashMap<String, Secret>,
+
+    /// Map public_key multibase to the multibase_hash
+    pub key_map: HashMap<String, String>,
 }
 
 impl ConfigInfo {
@@ -46,25 +49,31 @@ impl ConfigInfo {
         Ok(())
     }
 
-    /// Finds a secret by version and hash
-    pub fn find_secret_by_version(&self, version_id: &str, hash: &str) -> Option<Secret> {
-        if let Some(secrets) = self.update_keys.get(version_id) {
-            return Self::find_secret(hash, secrets);
-        }
-        // Nothing found
-        None
+    /// Add a Secret to the Configuration
+    pub fn add_key(&mut self, secret: &Secret) {
+        self.keys_hash.insert(
+            secret.get_public_keymultibase_hash().unwrap(),
+            secret.clone(),
+        );
+
+        self.key_map.insert(
+            secret.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase_hash().unwrap(),
+        );
     }
 
-    pub fn find_secret(hash: &str, secrets: &[Secret]) -> Option<Secret> {
-        for secret in secrets {
-            if let Ok(s_hash) = secret.get_public_keymultibase_hash() {
-                if s_hash == hash {
-                    return Some(secret.clone());
-                }
-            }
+    /// Finds a secret by hash
+    pub fn find_secret_by_hash(&self, hash: &str) -> Option<&Secret> {
+        self.keys_hash.get(hash)
+    }
+
+    /// Find a Secret by it's public key
+    pub fn find_secret_by_public_key(&self, key: &str) -> Option<&Secret> {
+        if let Some(map) = self.key_map.get(key) {
+            self.keys_hash.get(map)
+        } else {
+            None
         }
-        // Nothing found
-        None
     }
 }
 
@@ -242,9 +251,11 @@ async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 4: Configure Parameters
     // ************************************************************************
-    let (parameters, next_keys) = loop {
-        match configure_parameters(&webvh_did, &authorizing_keys) {
-            Ok((parameters, keys)) => break (parameters, keys),
+    // Store keys that we want to use for updates
+    let mut authorization_secrets = ConfigInfo::default();
+    let parameters = loop {
+        match configure_parameters(&webvh_did, &authorizing_keys, &mut authorization_secrets) {
+            Ok(parameters) => break parameters,
             Err(e) => {
                 println!(
                     "{} {}",
@@ -292,16 +303,7 @@ async fn create_new_did() -> Result<()> {
         file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
 
         // Save the authorization keys
-        // Store keys that we want to use for updates
-        let mut update_keys = HashMap::new();
-
-        update_keys.insert(log_entry.version_id.clone(), authorizing_keys.clone());
-        update_keys
-            .get_mut(&log_entry.version_id)
-            .unwrap()
-            .extend(next_keys);
-        let keys = ConfigInfo { update_keys };
-        keys.save_to_file("secrets.json")?;
+        authorization_secrets.save_to_file("secrets.json")?;
         println!(
             "{} {}",
             style("Authorization secrets saved to :").color256(69),
@@ -477,6 +479,10 @@ fn get_authorization_keys(webvh_did: &str) -> Result<Vec<Secret>> {
         style(")").color256(69)
     );
 
+    get_keys()
+}
+
+pub fn get_keys() -> Result<Vec<Secret>> {
     let mut keys: Vec<Secret> = Vec::new();
 
     loop {
@@ -896,7 +902,8 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
 fn configure_parameters(
     webvh_did: &str,
     authorizing_keys: &[Secret],
-) -> Result<(Parameters, Vec<Secret>)> {
+    keys: &mut ConfigInfo,
+) -> Result<Parameters> {
     println!(
         "{} {}",
         style("Configuring Parameters for:").color256(69),
@@ -942,31 +949,7 @@ fn configure_parameters(
         style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
             .color256(69)
     );
-    let mut next_key_secrets = Vec::new();
-    let mut next_key_hashes: Vec<String> = Vec::new();
-    loop {
-        if Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Generate a pre-rotated key?")
-            .default(true)
-            .interact()?
-        {
-            // Generate a new key
-            let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
-            println!(
-                "{} {} {} {}\n\t{} {}",
-                style("publicKeyMultibase:").color256(69),
-                style(&key.get_public_keymultibase()?).color256(34),
-                style("privateKeyMultibase:").color256(69),
-                style(&key.get_private_keymultibase()?).color256(214),
-                style("key hash:").color256(69),
-                style(&key.get_public_keymultibase_hash()?).color256(214)
-            );
-            next_key_hashes.push(key.get_public_keymultibase_hash()?);
-            next_key_secrets.push(key);
-        } else {
-            break;
-        }
-    }
+    let next_key_hashes = create_next_key_hashes(keys)?;
     if next_key_hashes.is_empty() {
         parameters.next_key_hashes = None;
     } else {
@@ -1003,7 +986,38 @@ fn configure_parameters(
         parameters.ttl = Some(ttl);
     }
 
-    Ok((parameters, next_key_secrets))
+    Ok(parameters)
+}
+
+/// Creates nextKeyHashes for the DID Document
+/// Returns Secrets and the hashes
+fn create_next_key_hashes(existing_secrets: &mut ConfigInfo) -> Result<Vec<String>> {
+    let mut next_key_hashes: Vec<String> = Vec::new();
+    loop {
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Generate a pre-rotated key?")
+            .default(true)
+            .interact()?
+        {
+            // Generate a new key
+            let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
+            println!(
+                "{} {} {} {}\n\t{} {}",
+                style("publicKeyMultibase:").color256(69),
+                style(&key.get_public_keymultibase()?).color256(34),
+                style("privateKeyMultibase:").color256(69),
+                style(&key.get_private_keymultibase()?).color256(214),
+                style("key hash:").color256(69),
+                style(&key.get_public_keymultibase_hash()?).color256(214)
+            );
+            next_key_hashes.push(key.get_public_keymultibase_hash()?);
+            existing_secrets.add_key(&key);
+        } else {
+            break;
+        }
+    }
+
+    Ok(next_key_hashes)
 }
 
 fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {

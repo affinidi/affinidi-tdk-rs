@@ -392,7 +392,6 @@ impl Parameters {
                         ));
                     }
                     // Ensure they are included in the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&self.next_key_hashes, update_keys)?;
                     diff.update_keys = Some(Some(update_keys.clone()));
                 }
             }

@@ -4,10 +4,10 @@
 use affinidi_secrets_resolver::secrets::Secret;
 use anyhow::{Result, bail};
 use console::style;
-use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
 
-use crate::{ConfigInfo, edit_did_document};
+use crate::{ConfigInfo, create_next_key_hashes, edit_did_document, get_keys};
 
 pub async fn edit_did() -> Result<()> {
     let file_path: String = Input::with_theme(&ColorfulTheme::default())
@@ -58,7 +58,15 @@ pub async fn edit_did() -> Result<()> {
                     "{}",
                     style("Modifying DID Document and/or Parameters").color256(69)
                 );
-                let new_state = edit_did_document(&log_entry.state)?;
+                let new_state = if Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Edit the DID Document?")
+                    .default(false)
+                    .interact()?
+                {
+                    edit_did_document(&log_entry.state)?
+                } else {
+                    log_entry.state.clone()
+                };
                 let new_params = update_parameters(&log_entry, &mut config_info)?;
                 let diff_params = log_entry.parameters.diff(&new_params)?;
                 println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
@@ -87,7 +95,7 @@ pub async fn edit_did() -> Result<()> {
 fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Result<Parameters> {
     let mut new_params = Parameters::default();
 
-    // Update Keys
+    // updateKeys and nextKeyHashes
     update_authorization_keys(old_log_entry, &mut new_params, secrets)?;
     println!(
         "{}{}{}",
@@ -160,20 +168,60 @@ fn update_authorization_keys(
             new_params.next_key_hashes = Some(None);
             let update_keys = select_update_keys_from_next_hashes(
                 &old_log_entry.parameters.next_key_hashes,
-                &existing_secrets
-                    .update_keys
-                    .get(&old_log_entry.version_id)
-                    .unwrap_or(&Vec::new()),
+                existing_secrets,
             )?;
             let mut tmp_keys = Vec::new();
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
             }
-            new_params.update_keys = Some(Some(tmp_keys));
-            return Ok(());
+            new_params.update_keys = Some(Some(tmp_keys.clone()));
+            new_params.active_update_keys = tmp_keys;
+        } else {
+            // Staying in pre-rotation mode
+            new_params.pre_rotation_active = true;
+
+            // Select update_keys for this update
+            let update_keys = select_update_keys_from_next_hashes(
+                &old_log_entry.parameters.next_key_hashes,
+                existing_secrets,
+            )?;
+            let mut tmp_keys = Vec::new();
+            for key in update_keys {
+                tmp_keys.push(key.get_public_keymultibase()?);
+            }
+            new_params.update_keys = Some(Some(tmp_keys.clone()));
+            new_params.active_update_keys = tmp_keys;
+
+            // Create new next_key_hashes
+            let next_key_hashes = create_next_key_hashes(existing_secrets)?;
+            if next_key_hashes.is_empty() {
+                bail!("No next key hashes created for pre-rotation mode");
+            }
+            new_params.next_key_hashes = Some(Some(next_key_hashes.clone()));
         }
     } else {
         // Non pre-rotation mode
+        new_params.active_update_keys = old_log_entry.parameters.active_update_keys.clone();
+        new_params.pre_rotation_active = false;
+
+        // Do you want to enable pre-rotation mode?
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Enable pre-rotation mode?")
+            .default(false)
+            .interact()?
+        {
+            // Enable pre-rotation mode
+            new_params.update_keys = None;
+            let next_key_hashes = create_next_key_hashes(existing_secrets)?;
+            if next_key_hashes.is_empty() {
+                bail!("No next key hashes created for pre-rotation mode");
+            }
+            new_params.next_key_hashes = Some(Some(next_key_hashes.clone()));
+        } else {
+            // Stay in non pre-rotation mode
+            // check if modify updateKeys
+            modify_update_keys(new_params, existing_secrets)?;
+        }
     }
     Ok(())
 }
@@ -182,7 +230,7 @@ fn update_authorization_keys(
 /// Returns array of Secrets
 fn select_update_keys_from_next_hashes(
     next_key_hashes: &Option<Option<Vec<String>>>,
-    existing_secrets: &[Secret],
+    existing_secrets: &ConfigInfo,
 ) -> Result<Vec<Secret>> {
     let Some(Some(hashes)) = next_key_hashes else {
         bail!("No next key hashes found for pre-rotation mode".to_string());
@@ -196,8 +244,9 @@ fn select_update_keys_from_next_hashes(
 
     let mut selected_secrets = Vec::new();
     for i in selected {
-        ConfigInfo::find_secret(&hashes[i], existing_secrets)
-            .map(|secret| selected_secrets.push(secret))
+        existing_secrets
+            .find_secret_by_hash(&hashes[i])
+            .map(|secret| selected_secrets.push(secret.to_owned()))
             .ok_or_else(|| {
                 DIDWebVHError::ParametersError(format!(
                     "Couldn't find a matching Secret key for hash: {}",
@@ -207,4 +256,46 @@ fn select_update_keys_from_next_hashes(
     }
 
     Ok(selected_secrets)
+}
+
+/// Any changes to the updateKeys?
+fn modify_update_keys(params: &mut Parameters, existing_secrets: &mut ConfigInfo) -> Result<()> {
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Do you want to change authorization keys going forward from this update?")
+        .default(false)
+        .interact()?
+    {
+        let mut new_update_keys = Vec::new();
+
+        let selected = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Which existing authorization keys do you want to keep?")
+            .items(&params.active_update_keys)
+            .interact()
+            .unwrap();
+
+        // Add new keys
+        for i in selected {
+            new_update_keys.push(params.active_update_keys[i].clone());
+        }
+
+        // Do we want to add new keys?
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Would you like to create new update keys to add to the authorized keys?")
+            .default(false)
+            .interact()?
+        {
+            let keys = get_keys()?;
+            for k in keys {
+                new_update_keys.push(k.get_public_keymultibase()?);
+                existing_secrets.add_key(&k);
+            }
+        }
+
+        params.update_keys = Some(Some(new_update_keys));
+    } else {
+        // No changes made to existing authorization keys
+        params.update_keys = None;
+    }
+
+    Ok(())
 }
