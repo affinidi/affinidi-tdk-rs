@@ -17,7 +17,7 @@ use did_webvh::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fs::File, io::Write};
+use std::fs::File;
 use tracing_subscriber::filter;
 use url::Url;
 
@@ -302,8 +302,7 @@ async fn create_new_did() -> Result<()> {
         .default(true)
         .interact()?
     {
-        let mut file = File::create("did.jsonl")?;
-        file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
+        log_entry.save_to_file("did.jsonl")?;
 
         // Save the authorization keys
         authorization_secrets.save_to_file("secrets.json")?;
@@ -689,7 +688,7 @@ fn get_verification_methods(webvh_did: &str, doc: &mut Value) {
 
     loop {
         let vm_id: String = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Verification ID")
+            .with_prompt("Verification Method ID")
             .default(format!("{}#key-{}", webvh_did, key_id))
             .interact()
             .unwrap();
@@ -986,7 +985,7 @@ fn configure_parameters(
             .with_prompt("TTL in Seconds?")
             .interact()
             .unwrap();
-        parameters.ttl = Some(ttl);
+        parameters.ttl = Some(Some(ttl));
     }
 
     Ok(parameters)

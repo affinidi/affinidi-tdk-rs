@@ -8,7 +8,7 @@ use crate::{
         witness::modify_witness_params,
     },
 };
-use anyhow::Result;
+use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
@@ -62,7 +62,16 @@ pub async fn edit_did() -> Result<()> {
 
         match selection {
             0 => {
-                create_log_entry(&log_entry, &mut config_info)?;
+                let new_entry = create_log_entry(&log_entry, &mut config_info).await?;
+                new_entry.save_to_file(&file_path)?;
+                config_info.save_to_file("secrets.json")?;
+                println!(
+                    "{}",
+                    style("Successfully created new LogEntry")
+                        .color256(34)
+                        .blink()
+                );
+                break;
             }
             1 => {
                 println!("{}", style("Migrate to a new domain").color256(69));
@@ -83,7 +92,7 @@ pub async fn edit_did() -> Result<()> {
     Ok(())
 }
 
-fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) -> Result<()> {
+async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) -> Result<LogEntry> {
     println!(
         "{}",
         style("Modifying DID Document and/or Parameters").color256(69)
@@ -109,7 +118,37 @@ fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) -> Resul
     let diff_params = log_entry.parameters.diff(&new_params)?;
     println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
 
-    Ok(())
+    // ************************************************************************
+    // Create a new LogEntry
+    // ************************************************************************
+    let Some(signing_key) =
+        config_info.find_secret_by_public_key(&new_params.active_update_keys[0])
+    else {
+        bail!(
+            "No signing key found for active update key: {}",
+            new_params.active_update_keys[0]
+        );
+    };
+    let new_entry =
+        LogEntry::create_new_log_entry(log_entry, None, &new_state, &diff_params, signing_key)
+            .await?;
+
+    println!(
+        "{}\n{}",
+        style("New Log Entry:").color256(69),
+        style(serde_json::to_string_pretty(&new_entry).unwrap()).color256(34)
+    );
+
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Accept this updated LogEntry?")
+        .default(true)
+        .interact()?
+    {
+        Ok(new_entry)
+    } else {
+        println!("{}", style("Rejecting all changes!").color256(9));
+        bail!("Changes Rejected")
+    }
 }
 
 /// Run UI for creating new parameter set
@@ -199,9 +238,9 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
 }
 
 /// Modify the TTL for this DID?
-fn modify_ttl_params(ttl: &Option<u32>, params: &mut Parameters) -> Result<()> {
+fn modify_ttl_params(ttl: &Option<Option<u32>>, params: &mut Parameters) -> Result<()> {
     print!("{}", style("Existing TTL: ").color256(69));
-    let current_ttl = if let Some(ttl) = ttl {
+    let current_ttl = if let Some(Some(ttl)) = ttl {
         println!("{}", style(ttl).color256(34));
         ttl.to_owned()
     } else {
@@ -221,18 +260,14 @@ fn modify_ttl_params(ttl: &Option<u32>, params: &mut Parameters) -> Result<()> {
 
         if new_ttl == 0 {
             // Disable TTL
-            params.ttl = None;
+            params.ttl = Some(None);
         } else {
             // Set new TTL
-            params.ttl = Some(new_ttl);
+            params.ttl = Some(Some(new_ttl));
         }
     } else {
         // Keep existing TTL
-        if current_ttl == 0 {
-            params.ttl = None;
-        } else {
-            params.ttl = Some(current_ttl);
-        }
+        params.ttl = ttl.to_owned();
     }
 
     Ok(())

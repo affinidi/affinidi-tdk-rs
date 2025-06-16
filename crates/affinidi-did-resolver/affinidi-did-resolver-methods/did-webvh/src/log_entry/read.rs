@@ -313,7 +313,7 @@ impl LogEntry {
     }
 
     /// Splits the version number and the version hash for a DID versionId
-    fn get_version_id_fields(version_id: &str) -> Result<(u32, String), DIDWebVHError> {
+    pub(crate) fn get_version_id_fields(version_id: &str) -> Result<(u32, String), DIDWebVHError> {
         let Some((id, hash)) = version_id.split_once('-') else {
             return Err(DIDWebVHError::ValidationError(format!(
                 "versionID ({}) doesn't match format <int>-<hash>",

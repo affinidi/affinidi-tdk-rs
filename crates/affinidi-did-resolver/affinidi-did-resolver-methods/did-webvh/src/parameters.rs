@@ -85,8 +85,12 @@ pub struct Parameters {
     pub deactivated: bool,
 
     /// time to live in seconds for a resolved DID document
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl: Option<u32>,
+    #[serde(
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
+    )]
+    pub ttl: Option<Option<u32>>,
 }
 
 impl Default for Parameters {
@@ -304,6 +308,35 @@ impl Parameters {
             ));
         }
         new_parameters.deactivated = self.deactivated;
+
+        // Determine TTL
+        if let Some(previous) = previous {
+            match &self.ttl {
+                None => {
+                    // If absent, keep current TTL
+                    new_parameters.ttl = previous.ttl;
+                }
+                Some(None) => {
+                    // If None, turn off TTL
+                    new_parameters.ttl = None;
+                }
+                Some(Some(ttl)) => {
+                    // Replace ttl with the new value
+                    new_parameters.ttl = Some(Some(*ttl));
+                }
+            }
+        } else {
+            // First Log Entry
+            match &self.ttl {
+                None | Some(None) => {
+                    new_parameters.ttl = None;
+                }
+                Some(Some(ttl)) => {
+                    // Replace ttl with the new value
+                    new_parameters.ttl = Some(Some(*ttl));
+                }
+            }
+        }
 
         Ok(new_parameters)
     }
@@ -536,15 +569,36 @@ impl Parameters {
         }
 
         // TTL Checks
-        if new_params.ttl != self.ttl {
-            if let Some(ttl) = new_params.ttl {
+        match new_params.ttl {
+            None => {
+                // If None, then keep current parameter ttl
+                diff.ttl = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the ttl
+                match self.ttl {
+                    None => {
+                        // If current ttl is also None, then no change
+                        diff.ttl = None;
+                    }
+                    Some(None) => {
+                        // If current ttl is Some(None), then set to None
+                        diff.ttl = None;
+                    }
+                    Some(Some(_)) => {
+                        diff.ttl = Some(None);
+                    }
+                }
+            }
+            Some(Some(ttl)) => {
+                // If Some(ttl), then set the new ttl
                 if ttl == 0 {
                     return Err(DIDWebVHError::ParametersError(
                         "TTL cannot be zero".to_string(),
                     ));
                 }
+                diff.ttl = Some(Some(ttl));
             }
-            diff.ttl = new_params.ttl;
         }
 
         Ok(diff)
@@ -597,7 +651,7 @@ mod tests {
             })),
             watchers: Some(Some(vec!["watcher1".to_string()])),
             deactivated: false,
-            ttl: Some(3600),
+            ttl: Some(Some(3600)),
             ..Default::default()
         };
 
