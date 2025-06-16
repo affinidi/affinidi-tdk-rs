@@ -3,7 +3,10 @@
 */
 use crate::{
     ConfigInfo, edit_did_document,
-    updating::{authorization::update_authorization_keys, witness::modify_witness_params},
+    updating::{
+        authorization::update_authorization_keys, watchers::modify_watcher_params,
+        witness::modify_witness_params,
+    },
 };
 use anyhow::Result;
 use console::style;
@@ -11,6 +14,7 @@ use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
 
 mod authorization;
+mod watchers;
 mod witness;
 
 pub async fn edit_did() -> Result<()> {
@@ -172,6 +176,13 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // Watchers
     // ************************************************************************
+    let old_watchers = if let Some(watchers) = &old_log_entry.parameters.watchers {
+        watchers
+    } else {
+        &None
+    };
+
+    modify_watcher_params(old_watchers.as_ref(), &mut new_params)?;
 
     // ************************************************************************
     // TTL

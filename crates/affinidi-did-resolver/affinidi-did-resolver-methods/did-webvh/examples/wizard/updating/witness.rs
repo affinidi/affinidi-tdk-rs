@@ -100,7 +100,7 @@ fn modify_witness_nodes(
         .interact()
         .unwrap();
 
-    // Add selected witnesse
+    // Add selected witnesses
     for i in selected {
         new_witnesses.push(witnesses.witnesses[i].clone());
     }

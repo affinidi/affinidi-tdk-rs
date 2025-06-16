@@ -6,6 +6,7 @@
 use crate::{ConfigInfo, create_next_key_hashes, get_keys};
 use affinidi_secrets_resolver::secrets::Secret;
 use anyhow::{Result, bail};
+use console::style;
 use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
 
@@ -100,11 +101,22 @@ fn select_update_keys_from_next_hashes(
         bail!("No next key hashes found for pre-rotation mode".to_string());
     };
 
-    let selected = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which pre-rotated keys do you want to use for this LogEntry update?")
-        .items(hashes)
-        .interact()
-        .unwrap();
+    let selected = loop {
+        let selected = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Which pre-rotated keys do you want to use for this LogEntry update?")
+            .items(hashes)
+            .defaults(&[true])
+            .interact()
+            .unwrap();
+        if !selected.is_empty() {
+            break selected;
+        } else {
+            println!(
+                "{}",
+                style("You MUST select at least one key from the pre-rolled keys!").color256(9)
+            );
+        }
+    };
 
     let mut selected_secrets = Vec::new();
     for i in selected {

@@ -998,7 +998,7 @@ fn create_next_key_hashes(existing_secrets: &mut ConfigInfo) -> Result<Vec<Strin
     let mut next_key_hashes: Vec<String> = Vec::new();
     loop {
         if Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Generate a pre-rotated key?")
+            .with_prompt("Generate a new pre-rotated key?")
             .default(true)
             .interact()?
         {
@@ -1125,7 +1125,7 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
 
     loop {
         let did: String = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Watcher DID?")
+            .with_prompt("Watcher URL?")
             .interact()
             .unwrap();
 
