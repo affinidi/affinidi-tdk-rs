@@ -1,6 +1,8 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
+use std::{fs::OpenOptions, io::Write};
+
 use crate::{DIDWebVHError, SCID_HOLDER, parameters::Parameters};
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
@@ -154,6 +156,106 @@ impl LogEntry {
             ))
         })?;
         Ok(log_entry)
+    }
+
+    /// Takes an existing LogEntry and creates a new LogEntry from it
+    pub async fn create_new_log_entry(
+        previous_log_entry: &LogEntry,
+        version_time: Option<String>,
+        document: &Value,
+        parameters: &Parameters,
+        secret: &Secret,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        let mut new_entry = LogEntry {
+            version_id: previous_log_entry.version_id.clone(),
+            version_time: version_time
+                .unwrap_or_else(|| Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            parameters: parameters.clone(),
+            state: document.clone(),
+            proof: None,
+        };
+
+        // Create the entry hash for this Log Entry
+        let entry_hash = new_entry.generate_log_entry_hash().map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't generate entryHash for LogEntry. Reason: {}",
+                e
+            ))
+        })?;
+
+        // Increment the version-id
+        let (current_id, _) = LogEntry::get_version_id_fields(&new_entry.version_id)?;
+        new_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
+
+        // Generate the proof for the log entry
+        let log_entry_values = serde_json::to_value(&new_entry).map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
+                e
+            ))
+        })?;
+
+        let log_entry = serde_json::from_value(
+            DataIntegrityProof::sign_data_jcs(
+                &serde_json::from_value(log_entry_values).map_err(|e| {
+                    DIDWebVHError::SCIDError(format!(
+                        "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
+                        e
+                    ))
+                })?,
+                &secret.id,
+                secret,
+            )
+            .map_err(|e| {
+                DIDWebVHError::SCIDError(format!(
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                    e
+                ))
+            })?,
+        )
+        .map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't deserialize signed LogEntry. Reason: {}",
+                e
+            ))
+        })?;
+        Ok(log_entry)
+    }
+
+    /// Append a valid LogEntry to a file
+    pub fn save_to_file(&self, file_path: &str) -> Result<(), DIDWebVHError> {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file_path)
+            .map_err(|e| {
+                DIDWebVHError::LogEntryError(format!("Couldn't open file {}: {}", file_path, e))
+            })?;
+
+        file.write_all(
+            serde_json::to_string(self)
+                .map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!(
+                        "Couldn't serialize LogEntry to JSON. Reason: {}",
+                        e
+                    ))
+                })?
+                .as_bytes(),
+        )
+        .map_err(|e| {
+            DIDWebVHError::LogEntryError(format!(
+                "Couldn't append LogEntry to file({}). Reason: {}",
+                file_path, e
+            ))
+        })?;
+        file.write_all("\n".as_bytes()).map_err(|e| {
+            DIDWebVHError::LogEntryError(format!(
+                "Couldn't append LogEntry to file({}). Reason: {}",
+                file_path, e
+            ))
+        })?;
+
+        Ok(())
     }
 
     /// Generates a SCID from a preliminary LogEntry

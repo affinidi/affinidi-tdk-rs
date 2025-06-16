@@ -85,8 +85,12 @@ pub struct Parameters {
     pub deactivated: bool,
 
     /// time to live in seconds for a resolved DID document
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ttl: Option<u32>,
+    #[serde(
+        default,                                    // <- important for deserialization
+        skip_serializing_if = "Option::is_none",    // <- important for serialization
+        with = "::serde_with::rust::double_option",
+    )]
+    pub ttl: Option<Option<u32>>,
 }
 
 impl Default for Parameters {
@@ -305,6 +309,35 @@ impl Parameters {
         }
         new_parameters.deactivated = self.deactivated;
 
+        // Determine TTL
+        if let Some(previous) = previous {
+            match &self.ttl {
+                None => {
+                    // If absent, keep current TTL
+                    new_parameters.ttl = previous.ttl;
+                }
+                Some(None) => {
+                    // If None, turn off TTL
+                    new_parameters.ttl = None;
+                }
+                Some(Some(ttl)) => {
+                    // Replace ttl with the new value
+                    new_parameters.ttl = Some(Some(*ttl));
+                }
+            }
+        } else {
+            // First Log Entry
+            match &self.ttl {
+                None | Some(None) => {
+                    new_parameters.ttl = None;
+                }
+                Some(Some(ttl)) => {
+                    // Replace ttl with the new value
+                    new_parameters.ttl = Some(Some(*ttl));
+                }
+            }
+        }
+
         Ok(new_parameters)
     }
 
@@ -392,7 +425,6 @@ impl Parameters {
                         ));
                     }
                     // Ensure they are included in the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&self.next_key_hashes, update_keys)?;
                     diff.update_keys = Some(Some(update_keys.clone()));
                 }
             }
@@ -537,15 +569,36 @@ impl Parameters {
         }
 
         // TTL Checks
-        if new_params.ttl != self.ttl {
-            if let Some(ttl) = new_params.ttl {
+        match new_params.ttl {
+            None => {
+                // If None, then keep current parameter ttl
+                diff.ttl = None;
+            }
+            Some(None) => {
+                // If Some(None), then cancel the ttl
+                match self.ttl {
+                    None => {
+                        // If current ttl is also None, then no change
+                        diff.ttl = None;
+                    }
+                    Some(None) => {
+                        // If current ttl is Some(None), then set to None
+                        diff.ttl = None;
+                    }
+                    Some(Some(_)) => {
+                        diff.ttl = Some(None);
+                    }
+                }
+            }
+            Some(Some(ttl)) => {
+                // If Some(ttl), then set the new ttl
                 if ttl == 0 {
                     return Err(DIDWebVHError::ParametersError(
                         "TTL cannot be zero".to_string(),
                     ));
                 }
+                diff.ttl = Some(Some(ttl));
             }
-            diff.ttl = new_params.ttl;
         }
 
         Ok(diff)
@@ -598,7 +651,7 @@ mod tests {
             })),
             watchers: Some(Some(vec!["watcher1".to_string()])),
             deactivated: false,
-            ttl: Some(3600),
+            ttl: Some(Some(3600)),
             ..Default::default()
         };
 
@@ -619,5 +672,38 @@ mod tests {
 
         let result = old_params.diff(&new_params).expect("Diff failed");
         assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
+    }
+
+    #[test]
+    fn diff_no_changes_method() {
+        let old_params = Parameters::default();
+
+        let new_params = Parameters {
+            method: None,
+            ..Default::default()
+        };
+
+        let result = old_params.diff(&new_params).expect("Diff failed");
+        assert_eq!(serde_json::to_string(&result).unwrap(), "{}");
+    }
+
+    #[test]
+    fn test_pre_rotation_active() {
+        // On first LogEntry, if next_hashes is configured, then pre-rotation is active
+        let first_params = Parameters {
+            update_keys: Some(Some(vec![
+                "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
+            ])),
+            next_key_hashes: Some(Some(vec![
+                "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
+            ])),
+            ..Default::default()
+        };
+
+        let validated = first_params
+            .validate(None)
+            .expect("First Log Entry should be valid");
+
+        assert!(validated.pre_rotation_active);
     }
 }

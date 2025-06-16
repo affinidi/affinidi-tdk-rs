@@ -4,20 +4,81 @@
 
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
+use ahash::HashMap;
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
-    SCID_HOLDER,
+    DIDWebVHError, SCID_HOLDER,
     log_entry::LogEntry,
     parameters::Parameters,
     url::WebVHURL,
     witness::{Witness, Witnesses},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fs::File, io::Write};
+use std::fs::File;
 use tracing_subscriber::filter;
 use url::Url;
+
+use crate::updating::edit_did;
+
+mod updating;
+
+/// Stores information relating to the configusation of the DID
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ConfigInfo {
+    /// Authorization keys used to manage the DID
+    /// Key is the hash of the public key
+    pub keys_hash: HashMap<String, Secret>,
+
+    /// Map public_key multibase to the multibase_hash
+    pub key_map: HashMap<String, String>,
+
+    /// Secrets relating to Witness Nodes
+    pub witnesses: HashMap<String, Secret>,
+}
+
+impl ConfigInfo {
+    pub fn read_from_file(file_path: &str) -> Result<Self> {
+        let file = File::open(file_path)?;
+        let config_info: ConfigInfo = serde_json::from_reader(file)?;
+        Ok(config_info)
+    }
+
+    pub fn save_to_file(&self, file_path: &str) -> Result<()> {
+        let file = File::create(file_path)?;
+        serde_json::to_writer_pretty(file, self)?;
+        Ok(())
+    }
+
+    /// Add a Secret to the Configuration
+    pub fn add_key(&mut self, secret: &Secret) {
+        self.keys_hash.insert(
+            secret.get_public_keymultibase_hash().unwrap(),
+            secret.clone(),
+        );
+
+        self.key_map.insert(
+            secret.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase_hash().unwrap(),
+        );
+    }
+
+    /// Finds a secret by hash
+    pub fn find_secret_by_hash(&self, hash: &str) -> Option<&Secret> {
+        self.keys_hash.get(hash)
+    }
+
+    /// Find a Secret by it's public key
+    pub fn find_secret_by_public_key(&self, key: &str) -> Option<&Secret> {
+        if let Some(map) = self.key_map.get(key) {
+            self.keys_hash.get(map)
+        } else {
+            None
+        }
+    }
+}
 
 /// Display a fun banner
 fn show_banner() {
@@ -75,6 +136,43 @@ async fn main() -> Result<()> {
 
     show_banner();
 
+    // ************************************************************************
+    // Show main menu
+    // ************************************************************************
+    let menu = vec!["Create a new webvh DID", "Update existing DID", "Exit"];
+
+    loop {
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("What would you like to do?")
+            .items(&menu)
+            .default(0)
+            .interact()
+            .unwrap();
+
+        match selection {
+            0 => {
+                println!("{}", style("Creating a new webvh DID").color256(69));
+                create_new_did().await?;
+            }
+            1 => {
+                println!("{}", style("Updating an existing webvh DID").color256(69));
+                edit_did().await?;
+            }
+            2 => {
+                println!("{}", style("Exiting the wizard, goodbye!").color256(69));
+                break;
+            }
+            _ => {
+                println!("{}", style("Invalid selection...").color256(196));
+                continue;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 1: Get the URLs for this DID
     // ************************************************************************
@@ -156,9 +254,11 @@ async fn main() -> Result<()> {
     // ************************************************************************
     // Step 4: Configure Parameters
     // ************************************************************************
+    // Store keys that we want to use for updates
+    let mut authorization_secrets = ConfigInfo::default();
     let parameters = loop {
-        match configure_parameters(&webvh_did, &authorizing_keys) {
-            Ok(keys) => break keys,
+        match configure_parameters(&webvh_did, &authorizing_keys, &mut authorization_secrets) {
+            Ok(parameters) => break parameters,
             Err(e) => {
                 println!(
                     "{} {}",
@@ -198,15 +298,51 @@ async fn main() -> Result<()> {
     );
 
     if Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Save to file did.jsonl?")
+        .with_prompt("Save to file?")
         .default(true)
         .interact()?
     {
-        let mut file = File::create("did.jsonl")?;
-        file.write_all(serde_json::to_string(&log_entry)?.as_bytes())?;
+        let file_name: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("File Name")
+            .default("did.jsonl".to_string())
+            .interact()
+            .unwrap();
+
+        log_entry.save_to_file(&file_name)?;
+
+        // Save the authorization keys
+        authorization_secrets.save_to_file(&[&file_name, "-secrets"].concat())?;
+        println!(
+            "{} {}",
+            style("Authorization secrets saved to :").color256(69),
+            style([&file_name, "-secrets"].concat()).color256(214),
+        );
     }
 
     Ok(())
+}
+
+/// Open an editor to edit the DID Document
+fn edit_did_document(did_document: &Value) -> Result<Value, DIDWebVHError> {
+    if let Some(document) = Editor::new()
+        .extension("json")
+        .edit(&serde_json::to_string_pretty(&did_document).unwrap())
+        .unwrap()
+    {
+        match serde_json::from_str(&document) {
+            Ok(document) => Ok(document),
+            Err(e) => {
+                println!("{}", style("Invalid DID Document!").color256(196));
+                println!("\t{}", style(e.to_string()).color256(196));
+                Err(DIDWebVHError::DIDError(format!(
+                    "DID Document isn't valid. Reason: {}",
+                    e
+                )))
+            }
+        }
+    } else {
+        Ok(did_document.to_owned())
+    }
 }
 
 /// Step 1: Get the URL and the DID Identifier
@@ -351,6 +487,10 @@ fn get_authorization_keys(webvh_did: &str) -> Result<Vec<Secret>> {
         style(")").color256(69)
     );
 
+    get_keys()
+}
+
+pub fn get_keys() -> Result<Vec<Secret>> {
     let mut keys: Vec<Secret> = Vec::new();
 
     loop {
@@ -479,22 +619,7 @@ fn create_did_document(webvh_did: &str) -> Result<Value> {
         .interact()
         .unwrap()
     {
-        if let Some(document) = Editor::new()
-            .extension("json")
-            .edit(&serde_json::to_string_pretty(&did_document).unwrap())
-            .unwrap()
-        {
-            match serde_json::from_str(&document) {
-                Ok(document) => document,
-                Err(e) => {
-                    println!("{}", style("Invalid DID Document!").color256(196));
-                    println!("\t{}", style(e.to_string()).color256(196));
-                    did_document
-                }
-            }
-        } else {
-            did_document
-        }
+        edit_did_document(&did_document)?
     } else {
         did_document
     };
@@ -569,7 +694,7 @@ fn get_verification_methods(webvh_did: &str, doc: &mut Value) {
 
     loop {
         let vm_id: String = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Verification ID")
+            .with_prompt("Verification Method ID")
             .default(format!("{}#key-{}", webvh_did, key_id))
             .interact()
             .unwrap();
@@ -782,7 +907,11 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
     }
 }
 
-fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<Parameters> {
+fn configure_parameters(
+    webvh_did: &str,
+    authorizing_keys: &[Secret],
+    keys: &mut ConfigInfo,
+) -> Result<Parameters> {
     println!(
         "{} {}",
         style("Configuring Parameters for:").color256(69),
@@ -828,29 +957,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
         style("Best practice to set pre-rotated authorization key(s), protects against an attacker switching to new authorization keys")
             .color256(69)
     );
-    let mut next_key_hashes: Vec<String> = Vec::new();
-    loop {
-        if Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Generate a pre-rotated key?")
-            .default(true)
-            .interact()?
-        {
-            // Generate a new key
-            let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
-            println!(
-                "{} {} {} {}\n\t{} {}",
-                style("publicKeyMultibase:").color256(69),
-                style(&key.get_public_keymultibase()?).color256(34),
-                style("privateKeyMultibase:").color256(69),
-                style(&key.get_private_keymultibase()?).color256(214),
-                style("key hash:").color256(69),
-                style(&key.get_public_keymultibase_hash()?).color256(214)
-            );
-            next_key_hashes.push(key.get_public_keymultibase_hash()?);
-        } else {
-            break;
-        }
-    }
+    let next_key_hashes = create_next_key_hashes(keys)?;
     if next_key_hashes.is_empty() {
         parameters.next_key_hashes = None;
     } else {
@@ -858,7 +965,7 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
     }
 
     // Witness Nodes
-    manage_witnesses(&mut parameters)?;
+    manage_witnesses(&mut parameters, keys)?;
 
     // Watchers?
     manage_watchers(&mut parameters)?;
@@ -884,13 +991,44 @@ fn configure_parameters(webvh_did: &str, authorizing_keys: &[Secret]) -> Result<
             .with_prompt("TTL in Seconds?")
             .interact()
             .unwrap();
-        parameters.ttl = Some(ttl);
+        parameters.ttl = Some(Some(ttl));
     }
 
     Ok(parameters)
 }
 
-fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
+/// Creates nextKeyHashes for the DID Document
+/// Returns Secrets and the hashes
+fn create_next_key_hashes(existing_secrets: &mut ConfigInfo) -> Result<Vec<String>> {
+    let mut next_key_hashes: Vec<String> = Vec::new();
+    loop {
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Generate a new pre-rotated key?")
+            .default(true)
+            .interact()?
+        {
+            // Generate a new key
+            let (_, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
+            println!(
+                "{} {} {} {}\n\t{} {}",
+                style("publicKeyMultibase:").color256(69),
+                style(&key.get_public_keymultibase()?).color256(34),
+                style("privateKeyMultibase:").color256(69),
+                style(&key.get_private_keymultibase()?).color256(214),
+                style("key hash:").color256(69),
+                style(&key.get_public_keymultibase_hash()?).color256(214)
+            );
+            next_key_hashes.push(key.get_public_keymultibase_hash()?);
+            existing_secrets.add_key(&key);
+        } else {
+            break;
+        }
+    }
+
+    Ok(next_key_hashes)
+}
+
+fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Result<()> {
     println!(
         "{}",
         style("To protect against compromised controller authorization keys, use witness nodes which can offer additional protection!")
@@ -944,7 +1082,8 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
                 style("privateKeyMultibase:").color256(69),
                 style(&key.get_private_keymultibase()?).color256(214)
             );
-            witnesses.witnesses.push(Witness { id: did });
+            witnesses.witnesses.push(Witness { id: did.clone() });
+            secrets.witnesses.insert(did, key);
         }
     } else {
         loop {
@@ -957,7 +1096,7 @@ fn manage_witnesses(parameters: &mut Parameters) -> Result<()> {
 
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
-                    "Add another witness: current:({:02}) threashold:({:02})?",
+                    "Add another witness: current:({:02}) threshold:({:02})?",
                     witnesses.witnesses.len(),
                     threshold
                 ))
@@ -991,7 +1130,7 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
 
     loop {
         let did: String = Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("Watcher DID?")
+            .with_prompt("Watcher URL?")
             .interact()
             .unwrap();
 
