@@ -4,8 +4,8 @@
 use crate::{
     ConfigInfo, edit_did_document,
     updating::{
-        authorization::update_authorization_keys, watchers::modify_watcher_params,
-        witness::modify_witness_params,
+        authorization::update_authorization_keys, revoke::revoke_did,
+        watchers::modify_watcher_params, witness::modify_witness_params,
     },
 };
 use anyhow::{Result, bail};
@@ -14,6 +14,7 @@ use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
 
 mod authorization;
+mod revoke;
 mod watchers;
 mod witness;
 
@@ -74,10 +75,14 @@ pub async fn edit_did() -> Result<()> {
                 break;
             }
             1 => {
-                println!("{}", style("Migrate to a new domain").color256(69));
+                println!(
+                    "{}",
+                    style("Migrate to a new domain ** NOT IMPLEMENTED YET ** ").color256(214)
+                );
             }
             2 => {
-                println!("{}", style("Revoke this DID").color256(69));
+                revoke_did(&file_path, &log_entry, &config_info).await?;
+                break;
             }
             3 => {
                 break;

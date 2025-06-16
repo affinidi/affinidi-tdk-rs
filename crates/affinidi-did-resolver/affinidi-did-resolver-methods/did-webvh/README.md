@@ -40,7 +40,9 @@ environment is not recommended.**
 - [x] Create a did:webvh LogEntry and DID Document
 - [x] Resolve a did:webvh method
 - [x] Validate webvh LogEntries to v1.0 specification
-- [ ] Update webvh DID
+- [x] Update webvh DID
+- [x] Revoke webvh DID
+- [ ] Migration of DID (portability)
 - [ ] Validate witness information
 - [ ] Witness Node infrastructure
 - [ ] Watcher Node infrastructure

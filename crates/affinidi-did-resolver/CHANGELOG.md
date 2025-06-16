@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### June 2025
+### 16th June 2025
 
 ## DID webvh method (0.1.3)
 
@@ -11,6 +11,8 @@
 * **FEATURE:** `wizard` will now store authorization keys in  secrets.json
   * **SECURITY:** This is an example wizard, production use should have more
   robust handling of your secret key material!!!
+* **FEATURE:** Updating LogEntries works, can now edit parameters and DID Document
+* **FEATURE:** Revoking a DID works
 
 ### 6th June 2025
 
