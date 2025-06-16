@@ -46,7 +46,7 @@ pub async fn edit_did() -> Result<()> {
     println!();
 
     let menu = vec![
-        "Modify DID",
+        "Create a new Log Entry (Modify DID Document or Parameters)?",
         "Move to a new domain (portability)?",
         "Revoke this DID?",
         "Back",
@@ -54,7 +54,7 @@ pub async fn edit_did() -> Result<()> {
 
     loop {
         let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Editing DID")
+            .with_prompt("Action")
             .items(&menu)
             .default(0)
             .interact()
@@ -62,30 +62,7 @@ pub async fn edit_did() -> Result<()> {
 
         match selection {
             0 => {
-                println!(
-                    "{}",
-                    style("Modifying DID Document and/or Parameters").color256(69)
-                );
-
-                // ************************************************************************
-                // Change the DID Document?
-                // ************************************************************************
-                let new_state = if Confirm::with_theme(&ColorfulTheme::default())
-                    .with_prompt("Edit the DID Document?")
-                    .default(false)
-                    .interact()?
-                {
-                    edit_did_document(&log_entry.state)?
-                } else {
-                    log_entry.state.clone()
-                };
-
-                // ************************************************************************
-                // Change webvh Parameters
-                // ************************************************************************
-                let new_params = update_parameters(&log_entry, &mut config_info)?;
-                let diff_params = log_entry.parameters.diff(&new_params)?;
-                println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
+                create_log_entry(&log_entry, &mut config_info)?;
             }
             1 => {
                 println!("{}", style("Migrate to a new domain").color256(69));
@@ -102,6 +79,35 @@ pub async fn edit_did() -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) -> Result<()> {
+    println!(
+        "{}",
+        style("Modifying DID Document and/or Parameters").color256(69)
+    );
+
+    // ************************************************************************
+    // Change the DID Document?
+    // ************************************************************************
+    let new_state = if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Edit the DID Document?")
+        .default(false)
+        .interact()?
+    {
+        edit_did_document(&log_entry.state)?
+    } else {
+        log_entry.state.clone()
+    };
+
+    // ************************************************************************
+    // Change webvh Parameters
+    // ************************************************************************
+    let new_params = update_parameters(log_entry, config_info)?;
+    let diff_params = log_entry.parameters.diff(&new_params)?;
+    println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
 
     Ok(())
 }
@@ -187,6 +193,47 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // TTL
     // ************************************************************************
+    modify_ttl_params(&old_log_entry.parameters.ttl, &mut new_params)?;
 
     Ok(new_params)
+}
+
+/// Modify the TTL for this DID?
+fn modify_ttl_params(ttl: &Option<u32>, params: &mut Parameters) -> Result<()> {
+    print!("{}", style("Existing TTL: ").color256(69));
+    let current_ttl = if let Some(ttl) = ttl {
+        println!("{}", style(ttl).color256(34));
+        ttl.to_owned()
+    } else {
+        println!("{}", style("NOT SET").color256(214));
+        0_u32
+    };
+
+    if Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Change the TTL?")
+        .default(false)
+        .interact()?
+    {
+        let new_ttl: u32 = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("New TTL (0 = Disable TTL)?")
+            .default(current_ttl)
+            .interact()?;
+
+        if new_ttl == 0 {
+            // Disable TTL
+            params.ttl = None;
+        } else {
+            // Set new TTL
+            params.ttl = Some(new_ttl);
+        }
+    } else {
+        // Keep existing TTL
+        if current_ttl == 0 {
+            params.ttl = None;
+        } else {
+            params.ttl = Some(current_ttl);
+        }
+    }
+
+    Ok(())
 }
