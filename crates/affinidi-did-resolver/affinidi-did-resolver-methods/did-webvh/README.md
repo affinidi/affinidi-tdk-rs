@@ -29,6 +29,12 @@ display the secret on the screen.*
 > **The wizard is meant for demonstration purposes only. Use in a production
 environment is not recommended.**
 
+### Default Wizard Files
+
+`did.jsonl` is the default webvh LogEntry file that the wizard will create.
+
+`did.jsonl-secrets` is the default file containing key secrets
+
 ## Implementation Status
 
 - [x] Create a did:webvh LogEntry and DID Document

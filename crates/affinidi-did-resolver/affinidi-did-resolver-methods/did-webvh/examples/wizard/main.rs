@@ -298,18 +298,24 @@ async fn create_new_did() -> Result<()> {
     );
 
     if Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Save to file did.jsonl?")
+        .with_prompt("Save to file?")
         .default(true)
         .interact()?
     {
-        log_entry.save_to_file("did.jsonl")?;
+        let file_name: String = Input::with_theme(&ColorfulTheme::default())
+            .with_prompt("File Name")
+            .default("did.jsonl".to_string())
+            .interact()
+            .unwrap();
+
+        log_entry.save_to_file(&file_name)?;
 
         // Save the authorization keys
-        authorization_secrets.save_to_file("secrets.json")?;
+        authorization_secrets.save_to_file(&[&file_name, "-secrets"].concat())?;
         println!(
             "{} {}",
             style("Authorization secrets saved to :").color256(69),
-            style("secrets.json").color256(214),
+            style([&file_name, "-secrets"].concat()).color256(214),
         );
     }
 

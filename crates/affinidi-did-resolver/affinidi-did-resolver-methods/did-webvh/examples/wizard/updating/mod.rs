@@ -27,7 +27,7 @@ pub async fn edit_did() -> Result<()> {
     let (log_entry, meta_data) = LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
 
     // Load the secrets
-    let mut config_info = ConfigInfo::read_from_file("secrets.json")
+    let mut config_info = ConfigInfo::read_from_file(&[&file_path, "-secrets"].concat())
         .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e)))?;
 
     println!(
@@ -64,7 +64,7 @@ pub async fn edit_did() -> Result<()> {
             0 => {
                 let new_entry = create_log_entry(&log_entry, &mut config_info).await?;
                 new_entry.save_to_file(&file_path)?;
-                config_info.save_to_file("secrets.json")?;
+                config_info.save_to_file(&[&file_path, "-secrets"].concat())?;
                 println!(
                     "{}",
                     style("Successfully created new LogEntry")
