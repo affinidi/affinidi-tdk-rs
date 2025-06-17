@@ -7,7 +7,7 @@
 * **BREAKING:** `sign_jcs_data()` `data_doc` parameter is now mutable, allowing
 in place insertion of the `DataIntegrityProof`
   * Optimisation that stops an in-memory clone of the entire document
-* **FEATURE:** `sign_jcd_proof_only()` Generate Proof only and get `DataIntegrityProof`
+* **FEATURE:** `sign_jcs_proof_only()` Generate Proof only and get `DataIntegrityProof`
 return
   * Optimisation method for witness nodes that only require proof, not the full
   signed document
