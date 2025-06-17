@@ -22,29 +22,32 @@ pub const SCID_HOLDER: &str = "{SCID}";
 /// Error types for WebVH method
 #[derive(Error, Debug)]
 pub enum DIDWebVHError {
-    #[error("DID Query NotFound")]
-    NotFound,
-    #[error("UnsupportedMethod: Must be did:webvh")]
-    UnsupportedMethod,
-    #[error("Invalid method identifier: {0}")]
-    InvalidMethodIdentifier(String),
-    #[error("ServerError: {0}")]
-    ServerError(String),
-    #[error("NotImplemented: {0}")]
-    NotImplemented(String),
-    #[error("SCIDError: {0}")]
-    SCIDError(String),
-    #[error("LogEntryError: {0}")]
-    LogEntryError(String),
-    #[error("ParametersError: {0}")]
-    ParametersError(String),
-    /// There was an error in validating the DID
-    #[error("ValidationError: {0}")]
-    ValidationError(String),
     #[error("DeactivatedError: {0}")]
     DeactivatedError(String),
     #[error("DIDError: {0}")]
     DIDError(String),
+    #[error("Invalid method identifier: {0}")]
+    InvalidMethodIdentifier(String),
+    #[error("LogEntryError: {0}")]
+    LogEntryError(String),
+    #[error("DID Query NotFound")]
+    NotFound,
+    #[error("NotImplemented: {0}")]
+    NotImplemented(String),
+    #[error("ParametersError: {0}")]
+    ParametersError(String),
+    #[error("SCIDError: {0}")]
+    SCIDError(String),
+    #[error("ServerError: {0}")]
+    ServerError(String),
+    #[error("UnsupportedMethod: Must be did:webvh")]
+    UnsupportedMethod,
+    /// There was an error in validating the DID
+    #[error("ValidationError: {0}")]
+    ValidationError(String),
+    /// An error occurred while working with Witness Proofs
+    #[error("WitnessProofError: {0}")]
+    WitnessProofError(String),
 }
 
 pub struct DIDWebVH;
