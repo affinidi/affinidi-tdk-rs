@@ -1,5 +1,5 @@
 use crate::ConfigInfo;
-use affinidi_data_integrity::GenericDocument;
+use affinidi_data_integrity::SigningDocument;
 use anyhow::Result;
 use console::style;
 use did_webvh::{log_entry::LogEntry, witness::proofs::WitnessProofCollection};
@@ -24,7 +24,7 @@ pub fn witness_log_entry(
         style(") proofs from witnesses").color256(69)
     );
 
-    let doc_to_sign: GenericDocument = log_entry.try_into()?;
+    let doc_to_sign: SigningDocument = log_entry.try_into()?;
     for witness in &witnesses.witnesses {
         // Get secret for Witness
         let secret = secrets.find_secret_by_public_key(&witness.id);

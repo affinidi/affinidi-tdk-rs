@@ -112,7 +112,7 @@ impl DataIntegrityProof {
                 )));
             }
         };
-        debug!("Document: {}", jcs);
+        debug!("JCS Document: {}", jcs);
 
         // Create a Proof Options struct
         let now = Utc::now();

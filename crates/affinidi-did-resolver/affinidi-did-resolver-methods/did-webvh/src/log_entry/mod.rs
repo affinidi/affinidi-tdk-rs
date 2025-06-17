@@ -2,7 +2,7 @@
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
 use crate::{DIDWebVHError, parameters::Parameters};
-use affinidi_data_integrity::{DataIntegrityProof, GenericDocument};
+use affinidi_data_integrity::{DataIntegrityProof, SignedDocument, SigningDocument};
 use multibase::Base;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ pub mod read;
 /// Each version of the DID gets a new log entry
 /// [Log Entries](https://identity.foundation/didwebvh/v1.0/#the-did-log-file)
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     /// format integer-prev_hash
     pub version_id: String,
@@ -108,26 +109,27 @@ impl LogEntry {
 }
 
 /// Converts a log entry to the Signing Document format.
-impl TryFrom<&LogEntry> for GenericDocument {
+/// Allowing a LogEntry to be signed
+impl TryFrom<&LogEntry> for SigningDocument {
     type Error = DIDWebVHError;
 
     fn try_from(log_entry: &LogEntry) -> Result<Self, Self::Error> {
-        let mut generic = GenericDocument {
+        let mut signing = SigningDocument {
             extra: HashMap::new(),
-            proof: log_entry.proof.clone(),
+            proof: None,
         };
 
-        generic.extra.insert(
+        signing.extra.insert(
             "versionId".to_string(),
             log_entry.version_id.to_owned().into(),
         );
 
-        generic.extra.insert(
+        signing.extra.insert(
             "versionTime".to_string(),
             log_entry.version_time.to_owned().into(),
         );
 
-        generic.extra.insert(
+        signing.extra.insert(
             "parameters".to_string(),
             serde_json::to_value(&log_entry.parameters).map_err(|e| {
                 DIDWebVHError::ParametersError(format!(
@@ -137,14 +139,14 @@ impl TryFrom<&LogEntry> for GenericDocument {
             })?,
         );
 
-        generic
+        signing
             .extra
             .insert("state".to_string(), log_entry.state.clone());
 
         // If proof already exists in the document, then add it to extra as a signature will be
         // created from it
         if let Some(proof) = &log_entry.proof {
-            generic.extra.insert(
+            signing.extra.insert(
                 "proof".to_string(),
                 serde_json::to_value(proof).map_err(|e| {
                     DIDWebVHError::LogEntryError(format!(
@@ -155,6 +157,45 @@ impl TryFrom<&LogEntry> for GenericDocument {
             );
         }
 
-        Ok(generic)
+        Ok(signing)
+    }
+}
+
+/// Converts a signed log entry to the Signed Document format.
+/// Allowing a LogEntry to be verified
+impl TryFrom<&LogEntry> for SignedDocument {
+    type Error = DIDWebVHError;
+
+    fn try_from(log_entry: &LogEntry) -> Result<Self, Self::Error> {
+        let mut signing = SignedDocument {
+            extra: HashMap::new(),
+            proof: log_entry.proof.clone(),
+        };
+
+        signing.extra.insert(
+            "versionId".to_string(),
+            log_entry.version_id.to_owned().into(),
+        );
+
+        signing.extra.insert(
+            "versionTime".to_string(),
+            log_entry.version_time.to_owned().into(),
+        );
+
+        signing.extra.insert(
+            "parameters".to_string(),
+            serde_json::to_value(&log_entry.parameters).map_err(|e| {
+                DIDWebVHError::ParametersError(format!(
+                    "Couldn't serialize Paramaters to JSON Value: {}",
+                    e
+                ))
+            })?,
+        );
+
+        signing
+            .extra
+            .insert("state".to_string(), log_entry.state.clone());
+
+        Ok(signing)
     }
 }

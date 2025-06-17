@@ -2,7 +2,7 @@
 *   Methods relatings to creating a new LogEntry
 */
 use crate::{DIDWebVHError, SCID_HOLDER, log_entry::LogEntry, parameters::Parameters};
-use affinidi_data_integrity::{DataIntegrityProof, GenericDocument};
+use affinidi_data_integrity::{DataIntegrityProof, SigningDocument};
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use serde_json::Value;
@@ -94,7 +94,7 @@ impl LogEntry {
 
         // Generate the proof for the log entry
 
-        let mut log_entry_unsigned: GenericDocument = (&log_entry).try_into()?;
+        let mut log_entry_unsigned: SigningDocument = (&log_entry).try_into()?;
 
         DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, secret).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
@@ -138,7 +138,7 @@ impl LogEntry {
         new_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
 
         // Generate the proof for the log entry
-        let mut log_entry_unsigned: GenericDocument = (&new_entry).try_into()?;
+        let mut log_entry_unsigned: SigningDocument = (&new_entry).try_into()?;
 
         DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, secret).map_err(|e| {
             DIDWebVHError::SCIDError(format!(

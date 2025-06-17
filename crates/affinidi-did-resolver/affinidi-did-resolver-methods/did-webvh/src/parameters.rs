@@ -16,6 +16,7 @@ use std::ops::Not;
 /// Some(None) = field was specified, but set to null
 /// Some(Some(value)) = field was specified with a value
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Parameters {
     /// Is key pre-rotation active?
     #[serde(skip)]
