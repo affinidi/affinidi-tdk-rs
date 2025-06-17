@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "affinidi-secrets-resolver",
  "chrono",

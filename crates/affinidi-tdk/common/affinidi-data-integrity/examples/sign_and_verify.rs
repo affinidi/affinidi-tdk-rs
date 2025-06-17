@@ -62,7 +62,7 @@ fn main() {
   }
 }"#;
 
-    let unsigned_values: GenericDocument =
+    let mut unsigned_values: GenericDocument =
         serde_json::from_str(input_doc_str).expect("Couldn't serialize input string");
 
     let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
@@ -75,16 +75,13 @@ fn main() {
     )
     .expect("Couldn't create Secret");
 
-    let signed = DataIntegrityProof::sign_data_jcs(&unsigned_values, &secret.id, &secret)
+    DataIntegrityProof::sign_jcs_data(&mut unsigned_values, &secret)
         .expect("Couldn't sign Document");
 
-    let _ = verify_data(
-        &serde_json::from_value(signed.clone()).expect("Couldn't convert genericDocument"),
-    )
-    .expect("Couldn't validate doc");
+    let _ = verify_data(&unsigned_values).expect("Couldn't validate doc");
 
     println!(
         "Signed Document: {}",
-        serde_json::to_string_pretty(&signed).unwrap()
+        serde_json::to_string_pretty(&unsigned_values).unwrap()
     );
 }
