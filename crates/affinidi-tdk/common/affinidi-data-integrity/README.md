@@ -10,7 +10,7 @@ issues arising from the use or modification of the project.
 ## Overview
 
 An implementation of the W3C Data Integrity specification that is integrated
-with the Affinidi Trust Development Kit (TDK) famework.
+with the Affinidi Trust Development Kit (TDK) framework.
 
 ### Library Usage
 
