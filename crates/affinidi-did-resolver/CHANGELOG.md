@@ -6,6 +6,10 @@
 
 ## DID webvh method (0.1.4)
 
+* **FEATURE:** Conversion of `LogEntry` to `GenericDocument` for signing is now
+3.4x faster
+  * No need to convert to JSON Value and then transform again, now can use try_from()
+
 ### 16th June 2025
 
 ## DID webvh method (0.1.3)

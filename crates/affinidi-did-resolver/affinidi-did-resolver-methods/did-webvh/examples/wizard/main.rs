@@ -2,6 +2,7 @@
 *   creates a new webvh DID
 */
 
+use crate::{updating::edit_did, witness::witness_log_entry};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
 use ahash::HashMap;
@@ -21,9 +22,8 @@ use std::fs::File;
 use tracing_subscriber::filter;
 use url::Url;
 
-use crate::updating::edit_did;
-
 mod updating;
+mod witness;
 
 /// Stores information relating to the configusation of the DID
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -287,6 +287,11 @@ async fn create_new_did() -> Result<()> {
         style("Log Entry:").color256(69),
         style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
     );
+
+    // ************************************************************************
+    // Step 6: Create the witness proofs if needed?
+    // ************************************************************************
+    let witness_proofs = witness_log_entry(&log_entry, &authorization_secrets)?;
 
     // Validate the Log Entry
     let meta_data = log_entry.verify_log_entry(None, None)?;

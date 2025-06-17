@@ -597,7 +597,12 @@ impl Parameters {
                         "TTL cannot be zero".to_string(),
                     ));
                 }
-                diff.ttl = Some(Some(ttl));
+                if self.ttl == new_params.ttl {
+                    // If ttl is the same, no change
+                    diff.ttl = None;
+                } else {
+                    diff.ttl = Some(Some(ttl));
+                }
             }
         }
 
