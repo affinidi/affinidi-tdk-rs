@@ -2,6 +2,10 @@
 
 ## Changelog history
 
+### June 2025
+
+## DID webvh method (0.1.4)
+
 ### 16th June 2025
 
 ## DID webvh method (0.1.3)

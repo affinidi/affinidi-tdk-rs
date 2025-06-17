@@ -47,7 +47,7 @@ affinidi-did-resolver-cache-sdk = { version = "0.5.4", path = "crates/affinidi-d
 affinidi-did-resolver-cache-server = { version = "0.5.4", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
 did-example = { version = "0.5.3", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example" }
 did-peer = { version = "0.6.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer" }
-did-webvh = { version = "0.1.3", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh" }
+did-webvh = { version = "0.1.4", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh" }
 affinidi-meeting-place = { version = "0.1.10", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.10.8", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-helpers = { version = "0.10.7", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
@@ -57,7 +57,7 @@ affinidi-messaging-mediator-processors = { version = "0.10.7", path = "./crates/
 affinidi-messaging-sdk = { version = "0.11.2", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
 affinidi-messaging-text-client = { version = "0.10.8", path = "./crates/affinidi-messaging/affinidi-messaging-text-client" }
 affinidi-tdk = { version = "0.1.12", path = "./crates/affinidi-tdk/affinidi-tdk" }
-affinidi-data-integrity = { version = "0.1.1", path = "./crates/affinidi-tdk/common/affinidi-data-integrity" }
+affinidi-data-integrity = { version = "0.1.2", path = "./crates/affinidi-tdk/common/affinidi-data-integrity" }
 affinidi-did-authentication = { version = "0.1.10", path = "./crates/affinidi-tdk/common/affinidi-did-authentication" }
 affinidi-secrets-resolver = { version = "0.1.11", path = "./crates/affinidi-tdk/common/affinidi-secrets-resolver" }
 affinidi-tdk-common = { version = "0.1.12", path = "./crates/affinidi-tdk/common/affinidi-tdk-common" }

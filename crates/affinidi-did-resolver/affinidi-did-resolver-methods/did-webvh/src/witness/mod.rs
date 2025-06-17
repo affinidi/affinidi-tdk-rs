@@ -2,11 +2,14 @@
 *   Handling of witnessing changes to the log entries
 */
 
+use crate::DIDWebVHError;
+use affinidi_data_integrity::DataIntegrityProof;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt::Display;
 
-use serde::{Deserialize, Serialize};
+pub mod proofs;
 
-use crate::DIDWebVHError;
 /// Witness nodes
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct Witnesses {
