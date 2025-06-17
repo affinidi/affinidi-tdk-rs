@@ -3,9 +3,7 @@
 */
 
 use crate::DIDWebVHError;
-use affinidi_data_integrity::DataIntegrityProof;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::fmt::Display;
 
 pub mod proofs;

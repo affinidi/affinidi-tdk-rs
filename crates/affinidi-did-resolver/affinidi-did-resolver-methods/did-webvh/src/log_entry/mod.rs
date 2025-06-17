@@ -131,30 +131,22 @@ impl LogEntry {
             ))
         })?;
 
-        let log_entry = serde_json::from_value(
-            DataIntegrityProof::sign_data_jcs(
-                &serde_json::from_value(log_entry_values).map_err(|e| {
-                    DIDWebVHError::SCIDError(format!(
-                        "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
-                        e
-                    ))
-                })?,
-                &vm_id,
-                secret,
-            )
-            .map_err(|e| {
-                DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                    e
-                ))
-            })?,
-        )
-        .map_err(|e| {
+        let mut log_entry_unsigned = serde_json::from_value(log_entry_values).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't deserialize signed LogEntry. Reason: {}",
+                "Couldn't convert LogEntry to GenericUnigned for Signing. Reason: {}",
                 e
             ))
         })?;
+
+        DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, secret).map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                e
+            ))
+        })?;
+
+        log_entry.proof = log_entry_unsigned.proof;
+
         Ok(log_entry)
     }
 
@@ -188,6 +180,7 @@ impl LogEntry {
         new_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
 
         // Generate the proof for the log entry
+        // TODO: Have a single transofrmation step instead of translating twice
         let log_entry_values = serde_json::to_value(&new_entry).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
@@ -195,31 +188,23 @@ impl LogEntry {
             ))
         })?;
 
-        let log_entry = serde_json::from_value(
-            DataIntegrityProof::sign_data_jcs(
-                &serde_json::from_value(log_entry_values).map_err(|e| {
-                    DIDWebVHError::SCIDError(format!(
-                        "Couldn't convert LogEntry to JSON Values for Signing. Reason: {}",
-                        e
-                    ))
-                })?,
-                &secret.id,
-                secret,
-            )
-            .map_err(|e| {
-                DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                    e
-                ))
-            })?,
-        )
-        .map_err(|e| {
+        let mut log_entry_unsigned = serde_json::from_value(log_entry_values).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't deserialize signed LogEntry. Reason: {}",
+                "Couldn't convert LogEntry to GenericUnigned for Signing. Reason: {}",
                 e
             ))
         })?;
-        Ok(log_entry)
+
+        DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, secret).map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                e
+            ))
+        })?;
+
+        new_entry.proof = log_entry_unsigned.proof;
+
+        Ok(new_entry)
     }
 
     /// Append a valid LogEntry to a file
