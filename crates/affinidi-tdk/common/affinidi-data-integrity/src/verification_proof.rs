@@ -7,7 +7,7 @@ use ssi::security::MultibaseBuf;
 use tracing::debug;
 
 use crate::{
-    DataIntegrityError, DataIntegrityProof, GenericDocument, crypto_suites::CryptoSuite,
+    DataIntegrityError, DataIntegrityProof, SignedDocument, crypto_suites::CryptoSuite,
     hashing_eddsa_jcs,
 };
 
@@ -23,7 +23,7 @@ pub struct VerificationProof {
 
 /// Verify a signed JSON Schema document.
 /// Must contain the field `proof`
-pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, DataIntegrityError> {
+pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, DataIntegrityError> {
     let mut verification_proof_result = VerificationProof {
         verified: false,
         verified_document: None,
@@ -144,12 +144,12 @@ pub fn verify_data(signed_doc: &GenericDocument) -> Result<VerificationProof, Da
 #[cfg(test)]
 mod tests {
     use super::verify_data;
-    use crate::{DataIntegrityError, GenericDocument, crypto_suites::CryptoSuite};
+    use crate::{DataIntegrityError, SignedDocument, crypto_suites::CryptoSuite};
     use std::collections::HashMap;
 
     #[test]
     fn missing_proof() {
-        let missing_proof = GenericDocument {
+        let missing_proof = SignedDocument {
             extra: HashMap::new(),
             proof: None,
         };
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn missing_proof_proof_value() {
-        let missing_proof_value = GenericDocument {
+        let missing_proof_value = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn invalid_proof_proof_value() {
-        let invalid_proof_value = GenericDocument {
+        let invalid_proof_value = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn invalid_context() {
-        let mut invalid_context = GenericDocument {
+        let mut invalid_context = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -256,7 +256,7 @@ mod tests {
             "https://example.com/1".to_string(),
             "https://example.com/2".to_string(),
         ];
-        let invalid_context = GenericDocument {
+        let invalid_context = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -286,7 +286,7 @@ mod tests {
             "https://example.com/1".to_string(),
             "https://example.com/2".to_string(),
         ];
-        let mut invalid_context = GenericDocument {
+        let mut invalid_context = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -326,7 +326,7 @@ mod tests {
             "https://example.com/1".to_string(),
             "https://example.com/2".to_string(),
         ];
-        let mut invalid_context = GenericDocument {
+        let mut invalid_context = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "Test".to_string(),
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn invalid_data_integrity_proof() {
-        let invalid_data_integrity_proof = GenericDocument {
+        let invalid_data_integrity_proof = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "test".to_string(),
@@ -392,7 +392,7 @@ mod tests {
 
     #[test]
     fn invalid_created() {
-        let invalid_create = GenericDocument {
+        let invalid_create = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn invalid_created_future() {
-        let invalid_create = GenericDocument {
+        let invalid_create = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn invalid_verification_method() {
-        let invalid_verification_method = GenericDocument {
+        let invalid_verification_method = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn invalid_verification_method_2() {
-        let invalid_verification_method = GenericDocument {
+        let invalid_verification_method = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
@@ -491,7 +491,7 @@ mod tests {
     }
     #[test]
     fn invalid_verification_method_3() {
-        let invalid_verification_method = GenericDocument {
+        let invalid_verification_method = SignedDocument {
             extra: HashMap::new(),
             proof: Some(crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
@@ -582,7 +582,7 @@ mod tests {
   "version_time": "2025-05-31T02:11:02Z"
 }"#;
 
-        let invalid_signed: GenericDocument = serde_json::from_str(invalid_signed).unwrap();
+        let invalid_signed: SignedDocument = serde_json::from_str(invalid_signed).unwrap();
 
         let result = verify_data(&invalid_signed);
         assert!(result.is_err());
@@ -662,7 +662,7 @@ mod tests {
   "version_id": "1-zQmW7ssogG8fwWBZTdH47S4vntYJzVB4vbXR1pYsAhriNh4",
   "version_time": "2025-05-31T02:11:02Z"
 }"#;
-        let signed: GenericDocument = serde_json::from_str(signed).unwrap();
+        let signed: SignedDocument = serde_json::from_str(signed).unwrap();
 
         let result = verify_data(&signed);
         assert!(result.is_ok());
@@ -737,7 +737,7 @@ mod tests {
   "version_time": "2025-05-31T02:11:02Z",
   "version_id": "1-zQmW7ssogG8fwWBZTdH47S4vntYJzVB4vbXR1pYsAhriNh4"
 }"#;
-        let signed: GenericDocument = serde_json::from_str(signed).unwrap();
+        let signed: SignedDocument = serde_json::from_str(signed).unwrap();
 
         let result = verify_data(&signed);
         assert!(result.is_ok());
