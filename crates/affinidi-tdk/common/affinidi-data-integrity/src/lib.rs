@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+/*!
+*   W3C Data Integrity Implementation
+*/
 
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
@@ -9,6 +11,7 @@ use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
 use ssi::security::MultibaseBuf;
+use std::collections::HashMap;
 use thiserror::Error;
 use tracing::debug;
 
@@ -28,11 +31,25 @@ pub enum DataIntegrityError {
     VerificationError(String),
 }
 
-/// Generic Document structure that can be used for converting any Serializable document
-/// into a format this library can understand.
-/// Works with both signed and unsigned Documents.
+/// Signing Document structure that can be used for converting any Serializable document
+/// into a format this library can sign.
+/// Flattens the structure into exra fields
+/// Signature is placed into proof
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct GenericDocument {
+pub struct SigningDocument {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<DataIntegrityProof>,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+///
+/// Signed Document structure that can be used for converting any Serializable document
+/// into a format this library can verify.
+/// Flattens the structure into exra fields
+/// Signature is placed into proof
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SignedDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof: Option<DataIntegrityProof>,
 
@@ -69,7 +86,7 @@ impl DataIntegrityProof {
     ///
     /// Returns a Result containing a signed document
     pub fn sign_jcs_data(
-        data_doc: &mut GenericDocument,
+        data_doc: &mut SigningDocument,
         secret: &Secret,
     ) -> Result<(), DataIntegrityError> {
         // Initialise as required
@@ -135,7 +152,7 @@ impl DataIntegrityProof {
     }
 
     pub fn sign_jcs_proof_only(
-        data_doc: &GenericDocument,
+        data_doc: &SigningDocument,
         secret: &Secret,
     ) -> Result<DataIntegrityProof, DataIntegrityError> {
         // Initialise as required
@@ -214,7 +231,7 @@ mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::json;
 
-    use crate::{DataIntegrityProof, GenericDocument, hashing_eddsa_jcs};
+    use crate::{DataIntegrityProof, SigningDocument, hashing_eddsa_jcs};
 
     #[test]
     fn hashing_working() {
@@ -232,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_sign_jcs_data_bad_key() {
-        let mut generic_doc: GenericDocument = serde_json::from_value(json!({"test": "test_data"}))
+        let mut generic_doc: SigningDocument = serde_json::from_value(json!({"test": "test_data"}))
             .expect("Couldn't deserialize test data");
 
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
@@ -248,7 +265,7 @@ mod tests {
     }
     #[test]
     fn test_sign_jcs_data_good() {
-        let mut generic_doc: GenericDocument = serde_json::from_value(
+        let mut generic_doc: SigningDocument = serde_json::from_value(
             json!({"test": "test_data", "@context": ["context1", "context2", "context3"]}),
         )
         .expect("Couldn't deserialize test data");
@@ -270,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_sign_jcs_proof_only_good() {
-        let generic_doc: GenericDocument = serde_json::from_value(
+        let generic_doc: SigningDocument = serde_json::from_value(
             json!({"test": "test_data", "@context": ["context1", "context2", "context3"]}),
         )
         .expect("Couldn't deserialize test data");
