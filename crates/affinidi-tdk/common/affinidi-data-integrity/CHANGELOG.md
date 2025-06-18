@@ -1,6 +1,12 @@
 # Affinidi Data Integrity Changelog
 
-## 17 June 2025 Release 0.1.2
+## 17th June 2025 Release 0.1.3
+
+* **FEATURE:** **BREAKING** `GenericDocument` replaced with `SigningDocument` and `SignedDocument`
+  * `SigningDocument`: Used when signing  data
+  * `SignedDocument`: Used when verifying data
+
+## 17th June 2025 Release 0.1.2
 
 * **BREAKING:** `sign_data_jcs()` renamed to `sign_jcs_data()`
 * **BREAKING:** `sign_jcs_data()` no longer requires the  `vm_id` parameter
