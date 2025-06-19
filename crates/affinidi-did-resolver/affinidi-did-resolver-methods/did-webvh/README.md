@@ -42,6 +42,7 @@ environment is not recommended.**
 - [x] Validate webvh LogEntries to v1.0 specification
 - [x] Update webvh DID
 - [x] Revoke webvh DID
+- [x] Witness webvh DID
 - [ ] Migration of DID (portability)
 - [ ] Validate witness information
 - [ ] Witness Node infrastructure
