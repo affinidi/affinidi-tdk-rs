@@ -1,3 +1,4 @@
-did.jsonl
-did-witness.json
-*-secrets
+*.jsonl
+*-witness.json
+*-secret.json
+
