@@ -43,7 +43,7 @@ pub fn create_http_client() -> Client {
     let tls_config = ClientConfig::with_platform_verifier();
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
-        .use_preconfigured_tls(tls_config.clone())
+        .use_preconfigured_tls(tls_config.unwrap())
         .user_agent(format!(
             "Affinidi Trust Development Kit {}",
             env!("CARGO_PKG_VERSION")
