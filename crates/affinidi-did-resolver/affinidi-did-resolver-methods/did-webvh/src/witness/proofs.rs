@@ -12,7 +12,7 @@ use crate::DIDWebVHError;
 
 /// Array of WitnessProofs for each Witness Proof
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WitnessProofCollection(Vec<WitnessProof>);
+pub struct WitnessProofCollection(pub Vec<WitnessProof>);
 
 /// Record of each LogEntry that requires witnessing
 #[derive(Debug, Clone, Serialize, Deserialize)]

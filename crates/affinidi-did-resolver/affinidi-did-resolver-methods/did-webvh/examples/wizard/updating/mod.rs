@@ -7,6 +7,7 @@ use crate::{
         authorization::update_authorization_keys, revoke::revoke_did,
         watchers::modify_watcher_params, witness::modify_witness_params,
     },
+    witness::witness_log_entry,
 };
 use anyhow::{Result, bail};
 use console::style;
@@ -22,14 +23,32 @@ pub async fn edit_did() -> Result<()> {
     let file_path: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("DID LogEntry File?")
         .default("did.jsonl".to_string())
+        .validate_with(|input: &String| {
+            if input.is_empty() {
+                Err("File name cannot be empty".to_string())
+            } else if !input.ends_with(".jsonl") {
+                Err("File name must end with .jsonl".to_string())
+            } else {
+                Ok(())
+            }
+        })
         .interact()
         .unwrap();
 
-    let (log_entry, meta_data) = LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
+    let (log_entry, meta_data, mut config_info, file_name_prefix) =
+        if let Some((start, _)) = file_path.split_once(".") {
+            let (log_entry, meta_data) =
+                LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
 
-    // Load the secrets
-    let mut config_info = ConfigInfo::read_from_file(&[&file_path, "-secrets"].concat())
-        .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e)))?;
+            // Load the secrets
+            let config_info = ConfigInfo::read_from_file(&[start, "-secrets.json"].concat())
+                .map_err(|e| {
+                    DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e))
+                })?;
+            (log_entry, meta_data, config_info, start)
+        } else {
+            bail!("Invalid file path! Must end with .jsonl!");
+        };
 
     println!(
         "{}\n{}",
@@ -63,15 +82,23 @@ pub async fn edit_did() -> Result<()> {
 
         match selection {
             0 => {
+                // Create a new LogEntry for a given DID
                 let new_entry = create_log_entry(&log_entry, &mut config_info).await?;
+
+                let witness_proofs =
+                    witness_log_entry(&new_entry, &log_entry.parameters.witness, &config_info)?;
+                // Save info to files
                 new_entry.save_to_file(&file_path)?;
-                config_info.save_to_file(&[&file_path, "-secrets"].concat())?;
+                config_info.save_to_file(&[file_name_prefix, "-secrets.json"].concat())?;
                 println!(
                     "{}",
                     style("Successfully created new LogEntry")
                         .color256(34)
                         .blink()
                 );
+                if let Some(witness_proofs) = witness_proofs {
+                    witness_proofs.save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
+                }
                 break;
             }
             1 => {
@@ -120,6 +147,7 @@ async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) ->
     // Change webvh Parameters
     // ************************************************************************
     let new_params = update_parameters(log_entry, config_info)?;
+    println!("TIMTAM FINAL NEW PARAMS: {:#?}", new_params);
     let diff_params = log_entry.parameters.diff(&new_params)?;
     println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
 

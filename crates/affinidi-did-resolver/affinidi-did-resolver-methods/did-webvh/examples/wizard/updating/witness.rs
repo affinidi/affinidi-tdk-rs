@@ -74,6 +74,7 @@ pub fn modify_witness_params(
         // No changes to Witness configuration
         new_params.witness = None;
     }
+
     Ok(())
 }
 

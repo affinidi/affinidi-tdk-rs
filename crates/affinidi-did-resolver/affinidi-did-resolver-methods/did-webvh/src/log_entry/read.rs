@@ -169,17 +169,7 @@ impl LogEntry {
         }
 
         // Verify Signature
-        let values = serde_json::to_value(self).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {}", e))
-        })?;
-
-        let verified = verify_data(&serde_json::from_value(values).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!(
-                "Failed to convert log entry to GenericDocument: {}",
-                e
-            ))
-        })?)
-        .map_err(|e| {
+        let verified = verify_data(&self.try_into()?).map_err(|e| {
             DIDWebVHError::LogEntryError(format!("Signature verification failed: {}", e))
         })?;
         if !verified.verified {

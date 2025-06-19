@@ -16,6 +16,7 @@ use std::ops::Not;
 /// Some(None) = field was specified, but set to null
 /// Some(Some(value)) = field was specified with a value
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Parameters {
     /// Is key pre-rotation active?
     #[serde(skip)]
@@ -480,6 +481,8 @@ impl Parameters {
         }
 
         // Witness checks
+        println!("TIMTAM OLD: {:#?}", self.witness);
+        println!("TIMTAM NEW: {:#?}", new_params.witness);
         match new_params.witness {
             None => {
                 // If None, then keep current parameter witness
@@ -597,7 +600,12 @@ impl Parameters {
                         "TTL cannot be zero".to_string(),
                     ));
                 }
-                diff.ttl = Some(Some(ttl));
+                if self.ttl == new_params.ttl {
+                    // If ttl is the same, no change
+                    diff.ttl = None;
+                } else {
+                    diff.ttl = Some(Some(ttl));
+                }
             }
         }
 

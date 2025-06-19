@@ -2,9 +2,17 @@
 
 ## Changelog history
 
-### June 2025
+### 19th June 2025
 
 ## DID webvh method (0.1.4)
+
+* **FEATURE:** Conversion of `LogEntry` to `GenericDocument` for signing is now
+3.4x faster
+  * No need to convert to JSON Value and then transform again, now can use try_from()
+* **FIX:** Serialization was not converting camelCase correctly for certain fields
+  * `LogEntry` and `Parameters` now correctly use camelCase for serialization
+* **OPTIMISATION:** Internal conversion for DataIntegrity now 340% faster
+* **FEATURE:** Witnessing of changes enabled.
 
 ### 16th June 2025
 

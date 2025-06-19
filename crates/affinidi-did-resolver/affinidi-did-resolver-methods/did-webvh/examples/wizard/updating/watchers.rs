@@ -38,7 +38,7 @@ pub fn modify_watcher_params(
                 .default(false)
                 .interact()?
             {
-                // Disable witness parameters
+                // Disable watcher parameters
                 new_params.watchers = Some(None);
                 return Ok(());
             }
@@ -48,12 +48,12 @@ pub fn modify_watcher_params(
 
             new_params.watchers = Some(Some(watchers));
         } else {
-            // No existing witness setup, create a new one
+            // No existing watcher setup, create a new one
             manage_watchers(new_params)?;
         }
     } else {
-        // No changes to Witness configuration
-        new_params.witness = None;
+        // No changes to Watcher configuration
+        new_params.watchers = None;
     }
     Ok(())
 }
@@ -63,7 +63,7 @@ fn modify_watcher_nodes(watchers: &[String]) -> Result<Vec<String>> {
     let mut new_watchers = Vec::new();
 
     let selected = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Which Witness Nodes do you want to keep?")
+        .with_prompt("Which Watcher Nodes do you want to keep?")
         .items(watchers)
         .interact()
         .unwrap();

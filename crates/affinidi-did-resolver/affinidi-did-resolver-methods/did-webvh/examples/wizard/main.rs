@@ -2,6 +2,7 @@
 *   creates a new webvh DID
 */
 
+use crate::{updating::edit_did, witness::witness_log_entry};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
 use ahash::HashMap;
@@ -21,9 +22,8 @@ use std::fs::File;
 use tracing_subscriber::filter;
 use url::Url;
 
-use crate::updating::edit_did;
-
 mod updating;
+mod witness;
 
 /// Stores information relating to the configusation of the DID
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -118,8 +118,8 @@ fn show_banner() {
         "{} {} {} {} ❤️ ❤️ ❤️",
         style("Built by").color256(69),
         style("Affinidi").color256(255),
-        style("- for").color256(69),
-        style("- for everyone").color256(255)
+        style("- for - ").color256(69),
+        style("everyone").color256(255)
     );
     println!();
 }
@@ -288,6 +288,9 @@ async fn create_new_did() -> Result<()> {
         style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
     );
 
+    // ************************************************************************
+    // Step 6: Valide the LogEntry
+    // ************************************************************************
     // Validate the Log Entry
     let meta_data = log_entry.verify_log_entry(None, None)?;
     println!(
@@ -297,6 +300,15 @@ async fn create_new_did() -> Result<()> {
         style("Successfully Validated").color256(34).blink(),
     );
 
+    // ************************************************************************
+    // Step 7: Create the witness proofs if needed?
+    // ************************************************************************
+    let witness_proofs = witness_log_entry(
+        &log_entry,
+        &log_entry.parameters.witness,
+        &authorization_secrets,
+    )?;
+
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Save to file?")
         .default(true)
@@ -305,18 +317,39 @@ async fn create_new_did() -> Result<()> {
         let file_name: String = Input::with_theme(&ColorfulTheme::default())
             .with_prompt("File Name")
             .default("did.jsonl".to_string())
+            .validate_with(|input: &String| {
+                if input.is_empty() {
+                    Err("File name cannot be empty".to_string())
+                } else if !input.ends_with(".jsonl") {
+                    Err("File name must end with .jsonl".to_string())
+                } else {
+                    Ok(())
+                }
+            })
             .interact()
             .unwrap();
 
-        log_entry.save_to_file(&file_name)?;
+        if let Some((start, _)) = file_name.split_once(".") {
+            log_entry.save_to_file(&file_name)?;
 
-        // Save the authorization keys
-        authorization_secrets.save_to_file(&[&file_name, "-secrets"].concat())?;
-        println!(
-            "{} {}",
-            style("Authorization secrets saved to :").color256(69),
-            style([&file_name, "-secrets"].concat()).color256(214),
-        );
+            // Save the authorization keys
+            authorization_secrets.save_to_file(&[start, "-secrets.json"].concat())?;
+            println!(
+                "{} {}",
+                style("Authorization secrets saved to :").color256(69),
+                style([start, "-secrets.json"].concat()).color256(214),
+            );
+
+            // Save the witness proofs
+            if let Some(witness_proofs) = witness_proofs {
+                witness_proofs.save_to_file(&[start, "-witness.json"].concat())?;
+            }
+            println!(
+                "{} {}",
+                style("Witness Proofs saved to :").color256(69),
+                style([start, "-witness.json"].concat()).color256(214),
+            );
+        }
     }
 
     Ok(())
