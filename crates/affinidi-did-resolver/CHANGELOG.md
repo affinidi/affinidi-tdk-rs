@@ -8,6 +8,8 @@
 
 * **FEATURE:** Witness Proofs are now optimized based on webvh 1.0 spec
   * Prior witness entries will be removed, only keeping the latest witness proof
+  for each witness
+* **FEATURE:** Witness proof validation enabled
 
 ### 19th June 2025
 
