@@ -481,8 +481,6 @@ impl Parameters {
         }
 
         // Witness checks
-        println!("TIMTAM OLD: {:#?}", self.witness);
-        println!("TIMTAM NEW: {:#?}", new_params.witness);
         match new_params.witness {
             None => {
                 // If None, then keep current parameter witness

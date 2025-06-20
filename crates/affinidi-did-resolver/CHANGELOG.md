@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### June 2025
+
+## DID webvh method (0.1.5)
+
+* **FEATURE:** Witness Proofs are now optimized based on webvh 1.0 spec
+  * Prior witness entries will be removed, only keeping the latest witness proof
+
 ### 19th June 2025
 
 ## DID webvh method (0.1.4)

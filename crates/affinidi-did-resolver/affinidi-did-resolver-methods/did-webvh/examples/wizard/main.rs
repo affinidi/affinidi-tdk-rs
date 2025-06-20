@@ -14,7 +14,7 @@ use did_webvh::{
     log_entry::LogEntry,
     parameters::Parameters,
     url::WebVHURL,
-    witness::{Witness, Witnesses},
+    witness::{Witness, Witnesses, proofs::WitnessProofCollection},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -303,7 +303,9 @@ async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 7: Create the witness proofs if needed?
     // ************************************************************************
-    let witness_proofs = witness_log_entry(
+    let mut witness_proofs = WitnessProofCollection::default();
+    let new_proofs = witness_log_entry(
+        &mut witness_proofs,
         &log_entry,
         &log_entry.parameters.witness,
         &authorization_secrets,
@@ -341,7 +343,7 @@ async fn create_new_did() -> Result<()> {
             );
 
             // Save the witness proofs
-            if let Some(witness_proofs) = witness_proofs {
+            if new_proofs.is_some() {
                 witness_proofs.save_to_file(&[start, "-witness.json"].concat())?;
             }
             println!(

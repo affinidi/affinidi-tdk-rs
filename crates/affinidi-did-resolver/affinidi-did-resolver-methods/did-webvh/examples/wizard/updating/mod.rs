@@ -12,7 +12,10 @@ use crate::{
 use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
-use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
+use did_webvh::{
+    DIDWebVHError, log_entry::LogEntry, parameters::Parameters,
+    witness::proofs::WitnessProofCollection,
+};
 
 mod authorization;
 mod revoke;
@@ -20,6 +23,7 @@ mod watchers;
 mod witness;
 
 pub async fn edit_did() -> Result<()> {
+    // Load in data from various files
     let file_path: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("DID LogEntry File?")
         .default("did.jsonl".to_string())
@@ -49,6 +53,11 @@ pub async fn edit_did() -> Result<()> {
         } else {
             bail!("Invalid file path! Must end with .jsonl!");
         };
+
+    // Load witness Proofs if they exist (they may not if no witnesses are involved)
+    let mut witness_proofs =
+        WitnessProofCollection::read_from_file(&[file_name_prefix, "-witness.json"].concat())
+            .unwrap_or_default();
 
     println!(
         "{}\n{}",
@@ -85,8 +94,13 @@ pub async fn edit_did() -> Result<()> {
                 // Create a new LogEntry for a given DID
                 let new_entry = create_log_entry(&log_entry, &mut config_info).await?;
 
-                let witness_proofs =
-                    witness_log_entry(&new_entry, &log_entry.parameters.witness, &config_info)?;
+                let new_proofs = witness_log_entry(
+                    &mut witness_proofs,
+                    &new_entry,
+                    &log_entry.parameters.witness,
+                    &config_info,
+                )?;
+
                 // Save info to files
                 new_entry.save_to_file(&file_path)?;
                 config_info.save_to_file(&[file_name_prefix, "-secrets.json"].concat())?;
@@ -96,7 +110,7 @@ pub async fn edit_did() -> Result<()> {
                         .color256(34)
                         .blink()
                 );
-                if let Some(witness_proofs) = witness_proofs {
+                if new_proofs.is_some() {
                     witness_proofs.save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
                 }
                 break;
@@ -147,7 +161,6 @@ async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) ->
     // Change webvh Parameters
     // ************************************************************************
     let new_params = update_parameters(log_entry, config_info)?;
-    println!("TIMTAM FINAL NEW PARAMS: {:#?}", new_params);
     let diff_params = log_entry.parameters.diff(&new_params)?;
     println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
 
