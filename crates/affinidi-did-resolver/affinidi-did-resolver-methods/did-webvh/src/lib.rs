@@ -3,18 +3,14 @@
 *   See [WebVH Spec](https://identity.foundation/didwebvh/v1.0)
 */
 
-use serde::{Deserialize, Serialize};
-use ssi::dids::{
-    DIDMethod, DIDMethodResolver,
-    resolution::{Error, Options, Output},
-};
+use crate::{log_entry::LogEntryState, witness::proofs::WitnessProofCollection};
 use thiserror::Error;
-use url::{URLType, WebVHURL};
-use witness::Witnesses;
 
 pub mod log_entry;
 pub mod parameters;
+pub mod resolve;
 pub mod url;
+pub mod validate;
 pub mod witness;
 
 pub const SCID_HOLDER: &str = "{SCID}";
@@ -50,47 +46,14 @@ pub enum DIDWebVHError {
     WitnessProofError(String),
 }
 
-pub struct DIDWebVH;
-
-/// Resolved Document MetaData
-/// Returned as reolved Document MetaData on a successful resolve
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MetaData {
-    pub version_id: String,
-    pub version_time: String,
-    pub created: String,
-    pub updated: String,
-    pub scid: String,
-    pub portable: bool,
-    pub deactivated: bool,
-    pub witness: Option<Witnesses>,
-    pub watchers: Option<Vec<String>>,
+/// Information relating to a webvh DID
+#[derive(Debug, Default)]
+pub struct DIDWebVH {
+    pub log_entries: Vec<LogEntryState>,
+    pub witness_proofs: WitnessProofCollection,
 }
 
-impl DIDMethodResolver for DIDWebVH {
-    async fn resolve_method_representation<'a>(
-        &'a self,
-        method_specific_id: &'a str,
-        _: Options,
-    ) -> Result<Output<Vec<u8>>, Error> {
-        let parsed_did_url = WebVHURL::parse_did_url(method_specific_id)
-            .map_err(|err| Error::Internal(format!("webvh error: {}", err)))?;
-
-        if parsed_did_url.type_ == URLType::WhoIs {
-            // TODO: whois is not implemented yet
-            return Err(Error::RepresentationNotSupported(
-                "WhoIs is not implemented yet".to_string(),
-            ));
-        }
-
-        Err(Error::NotFound)
-    }
-}
-
-impl DIDMethod for DIDWebVH {
-    const DID_METHOD_NAME: &'static str = "webvh";
-}
+impl DIDWebVH {}
 
 #[cfg(test)]
 mod tests {

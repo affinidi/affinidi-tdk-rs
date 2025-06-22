@@ -46,7 +46,7 @@ pub struct WitnessProofCollection {
     /// Mapping of Proofs by witness. Points to the highest versionId
     /// Value = versionId, integer prefix of versionId, Data Integrity Proof
     #[serde(skip)]
-    witness_version: HashMap<String, (Rc<String>, usize, Rc<DataIntegrityProof>)>,
+    pub(crate) witness_version: HashMap<String, (Rc<String>, usize, Rc<DataIntegrityProof>)>,
 }
 
 /// Converts the inner Secret Shadow to a public Shadow Struct

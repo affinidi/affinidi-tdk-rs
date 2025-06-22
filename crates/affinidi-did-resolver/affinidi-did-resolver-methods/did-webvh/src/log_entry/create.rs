@@ -134,7 +134,7 @@ impl LogEntry {
         })?;
 
         // Increment the version-id
-        let (current_id, _) = LogEntry::get_version_id_fields(&new_entry.version_id)?;
+        let (current_id, _) = new_entry.get_version_id_fields()?;
         new_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
 
         // Generate the proof for the log entry

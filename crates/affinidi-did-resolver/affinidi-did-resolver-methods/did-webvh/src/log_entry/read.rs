@@ -3,16 +3,31 @@
 */
 
 use super::LogEntry;
-use crate::{DIDWebVHError, MetaData, SCID_HOLDER, parameters::Parameters};
+use crate::{DIDWebVHError, SCID_HOLDER, log_entry::MetaData, parameters::Parameters};
 use affinidi_data_integrity::verification_proof::verify_data;
 use chrono::{DateTime, Utc};
 use std::{
     fs::File,
-    io::{self, BufRead},
+    io::{self},
     path::Path,
 };
 
 impl LogEntry {
+    /// Load all LogEntries from a file and return them as a vector
+    /// Returns an error if the file cannot be read or if the entries are invalid.
+    pub fn load_from_file<P>(file_path: P) -> Result<Vec<LogEntry>, DIDWebVHError>
+    where
+        P: AsRef<Path>,
+    {
+        let file = File::open(file_path)
+            .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to open log file: {}", e)))?;
+        let buf_reader = io::BufReader::new(file);
+
+        serde_json::from_reader(buf_reader)
+            .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to read log entries: {}", e)))
+    }
+
+    /*
     /// Reads a JSON Log file and returns an iterator over the lines in the file.
     fn read_from_json_file<P>(file_path: P) -> io::Result<io::Lines<io::BufReader<File>>>
     where
@@ -128,8 +143,11 @@ impl LogEntry {
             ))
         }
     }
+    */
 
     /// Verify a LogEntry against a previous entry if it exists
+    /// NOTE: THIS DOES NOT VERIFY WITNESS PROOFS!
+    /// NOTE: You must validate witness proofs separately
     /// Returns validated current-state Parameters and MetaData
     pub fn verify_log_entry(
         &self,
@@ -178,14 +196,10 @@ impl LogEntry {
             ));
         }
 
-        // As a version of this LogEntry gets modified to reclaculate hashes,
+        // As a version of this LogEntry gets modified to recalculate hashes,
         // we create a clone once and reuse it for verification
         let mut working_entry = self.clone();
         working_entry.proof = None; // Remove proof for hash calculation
-
-        // Handle Witness verification
-        // This could be done async?
-        // TODO: Implement Witness verification
 
         // Verify the version ID
         working_entry.verify_version_id(previous_log_entry)?;
@@ -251,7 +265,7 @@ impl LogEntry {
 
     /// Checks the version ID of a LogEntry against the previous LogEntry
     fn verify_version_id(&mut self, previous: Option<&LogEntry>) -> Result<(), DIDWebVHError> {
-        let (current_id, current_hash) = LogEntry::get_version_id_fields(&self.version_id)?;
+        let (current_id, current_hash) = self.get_version_id_fields()?;
 
         // Check if the version number is incremented correctly
         if let Some(previous) = previous {
@@ -300,23 +314,6 @@ impl LogEntry {
         }
 
         Ok(())
-    }
-
-    /// Splits the version number and the version hash for a DID versionId
-    pub(crate) fn get_version_id_fields(version_id: &str) -> Result<(u32, String), DIDWebVHError> {
-        let Some((id, hash)) = version_id.split_once('-') else {
-            return Err(DIDWebVHError::ValidationError(format!(
-                "versionID ({}) doesn't match format <int>-<hash>",
-                version_id
-            )));
-        };
-        let id = id.parse::<u32>().map_err(|e| {
-            DIDWebVHError::ValidationError(format!(
-                "Failed to parse version ID ({}) as u32: {}",
-                id, e
-            ))
-        })?;
-        Ok((id, hash.to_string()))
     }
 
     /// Verifies everything is ok with the versionTime LogEntry field
