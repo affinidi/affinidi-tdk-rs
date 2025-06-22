@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 pub mod proofs;
+pub mod validate;
 
 /// Witness nodes
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

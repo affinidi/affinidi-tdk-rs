@@ -1,4 +1,4 @@
 *.jsonl
 *-witness.json
-*-secret.json
+*-secrets.json
 

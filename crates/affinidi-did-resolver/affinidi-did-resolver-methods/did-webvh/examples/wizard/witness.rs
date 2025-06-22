@@ -49,7 +49,7 @@ pub fn witness_log_entry(
         // Save proof to collection
         if let Some(proof) = &doc_to_sign.proof {
             witness_proofs
-                .add_proof(&log_entry.version_id, proof)
+                .add_proof(&log_entry.version_id, proof, false)
                 .map_err(|e| {
                     DIDWebVHError::WitnessProofError(format!("Error adding proof: {}", e))
                 })?;
@@ -69,7 +69,7 @@ pub fn witness_log_entry(
         }
     }
     // Strip out any duplicate records where we can
-    witness_proofs.optimise_records()?;
+    witness_proofs.write_optimise_records()?;
 
     println!(
         "{}{}{}{}",
