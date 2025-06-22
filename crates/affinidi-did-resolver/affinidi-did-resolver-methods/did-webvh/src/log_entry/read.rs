@@ -8,23 +8,39 @@ use affinidi_data_integrity::verification_proof::verify_data;
 use chrono::{DateTime, Utc};
 use std::{
     fs::File,
-    io::{self},
-    path::Path,
+    io::{self, BufRead},
 };
 
 impl LogEntry {
     /// Load all LogEntries from a file and return them as a vector
     /// Returns an error if the file cannot be read or if the entries are invalid.
-    pub fn load_from_file<P>(file_path: P) -> Result<Vec<LogEntry>, DIDWebVHError>
-    where
-        P: AsRef<Path>,
-    {
+    pub(crate) fn load_from_file(file_path: &str) -> Result<Vec<LogEntry>, DIDWebVHError> {
         let file = File::open(file_path)
             .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to open log file: {}", e)))?;
         let buf_reader = io::BufReader::new(file);
 
-        serde_json::from_reader(buf_reader)
-            .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to read log entries: {}", e)))
+        let mut entries = Vec::new();
+        for line in buf_reader.lines() {
+            match line {
+                Ok(line) => {
+                    let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
+                        DIDWebVHError::LogEntryError(format!(
+                            "Failed to deserialize log entry: {}",
+                            e
+                        ))
+                    })?;
+                    entries.push(log_entry);
+                }
+                Err(e) => {
+                    return Err(DIDWebVHError::LogEntryError(format!(
+                        "Failed to read line from log file: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        Ok(entries)
     }
 
     /*

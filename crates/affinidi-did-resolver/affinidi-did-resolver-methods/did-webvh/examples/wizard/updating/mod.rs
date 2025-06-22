@@ -13,8 +13,9 @@ use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use did_webvh::{
-    DIDWebVHError, log_entry::LogEntry, parameters::Parameters,
-    witness::proofs::WitnessProofCollection,
+    DIDWebVHError, DIDWebVHState,
+    log_entry::{LogEntry, LogEntryState},
+    parameters::Parameters,
 };
 
 mod authorization;
@@ -39,36 +40,41 @@ pub async fn edit_did() -> Result<()> {
         .interact()
         .unwrap();
 
-    let (log_entry, meta_data, mut config_info, file_name_prefix) =
-        if let Some((start, _)) = file_path.split_once(".") {
-            let (log_entry, meta_data) =
-                LogEntry::get_log_entry_from_file(&file_path, None, None, None)?;
+    let mut webvh_state = DIDWebVHState::default();
+    let (mut config_info, file_name_prefix) = if let Some((start, _)) = file_path.split_once(".") {
+        webvh_state.load_log_entries_from_file(&file_path)?;
+        webvh_state.load_witness_proofs_from_file(&[start, "-witness.json"].concat());
 
-            // Load the secrets
-            let config_info = ConfigInfo::read_from_file(&[start, "-secrets.json"].concat())
-                .map_err(|e| {
-                    DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e))
-                })?;
-            (log_entry, meta_data, config_info, start)
-        } else {
-            bail!("Invalid file path! Must end with .jsonl!");
-        };
+        // Load the secrets
+        let config_info =
+            ConfigInfo::read_from_file(&[start, "-secrets.json"].concat()).map_err(|e| {
+                DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e))
+            })?;
+        (config_info, start)
+    } else {
+        bail!("Invalid file path! Must end with .jsonl!");
+    };
 
-    // Load witness Proofs if they exist (they may not if no witnesses are involved)
-    let mut witness_proofs =
-        WitnessProofCollection::read_from_file(&[file_name_prefix, "-witness.json"].concat())
-            .unwrap_or_default();
+    // Validate webvh state
+    webvh_state.validate()?;
+
+    let last_entry_state = webvh_state.log_entries.last().ok_or_else(|| {
+        DIDWebVHError::ParametersError("No log entries found in the file".to_string())
+    })?;
+    let log_entry = &last_entry_state.log_entry;
+    let metadata = &last_entry_state.metadata;
 
     println!(
         "{}\n{}",
         style("Log Entry Parameters:").color256(69),
-        style(serde_json::to_string_pretty(&log_entry.parameters).unwrap()).color256(34),
+        style(serde_json::to_string_pretty(&last_entry_state.validated_parameters).unwrap())
+            .color256(34),
     );
     println!();
     println!(
         "{}\n{}\n\n{}",
         style("Log Entry Metadata:").color256(69),
-        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(34),
+        style(serde_json::to_string_pretty(metadata).unwrap()).color256(34),
         style("Successfully Loaded").color256(34).blink(),
     );
 
@@ -92,10 +98,10 @@ pub async fn edit_did() -> Result<()> {
         match selection {
             0 => {
                 // Create a new LogEntry for a given DID
-                let new_entry = create_log_entry(&log_entry, &mut config_info).await?;
+                let new_entry = create_log_entry(last_entry_state, &mut config_info).await?;
 
                 let new_proofs = witness_log_entry(
-                    &mut witness_proofs,
+                    &mut webvh_state.witness_proofs,
                     &new_entry,
                     &log_entry.parameters.witness,
                     &config_info,
@@ -111,7 +117,9 @@ pub async fn edit_did() -> Result<()> {
                         .blink()
                 );
                 if new_proofs.is_some() {
-                    witness_proofs.save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
+                    webvh_state
+                        .witness_proofs
+                        .save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
                 }
                 break;
             }
@@ -122,7 +130,7 @@ pub async fn edit_did() -> Result<()> {
                 );
             }
             2 => {
-                revoke_did(&file_path, &log_entry, &config_info).await?;
+                revoke_did(&file_path, log_entry, &config_info).await?;
                 break;
             }
             3 => {
@@ -138,7 +146,10 @@ pub async fn edit_did() -> Result<()> {
     Ok(())
 }
 
-async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) -> Result<LogEntry> {
+async fn create_log_entry(
+    le_state: &LogEntryState,
+    config_info: &mut ConfigInfo,
+) -> Result<LogEntry> {
     println!(
         "{}",
         style("Modifying DID Document and/or Parameters").color256(69)
@@ -152,16 +163,16 @@ async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) ->
         .default(false)
         .interact()?
     {
-        edit_did_document(&log_entry.state)?
+        edit_did_document(&le_state.log_entry.state)?
     } else {
-        log_entry.state.clone()
+        le_state.log_entry.state.clone()
     };
 
     // ************************************************************************
     // Change webvh Parameters
     // ************************************************************************
-    let new_params = update_parameters(log_entry, config_info)?;
-    let diff_params = log_entry.parameters.diff(&new_params)?;
+    let new_params = update_parameters(le_state, config_info)?;
+    let diff_params = le_state.validated_parameters.diff(&new_params)?;
     println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
 
     // ************************************************************************
@@ -175,9 +186,14 @@ async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) ->
             new_params.active_update_keys[0]
         );
     };
-    let new_entry =
-        LogEntry::create_new_log_entry(log_entry, None, &new_state, &diff_params, signing_key)
-            .await?;
+    let new_entry = LogEntry::create_new_log_entry(
+        &le_state.log_entry,
+        None,
+        &new_state,
+        &diff_params,
+        signing_key,
+    )
+    .await?;
 
     println!(
         "{}\n{}",
@@ -199,13 +215,20 @@ async fn create_log_entry(log_entry: &LogEntry, config_info: &mut ConfigInfo) ->
 
 /// Run UI for creating new parameter set
 /// Returns: New Parameters
-fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Result<Parameters> {
+fn update_parameters(
+    old_log_entry: &LogEntryState,
+    secrets: &mut ConfigInfo,
+) -> Result<Parameters> {
     let mut new_params = Parameters::default();
 
     // ************************************************************************
-    // Portability
+    // Authorization Keys
     // ************************************************************************
-    update_authorization_keys(old_log_entry, &mut new_params, secrets)?;
+    update_authorization_keys(
+        &old_log_entry.validated_parameters,
+        &mut new_params,
+        secrets,
+    )?;
     println!(
         "{}{}{}",
         style("Pre-rotation (").color256(69),
@@ -230,7 +253,7 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // Portability
     // ************************************************************************
-    if let Some(portable) = old_log_entry.parameters.portable {
+    if let Some(portable) = old_log_entry.validated_parameters.portable {
         if portable {
             // Portable
             if Confirm::with_theme(&ColorfulTheme::default())
@@ -256,7 +279,7 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // Witnesses
     // ************************************************************************
-    let old_witness = if let Some(witnesses) = &old_log_entry.parameters.witness {
+    let old_witness = if let Some(witnesses) = &old_log_entry.validated_parameters.witness {
         witnesses
     } else {
         &None
@@ -267,7 +290,7 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // Watchers
     // ************************************************************************
-    let old_watchers = if let Some(watchers) = &old_log_entry.parameters.watchers {
+    let old_watchers = if let Some(watchers) = &old_log_entry.validated_parameters.watchers {
         watchers
     } else {
         &None
@@ -278,7 +301,7 @@ fn update_parameters(old_log_entry: &LogEntry, secrets: &mut ConfigInfo) -> Resu
     // ************************************************************************
     // TTL
     // ************************************************************************
-    modify_ttl_params(&old_log_entry.parameters.ttl, &mut new_params)?;
+    modify_ttl_params(&old_log_entry.validated_parameters.ttl, &mut new_params)?;
 
     Ok(new_params)
 }

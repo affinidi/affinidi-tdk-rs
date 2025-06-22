@@ -41,10 +41,11 @@ impl DIDWebVHState {
                 };
             entry.validated_parameters = validated_parameters;
             entry.validation_status = LogEntryValidationStatus::LogEntryOnly;
+            entry.metadata = current_metadata.clone();
 
             // Check if this valid LogEntry has been deactivated, if so then ignore any other
             // Entries
-            if current_metadata.deactivated {
+            if entry.metadata.deactivated {
                 // Deactivated, return the current LogEntry and MetaData
                 deactivated_flag = true;
             }

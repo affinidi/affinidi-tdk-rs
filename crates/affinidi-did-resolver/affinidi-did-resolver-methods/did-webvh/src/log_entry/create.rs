@@ -108,7 +108,7 @@ impl LogEntry {
         Ok(log_entry)
     }
 
-    /// Takes an existing LogEntry and creates a new LogEntry from it
+    /// Takes an existing LogEntry and creates a new signed LogEntry from it
     pub async fn create_new_log_entry(
         previous_log_entry: &LogEntry,
         version_time: Option<String>,

@@ -40,10 +40,10 @@ pub struct LogEntryState {
     pub log_entry: LogEntry,
 
     /// MetaData for this LogEntry record
-    pub meta_data: MetaData,
+    pub metadata: MetaData,
 
     /// Integer representing versionId for this LogEntry
-    pub version_number: usize,
+    pub version_number: u32,
 
     /// After validation, parameters that were active at that time are stored here
     pub validated_parameters: Parameters,
@@ -62,14 +62,14 @@ impl LogEntryState {
             .verify_log_entry(previous_log_entry.map(|e| &e.log_entry), previous_meta_data)
     }
 
-    pub fn get_version_number(&self) -> usize {
+    pub fn get_version_number(&self) -> u32 {
         self.version_number
     }
 }
 
 /// Resolved Document MetaData
 /// Returned as reolved Document MetaData on a successful resolve
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaData {
     pub version_id: String,

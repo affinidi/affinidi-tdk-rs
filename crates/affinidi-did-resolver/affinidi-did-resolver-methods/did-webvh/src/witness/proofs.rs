@@ -143,7 +143,7 @@ impl WitnessProofCollection {
     }
 
     /// Load existing proofs from a file
-    pub fn read_from_file(file_path: &str) -> Result<Self, DIDWebVHError> {
+    pub(crate) fn read_from_file(file_path: &str) -> Result<Self, DIDWebVHError> {
         let file = File::open(file_path).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
                 "Couldn't open Witness Proofs file ({}): {}",

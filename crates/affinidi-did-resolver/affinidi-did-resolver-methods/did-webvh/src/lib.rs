@@ -3,7 +3,11 @@
 *   See [WebVH Spec](https://identity.foundation/didwebvh/v1.0)
 */
 
-use crate::{log_entry::LogEntryState, witness::proofs::WitnessProofCollection};
+use crate::{
+    log_entry::{LogEntry, LogEntryState, MetaData},
+    parameters::Parameters,
+    witness::proofs::WitnessProofCollection,
+};
 use thiserror::Error;
 
 pub mod log_entry;
@@ -53,7 +57,31 @@ pub struct DIDWebVHState {
     pub witness_proofs: WitnessProofCollection,
 }
 
-impl DIDWebVHState {}
+impl DIDWebVHState {
+    /// Convenience method to load LogEntries from a file, will ensure default state is set
+    /// NOTE: NO WEBVH VALIDATION IS DONE HERE
+    pub fn load_log_entries_from_file(&mut self, file_path: &str) -> Result<(), DIDWebVHError> {
+        for log_entry in LogEntry::load_from_file(file_path)? {
+            self.log_entries.push(LogEntryState {
+                log_entry: log_entry.clone(),
+                metadata: MetaData::default(),
+                version_number: log_entry.get_version_id_fields()?.0,
+                validation_status: log_entry::LogEntryValidationStatus::NotValidated,
+                validated_parameters: Parameters::default(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Convenience method to load WitnessProofs from a file, will ensure default state is set
+    /// NOTE: NO WEBVH VALIDATION IS DONE HERE
+    /// NOTE: Not all DIDs will have witness proofs, so this is optional
+    pub fn load_witness_proofs_from_file(&mut self, file_path: &str) {
+        if let Ok(proofs) = WitnessProofCollection::read_from_file(file_path) {
+            self.witness_proofs = proofs;
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
