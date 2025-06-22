@@ -2,15 +2,13 @@
 *   Resolver trait methods for webvh
 */
 
+use crate::url::{URLType, WebVHURL};
 use ssi::dids::{
     DIDMethod, DIDMethodResolver,
     resolution::{Error, Options},
 };
 
-use crate::{
-    DIDWebVH,
-    url::{URLType, WebVHURL},
-};
+pub struct DIDWebVH;
 
 impl DIDMethodResolver for DIDWebVH {
     async fn resolve_method_representation<'a>(

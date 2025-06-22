@@ -48,12 +48,12 @@ pub enum DIDWebVHError {
 
 /// Information relating to a webvh DID
 #[derive(Debug, Default)]
-pub struct DIDWebVH {
+pub struct DIDWebVHState {
     pub log_entries: Vec<LogEntryState>,
     pub witness_proofs: WitnessProofCollection,
 }
 
-impl DIDWebVH {}
+impl DIDWebVHState {}
 
 #[cfg(test)]
 mod tests {

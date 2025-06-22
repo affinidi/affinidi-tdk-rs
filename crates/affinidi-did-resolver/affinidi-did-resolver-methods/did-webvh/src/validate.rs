@@ -11,11 +11,11 @@
 use tracing::debug;
 
 use crate::{
-    DIDWebVH, DIDWebVHError,
+    DIDWebVHError, DIDWebVHState,
     log_entry::{LogEntryState, LogEntryValidationStatus, MetaData},
 };
 
-impl DIDWebVH {
+impl DIDWebVHState {
     /// Validate WebVH Data
     /// Validation will stop at the last known good version
     pub fn validate(&mut self) -> Result<(), DIDWebVHError> {
