@@ -12,7 +12,8 @@ use tracing::debug;
 
 use crate::{
     DIDWebVHError, DIDWebVHState,
-    log_entry::{LogEntryState, LogEntryValidationStatus, MetaData},
+    log_entry::MetaData,
+    log_entry_state::{LogEntryState, LogEntryValidationStatus},
 };
 
 impl DIDWebVHState {
@@ -25,20 +26,19 @@ impl DIDWebVHState {
 
         let mut deactivated_flag = false;
         for entry in self.log_entries.iter_mut() {
-            let (validated_parameters, current_metadata) =
-                match entry.verify_log_entry(previous_entry, previous_metadata.as_ref()) {
-                    Ok((parameters, metadata)) => (parameters, metadata),
-                    Err(e) => {
-                        if previous_entry.is_some() && previous_metadata.is_some() {
-                            // Return last known good LogEntry
-                            break;
-                        }
-                        return Err(DIDWebVHError::ValidationError(format!(
-                            "No valid LogEntry found! Reason: {}",
-                            e
-                        )));
+            match entry.verify_log_entry(previous_entry, previous_metadata.as_ref()) {
+                Ok(()) => (),
+                Err(e) => {
+                    if previous_entry.is_some() && previous_metadata.is_some() {
+                        // Return last known good LogEntry
+                        break;
                     }
-                };
+                    return Err(DIDWebVHError::ValidationError(format!(
+                        "No valid LogEntry found! Reason: {}",
+                        e
+                    )));
+                }
+            }
             entry.validated_parameters = validated_parameters;
             entry.validation_status = LogEntryValidationStatus::LogEntryOnly;
             entry.metadata = current_metadata.clone();

@@ -14,58 +14,7 @@ use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fs::OpenOptions, io::Write};
 use tracing::debug;
 
-pub mod create;
 pub mod read;
-
-/// Tracks validation status of a LogEntry
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-pub enum LogEntryValidationStatus {
-    /// LogEntry failed validation
-    Invalid(String),
-    /// Validation process has NOT started yet
-    #[default]
-    NotValidated,
-    /// LogEntry has been validated (step 1 of 2)
-    LogEntryOnly,
-    /// Witness Proof for this LogEntry has been validated (step 2 of 2)
-    WitnessProof,
-    /// LogEntry has been fully Validated
-    Ok,
-}
-
-/// Manages state relating to a LogEntry during validation
-#[derive(Debug)]
-pub struct LogEntryState {
-    /// webvh LogEntry record
-    pub log_entry: LogEntry,
-
-    /// MetaData for this LogEntry record
-    pub metadata: MetaData,
-
-    /// Integer representing versionId for this LogEntry
-    pub version_number: u32,
-
-    /// After validation, parameters that were active at that time are stored here
-    pub validated_parameters: Parameters,
-
-    /// Validation status of this record
-    pub validation_status: LogEntryValidationStatus,
-}
-
-impl LogEntryState {
-    pub fn verify_log_entry(
-        &self,
-        previous_log_entry: Option<&LogEntryState>,
-        previous_meta_data: Option<&MetaData>,
-    ) -> Result<(Parameters, MetaData), DIDWebVHError> {
-        self.log_entry
-            .verify_log_entry(previous_log_entry.map(|e| &e.log_entry), previous_meta_data)
-    }
-
-    pub fn get_version_number(&self) -> u32 {
-        self.version_number
-    }
-}
 
 /// Resolved Document MetaData
 /// Returned as reolved Document MetaData on a successful resolve
@@ -144,7 +93,7 @@ impl LogEntry {
 
     /// Generates a SCID from a preliminary LogEntry
     /// This only needs to be called once when the DID is first created.
-    fn generate_scid(&self) -> Result<String, DIDWebVHError> {
+    pub(crate) fn generate_scid(&self) -> Result<String, DIDWebVHError> {
         self.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate SCID from preliminary LogEntry. Reason: {}",
