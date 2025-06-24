@@ -107,3 +107,5 @@ How you choose to handle these is left to the client side on how to handle these
 | 82 | 400 | e.p.protocol.mediator.access_list.limit | No | Transaction is limited to 1..100 items   |
 | 83 | 400 | w.m.protocol.mediator.administration.parse | No | Message body couldn't be parsed correctly |
 | 84 | 400 | w.m.protocol.mediator.administration.strip.missing | No | Missing admin DID to strip admin type from |
+| 85 | 400 | e.p.message.from.incorrect | No | Inner DIDComm plaintext from field does NOT match signing or encryption DID |
+| 86 | 400 | e.p.authentication.message.not_signed_or_encrypted | No | DIDComm message MUST be signed and encrypted for this transaction |
