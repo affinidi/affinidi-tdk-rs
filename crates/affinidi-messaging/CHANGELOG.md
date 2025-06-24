@@ -15,6 +15,8 @@ tooling.
 * **SECURITY FIX:** DID Authentication flow was not checking inner plaintext from
 field attribute
   * Will now check that the from field exists and matches signing key
+* **FEATURE:** authentication now requires the auth response message to be `SIGNED`
+and `ENCRYPTED`
 * **MAINTENANCE:** Crate dependencies updated
 
 ## 6th June 2025
