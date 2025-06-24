@@ -88,8 +88,8 @@ impl Database {
                     self.upgrade_0_10_0(&config.security.global_acl_default)
                         .await?;
                     info!("Database schema version updated to ({})", mediator_version);
-                } else if schema_version < Version::parse("0.10.9").unwrap() {
-                    self.upgrade_0_10_9().await?;
+                } else if schema_version < Version::parse("0.10.11").unwrap() {
+                    self.upgrade_0_10_11().await?;
                     info!("Database schema version updated to ({})", mediator_version);
                 } else {
                     error!(
