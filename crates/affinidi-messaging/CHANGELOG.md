@@ -15,6 +15,7 @@ tooling.
 * **SECURITY FIX:** DID Authentication flow was not checking inner plaintext from
 field attribute
   * Will now check that the from field exists and matches signing key
+* **MAINTENANCE:** Crate dependencies updated
 
 ## 6th June 2025
 
