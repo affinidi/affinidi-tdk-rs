@@ -181,6 +181,28 @@ pub async fn authentication_response(
             }
         };
 
+        // Authentication messages MUST be signed and authenticated!
+        if envelope.metadata.authenticated && envelope.metadata.encrypted {
+            debug!("Authenticated messages is properly signed and encrypted")
+        } else {
+                return Err(MediatorError::MediatorError(
+                    86,
+                    "".to_string(),
+                    None,
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authentication.message.not_signed_or_encrypted".into(),
+                        "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction".into(),
+                        vec![envelope.metadata.authenticated.to_string(), envelope.metadata.encrypted.to_string()],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", envelope.metadata.authenticated, envelope.metadata.encrypted)
+                )
+                .into());
+        }
+
         let from_did = match &envelope.from_did {
             Some(from_did) => {
                 // Check if DID is allowed to connect
@@ -299,6 +321,46 @@ pub async fn authentication_response(
                 .into());
         }
         
+        // Check that the inner plaintext from matches the envelope skid
+        if let Some(msg_from) = &msg.from {
+            if msg_from != &envelope.from_did.unwrap_or_default() {
+                // Inner and outer envelope don't match
+            return Err(MediatorError::MediatorError(
+                85,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.from.incorrect".into(),
+                    "Inner DIDComm plaintext from field does NOT match signing or encryption DID".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Inner DIDComm plaintext from field does NOT match signing or encryption DID".to_string(),
+            )
+            .into());
+            }
+        } else {
+            return Err(MediatorError::MediatorError(
+                29,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.response.from".into(),
+                    "inner message: Missing the `from` header".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "inner message: Missing the `from` header".to_string(),
+            )
+            .into());
+        }
+
         // Check that the inner plaintext from matches the envelope skid
         if let Some(msg_from) = &msg.from {
             if msg_from != &envelope.from_did.unwrap_or_default() {
