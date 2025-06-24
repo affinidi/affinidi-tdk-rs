@@ -182,7 +182,9 @@ pub async fn authentication_response(
         };
 
         // Authentication messages MUST be signed and authenticated!
-        if !envelope.metadata.authenticated || !envelope.metadata.encrypted {
+        if envelope.metadata.authenticated && envelope.metadata.encrypted {
+            debug!("Authenticated messages is properly signed and encrypted")
+        } else {
                 return Err(MediatorError::MediatorError(
                     86,
                     "".to_string(),
