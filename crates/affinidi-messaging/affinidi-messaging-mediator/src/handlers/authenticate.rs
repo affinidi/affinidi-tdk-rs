@@ -180,6 +180,7 @@ pub async fn authentication_response(
                 .into());
             }
         };
+        println!("TIMTAM: {:#?}", envelope.metadata);
 
         let from_did = match &envelope.from_did {
             Some(from_did) => {
@@ -307,12 +308,12 @@ pub async fn authentication_response(
                     ProblemReportSorter::Error,
                     ProblemReportScope::Protocol,
                     "authentication.response.from".into(),
-                    "Authentication response message is missing the `from` header".into(),
+                    "inner message: Missing the `from` header".into(),
                     vec![],
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                "Authentication response message is missing the `from` header".to_string(),
+                "inner message: Missing the `from` header".to_string(),
             )
             .into());
         }
