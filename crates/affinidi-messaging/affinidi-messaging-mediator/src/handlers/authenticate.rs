@@ -229,19 +229,19 @@ pub async fn authentication_response(
             }
             _ => {
                 return Err(MediatorError::MediatorError(
-                    25,
+                    29,
                     "".to_string(),
                     None,
                     Box::new(ProblemReport::new(
                         ProblemReportSorter::Error,
                         ProblemReportScope::Protocol,
                         "authentication.response.from".into(),
-                        "authentication response message is missing from header".into(),
+                        "Authentication response message is missing the `from` header".into(),
                         vec![],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    "authentication response message is missing from header".to_string(),
+                    "Authentication response message is missing the `from` header".to_string(),
                 )
                 .into());
             }
@@ -276,6 +276,46 @@ pub async fn authentication_response(
                 .into());
             }
         };
+
+        // Check that the inner plaintext from matches the envelope skid
+        if let Some(msg_from) = &msg.from {
+            if msg_from != &envelope.from_did.unwrap_or_default() {
+                // Inner and outer envelope don't match
+            return Err(MediatorError::MediatorError(
+                85,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.from.incorrect".into(),
+                    "Inner DIDComm plaintext from field does NOT match signing or encryption DID".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Inner DIDComm plaintext from field does NOT match signing or encryption DID".to_string(),
+            )
+            .into());
+            }
+        } else {
+            return Err(MediatorError::MediatorError(
+                29,
+                "".to_string(),
+                None,
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authentication.response.from".into(),
+                    "Authentication response message is missing the `from` header".into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Authentication response message is missing the `from` header".to_string(),
+            )
+            .into());
+        }
 
         // Only accepts AffinidiAuthenticate messages
         match msg.type_.as_str().parse::<MessageType>().map_err(|err| {
@@ -407,8 +447,8 @@ pub async fn authentication_response(
         };
 
         // check that the DID matches from what was given for the initial challenge request to what was used for the message response
-        if let Some(from_did) = msg.from {
-            if from_did != session.did {
+        if let Some(from_did) = &msg.from {
+            if from_did != &session.did {
                 return Err(MediatorError::MediatorError(
                     33,
                     "".to_string(),
