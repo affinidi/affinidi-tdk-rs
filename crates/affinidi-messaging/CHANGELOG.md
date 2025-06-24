@@ -8,6 +8,17 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 24th June 2025
+
+### Mediator (0.10.11)
+
+* **SECURITY FIX:** DID Authentication flow was not checking inner plaintext from
+field attribute
+  * Will now check that the from field exists and matches signing key
+* **FEATURE:** authentication now requires the auth response message to be `SIGNED`
+and `ENCRYPTED`
+* **MAINTENANCE:** Crate dependencies updated
+
 ## 6th June 2025
 
 ### Mediator (0.10.10)
