@@ -13,9 +13,7 @@ use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
 use did_webvh::{
-    DIDWebVHError, DIDWebVHState,
-    log_entry::{LogEntry, LogEntryState},
-    parameters::Parameters,
+    DIDWebVHError, DIDWebVHState, log_entry_state::LogEntryState, parameters::Parameters,
 };
 
 mod authorization;
@@ -61,7 +59,6 @@ pub async fn edit_did() -> Result<()> {
     let last_entry_state = webvh_state.log_entries.last().ok_or_else(|| {
         DIDWebVHError::ParametersError("No log entries found in the file".to_string())
     })?;
-    let log_entry = &last_entry_state.log_entry;
     let metadata = &last_entry_state.metadata;
 
     println!(
@@ -98,17 +95,21 @@ pub async fn edit_did() -> Result<()> {
         match selection {
             0 => {
                 // Create a new LogEntry for a given DID
-                let new_entry = create_log_entry(last_entry_state, &mut config_info).await?;
+                create_log_entry(&mut webvh_state, &mut config_info).await?;
+
+                let new_entry = webvh_state.log_entries.last().ok_or_else(|| {
+                    DIDWebVHError::LogEntryError("No new LogEntry created".to_string())
+                })?;
 
                 let new_proofs = witness_log_entry(
                     &mut webvh_state.witness_proofs,
-                    &new_entry,
-                    &log_entry.parameters.witness,
+                    &new_entry.log_entry,
+                    &new_entry.log_entry.parameters.witness,
                     &config_info,
                 )?;
 
                 // Save info to files
-                new_entry.save_to_file(&file_path)?;
+                new_entry.log_entry.save_to_file(&file_path)?;
                 config_info.save_to_file(&[file_name_prefix, "-secrets.json"].concat())?;
                 println!(
                     "{}",
@@ -130,7 +131,7 @@ pub async fn edit_did() -> Result<()> {
                 );
             }
             2 => {
-                revoke_did(&file_path, log_entry, &config_info).await?;
+                revoke_did(&file_path, &mut webvh_state, &config_info).await?;
                 break;
             }
             3 => {
@@ -147,13 +148,18 @@ pub async fn edit_did() -> Result<()> {
 }
 
 async fn create_log_entry(
-    le_state: &LogEntryState,
+    didwebvh: &mut DIDWebVHState,
     config_info: &mut ConfigInfo,
-) -> Result<LogEntry> {
+) -> Result<()> {
     println!(
         "{}",
         style("Modifying DID Document and/or Parameters").color256(69)
     );
+
+    let previous_log_entry = didwebvh
+        .log_entries
+        .last()
+        .ok_or_else(|| DIDWebVHError::LogEntryError("No log entries found".to_string()))?;
 
     // ************************************************************************
     // Change the DID Document?
@@ -163,17 +169,15 @@ async fn create_log_entry(
         .default(false)
         .interact()?
     {
-        edit_did_document(&le_state.log_entry.state)?
+        edit_did_document(&previous_log_entry.log_entry.state)?
     } else {
-        le_state.log_entry.state.clone()
+        previous_log_entry.log_entry.state.clone()
     };
 
     // ************************************************************************
     // Change webvh Parameters
     // ************************************************************************
-    let new_params = update_parameters(le_state, config_info)?;
-    let diff_params = le_state.validated_parameters.diff(&new_params)?;
-    println!("{}", serde_json::to_string_pretty(&diff_params).unwrap());
+    let new_params = update_parameters(previous_log_entry, config_info)?;
 
     // ************************************************************************
     // Create a new LogEntry
@@ -186,19 +190,21 @@ async fn create_log_entry(
             new_params.active_update_keys[0]
         );
     };
-    let new_entry = LogEntry::create_new_log_entry(
-        &le_state.log_entry,
-        None,
-        &new_state,
-        &diff_params,
-        signing_key,
-    )
-    .await?;
+    let log_entry_result =
+        didwebvh.create_log_entry(None, &new_state, &new_params, signing_key, true)?;
+
+    let log_entry = if let Some(log_entry_state) = &log_entry_result {
+        &log_entry_state.log_entry
+    } else {
+        bail!(
+            "This is likely an SDK bug. Creating first DID succeeded, but no LogEntry has been logged and saved."
+        );
+    };
 
     println!(
         "{}\n{}",
         style("New Log Entry:").color256(69),
-        style(serde_json::to_string_pretty(&new_entry).unwrap()).color256(34)
+        style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
     );
 
     if Confirm::with_theme(&ColorfulTheme::default())
@@ -206,8 +212,9 @@ async fn create_log_entry(
         .default(true)
         .interact()?
     {
-        Ok(new_entry)
+        Ok(())
     } else {
+        didwebvh.log_entries.pop(); // Remove the last entry
         println!("{}", style("Rejecting all changes!").color256(9));
         bail!("Changes Rejected")
     }

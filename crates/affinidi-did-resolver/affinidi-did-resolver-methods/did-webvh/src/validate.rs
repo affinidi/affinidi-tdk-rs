@@ -12,7 +12,6 @@ use tracing::debug;
 
 use crate::{
     DIDWebVHError, DIDWebVHState,
-    log_entry::MetaData,
     log_entry_state::{LogEntryState, LogEntryValidationStatus},
 };
 
@@ -22,14 +21,13 @@ impl DIDWebVHState {
     pub fn validate(&mut self) -> Result<(), DIDWebVHError> {
         // Validate each LogEntry
         let mut previous_entry: Option<&LogEntryState> = None;
-        let mut previous_metadata: Option<MetaData> = None;
 
         let mut deactivated_flag = false;
         for entry in self.log_entries.iter_mut() {
-            match entry.verify_log_entry(previous_entry, previous_metadata.as_ref()) {
+            match entry.verify_log_entry(previous_entry) {
                 Ok(()) => (),
                 Err(e) => {
-                    if previous_entry.is_some() && previous_metadata.is_some() {
+                    if previous_entry.is_some() {
                         // Return last known good LogEntry
                         break;
                     }
@@ -39,10 +37,6 @@ impl DIDWebVHState {
                     )));
                 }
             }
-            entry.validated_parameters = validated_parameters;
-            entry.validation_status = LogEntryValidationStatus::LogEntryOnly;
-            entry.metadata = current_metadata.clone();
-
             // Check if this valid LogEntry has been deactivated, if so then ignore any other
             // Entries
             if entry.metadata.deactivated {
@@ -52,7 +46,6 @@ impl DIDWebVHState {
 
             // Set the next previous records
             previous_entry = Some(entry);
-            previous_metadata = Some(current_metadata);
 
             if deactivated_flag {
                 // If we have a deactivated entry, we stop processing further entries

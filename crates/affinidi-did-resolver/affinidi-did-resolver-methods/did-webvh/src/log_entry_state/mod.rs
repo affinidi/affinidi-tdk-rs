@@ -45,7 +45,7 @@ impl LogEntryState {
     /// Validates a LogEntry
     /// NOTE: Does NOT validate witness proofs!
     pub fn verify_log_entry(
-        &self,
+        &mut self,
         previous_log_entry: Option<&LogEntryState>,
     ) -> Result<(), DIDWebVHError> {
         if self.validation_status == LogEntryValidationStatus::Ok {
@@ -53,10 +53,15 @@ impl LogEntryState {
             return Ok(());
         }
 
-        self.log_entry.verify_log_entry(
+        let (parameters, metadata) = self.log_entry.verify_log_entry(
             previous_log_entry.map(|e| &e.log_entry),
             previous_log_entry.map(|e| &e.metadata),
         )?;
+
+        self.validated_parameters = parameters;
+        self.metadata = metadata;
+        self.validation_status = LogEntryValidationStatus::LogEntryOnly;
+
         Ok(())
     }
 
