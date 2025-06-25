@@ -101,10 +101,11 @@ pub async fn edit_did() -> Result<()> {
                     DIDWebVHError::LogEntryError("No new LogEntry created".to_string())
                 })?;
 
+                println!("TIMTAM: NewEntry: {:#?}", new_entry);
                 let new_proofs = witness_log_entry(
                     &mut webvh_state.witness_proofs,
                     &new_entry.log_entry,
-                    &new_entry.log_entry.parameters.witness,
+                    &new_entry.validated_parameters.active_witness,
                     &config_info,
                 )?;
 
@@ -309,6 +310,8 @@ fn update_parameters(
     // TTL
     // ************************************************************************
     modify_ttl_params(&old_log_entry.validated_parameters.ttl, &mut new_params)?;
+
+    // Map the new parameters to the previous validated parameters
 
     Ok(new_params)
 }

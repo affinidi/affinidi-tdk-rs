@@ -122,6 +122,8 @@ impl Parameters {
             ..Default::default()
         };
 
+        println!("TIMTAM:\nPREVIOUS: {:#?}\nCURRENT: {:#?}", previous, self);
+
         // Handle previous values
         let mut pre_rotation_previous_value: bool = false;
         if let Some(previous) = previous {

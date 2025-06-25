@@ -301,7 +301,7 @@ async fn create_new_did() -> Result<()> {
     // Step 6: Valide the LogEntry
     // ************************************************************************
     // Validate the Log Entry
-    let meta_data = log_entry.verify_log_entry(None, None)?;
+    let meta_data = log_entry.verify_log_entry(None, None, None)?;
     println!(
         "{}\n{}\n{}",
         style("Log Entry Metadata:").color256(69),

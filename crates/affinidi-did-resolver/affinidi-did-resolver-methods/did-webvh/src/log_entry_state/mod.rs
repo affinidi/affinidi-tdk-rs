@@ -55,6 +55,7 @@ impl LogEntryState {
 
         let (parameters, metadata) = self.log_entry.verify_log_entry(
             previous_log_entry.map(|e| &e.log_entry),
+            previous_log_entry.map(|e| &e.validated_parameters),
             previous_log_entry.map(|e| &e.metadata),
         )?;
 

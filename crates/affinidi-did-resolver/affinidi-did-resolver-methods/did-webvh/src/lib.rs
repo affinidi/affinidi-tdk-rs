@@ -133,7 +133,7 @@ impl DIDWebVHState {
         let last_log_entry = self.log_entries.last();
 
         let mut log_entry = if let Some(last_log_entry) = last_log_entry {
-            // Utilizes the previous LOgEntry for some info
+            // Utilizes the previous LogEntry for some info
 
             LogEntry {
                 version_id: last_log_entry.log_entry.version_id.clone(),
@@ -186,43 +186,48 @@ impl DIDWebVHState {
             ))
         })?;
 
-        let (created, scid, portable) = if last_log_entry.is_some() {
-            // Increment the version-id if NOT first LogEntry
-            let (current_id, _) = log_entry.get_version_id_fields()?;
-            log_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
-            if let Some(first_entry) = self.log_entries.first() {
-                let Some(scid) = first_entry.log_entry.parameters.scid.clone() else {
+        let (created, scid, portable, validated_parameters) =
+            if let Some(last_entry) = last_log_entry {
+                // Increment the version-id if NOT first LogEntry
+                let (current_id, _) = log_entry.get_version_id_fields()?;
+                log_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
+                if let Some(first_entry) = self.log_entries.first() {
+                    let Some(scid) = first_entry.log_entry.parameters.scid.clone() else {
+                        return Err(DIDWebVHError::LogEntryError(
+                            "First LogEntry does not have a SCID!".to_string(),
+                        ));
+                    };
+                    (
+                        first_entry.log_entry.version_time.clone(),
+                        scid,
+                        first_entry
+                            .log_entry
+                            .parameters
+                            .portable
+                            .unwrap_or_default(),
+                        log_entry
+                            .parameters
+                            .validate(Some(&last_entry.validated_parameters))?,
+                    )
+                } else {
+                    return Err(DIDWebVHError::LogEntryError(
+                        "Expected a First LogEntry, but none exist!".to_string(),
+                    ));
+                }
+            } else {
+                log_entry.version_id = ["1-", &entry_hash].concat();
+                let Some(scid) = log_entry.parameters.scid.clone() else {
                     return Err(DIDWebVHError::LogEntryError(
                         "First LogEntry does not have a SCID!".to_string(),
                     ));
                 };
                 (
-                    first_entry.log_entry.version_time.clone(),
+                    log_entry.version_time.clone(),
                     scid,
-                    first_entry
-                        .log_entry
-                        .parameters
-                        .portable
-                        .unwrap_or_default(),
+                    log_entry.parameters.portable.unwrap_or_default(),
+                    log_entry.parameters.clone(),
                 )
-            } else {
-                return Err(DIDWebVHError::LogEntryError(
-                    "Expected a First LogEntry, but none exist!".to_string(),
-                ));
-            }
-        } else {
-            log_entry.version_id = ["1-", &entry_hash].concat();
-            let Some(scid) = log_entry.parameters.scid.clone() else {
-                return Err(DIDWebVHError::LogEntryError(
-                    "First LogEntry does not have a SCID!".to_string(),
-                ));
             };
-            (
-                log_entry.version_time.clone(),
-                scid,
-                log_entry.parameters.portable.unwrap_or_default(),
-            )
-        };
 
         // Generate the proof for the log entry
         let mut log_entry_unsigned: SigningDocument = (&log_entry).try_into()?;
@@ -263,7 +268,7 @@ impl DIDWebVHState {
             metadata,
             version_number: id_number,
             validation_status: LogEntryValidationStatus::Ok,
-            validated_parameters: parameters.clone(),
+            validated_parameters,
         });
 
         Ok(self.log_entries.last())

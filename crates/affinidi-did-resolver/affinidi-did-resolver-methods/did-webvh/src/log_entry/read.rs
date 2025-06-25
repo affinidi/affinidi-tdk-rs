@@ -168,6 +168,7 @@ impl LogEntry {
     pub fn verify_log_entry(
         &self,
         previous_log_entry: Option<&LogEntry>,
+        previous_parameters: Option<&Parameters>,
         previous_meta_data: Option<&MetaData>,
     ) -> Result<(Parameters, MetaData), DIDWebVHError> {
         // Ensure we are dealing with a signed LogEntry
@@ -178,10 +179,7 @@ impl LogEntry {
         };
 
         // Ensure the Parameters are correctly setup
-        let parameters = match self
-            .parameters
-            .validate(previous_log_entry.map(|p| &p.parameters))
-        {
+        let parameters = match self.parameters.validate(previous_parameters) {
             Ok(params) => params,
             Err(e) => {
                 return Err(DIDWebVHError::LogEntryError(format!(
