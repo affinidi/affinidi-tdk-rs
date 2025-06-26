@@ -41,7 +41,8 @@ pub struct WitnessProof {
 #[serde(try_from = "WitnessProofShadow")]
 pub struct WitnessProofCollection {
     /// Raw Witness Proofs
-    proofs: WitnessProofShadow,
+    pub(crate) proofs: WitnessProofShadow,
+
 
     /// Mapping of Proofs by witness. Points to the highest versionId
     /// Value = versionId, integer prefix of versionId, Data Integrity Proof
@@ -156,29 +157,17 @@ impl WitnessProofCollection {
                 file_path, e
             ))
         })?;
-        let raw: WitnessProofShadow = serde_json::from_reader(file).map_err(|e| {
+        let proofs: WitnessProofShadow = serde_json::from_reader(file).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
                 "Couldn't deserialize Witness Proofs Data from file ({}): {}",
                 file_path, e
             ))
         })?;
 
-        let mut collection = WitnessProofCollection::default();
-        for version in raw.0 {
-            for proof in version.proof {
-            collection.add_proof(
-                &version.version_id,
-                &proof, // Assuming at least one proof exists
-                false,
-            ).map_err(|e| {
-                DIDWebVHError::WitnessProofError(format!(
-                    "Error adding proof from file ({}): {}",
-                    file_path, e
-                ))
-            })?;
-            }
-        }
-        Ok(collection)
+        Ok( WitnessProofCollection {
+            proofs,
+            ..Default::default()
+        })
     }
 
     /// Save proofs to a file
@@ -201,6 +190,52 @@ impl WitnessProofCollection {
     /// Get WitnessProof record for a given version_id
     pub fn get_proofs(&self, version_id: &str) -> Option<&WitnessProof> {
         self.proofs.0.iter().find(|p| *p.version_id == version_id)
+    }
+
+    /// Useed to regenerate the proof state table when you want ot cap the LogEntry
+    /// version number to a specific value.
+    /// This is can be used to exclude future proofs that are not yet valid or match
+    /// a published LogEntry
+    pub fn generate_proof_state(&mut self, highest_version_number: u32) -> Result<(), DIDWebVHError> {
+        let mut new_proofs_state = WitnessProofCollection::default();
+
+        for version in &self.proofs.0 {
+            let version_number = if let Some((prefix, _)) = version.version_id.split_once('-') {
+                prefix.parse::<u32>().map_err(|_| {
+                    DIDWebVHError::WitnessProofError(format!(
+                        "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
+                        version.version_id
+                    ))
+                })?
+            } else {
+                return Err(DIDWebVHError::WitnessProofError(format!(
+                    "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
+                    version.version_id
+                )));
+            };
+
+            if version_number > highest_version_number {
+                // Skip this versionId as it is for a future entry and thus needs to be kept
+                continue;
+            }
+            for proof in &version.proof {
+            new_proofs_state.add_proof(
+                &version.version_id,
+                proof, // Assuming at least one proof exists
+                false,
+            ).map_err(|e| {
+                DIDWebVHError::WitnessProofError(format!(
+                    "Error adding witness proof state to table: {}",
+                    e
+                ))
+            })?;
+            }
+        }
+
+        self.witness_version = new_proofs_state.witness_version;
+
+        Ok(())
+
     }
 
     /// Runs through and removes witness proofs from earlier LogEntries that are not required

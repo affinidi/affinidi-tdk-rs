@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### June 2025
+### 26th June 2025
 
 ## DID webvh method (0.1.5)
 
@@ -12,6 +12,9 @@ LogEntries and WitnessProofs
   * Prior witness entries will be removed, only keeping the latest witness proof
   for each witness
 * **FEATURE:** Witness proof validation enabled
+  * Correct handling of optimised Witness Proofs is managed by `WitnessProofCollection`
+* **FEATURE:** Future witness proofs will be ignored based on highest versionId
+from LogEntry
 
 ### 19th June 2025
 

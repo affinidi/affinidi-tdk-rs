@@ -68,17 +68,14 @@ impl DIDWebVHState {
         let highest_version_number = self.log_entries.last().unwrap().get_version_number();
         debug!("Latest LogEntry ID = ({})", highest_version_number);
 
-        // Step 3: Witness proofs are already loaded in the state, so we can skip this step
+        // Step 3: Recalculate witness proofs based on the highest LogEntry version
+        self.witness_proofs
+            .generate_proof_state(highest_version_number)?;
+
         // Step 4: Validate the witness proofs
         for log_entry in self.log_entries.iter_mut() {
             self.witness_proofs
-                .validate_log_entry(log_entry)
-                .map_err(|e| {
-                    DIDWebVHError::WitnessProofError(format!(
-                        "LogEntry ({}): Witness proof validation failed: {}",
-                        log_entry.log_entry.version_id, e
-                    ))
-                })?;
+                .validate_log_entry(log_entry, highest_version_number)?;
             log_entry.validation_status = LogEntryValidationStatus::Ok;
         }
 

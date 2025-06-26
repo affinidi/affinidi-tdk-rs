@@ -10,12 +10,17 @@ use crate::{
 
 impl WitnessProofCollection {
     /// Validates if a LogEntry was correctly witnessed
-    /// Requires the validated Parameter set
-    pub fn validate_log_entry(&mut self, log_entry: &LogEntryState) -> Result<bool, DIDWebVHError> {
+    /// highest_version_number is required so we don't mistakenly use future witness proofs
+    /// for unpublished LogEntries
+    pub fn validate_log_entry(
+        &mut self,
+        log_entry: &LogEntryState,
+        highest_version_number: u32,
+    ) -> Result<(), DIDWebVHError> {
         // Determine witnesses for this LogEntry
         let Some(Some(witnesses)) = &log_entry.validated_parameters.active_witness else {
             // There are no active witnesses for this LogEntry
-            return Ok(true);
+            return Ok(());
         };
 
         // Get the version_number for this LogEntry
@@ -30,6 +35,23 @@ impl WitnessProofCollection {
                 continue;
             };
 
+            debug!(
+                "oldest_id ({}) >  highest_version_number ({})",
+                oldest_id, highest_version_number
+            );
+            if oldest_id > &highest_version_number {
+                // This proof is for a future LogEntry, skip it
+                debug!(
+                    "LogEntry ({}): Skipping witness proof from {} (oldest: {}, highest: {})",
+                    log_entry.log_entry.version_id, w.id, oldest_id, highest_version_number
+                );
+                continue;
+            }
+
+            debug!(
+                "oldest_id ({}) >  version_number ({})",
+                oldest_id, version_number
+            );
             if oldest_id > &version_number {
                 // This proof is older than the current LogEntry, skip it
                 debug!(
@@ -65,13 +87,16 @@ impl WitnessProofCollection {
                 "LogEntry ({}): Witness threshold ({}) not met. Only ({} valid proofs!",
                 log_entry.log_entry.version_id, witnesses.threshold, valid_proofs
             );
-            Ok(false)
+            Err(DIDWebVHError::WitnessProofError(format!(
+                "Witness proof threshold ({}) was not met. Only ({}) proofs were validated",
+                witnesses.threshold, valid_proofs
+            )))
         } else {
             debug!(
                 "LogEntry ({}): Witness proofs fully passed",
                 log_entry.log_entry.version_id
             );
-            Ok(true)
+            Ok(())
         }
     }
 }
