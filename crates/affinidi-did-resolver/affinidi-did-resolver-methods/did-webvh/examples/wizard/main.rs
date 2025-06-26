@@ -6,15 +6,14 @@ use crate::{updating::edit_did, witness::witness_log_entry};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk::dids::{DID, KeyType};
 use ahash::HashMap;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
-    DIDWebVHError, SCID_HOLDER,
-    log_entry::LogEntry,
+    DIDWebVHError, DIDWebVHState, SCID_HOLDER,
     parameters::Parameters,
     url::WebVHURL,
-    witness::{Witness, Witnesses},
+    witness::{Witness, Witnesses, proofs::WitnessProofCollection},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -173,6 +172,8 @@ async fn main() -> Result<()> {
 }
 
 async fn create_new_did() -> Result<()> {
+    let mut didwebvh = DIDWebVHState::default();
+
     // ************************************************************************
     // Step 1: Get the URLs for this DID
     // ************************************************************************
@@ -274,13 +275,20 @@ async fn create_new_did() -> Result<()> {
     // Step 5: Create preliminary JSON Log Entry
     // ************************************************************************
 
-    let log_entry = LogEntry::create_first_entry(
+    let log_entry_result = didwebvh.create_log_entry(
         None, // No version time, defaults to now
         &did_document,
         &parameters,
         authorizing_keys.first().unwrap(),
-    )
-    .await?;
+    )?;
+
+    let log_entry = if let Some(log_entry_state) = &log_entry_result {
+        &log_entry_state.log_entry
+    } else {
+        bail!(
+            "This is likely an SDK bug. Creating first DID succeeded, but no LogEntry has been logged and saved."
+        );
+    };
 
     println!(
         "{}\n{}",
@@ -292,7 +300,7 @@ async fn create_new_did() -> Result<()> {
     // Step 6: Valide the LogEntry
     // ************************************************************************
     // Validate the Log Entry
-    let meta_data = log_entry.verify_log_entry(None, None)?;
+    let meta_data = log_entry.verify_log_entry(None, None, None)?;
     println!(
         "{}\n{}\n{}",
         style("Log Entry Metadata:").color256(69),
@@ -303,8 +311,10 @@ async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Step 7: Create the witness proofs if needed?
     // ************************************************************************
-    let witness_proofs = witness_log_entry(
-        &log_entry,
+    let mut witness_proofs = WitnessProofCollection::default();
+    let new_proofs = witness_log_entry(
+        &mut witness_proofs,
+        log_entry,
         &log_entry.parameters.witness,
         &authorization_secrets,
     )?;
@@ -341,7 +351,7 @@ async fn create_new_did() -> Result<()> {
             );
 
             // Save the witness proofs
-            if let Some(witness_proofs) = witness_proofs {
+            if new_proofs.is_some() {
                 witness_proofs.save_to_file(&[start, "-witness.json"].concat())?;
             }
             println!(

@@ -1,6 +1,6 @@
 use std::env;
 
-use did_webvh::DIDWebVH;
+use did_webvh::resolve::DIDWebVH;
 use ssi::dids::{DID, DIDResolver};
 
 #[tokio::main]

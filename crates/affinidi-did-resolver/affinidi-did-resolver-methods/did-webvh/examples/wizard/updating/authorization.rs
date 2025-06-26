@@ -8,18 +8,18 @@ use affinidi_secrets_resolver::secrets::Secret;
 use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
-use did_webvh::{DIDWebVHError, log_entry::LogEntry, parameters::Parameters};
+use did_webvh::{DIDWebVHError, parameters::Parameters};
 
 /// Handles all possible states of updating updateKeys including pre-rotation and non-pre-rotation
 /// modes. updateKeys and NextKeyHashes are modified here
 /// Returns authorization key for this update
 pub fn update_authorization_keys(
-    old_log_entry: &LogEntry,
+    old_params: &Parameters,
     new_params: &mut Parameters,
     existing_secrets: &mut ConfigInfo,
 ) -> Result<()> {
     // What mode are we operating in?
-    if old_log_entry.parameters.pre_rotation_active {
+    if old_params.pre_rotation_active {
         // Pre-Rotation mode
 
         // Disable pre-rotation mode?
@@ -31,10 +31,8 @@ pub fn update_authorization_keys(
             // Disabling pre-rotation mode
             new_params.pre_rotation_active = false;
             new_params.next_key_hashes = Some(None);
-            let update_keys = select_update_keys_from_next_hashes(
-                &old_log_entry.parameters.next_key_hashes,
-                existing_secrets,
-            )?;
+            let update_keys =
+                select_update_keys_from_next_hashes(&old_params.next_key_hashes, existing_secrets)?;
             let mut tmp_keys = Vec::new();
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
@@ -46,10 +44,8 @@ pub fn update_authorization_keys(
             new_params.pre_rotation_active = true;
 
             // Select update_keys for this update
-            let update_keys = select_update_keys_from_next_hashes(
-                &old_log_entry.parameters.next_key_hashes,
-                existing_secrets,
-            )?;
+            let update_keys =
+                select_update_keys_from_next_hashes(&old_params.next_key_hashes, existing_secrets)?;
             let mut tmp_keys = Vec::new();
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
@@ -66,7 +62,7 @@ pub fn update_authorization_keys(
         }
     } else {
         // Non pre-rotation mode
-        new_params.active_update_keys = old_log_entry.parameters.active_update_keys.clone();
+        new_params.active_update_keys = old_params.active_update_keys.clone();
         new_params.pre_rotation_active = false;
 
         // Do you want to enable pre-rotation mode?

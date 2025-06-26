@@ -8,11 +8,13 @@ use did_webvh::{
     witness::{Witnesses, proofs::WitnessProofCollection},
 };
 
+/// Witnesses a LogEntry with the active LogEntries
 pub fn witness_log_entry(
+    witness_proofs: &mut WitnessProofCollection,
     log_entry: &LogEntry,
     witnesses: &Option<Option<Witnesses>>,
     secrets: &ConfigInfo,
-) -> Result<Option<WitnessProofCollection>> {
+) -> Result<Option<()>> {
     let Some(Some(witnesses)) = witnesses else {
         println!(
             "{}",
@@ -29,7 +31,6 @@ pub fn witness_log_entry(
         style(") proofs from witnesses").color256(69)
     );
 
-    let mut proofs = WitnessProofCollection(Vec::new());
     let mut doc_to_sign: SigningDocument = log_entry.try_into()?;
     for witness in &witnesses.witnesses {
         // Get secret for Witness
@@ -47,8 +48,8 @@ pub fn witness_log_entry(
 
         // Save proof to collection
         if let Some(proof) = &doc_to_sign.proof {
-            proofs
-                .add_proof(&log_entry.version_id, proof)
+            witness_proofs
+                .add_proof(&log_entry.version_id, proof, false)
                 .map_err(|e| {
                     DIDWebVHError::WitnessProofError(format!("Error adding proof: {}", e))
                 })?;
@@ -67,13 +68,16 @@ pub fn witness_log_entry(
             bail!("No proof generated from witness ({})!", witness.id);
         }
     }
+    // Strip out any duplicate records where we can
+    witness_proofs.write_optimise_records()?;
+
     println!(
         "{}{}{}{}",
         style("Witnessing completed: ").color256(69),
-        style(proofs.get_proof_count(&log_entry.version_id)).color256(45),
+        style(witness_proofs.get_proof_count(&log_entry.version_id)).color256(45),
         style("/").color256(69),
         style(witnesses.threshold).color256(45),
     );
 
-    Ok(Some(proofs))
+    Ok(Some(()))
 }
