@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
