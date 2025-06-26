@@ -280,7 +280,6 @@ async fn create_new_did() -> Result<()> {
         &did_document,
         &parameters,
         authorizing_keys.first().unwrap(),
-        true,
     )?;
 
     let log_entry = if let Some(log_entry_state) = &log_entry_result {

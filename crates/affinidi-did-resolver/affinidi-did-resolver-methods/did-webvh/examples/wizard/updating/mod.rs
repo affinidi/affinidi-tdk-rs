@@ -101,7 +101,6 @@ pub async fn edit_did() -> Result<()> {
                     DIDWebVHError::LogEntryError("No new LogEntry created".to_string())
                 })?;
 
-                println!("TIMTAM: NewEntry: {:#?}", new_entry);
                 let new_proofs = witness_log_entry(
                     &mut webvh_state.witness_proofs,
                     &new_entry.log_entry,
@@ -191,8 +190,7 @@ async fn create_log_entry(
             new_params.active_update_keys[0]
         );
     };
-    let log_entry_result =
-        didwebvh.create_log_entry(None, &new_state, &new_params, signing_key, true)?;
+    let log_entry_result = didwebvh.create_log_entry(None, &new_state, &new_params, signing_key)?;
 
     let log_entry = if let Some(log_entry_state) = &log_entry_result {
         &log_entry_state.log_entry

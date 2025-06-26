@@ -122,7 +122,6 @@ async fn deactivate_pre_rotation(didwebvh: &mut DIDWebVHState, secrets: &ConfigI
             &last_entry.log_entry.state.clone(),
             &new_params,
             &new_update_key,
-            true,
         )
         .map_err(|e| anyhow!("Couldn't create LogEntry: {}", e))?;
 
@@ -163,7 +162,6 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
             &last_entry.log_entry.state.clone(),
             &new_params,
             &new_update_key,
-            true,
         )
         .map_err(|e| anyhow!("Couldn't create LogEntry: {}", e))?;
 

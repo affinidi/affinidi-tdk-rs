@@ -46,7 +46,7 @@ pub struct WitnessProofCollection {
     /// Mapping of Proofs by witness. Points to the highest versionId
     /// Value = versionId, integer prefix of versionId, Data Integrity Proof
     #[serde(skip)]
-    pub(crate) witness_version: HashMap<String, (Rc<String>, usize, Rc<DataIntegrityProof>)>,
+    pub(crate) witness_version: HashMap<String, (Rc<String>, u32, Rc<DataIntegrityProof>)>,
 }
 
 /// Converts the inner Secret Shadow to a public Shadow Struct
@@ -78,16 +78,22 @@ impl WitnessProofCollection {
                     version_id
                 )));
             };
-            let Ok(id): Result<usize, _> = str::parse(id) else {
+            let Ok(id): Result<u32, _> = str::parse(id) else {
                 return Err(DIDWebVHError::WitnessProofError(format!(
                     "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
                     version_id
                 )));
             };
 
+        let witness_id = if let Some((prefix, _)) = proof.verification_method.split_once("#") {
+            prefix.to_string()
+        } else {
+            proof.verification_method.to_string()
+        };
+
         if !future_entry {
             // Check if proof has an earlier version, remove it if so
-            if let Some((p_version, p_id, p)) = self.witness_version.get_mut(&proof.verification_method) {
+            if let Some((p_version, p_id, p)) = self.witness_version.get_mut(&witness_id) {
                 if &id > p_id {
                     // Remove the earlier proof
                     for e in self.proofs.0.iter_mut() {
@@ -118,9 +124,9 @@ impl WitnessProofCollection {
                 version_id
         };
 
-        // Updat teh pointer to latest witness version proof
+        // Update the pointer to latest witness version proof
         self.witness_version.insert(
-            proof.verification_method.clone(),
+            witness_id,
             (version_id, id, rc_proof),
         );
 
@@ -150,12 +156,28 @@ impl WitnessProofCollection {
                 file_path, e
             ))
         })?;
-        let collection: WitnessProofCollection = serde_json::from_reader(file).map_err(|e| {
+        let raw: WitnessProofShadow = serde_json::from_reader(file).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
                 "Couldn't deserialize Witness Proofs Data from file ({}): {}",
                 file_path, e
             ))
         })?;
+
+        let mut collection = WitnessProofCollection::default();
+        for version in raw.0 {
+            for proof in version.proof {
+            collection.add_proof(
+                &version.version_id,
+                &proof, // Assuming at least one proof exists
+                false,
+            ).map_err(|e| {
+                DIDWebVHError::WitnessProofError(format!(
+                    "Error adding proof from file ({}): {}",
+                    file_path, e
+                ))
+            })?;
+            }
+        }
         Ok(collection)
     }
 
@@ -195,7 +217,7 @@ impl WitnessProofCollection {
                     v.version_id
                 )));
             };
-            let Ok(id): Result<usize, _> = str::parse(id) else {
+            let Ok(id): Result<u32, _> = str::parse(id) else {
                 return Err(DIDWebVHError::WitnessProofError(format!(
                     "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
                     v.version_id
@@ -227,7 +249,7 @@ impl WitnessProofCollection {
                     "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n", v.version_id);
                 return false;
             };
-            let Ok(id): Result<usize, _> = str::parse(id) else {
+            let Ok(id): Result<u32, _> = str::parse(id) else {
                 warn!(
                     "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!", v.version_id);
             return false;

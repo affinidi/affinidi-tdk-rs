@@ -93,8 +93,6 @@ impl DIDWebVHState {
     /// document is the DID Document as a JSON Value
     /// parameters are the Parameters for the Log Entry (Full set of parameters)
     /// signing_key is the Secret used to sign the Log Entry
-    /// witness if set to true will trigger the witnessing of this log entry
-    ///   if witness is false, then an additional witnessing step may be required
     ///   NOTE: A diff comparison to previous parameters is automatically done
     /// signing_key is the Secret used to sign the Log Entry
     pub fn create_log_entry(
@@ -103,7 +101,6 @@ impl DIDWebVHState {
         document: &Value,
         parameters: &Parameters,
         signing_key: &Secret,
-        witness: bool,
     ) -> Result<Option<&LogEntryState>, DIDWebVHError> {
         let now = Utc::now();
 
