@@ -8,6 +8,12 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 26th June 2025
+
+### Mediator (0.10.12)
+
+* **FIX:** Code error on envelope `from` checks.
+
 ## 24th June 2025
 
 ### Mediator (0.10.11)

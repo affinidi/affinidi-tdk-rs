@@ -298,7 +298,7 @@ pub async fn authentication_response(
                 .into());
             }
         };
- 
+
         // Authentication messages MUST be signed and authenticated!
         if envelope.metadata.authenticated && envelope.metadata.encrypted && envelope.metadata.non_repudiation {
             debug!("Authentication message is properly signed and encrypted")
@@ -320,10 +320,10 @@ pub async fn authentication_response(
                 )
                 .into());
         }
-        
+
         // Check that the inner plaintext from matches the envelope skid
         if let Some(msg_from) = &msg.from {
-            if msg_from != &envelope.from_did.unwrap_or_default() {
+            if msg_from != envelope.from_did.as_ref().unwrap_or(&String::new()) {
                 // Inner and outer envelope don't match
             return Err(MediatorError::MediatorError(
                 85,
@@ -363,7 +363,7 @@ pub async fn authentication_response(
 
         // Check that the inner plaintext from matches the envelope skid
         if let Some(msg_from) = &msg.from {
-            if msg_from != &envelope.from_did.unwrap_or_default() {
+            if msg_from != envelope.from_did.as_ref().unwrap_or(&String::new()) {
                 // Inner and outer envelope don't match
             return Err(MediatorError::MediatorError(
                 85,
@@ -758,7 +758,7 @@ pub async fn authentication_refresh(
                 .into());
             }
         };
- 
+
         // Authentication messages MUST be signed and authenticated!
         if envelope.metadata.authenticated && envelope.metadata.encrypted && envelope.metadata.non_repudiation {
             debug!("Authentication message is properly signed and encrypted")
