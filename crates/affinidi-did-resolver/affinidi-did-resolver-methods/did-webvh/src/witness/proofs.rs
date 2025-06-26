@@ -8,7 +8,7 @@ use std::{fs::File, rc::Rc};
 
 use crate::DIDWebVHError;
 use affinidi_data_integrity::DataIntegrityProof;
-use ahash::{HashMap};
+use ahash::HashMap;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -33,7 +33,7 @@ pub struct WitnessProof {
     /// Internally used for partial proofs
     /// Set to true if versionId relates to an unpublished LogEntry
     /// Defauklts to false
-    #[serde(skip )]
+    #[serde(skip)]
     pub future_entry: bool,
 }
 
@@ -42,7 +42,6 @@ pub struct WitnessProof {
 pub struct WitnessProofCollection {
     /// Raw Witness Proofs
     pub(crate) proofs: WitnessProofShadow,
-
 
     /// Mapping of Proofs by witness. Points to the highest versionId
     /// Value = versionId, integer prefix of versionId, Data Integrity Proof
@@ -54,9 +53,11 @@ pub struct WitnessProofCollection {
 impl TryFrom<WitnessProofShadow> for WitnessProofCollection {
     type Error = DIDWebVHError;
 
-    fn try_from(proofs:  WitnessProofShadow) -> Result<Self, Self::Error> {
-
-        Ok(WitnessProofCollection{proofs, ..Default::default()})
+    fn try_from(proofs: WitnessProofShadow) -> Result<Self, Self::Error> {
+        Ok(WitnessProofCollection {
+            proofs,
+            ..Default::default()
+        })
     }
 }
 
@@ -73,18 +74,18 @@ impl WitnessProofCollection {
         proof: &DataIntegrityProof,
         future_entry: bool,
     ) -> Result<(), DIDWebVHError> {
-            let Some((id, _)) = version_id.split_once('-') else {
-                return Err(DIDWebVHError::WitnessProofError(format!(
-                    "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
-                    version_id
-                )));
-            };
-            let Ok(id): Result<u32, _> = str::parse(id) else {
-                return Err(DIDWebVHError::WitnessProofError(format!(
-                    "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
-                    version_id
-                )));
-            };
+        let Some((id, _)) = version_id.split_once('-') else {
+            return Err(DIDWebVHError::WitnessProofError(format!(
+                "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
+                version_id
+            )));
+        };
+        let Ok(id): Result<u32, _> = str::parse(id) else {
+            return Err(DIDWebVHError::WitnessProofError(format!(
+                "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
+                version_id
+            )));
+        };
 
         let witness_id = if let Some((prefix, _)) = proof.verification_method.split_once("#") {
             prefix.to_string()
@@ -99,7 +100,8 @@ impl WitnessProofCollection {
                     // Remove the earlier proof
                     for e in self.proofs.0.iter_mut() {
                         if e.version_id == *p_version {
-                            e.proof.retain(|i| i.verification_method != p.verification_method);
+                            e.proof
+                                .retain(|i| i.verification_method != p.verification_method);
                         }
                     }
                 }
@@ -110,26 +112,29 @@ impl WitnessProofCollection {
         }
 
         let rc_proof = Rc::new(proof.clone());
-        let version_id = if let Some(record) = self.proofs.0.iter_mut().find(|p| *p.version_id == version_id) {
+        let version_id = if let Some(record) = self
+            .proofs
+            .0
+            .iter_mut()
+            .find(|p| *p.version_id == version_id)
+        {
             // versionId already exists
             record.proof.push(rc_proof.clone());
             record.version_id.clone()
         } else {
             // Need to create a new WitnessProof record
-                let version_id = Rc::new(version_id.to_string());
+            let version_id = Rc::new(version_id.to_string());
             self.proofs.0.push(WitnessProof {
                 version_id: version_id.clone(),
                 future_entry,
                 proof: vec![rc_proof.clone()],
             });
-                version_id
+            version_id
         };
 
         // Update the pointer to latest witness version proof
-        self.witness_version.insert(
-            witness_id,
-            (version_id, id, rc_proof),
-        );
+        self.witness_version
+            .insert(witness_id, (version_id, id, rc_proof));
 
         Ok(())
     }
@@ -143,7 +148,8 @@ impl WitnessProofCollection {
     /// Returns 0 if no proofs exist for that versionId (or not found)
     /// This is a safe fail for how witness proofs are handled
     pub fn get_proof_count(&self, version_id: &str) -> usize {
-        self.proofs.0
+        self.proofs
+            .0
             .iter()
             .find(|p| *p.version_id == version_id)
             .map_or(0, |p| p.proof.len())
@@ -164,7 +170,7 @@ impl WitnessProofCollection {
             ))
         })?;
 
-        Ok( WitnessProofCollection {
+        Ok(WitnessProofCollection {
             proofs,
             ..Default::default()
         })
@@ -196,7 +202,10 @@ impl WitnessProofCollection {
     /// version number to a specific value.
     /// This is can be used to exclude future proofs that are not yet valid or match
     /// a published LogEntry
-    pub fn generate_proof_state(&mut self, highest_version_number: u32) -> Result<(), DIDWebVHError> {
+    pub fn generate_proof_state(
+        &mut self,
+        highest_version_number: u32,
+    ) -> Result<(), DIDWebVHError> {
         let mut new_proofs_state = WitnessProofCollection::default();
 
         for version in &self.proofs.0 {
@@ -219,33 +228,34 @@ impl WitnessProofCollection {
                 continue;
             }
             for proof in &version.proof {
-            new_proofs_state.add_proof(
-                &version.version_id,
-                proof, // Assuming at least one proof exists
-                false,
-            ).map_err(|e| {
-                DIDWebVHError::WitnessProofError(format!(
-                    "Error adding witness proof state to table: {}",
-                    e
-                ))
-            })?;
+                new_proofs_state
+                    .add_proof(
+                        &version.version_id,
+                        proof, // Assuming at least one proof exists
+                        false,
+                    )
+                    .map_err(|e| {
+                        DIDWebVHError::WitnessProofError(format!(
+                            "Error adding witness proof state to table: {}",
+                            e
+                        ))
+                    })?;
             }
         }
 
         self.witness_version = new_proofs_state.witness_version;
 
         Ok(())
-
     }
 
     /// Runs through and removes witness proofs from earlier LogEntries that are not required
-    pub fn write_optimise_records(& mut self) -> Result<(), DIDWebVHError> {
+    pub fn write_optimise_records(&mut self) -> Result<(), DIDWebVHError> {
         // Map out which versions each witness is visible in
         for v in &self.proofs.0 {
-           if v.future_entry {
+            if v.future_entry {
                 // Skip this versionId as it is for a future entry and thus needs to be kept
                 continue;
-            } 
+            }
             let Some((id, _)) = v.version_id.split_once('-') else {
                 return Err(DIDWebVHError::WitnessProofError(format!(
                     "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
@@ -261,13 +271,17 @@ impl WitnessProofCollection {
 
             // Walk through each proof for this versionID
             for p in &v.proof {
-                if let Some((_, proof_id, _)) = self.witness_version.get_mut(&p.verification_method) {
+                if let Some((_, proof_id, _)) = self.witness_version.get_mut(&p.verification_method)
+                {
                     if &id > proof_id {
-                        *proof_id  = id;
+                        *proof_id = id;
                     }
                 } else {
                     // Create new witness record
-                    self.witness_version.insert(p.verification_method.clone(), (v.version_id.clone(), id , p.clone()));
+                    self.witness_version.insert(
+                        p.verification_method.clone(),
+                        (v.version_id.clone(), id, p.clone()),
+                    );
                 }
             }
         }
@@ -293,7 +307,7 @@ impl WitnessProofCollection {
             // Remove older proofs
             v.proof
                 .retain(|p| &id >= if let Some((_, proof_id, _)) = self.witness_version.get(&p.verification_method) { proof_id } else {&0});
-            
+
             // If version has no proofs, then remove it
              !v.proof.is_empty()
         });
