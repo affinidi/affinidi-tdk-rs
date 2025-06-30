@@ -74,6 +74,10 @@ impl DIDWebVHState {
 
         // Step 4: Validate the witness proofs
         for log_entry in self.log_entries.iter_mut() {
+            debug!(
+                "Witness Proof Validating: {}",
+                log_entry.log_entry.version_id
+            );
             self.witness_proofs
                 .validate_log_entry(log_entry, highest_version_number)?;
             log_entry.validation_status = LogEntryValidationStatus::Ok;

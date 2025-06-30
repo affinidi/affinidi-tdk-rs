@@ -87,15 +87,11 @@ impl WitnessProofCollection {
             )));
         };
 
-        let witness_id = if let Some((prefix, _)) = proof.verification_method.split_once("#") {
-            prefix.to_string()
-        } else {
-            proof.verification_method.to_string()
-        };
-
         if !future_entry {
             // Check if proof has an earlier version, remove it if so
-            if let Some((p_version, p_id, p)) = self.witness_version.get_mut(&witness_id) {
+            if let Some((p_version, p_id, p)) =
+                self.witness_version.get_mut(&proof.verification_method)
+            {
                 if &id > p_id {
                     // Remove the earlier proof
                     for e in self.proofs.0.iter_mut() {
@@ -133,8 +129,10 @@ impl WitnessProofCollection {
         };
 
         // Update the pointer to latest witness version proof
-        self.witness_version
-            .insert(witness_id, (version_id, id, rc_proof));
+        self.witness_version.insert(
+            proof.verification_method.clone(),
+            (version_id, id, rc_proof),
+        );
 
         Ok(())
     }
@@ -198,7 +196,7 @@ impl WitnessProofCollection {
         self.proofs.0.iter().find(|p| *p.version_id == version_id)
     }
 
-    /// Useed to regenerate the proof state table when you want ot cap the LogEntry
+    /// Useed to regenerate the proof state table when you want to cap the LogEntry
     /// version number to a specific value.
     /// This is can be used to exclude future proofs that are not yet valid or match
     /// a published LogEntry

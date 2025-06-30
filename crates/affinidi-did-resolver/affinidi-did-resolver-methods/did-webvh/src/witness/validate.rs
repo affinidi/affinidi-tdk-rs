@@ -29,7 +29,10 @@ impl WitnessProofCollection {
         // For each witness, check if there is a proof available
         let mut valid_proofs = 0;
         for w in &witnesses.witnesses {
-            let Some((_, oldest_id, proof)) = self.witness_version.get(&w.id) else {
+            let key = w.id.split_at(8);
+            let Some((_, oldest_id, proof)) =
+                self.witness_version.get(&[&w.id, "#", key.1].concat())
+            else {
                 // No proof available for this witness, threshold will catch if too few proofs
                 debug!("No Witness proofs exist for witness ({})", w.id);
                 continue;

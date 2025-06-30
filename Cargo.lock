@@ -233,7 +233,7 @@ dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "clap",
- "console",
+ "console 0.15.11",
  "dialoguer",
  "did-peer",
  "rcgen",
@@ -272,7 +272,7 @@ dependencies = [
  "axum-server",
  "base64 0.22.1",
  "chrono",
- "console",
+ "console 0.15.11",
  "deadpool-redis",
  "dialoguer",
  "hostname",
@@ -343,7 +343,7 @@ dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "clap",
- "console",
+ "console 0.15.11",
  "dialoguer",
  "did-peer",
  "futures-util",
@@ -995,9 +995,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-http-client"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f491388e741b7ca73b24130ff464c1478acc34d5b331b7dd0a2ee4643595a15"
+checksum = "f108f1ca850f3feef3009bdcc977be201bca9a91058864d9de0684e64514bee0"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
@@ -1937,6 +1937,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e09ced7ebbccb63b4c65413d821f2e00ce54c5ca4514ddc6b3c892fdbcbc69d"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "once_cell",
+ "unicode-width 0.2.0",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2551,7 +2564,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "658bce805d770f407bc62102fca7c2c64ceef2fbcb2b8bd19d2765ce093980de"
 dependencies = [
- "console",
+ "console 0.15.11",
  "shell-words",
  "tempfile",
  "thiserror 1.0.69",
@@ -2729,11 +2742,12 @@ dependencies = [
  "ahash 0.8.12",
  "anyhow",
  "chrono",
- "console",
+ "console 0.16.0",
  "dialoguer",
  "iref",
  "multibase 0.9.1",
  "multihash 0.19.3",
+ "rand 0.9.1",
  "reqwest 0.12.20",
  "serde",
  "serde_json",
@@ -3376,7 +3390,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http 0.2.12",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3395,7 +3409,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http 1.3.1",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3965,9 +3979,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.9.0"
+version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cea70ddb795996207ad57735b50c5982d8844f38ba9ee5f1aedcfb708a2aa11e"
+checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
 dependencies = [
  "equivalent",
  "hashbrown 0.15.4",
@@ -4179,7 +4193,7 @@ dependencies = [
  "contextual",
  "educe 0.4.23",
  "futures",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-ld-context-processing",
  "json-ld-core",
@@ -4219,7 +4233,7 @@ dependencies = [
  "educe 0.4.23",
  "futures",
  "hashbrown 0.13.2",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-ld-syntax",
  "json-syntax",
@@ -4247,7 +4261,7 @@ dependencies = [
  "contextual",
  "educe 0.4.23",
  "futures",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-ld-context-processing",
  "json-ld-core",
@@ -4265,7 +4279,7 @@ version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "344f0a6042745d76a358b808878ae0d125a472de30b3eabc9eb82c6cf7f0c23e"
 dependencies = [
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-ld-core",
  "json-syntax",
@@ -4285,7 +4299,7 @@ dependencies = [
  "decoded-char",
  "educe 0.4.23",
  "hashbrown 0.13.2",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-syntax",
  "langtag",
@@ -4370,9 +4384,9 @@ dependencies = [
 
 [[package]]
 name = "kasuari"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "def1b67294a9fdc95eeeeafd1209c7a1b8a82aa0bf80ac2ab2a7d0318e9c7622"
+checksum = "96d9e0d6a8bf886abccc1cbcac7d74f9000ae5882aedc4a9042188bbc9cd4487"
 dependencies = [
  "hashbrown 0.15.4",
  "thiserror 2.0.12",
@@ -6181,7 +6195,7 @@ checksum = "4ccfa6b3af8f44db8d700038d47a9e8c8cc4126cdcafc069e82116903420631d"
 dependencies = [
  "contextual",
  "educe 0.5.11",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "langtag",
  "raw-btree",
@@ -6986,7 +7000,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "schemars",
  "serde",
  "serde_derive",
@@ -7625,7 +7639,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9bd7124d707688e6f5b0f42537978b461d0f8871a7e9a703a1a6ea378b6ddbe"
 dependencies = [
  "hex",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "json-syntax",
  "keccak-hash",
@@ -7765,7 +7779,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c74d0aaccc80259913b4f2d456f2150ab2e8a4e8daf3b8edeaf527bb978e710b"
 dependencies = [
  "combination",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "iref",
  "linked-data",
  "rdf-types",
@@ -7780,7 +7794,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5799e6fffa02065f2caf34735cb84dfac518248c937aade04cd17cd68fae5b45"
 dependencies = [
  "base64 0.22.1",
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -8624,7 +8638,7 @@ version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
- "indexmap 2.9.0",
+ "indexmap 2.10.0",
  "serde",
  "serde_spanned",
  "toml_datetime",

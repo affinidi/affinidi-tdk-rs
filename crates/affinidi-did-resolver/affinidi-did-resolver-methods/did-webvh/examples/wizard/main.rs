@@ -297,7 +297,7 @@ async fn create_new_did() -> Result<()> {
     );
 
     // ************************************************************************
-    // Step 6: Valide the LogEntry
+    // Step 6: Validate the LogEntry
     // ************************************************************************
     // Validate the Log Entry
     let meta_data = log_entry.verify_log_entry(None, None, None)?;
