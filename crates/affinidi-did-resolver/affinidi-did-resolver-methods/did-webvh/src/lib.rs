@@ -140,7 +140,7 @@ impl DIDWebVHState {
                 // Only use the difference of the parameters
                 parameters: last_log_entry.validated_parameters.diff(parameters)?,
                 state: document.clone(),
-                proof: None,
+                proof: Vec::new(),
             }
         } else {
             // First LogEntry so we need to set up a few things first
@@ -152,7 +152,7 @@ impl DIDWebVHState {
                     .unwrap_or_else(|| now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
                 parameters: parameters.clone(),
                 state: document.clone(),
-                proof: None,
+                proof: Vec::new(),
             };
             log_entry.parameters.scid = Some(SCID_HOLDER.to_string());
 
@@ -162,15 +162,13 @@ impl DIDWebVHState {
             // Replace all instances of {SCID} with the actual SCID
             let le_str = serde_json::to_string(&log_entry).map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't serialize LogEntry to JSON. Reason: {}",
-                    e
+                    "Couldn't serialize LogEntry to JSON. Reason: {e}",
                 ))
             })?;
 
             serde_json::from_str(&le_str.replace(SCID_HOLDER, &scid)).map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't deserialize LogEntry from SCID conversion. Reason: {}",
-                    e
+                    "Couldn't deserialize LogEntry from SCID conversion. Reason: {e}",
                 ))
             })?
         };
@@ -178,8 +176,7 @@ impl DIDWebVHState {
         // Create the entry hash for this Log Entry
         let entry_hash = log_entry.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate entryHash for first LogEntry. Reason: {}",
-                e
+                "Couldn't generate entryHash for first LogEntry. Reason: {e}",
             ))
         })?;
 
@@ -212,17 +209,21 @@ impl DIDWebVHState {
                     ));
                 }
             } else {
+                // First LogEntry
                 log_entry.version_id = ["1-", &entry_hash].concat();
                 let Some(scid) = log_entry.parameters.scid.clone() else {
                     return Err(DIDWebVHError::LogEntryError(
                         "First LogEntry does not have a SCID!".to_string(),
                     ));
                 };
+
+                let mut validated_params = log_entry.parameters.clone();
+                validated_params.active_witness = log_entry.parameters.witness.clone();
                 (
                     log_entry.version_time.clone(),
                     scid,
                     log_entry.parameters.portable.unwrap_or_default(),
-                    log_entry.parameters.clone(),
+                    validated_params,
                 )
             };
 
@@ -231,12 +232,17 @@ impl DIDWebVHState {
 
         DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, signing_key).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                e
+                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
             ))
         })?;
 
-        log_entry.proof = log_entry_unsigned.proof;
+        if let Some(proof) = log_entry_unsigned.proof {
+            log_entry.proof.push(proof);
+        } else {
+            return Err(DIDWebVHError::SCIDError(
+                "LogEntry proof is missing after signing".to_string(),
+            ));
+        }
 
         // Generate metadata for this LogEntry
         let metadata = MetaData {
@@ -297,7 +303,7 @@ mod tests {
         let parsed = serde_json::to_value(&params).expect("Couldn't parse parameters");
         let pretty = serde_json::to_string_pretty(&params).expect("Couldn't parse parameters");
 
-        println!("Parsed: {}", pretty);
+        println!("Parsed: {pretty}");
 
         assert_eq!(parsed.get("next_key_hashes"), None);
         assert!(parsed.get("witness").is_some_and(|s| s.is_null()));

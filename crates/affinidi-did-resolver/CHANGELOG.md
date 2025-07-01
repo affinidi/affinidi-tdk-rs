@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+### June 2025
+
+## DID webvh method (0.1.6)
+
+* **FIX:** Minor tweaks to witness proof handling to properly use `did:key`
+* **MAINTENANCE:** Addressing Rust clippy warnings due to new linting rules
+* **MAINTENANCE:** Adding Documentation
+* **FIX:** SCID creation was incorrectly using base58 multiencode
+* **FIX:** `active_witness` was leaking out from Parameters
+* **FIX:** `proof` attribute on LogEntry was not an array, now is an array
+* **FEATURE:** `decade_test` example added to create and validate larger DID
+
 ### 26th June 2025
 
 ## DID webvh method (0.1.5)

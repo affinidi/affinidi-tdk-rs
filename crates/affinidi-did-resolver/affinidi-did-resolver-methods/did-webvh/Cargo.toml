@@ -21,6 +21,7 @@ affinidi-data-integrity.workspace = true
 affinidi-secrets-resolver.workspace = true
 
 ahash = { version = "0.8", features = ["serde"] }
+base58 = "0.2.0"
 chrono = { version = "0.4", features = ["serde"] }
 multibase = "0.9"
 multihash = "0.19"

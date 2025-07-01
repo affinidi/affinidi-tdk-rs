@@ -130,7 +130,7 @@ fn modify_witness_nodes(
                 let (did, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
                 println!(
                     "{} {}",
-                    style(format!("Witness #{:02}:", i)).color256(69),
+                    style(format!("Witness #{i:02}:")).color256(69),
                     style(&did).color256(141)
                 );
                 println!(

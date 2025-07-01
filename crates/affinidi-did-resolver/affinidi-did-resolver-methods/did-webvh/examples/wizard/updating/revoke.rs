@@ -43,8 +43,7 @@ pub async fn revoke_did(
 
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt(format!(
-            "Are you sure you want to deactivate the DID({})?",
-            our_did
+            "Are you sure you want to deactivate the DID({our_did})?",
         ))
         .default(false)
         .interact()?

@@ -5,7 +5,7 @@ use crate::{DIDWebVHError, parameters::Parameters, witness::Witnesses};
 use affinidi_data_integrity::{
     DataIntegrityProof, SignedDocument, SigningDocument, verification_proof::verify_data,
 };
-use multibase::Base;
+use base58::ToBase58;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,8 +50,8 @@ pub struct LogEntry {
     pub state: Value,
 
     /// Data Integrity Proof
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub proof: Option<DataIntegrityProof>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub proof: Vec<DataIntegrityProof>,
 }
 
 impl LogEntry {
@@ -62,29 +62,26 @@ impl LogEntry {
             .append(true)
             .open(file_path)
             .map_err(|e| {
-                DIDWebVHError::LogEntryError(format!("Couldn't open file {}: {}", file_path, e))
+                DIDWebVHError::LogEntryError(format!("Couldn't open file {file_path}: {e}"))
             })?;
 
         file.write_all(
             serde_json::to_string(self)
                 .map_err(|e| {
                     DIDWebVHError::LogEntryError(format!(
-                        "Couldn't serialize LogEntry to JSON. Reason: {}",
-                        e
+                        "Couldn't serialize LogEntry to JSON. Reason: {e}",
                     ))
                 })?
                 .as_bytes(),
         )
         .map_err(|e| {
             DIDWebVHError::LogEntryError(format!(
-                "Couldn't append LogEntry to file({}). Reason: {}",
-                file_path, e
+                "Couldn't append LogEntry to file({file_path}). Reason: {e}",
             ))
         })?;
         file.write_all("\n".as_bytes()).map_err(|e| {
             DIDWebVHError::LogEntryError(format!(
-                "Couldn't append LogEntry to file({}). Reason: {}",
-                file_path, e
+                "Couldn't append LogEntry to file({file_path}). Reason: {e}",
             ))
         })?;
 
@@ -96,8 +93,7 @@ impl LogEntry {
     pub(crate) fn generate_scid(&self) -> Result<String, DIDWebVHError> {
         self.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate SCID from preliminary LogEntry. Reason: {}",
-                e
+                "Couldn't generate SCID from preliminary LogEntry. Reason: {e}",
             ))
         })
     }
@@ -105,10 +101,7 @@ impl LogEntry {
     /// Calculates a Log Entry hash
     pub fn generate_log_entry_hash(&self) -> Result<String, DIDWebVHError> {
         let jcs = to_string(self).map_err(|e| {
-            DIDWebVHError::SCIDError(format!(
-                "Couldn't generate JCS from LogEntry. Reason: {}",
-                e
-            ))
+            DIDWebVHError::SCIDError(format!("Couldn't generate JCS from LogEntry. Reason: {e}",))
         })?;
         debug!("JCS for LogEntry hash: {}", jcs);
 
@@ -116,12 +109,10 @@ impl LogEntry {
         let hash_encoded = Multihash::<32>::wrap(0x12, Sha256::digest(jcs.as_bytes()).as_slice())
             .map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't create multihash encoding for LogEntry. Reason: {}",
-                e
+                "Couldn't create multihash encoding for LogEntry. Reason: {e}",
             ))
         })?;
-
-        Ok(multibase::encode(Base::Base58Btc, hash_encoded.to_bytes()))
+        Ok(hash_encoded.to_bytes().to_base58())
     }
 
     pub fn validate_witness_proof(
@@ -135,15 +126,14 @@ impl LogEntry {
             "proof".to_string(),
             serde_json::to_value(&self.proof).map_err(|e| {
                 DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize LogEntry Proof to JSON Value: {}",
-                    e
+                    "Couldn't serialize LogEntry Proof to JSON Value: {e}",
                 ))
             })?,
         );
 
         // Verify the Data Integrity Proof against the Signing Document
         verify_data(&signing_doc).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {}", e))
+            DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {e}"))
         })?;
 
         Ok(true)
@@ -158,15 +148,13 @@ impl LogEntry {
     pub fn parse_version_id_fields(version_id: &str) -> Result<(u32, String), DIDWebVHError> {
         let Some((id, hash)) = version_id.split_once('-') else {
             return Err(DIDWebVHError::ValidationError(format!(
-                "versionID ({}) doesn't match format <int>-<hash>",
-                version_id
+                "versionID ({version_id}) doesn't match format <int>-<hash>",
             )));
         };
         let id = id.parse::<u32>().map_err(|e| {
-            DIDWebVHError::ValidationError(format!(
-                "Failed to parse version ID ({}) as u32: {}",
-                id, e
-            ))
+            DIDWebVHError::ValidationError(
+                format!("Failed to parse version ID ({id}) as u32: {e}",),
+            )
         })?;
         Ok((id, hash.to_string()))
     }
@@ -197,8 +185,7 @@ impl TryFrom<&LogEntry> for SigningDocument {
             "parameters".to_string(),
             serde_json::to_value(&log_entry.parameters).map_err(|e| {
                 DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize Paramaters to JSON Value: {}",
-                    e
+                    "Couldn't serialize Paramaters to JSON Value: {e}",
                 ))
             })?,
         );
@@ -209,13 +196,12 @@ impl TryFrom<&LogEntry> for SigningDocument {
 
         // If proof already exists in the document, then add it to extra as a signature will be
         // created from it
-        if let Some(proof) = &log_entry.proof {
+        if !log_entry.proof.is_empty() {
             signing.extra.insert(
                 "proof".to_string(),
-                serde_json::to_value(proof).map_err(|e| {
-                    DIDWebVHError::LogEntryError(format!(
-                        "Couldn't serialize Data Integrity Proof to JSON Value: {}",
-                        e
+                serde_json::to_value(&log_entry.proof).map_err(|e| {
+                    DIDWebVHError::ParametersError(format!(
+                        "Couldn't serialize LogEntry Proof to JSON Value: {e}",
                     ))
                 })?,
             );
@@ -233,7 +219,7 @@ impl TryFrom<&LogEntry> for SignedDocument {
     fn try_from(log_entry: &LogEntry) -> Result<Self, Self::Error> {
         let mut signing = SignedDocument {
             extra: HashMap::new(),
-            proof: log_entry.proof.clone(),
+            proof: log_entry.proof.first().cloned(),
         };
 
         signing.extra.insert(
@@ -250,8 +236,7 @@ impl TryFrom<&LogEntry> for SignedDocument {
             "parameters".to_string(),
             serde_json::to_value(&log_entry.parameters).map_err(|e| {
                 DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize Paramaters to JSON Value: {}",
-                    e
+                    "Couldn't serialize Paramaters to JSON Value: {e}",
                 ))
             })?,
         );

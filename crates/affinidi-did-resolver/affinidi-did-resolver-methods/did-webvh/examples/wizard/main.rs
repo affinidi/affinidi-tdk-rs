@@ -378,8 +378,7 @@ fn edit_did_document(did_document: &Value) -> Result<Value, DIDWebVHError> {
                 println!("{}", style("Invalid DID Document!").color256(196));
                 println!("\t{}", style(e.to_string()).color256(196));
                 Err(DIDWebVHError::DIDError(format!(
-                    "DID Document isn't valid. Reason: {}",
-                    e
+                    "DID Document isn't valid. Reason: {e}"
                 )))
             }
         }
@@ -738,7 +737,7 @@ fn get_verification_methods(webvh_did: &str, doc: &mut Value) {
     loop {
         let vm_id: String = Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Verification Method ID")
-            .default(format!("{}#key-{}", webvh_did, key_id))
+            .default(format!("{webvh_did}#key-{key_id}"))
             .interact()
             .unwrap();
 
@@ -889,7 +888,7 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
                 // Simple
                 let service_id: String = Input::with_theme(&ColorfulTheme::default())
                     .with_prompt("Service ID")
-                    .default(format!("{}#service-{}", webvh_did, service_id))
+                    .default(format!("{webvh_did}#service-{service_id}"))
                     .interact()
                     .unwrap();
 
@@ -912,7 +911,7 @@ fn add_services(webvh_did: &str, doc: &mut Value) {
             1 => {
                 // Complex
                 let template = default_service_map
-                    .replace("REPLACE", &format!("{}#service-{}", webvh_did, service_id));
+                    .replace("REPLACE", &format!("{webvh_did}#service-{service_id}"));
                 if let Some(service) = Editor::new().extension("json").edit(&template).unwrap() {
                     match serde_json::from_str(&service) {
                         Ok(service) => service,
@@ -1115,7 +1114,7 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
             let (did, key) = DID::generate_did_key(KeyType::Ed25519).unwrap();
             println!(
                 "{} {}",
-                style(format!("Witness #{:02}:", i)).color256(69),
+                style(format!("Witness #{i:02}:")).color256(69),
                 style(&did).color256(141)
             );
             println!(

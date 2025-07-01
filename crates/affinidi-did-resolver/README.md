@@ -2,9 +2,11 @@
 
 Library of useful Decentralized Identifier (DID) libraries.
 
-This resolver running locally will exceed 250k DID Resolutions per second in full cache mode.
+This resolver running locally will exceed 250k DID Resolutions per second in full
+cache mode.
 
-Bypassing the cache for simple computational DIDs like did:key for example, it can exceed 500K resolutions/second.
+Bypassing the cache for simple computational DIDs like did:key for example, it can
+exceed 500K resolutions/second.
 
 The main goal is to cache network bound DID resolutions like did:web or did:ethr etc.
 

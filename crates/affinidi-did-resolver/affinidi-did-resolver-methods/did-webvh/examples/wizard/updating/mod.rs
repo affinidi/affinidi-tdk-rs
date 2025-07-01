@@ -44,10 +44,8 @@ pub async fn edit_did() -> Result<()> {
         webvh_state.load_witness_proofs_from_file(&[start, "-witness.json"].concat());
 
         // Load the secrets
-        let config_info =
-            ConfigInfo::read_from_file(&[start, "-secrets.json"].concat()).map_err(|e| {
-                DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e))
-            })?;
+        let config_info = ConfigInfo::read_from_file(&[start, "-secrets.json"].concat())
+            .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {e}")))?;
         (config_info, start)
     } else {
         bail!("Invalid file path! Must end with .jsonl!");
@@ -267,10 +265,7 @@ fn update_parameters(
                 .default(false)
                 .interact()
                 .map_err(|e| {
-                    DIDWebVHError::ParametersError(format!(
-                        "Invalid selection on portability: {}",
-                        e
-                    ))
+                    DIDWebVHError::ParametersError(format!("Invalid selection on portability: {e}"))
                 })?
             {
                 // Disable portability

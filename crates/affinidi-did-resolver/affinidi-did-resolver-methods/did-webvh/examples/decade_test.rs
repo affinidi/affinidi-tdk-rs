@@ -132,7 +132,7 @@ async fn generate_did(
     "authentication": [
         "did:webvh:{SCID}:test.affinidi.com#key-0"
     ],
-    "id": "did:webvh:{SCID}:test.affinidi.com#key-0",
+    "id": "did:webvh:{SCID}:test.affinidi.com",
     "service": [
         {
         "id": "did:webvh:{SCID}:test.affinidi.com#service-0",
@@ -182,7 +182,7 @@ async fn generate_did(
     secrets.insert(witness3_secret.clone()).await;
     secrets.insert(witness4_secret.clone()).await;
 
-    let mut params = Parameters {
+    let params = Parameters {
         portable: Some(true),
         scid: Some(SCID_HOLDER.to_string()),
         update_keys: Some(Some(vec![signing_did1_secret.get_public_keymultibase()?])),
@@ -207,9 +207,6 @@ async fn generate_did(
         ttl: Some(Some(300)),
         ..Default::default()
     };
-
-    // As this is the first entry, ensure these are also the active witnesses
-    params.active_witness = params.witness.clone();
 
     let _ = didwebvh.create_log_entry(
         None,

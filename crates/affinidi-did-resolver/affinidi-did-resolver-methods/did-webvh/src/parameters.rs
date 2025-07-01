@@ -66,11 +66,7 @@ pub struct Parameters {
 
     /// witness doesn't take effect till after this log entry
     /// This is the active witnesses for this log entry
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
+    #[serde(skip)]
     pub active_witness: Option<Option<Witnesses>>,
 
     /// DID watchers for this DID
@@ -358,14 +354,12 @@ impl Parameters {
             // Convert the key to the hash value
             let check_hash = Secret::hash_string(key).map_err(|e| {
                 DIDWebVHError::ValidationError(format!(
-                    "Couldn't hash updateKeys key ({}). Reason: {}",
-                    key, e
+                    "Couldn't hash updateKeys key ({key}). Reason: {e}",
                 ))
             })?;
             if !next_key_hashes.contains(&check_hash) {
                 return Err(DIDWebVHError::ValidationError(format!(
-                    "updateKey ({}) hash({}) was not specified in the previous nextKeyHashes!",
-                    key, check_hash
+                    "updateKey ({key}) hash({check_hash}) was not specified in the previous nextKeyHashes!",
                 )));
             }
         }

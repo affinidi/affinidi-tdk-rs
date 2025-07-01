@@ -41,8 +41,7 @@ pub fn witness_log_entry(
         // Generate Signature
         DataIntegrityProof::sign_jcs_data(&mut doc_to_sign, secret).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                e
+                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
             ))
         })?;
 
@@ -51,7 +50,7 @@ pub fn witness_log_entry(
             witness_proofs
                 .add_proof(&log_entry.version_id, proof, false)
                 .map_err(|e| {
-                    DIDWebVHError::WitnessProofError(format!("Error adding proof: {}", e))
+                    DIDWebVHError::WitnessProofError(format!("Error adding proof: {e}"))
                 })?;
 
             doc_to_sign.proof = None; // Reset proof for next witness

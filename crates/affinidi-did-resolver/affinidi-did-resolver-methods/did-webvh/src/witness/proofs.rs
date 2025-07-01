@@ -76,14 +76,12 @@ impl WitnessProofCollection {
     ) -> Result<(), DIDWebVHError> {
         let Some((id, _)) = version_id.split_once('-') else {
             return Err(DIDWebVHError::WitnessProofError(format!(
-                "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
-                version_id
+                "Invalid versionID ({version_id}) in witness proofs! Expected n-hash, but missing n",
             )));
         };
         let Ok(id): Result<u32, _> = str::parse(id) else {
             return Err(DIDWebVHError::WitnessProofError(format!(
-                "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
-                version_id
+                "Invalid versionID ({version_id}) in witness proofs! expected n-hash, where n is a number!",
             )));
         };
 
@@ -157,14 +155,12 @@ impl WitnessProofCollection {
     pub(crate) fn read_from_file(file_path: &str) -> Result<Self, DIDWebVHError> {
         let file = File::open(file_path).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't open Witness Proofs file ({}): {}",
-                file_path, e
+                "Couldn't open Witness Proofs file ({file_path}): {e}",
             ))
         })?;
         let proofs: WitnessProofShadow = serde_json::from_reader(file).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't deserialize Witness Proofs Data from file ({}): {}",
-                file_path, e
+                "Couldn't deserialize Witness Proofs Data from file ({file_path}): {e}",
             ))
         })?;
 
@@ -177,15 +173,13 @@ impl WitnessProofCollection {
     /// Save proofs to a file
     pub fn save_to_file(&self, file_path: &str) -> Result<(), DIDWebVHError> {
         let json_data = serde_json::to_string(&self.proofs).map_err(|e| {
-            DIDWebVHError::WitnessProofError(format!(
-                "Couldn't serialize Witness Proofs Data: {}",
-                e
-            ))
+            DIDWebVHError::WitnessProofError(
+                format!("Couldn't serialize Witness Proofs Data: {e}",),
+            )
         })?;
         std::fs::write(file_path, json_data).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't write to Witness Proofs file ({}): {}",
-                file_path, e
+                "Couldn't write to Witness Proofs file ({file_path}): {e}",
             ))
         })?;
         Ok(())
@@ -234,8 +228,7 @@ impl WitnessProofCollection {
                     )
                     .map_err(|e| {
                         DIDWebVHError::WitnessProofError(format!(
-                            "Error adding witness proof state to table: {}",
-                            e
+                            "Error adding witness proof state to table: {e}",
                         ))
                     })?;
             }

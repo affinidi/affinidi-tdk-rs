@@ -20,7 +20,7 @@ async fn main() {
         match webvh.resolve(DID::new_unchecked(args[1].as_bytes())).await {
             Ok(res) => res,
             Err(e) => {
-                println!("Error: {:?}", e);
+                println!("Error: {e:?}");
                 return;
             }
         }

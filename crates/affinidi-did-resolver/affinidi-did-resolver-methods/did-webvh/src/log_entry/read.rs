@@ -16,7 +16,7 @@ impl LogEntry {
     /// Returns an error if the file cannot be read or if the entries are invalid.
     pub(crate) fn load_from_file(file_path: &str) -> Result<Vec<LogEntry>, DIDWebVHError> {
         let file = File::open(file_path)
-            .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to open log file: {}", e)))?;
+            .map_err(|e| DIDWebVHError::LogEntryError(format!("Failed to open log file: {e}")))?;
         let buf_reader = io::BufReader::new(file);
 
         let mut entries = Vec::new();
@@ -25,16 +25,14 @@ impl LogEntry {
                 Ok(line) => {
                     let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
                         DIDWebVHError::LogEntryError(format!(
-                            "Failed to deserialize log entry: {}",
-                            e
+                            "Failed to deserialize log entry: {e}",
                         ))
                     })?;
                     entries.push(log_entry);
                 }
                 Err(e) => {
                     return Err(DIDWebVHError::LogEntryError(format!(
-                        "Failed to read line from log file: {}",
-                        e
+                        "Failed to read line from log file: {e}",
                     )));
                 }
             }
@@ -42,124 +40,6 @@ impl LogEntry {
 
         Ok(entries)
     }
-
-    /*
-    /// Reads a JSON Log file and returns an iterator over the lines in the file.
-    fn read_from_json_file<P>(file_path: P) -> io::Result<io::Lines<io::BufReader<File>>>
-    where
-        P: AsRef<Path>,
-    {
-        let file = File::open(file_path)?;
-        Ok(io::BufReader::new(file).lines())
-    }
-
-    /// Get either latest LogEntry or the specific version if specified.
-    /// version_id: Must match the full versionId (1-z6M....)
-    /// version_ number: Will only match on the leading integer of versionId
-    /// version_time: Will match on a Version where the query_time is when that LogEntry was active
-    pub fn get_log_entry_from_file<P>(
-        file_path: P,
-        version_id: Option<&str>,
-        version_number: Option<u32>,
-        version_time: Option<&DateTime<Utc>>,
-    ) -> Result<(LogEntry, MetaData), DIDWebVHError>
-    where
-        P: AsRef<Path>,
-    {
-        if let Ok(lines) = LogEntry::read_from_json_file(file_path) {
-            let mut previous_log_entry: Option<LogEntry> = None;
-            let mut previous_metadata: Option<MetaData> = None;
-            for line in lines.map_while(Result::ok) {
-                let mut log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
-                    DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
-                })?;
-                let (validated_parameters, current_metadata) = match log_entry
-                    .verify_log_entry(previous_log_entry.as_ref(), previous_metadata.as_ref())
-                {
-                    Ok((parameters, metadata)) => (parameters, metadata),
-                    Err(e) => {
-                        if let Some(log_entry) = previous_log_entry {
-                            if let Some(metadata) = previous_metadata {
-                                // Return last known good LogEntry
-                                return Ok((log_entry, metadata));
-                            }
-                        }
-                        return Err(DIDWebVHError::ValidationError(format!(
-                            "No valid LogEntry found! Reason: {}",
-                            e
-                        )));
-                    }
-                };
-                log_entry.parameters = validated_parameters;
-
-                // Check if this valid LogEntry has been deactivated, if so then ignore any other
-                // Entries
-                if current_metadata.deactivated {
-                    // Deactivated, return the current LogEntry and MetaData
-                    return Ok((log_entry, current_metadata));
-                }
-
-                // Check if we are looking for this version-id
-                if let Some(version_id) = version_id {
-                    if current_metadata.version_id == version_id {
-                        // Found the query version versionID
-                        return Ok((log_entry, current_metadata));
-                    }
-                }
-
-                // Check Version number
-                if let Some(version_number) = version_number {
-                    // Check if the version_id starts with the version_number
-                    if let Some((id, _)) = current_metadata.version_id.split_once('-') {
-                        if let Ok(id) = id.parse::<u32>() {
-                            if id == version_number {
-                                // Found the query version number
-                                return Ok((log_entry, current_metadata));
-                            }
-                        }
-                    }
-                }
-
-                // Check if this log_entry is older than the version_time
-                // if so, then return the previous info
-                if let Some(version_time) = version_time {
-                    let current_time: DateTime<Utc> =
-                        current_metadata.version_time.parse().unwrap();
-                    let create_time: DateTime<Utc> = current_metadata.created.parse().unwrap();
-
-                    // Is the query versionTime in the range of this LogEntry?
-                    if (&create_time < version_time) && (&current_time > version_time) {
-                        return Ok((log_entry, current_metadata));
-                    }
-                }
-
-                // Set the next previous records
-                previous_log_entry = Some(log_entry);
-                previous_metadata = Some(current_metadata);
-            }
-
-            // End of file
-            if let Some(log_entry) = previous_log_entry {
-                if let Some(metadata) = previous_metadata {
-                    // If a specific version was requested, then return NotFound
-                    if version_id.is_some() || version_number.is_some() {
-                        return Err(DIDWebVHError::NotFound);
-                    }
-
-                    // Return last known good LogEntry
-                    return Ok((log_entry, metadata));
-                }
-            }
-            Err(DIDWebVHError::ValidationError(
-                "Empty LogEntry returned for DID".to_string(),
-            ))
-        } else {
-            Err(DIDWebVHError::LogEntryError(
-                "Failed to read log entry from file".to_string(),
-            ))
-        }
-    }
-    */
 
     /// Verify a LogEntry against a previous entry if it exists
     /// NOTE: THIS DOES NOT VERIFY WITNESS PROOFS!
@@ -172,7 +52,7 @@ impl LogEntry {
         previous_meta_data: Option<&MetaData>,
     ) -> Result<(Parameters, MetaData), DIDWebVHError> {
         // Ensure we are dealing with a signed LogEntry
-        let Some(proof) = &self.proof else {
+        let Some(proof) = &self.proof.first() else {
             return Err(DIDWebVHError::ValidationError(
                 "Missing proof in the signed LogEntry!".to_string(),
             ));
@@ -183,8 +63,7 @@ impl LogEntry {
             Ok(params) => params,
             Err(e) => {
                 return Err(DIDWebVHError::LogEntryError(format!(
-                    "Failed to validate parameters: {}",
-                    e
+                    "Failed to validate parameters: {e}",
                 )));
             }
         };
@@ -202,7 +81,7 @@ impl LogEntry {
 
         // Verify Signature
         let verified = verify_data(&self.try_into()?).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Signature verification failed: {}", e))
+            DIDWebVHError::LogEntryError(format!("Signature verification failed: {e}"))
         })?;
         if !verified.verified {
             return Err(DIDWebVHError::LogEntryError(
@@ -213,7 +92,7 @@ impl LogEntry {
         // As a version of this LogEntry gets modified to recalculate hashes,
         // we create a clone once and reuse it for verification
         let mut working_entry = self.clone();
-        working_entry.proof = None; // Remove proof for hash calculation
+        working_entry.proof.clear();
 
         // Verify the version ID
         working_entry.verify_version_id(previous_log_entry)?;
@@ -291,22 +170,19 @@ impl LogEntry {
             };
             let id = id.parse::<u32>().map_err(|e| {
                 DIDWebVHError::ValidationError(format!(
-                    "Failed to parse version ID ({}) as u32: {}",
-                    id, e
+                    "Failed to parse version ID ({id}) as u32: {e}",
                 ))
             })?;
             if current_id != id + 1 {
                 return Err(DIDWebVHError::ValidationError(format!(
-                    "Current LogEntry version ID ({}) must be one greater than previous version ID ({})",
-                    current_id, id
+                    "Current LogEntry version ID ({current_id}) must be one greater than previous version ID ({id})",
                 )));
             }
             // Set the versionId to the previous versionId to calculate the hash
             self.version_id = previous.version_id.clone();
         } else if current_id != 1 {
             return Err(DIDWebVHError::ValidationError(format!(
-                "First LogEntry must have version ID 1, got {}",
-                current_id
+                "First LogEntry must have version ID 1, got {current_id}",
             )));
         } else {
             self.version_id = if let Some(scid) = &self.parameters.scid {
@@ -322,8 +198,7 @@ impl LogEntry {
         let entry_hash = self.generate_log_entry_hash()?;
         if entry_hash != current_hash {
             return Err(DIDWebVHError::ValidationError(format!(
-                "Current LogEntry version ID ({}) hash ({}) does not match calculated hash ({})",
-                current_id, current_hash, entry_hash
+                "Current LogEntry version ID ({current_id}) hash ({current_hash}) does not match calculated hash ({entry_hash})",
             )));
         }
 
@@ -381,19 +256,18 @@ impl LogEntry {
 
         // Convert the SCID value to holder
         let temp = serde_json::to_string(&self).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {}", e))
+            DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {e}"))
         })?;
 
         let scid_entry: LogEntry = serde_json::from_str(&temp.replace(&scid, SCID_HOLDER))
             .map_err(|e| {
-                DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {}", e))
+                DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
             })?;
 
         let verify_scid = scid_entry.generate_scid()?;
         if scid != verify_scid {
             return Err(DIDWebVHError::ValidationError(format!(
-                "SCID ({}) does not match calculated SCID ({})",
-                scid, verify_scid
+                "SCID ({scid}) does not match calculated SCID ({verify_scid})",
             )));
         }
 

@@ -32,8 +32,7 @@ impl DIDWebVHState {
                         break;
                     }
                     return Err(DIDWebVHError::ValidationError(format!(
-                        "No valid LogEntry found! Reason: {}",
-                        e
+                        "No valid LogEntry found! Reason: {e}",
                     )));
                 }
             }
