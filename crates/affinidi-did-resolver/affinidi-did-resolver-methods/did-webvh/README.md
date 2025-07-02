@@ -1,4 +1,8 @@
-# did-webvh Rust implementation
+# did:webvh implementation
+
+[![Crates.io](https://img.shields.io/crates/v/did-webvh.svg)](https://crates.io/crates/did-webvh)
+[![Documentation](https://docs.rs/did-webvh/badge.svg)](https://docs.rs/did-webvh)
+[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh)
 
 An implementation of the [did:webvh](https://identity.foundation/didwebvh/v1.0/)
 method in Rust. Supports version 1.0 spec.
@@ -8,6 +12,39 @@ and works with the [Rust SSI Library](https://github.com/spruceid/ssi/)
 
 A helpful implementation site is the [webvh DID Method Information](https://didwebvh.info/)
 site
+
+## [Change log](../../CHANGELOG.md)
+
+## Features
+
+- [x] Create a did:webvh LogEntry and DID Document
+- [x] Resolve a did:webvh method
+- [x] Validate webvh LogEntries to v1.0 specification
+- [x] Update webvh DID
+- [x] Revoke webvh DID
+- [x] Witness webvh DID
+- [ ] Migration of DID (portability)
+- [x] Validate witness information
+
+## Usage
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+did-webvh = "0.1.6"
+```
+
+Then:
+
+```rust
+use did_webvh::DIDWebVHState;
+
+let mut webvh = DIDWebVHState::default();
+
+// Load LogEntries from a file
+webvh.load_log_entries_from_file("did.jsonl")?;
+```
 
 ## Everyone likes a wizard
 
@@ -37,16 +74,8 @@ environment is not recommended.**
 
 `did.jsonl-secrets` is the default file containing key secrets
 
-## Implementation Status
+## License
 
-- [X] Create a did:webvh LogEntry and DID Document
-- [X] Resolve a did:webvh method
-- [X] Validate webvh LogEntries to v1.0 specification
-- [X] Update webvh DID
-- [X] Revoke webvh DID
-- [X] Witness webvh DID
-- [ ] Migration of DID (portability)
-- [X] Validate witness information
-- [ ] Witness Node infrastructure
-- [ ] Watcher Node infrastructure
-- [ ] webvh hosting service
+Licensed under:
+
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)

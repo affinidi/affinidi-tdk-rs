@@ -4,7 +4,7 @@
 use crate::{
     ConfigInfo, edit_did_document,
     updating::{
-        authorization::update_authorization_keys, revoke::revoke_did,
+        authorization::update_authorization_keys, portable::migrate_did, revoke::revoke_did,
         watchers::modify_watcher_params, witness::modify_witness_params,
     },
     witness::witness_log_entry,
@@ -17,6 +17,7 @@ use did_webvh::{
 };
 
 mod authorization;
+mod portable;
 mod revoke;
 mod watchers;
 mod witness;
@@ -123,10 +124,9 @@ pub async fn edit_did() -> Result<()> {
                 break;
             }
             1 => {
-                println!(
-                    "{}",
-                    style("Migrate to a new domain ** NOT IMPLEMENTED YET ** ").color256(214)
-                );
+                // DID Portability
+                migrate_did(&file_path, &mut webvh_state, &config_info)?;
+                break;
             }
             2 => {
                 revoke_did(&file_path, &mut webvh_state, &config_info).await?;
