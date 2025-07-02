@@ -1,14 +1,9 @@
 //! Helps configure the various configuration options, DIDs and keys for the actors in the examples.
 //! This helps to create consistency in the examples and also to avoid code duplication.
 use affinidi_messaging_helpers::common::{affinidi_logo, check_path};
-use affinidi_tdk::{
-    common::{environments::TDKEnvironments, profiles::TDKProfile},
-    dids::{DID, KeyType},
-    secrets_resolver::secrets::Secret,
-};
+use affinidi_tdk::dids::{DID, KeyType};
 use clap::Parser;
-use console::{Style, Term, style};
-use dialoguer::{Confirm, theme::ColorfulTheme};
+use console::{Term, style};
 use did_peer::DIDPeerKeys;
 use serde_json::{Value, json};
 use std::{error::Error, fs};
@@ -140,11 +135,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let host = args.host.unwrap_or("localhost%3A7037".to_string());
     let secure_connection = args.secure_connection.unwrap_or(false);
     let api_prefix = args.api_prefix.unwrap_or("/mediator/v1".to_string());
-
-    let theme = ColorfulTheme {
-        values_style: Style::new().yellow().dim(),
-        ..ColorfulTheme::default()
-    };
 
     println!(
         "{}",
