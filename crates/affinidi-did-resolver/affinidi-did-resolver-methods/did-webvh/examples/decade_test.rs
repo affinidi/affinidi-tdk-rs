@@ -11,6 +11,7 @@ use affinidi_data_integrity::{DataIntegrityProof, SigningDocument};
 use affinidi_secrets_resolver::{SecretsResolver, SimpleSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{DID, KeyType};
 use anyhow::{Result, anyhow, bail};
+use clap::Parser;
 use console::style;
 use did_webvh::{
     DIDWebVHState, SCID_HOLDER,
@@ -26,8 +27,22 @@ use std::{
 };
 use tracing_subscriber::filter;
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of LogEntries to generate (default: 120)
+    #[arg(short, long, default_value_t = 120)]
+    count: u32,
+
+    /// Enables Witnesses with a given threshold (set to 0 to disable)
+    #[arg(short, long, default_value_t = 3)]
+    witnesses: u32,
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
+    let args: Args = Args::parse();
+
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -44,11 +59,11 @@ pub async fn main() -> Result<()> {
     let start = SystemTime::now();
 
     // Generate initial DID
-    let mut next = generate_did(&mut didwebvh, &mut secrets).await?;
+    let mut next = generate_did(&mut didwebvh, &mut secrets, &args).await?;
 
-    // Loop for 119 months (first entry represents the first month)
-    for i in 2..121 {
-        next = create_log_entry(&mut didwebvh, &mut secrets, &next, i).await?;
+    // Loop for count months (first entry represents the first month)
+    for i in 2..(args.count + 1) {
+        next = create_log_entry(&mut didwebvh, &mut secrets, &next, i, &args).await?;
     }
 
     let end = SystemTime::now();
@@ -73,9 +88,12 @@ pub async fn main() -> Result<()> {
         file.write_all("\n".as_bytes())?;
     }
 
-    // Witness proofs
-    didwebvh.witness_proofs.write_optimise_records()?;
-    didwebvh.witness_proofs.save_to_file("did-witness.json")?;
+    if args.witnesses > 0 {
+        println!("Witnesses enabled with threshold: {}", args.witnesses);
+        // Witness proofs
+        didwebvh.witness_proofs.write_optimise_records()?;
+        didwebvh.witness_proofs.save_to_file("did-witness.json")?;
+    }
 
     println!("Resetting.. ready for validation");
 
@@ -121,6 +139,7 @@ pub async fn main() -> Result<()> {
 async fn generate_did(
     didwebvh: &mut DIDWebVHState,
     secrets: &mut SimpleSecretsResolver,
+    args: &Args,
 ) -> Result<Vec<Secret>> {
     let raw_did = r#"{
     "@context": [
@@ -173,14 +192,20 @@ async fn generate_did(
     secrets.insert(next_key2.clone()).await;
 
     // Generate witnesses
-    let (witness1_did, witness1_secret) = DID::generate_did_key(KeyType::Ed25519)?;
-    let (witness2_did, witness2_secret) = DID::generate_did_key(KeyType::Ed25519)?;
-    let (witness3_did, witness3_secret) = DID::generate_did_key(KeyType::Ed25519)?;
-    let (witness4_did, witness4_secret) = DID::generate_did_key(KeyType::Ed25519)?;
-    secrets.insert(witness1_secret.clone()).await;
-    secrets.insert(witness2_secret.clone()).await;
-    secrets.insert(witness3_secret.clone()).await;
-    secrets.insert(witness4_secret.clone()).await;
+    let witness = if args.witnesses > 0 {
+        let mut witness = Witnesses {
+            threshold: args.witnesses,
+            witnesses: Vec::new(),
+        };
+        for _ in 0..args.witnesses {
+            let (w_did, w_secret) = DID::generate_did_key(KeyType::Ed25519)?;
+            secrets.insert(w_secret.clone()).await;
+            witness.witnesses.push(Witness { id: w_did });
+        }
+        Some(Some(witness))
+    } else {
+        None
+    };
 
     let params = Parameters {
         portable: Some(true),
@@ -190,15 +215,7 @@ async fn generate_did(
             next_key1.get_public_keymultibase_hash()?,
             next_key2.get_public_keymultibase_hash()?,
         ])),
-        witness: Some(Some(Witnesses {
-            threshold: 3,
-            witnesses: vec![
-                Witness { id: witness1_did },
-                Witness { id: witness2_did },
-                Witness { id: witness3_did },
-                Witness { id: witness4_did },
-            ],
-        })),
+        witness,
         watchers: Some(Some(vec![
             "https://watcher-1.affinidi.com/v1/webvh".to_string(),
             "https://watcher-2.affinidi.com/v1/webvh".to_string(),
@@ -299,6 +316,7 @@ async fn create_log_entry(
     secrets: &mut SimpleSecretsResolver,
     previous_keys: &[Secret],
     count: u32,
+    args: &Args,
 ) -> Result<Vec<Secret>> {
     let old_log_entry = didwebvh
         .log_entries
@@ -327,7 +345,7 @@ async fn create_log_entry(
     new_params.update_keys = Some(Some(update_keys));
 
     // Swap a witness node?
-    if count % 12 == 6 {
+    if args.witnesses > 0 && count % 12 == 6 {
         swap_witness(&mut new_params, secrets).await?;
     }
 
@@ -348,11 +366,11 @@ async fn create_log_entry(
     // Witness LogEntry
     witness_log_entry(didwebvh, secrets).await?;
 
-    let log_entry = didwebvh.log_entries.last().unwrap();
-    println!(
-        "{:03}: DID LogEntry created: {}",
-        count, log_entry.log_entry.version_id
-    );
+    // let log_entry = didwebvh.log_entries.last().unwrap();
+    // println!(
+    //     "{:03}: DID LogEntry created: {}",
+    //     count, log_entry.log_entry.version_id
+    // );
 
     Ok(vec![next_key1, next_key2])
 }

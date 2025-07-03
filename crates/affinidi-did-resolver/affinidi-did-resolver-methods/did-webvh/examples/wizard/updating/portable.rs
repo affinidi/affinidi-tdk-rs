@@ -10,7 +10,6 @@ use anyhow::{Result, anyhow, bail};
 use console::style;
 use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHState, url::WebVHURL};
-use regex::Regex;
 use url::Url;
 
 /// Revokes a webvh DID method
