@@ -1,6 +1,6 @@
 # Affinidi Data Integrity Changelog
 
-## 4th July 2025 Release 0.1.4
+## 5th July 2025 Release 0.1.4
 
 * **FEATURE:** `sign_jcs_data()` you can now specify a signature `created` attribute
 * **TESTING:** Added DataIntegrity Reference Test

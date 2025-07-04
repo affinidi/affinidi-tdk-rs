@@ -79,12 +79,12 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
     })?;
     verification_proof_result.verified_document = Some(validation_doc.clone());
 
-    debug!("Document: {:#?}", validation_doc);
+    debug!("Raw Document: {:#?}", validation_doc);
 
     let jcs_doc = to_string(&validation_doc).map_err(|e| {
         DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
     })?;
-    debug!("Document: {}", jcs_doc);
+    debug!("JCS String: {}", jcs_doc);
 
     // Run proof Configuration
     // Check Dates
@@ -106,10 +106,18 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
     let jcs_proof_config = to_string(&proof_config).map_err(|e| {
         DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {e}"))
     })?;
-    debug!("proof options: {}", jcs_proof_config);
+    debug!("Proof options: {}", jcs_proof_config);
 
     // Hash the fields and join
     let hash_data = hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config);
+    debug!(
+        "Hash data = {}",
+        hash_data
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<String>>()
+            .join("")
+    );
 
     // Create public key bytes from Verification Material
     if !proof_options.verification_method.starts_with("did:key:") {
@@ -138,6 +146,8 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
         })?;
 
     verification_proof_result.verified = true;
+
+    debug!("Sucessfully Verified");
     Ok(verification_proof_result)
 }
 
