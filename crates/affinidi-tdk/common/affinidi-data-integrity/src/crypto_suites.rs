@@ -23,8 +23,7 @@ impl TryFrom<&str> for CryptoSuite {
         match value {
             "eddsa-jcs-2022" => Ok(CryptoSuite::EddsaJcs2022),
             _ => Err(DataIntegrityError::InputDataError(format!(
-                "Unsupported crypto suite: {}",
-                value
+                "Unsupported crypto suite: {value}",
             ))),
         }
     }
@@ -55,8 +54,7 @@ impl TryFrom<KeyType> for CryptoSuite {
         match value {
             KeyType::Ed25519 => Ok(CryptoSuite::EddsaJcs2022),
             _ => Err(DataIntegrityError::InputDataError(format!(
-                "Unsupported key type: {:?}",
-                value
+                "Unsupported key type: {value:?}",
             ))),
         }
     }

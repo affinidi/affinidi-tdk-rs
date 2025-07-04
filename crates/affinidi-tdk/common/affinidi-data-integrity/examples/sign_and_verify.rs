@@ -68,14 +68,10 @@ fn main() {
     let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
     let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
 
-    let secret = Secret::from_multibase(
-        &format!("did:key:{}#{}", pub_key, pub_key),
-        pub_key,
-        pri_key,
-    )
-    .expect("Couldn't create Secret");
+    let secret = Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
+        .expect("Couldn't create Secret");
 
-    DataIntegrityProof::sign_jcs_data(&mut unsigned_values, &secret)
+    DataIntegrityProof::sign_jcs_data(&mut unsigned_values, &secret, None)
         .expect("Couldn't sign Document");
 
     let signed = SignedDocument {

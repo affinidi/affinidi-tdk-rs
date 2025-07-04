@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-data-integrity"
 description = "W3C Data Integrity Implementation"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -31,7 +31,7 @@ tracing = { version = "0.1", features = [
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
-tokio = { version = "1.45", features = ["full"] }
+tokio = { version = "1.46", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",
