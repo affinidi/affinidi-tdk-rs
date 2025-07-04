@@ -40,9 +40,9 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
 
     // Strip Proof Value from the proof
     let proof_value = if let Some(proof_value) = proof_options.proof_value {
-        MultibaseBuf::new(proof_value).decode().map_err(|e| {
-            DataIntegrityError::InputDataError(format!("Invalid proof value: {}", e))
-        })?
+        MultibaseBuf::new(proof_value)
+            .decode()
+            .map_err(|e| DataIntegrityError::InputDataError(format!("Invalid proof value: {e}")))?
     } else {
         return Err(DataIntegrityError::InputDataError(
             "proofValue is missing in the proof".to_string(),
@@ -75,23 +75,23 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
     }
 
     let validation_doc = serde_json::to_value(&signed_doc.extra).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to serialize document: {}", e))
+        DataIntegrityError::InputDataError(format!("Failed to serialize document: {e}"))
     })?;
     verification_proof_result.verified_document = Some(validation_doc.clone());
 
-    debug!("Document: {:#?}", validation_doc);
+    debug!("Raw Document: {:#?}", validation_doc);
 
     let jcs_doc = to_string(&validation_doc).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {}", e))
+        DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
     })?;
-    debug!("Document: {}", jcs_doc);
+    debug!("JCS String: {}", jcs_doc);
 
     // Run proof Configuration
     // Check Dates
     if let Some(created) = &proof_options.created {
         let now = Utc::now();
         let created = created.parse::<DateTime<Utc>>().map_err(|e| {
-            DataIntegrityError::InputDataError(format!("Invalid created date: {}", e))
+            DataIntegrityError::InputDataError(format!("Invalid created date: {e}"))
         })?;
         if created > now {
             return Err(DataIntegrityError::InputDataError(
@@ -101,15 +101,23 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
     }
 
     let proof_config = serde_json::to_value(&proof_options).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to serialize proof options: {}", e))
+        DataIntegrityError::InputDataError(format!("Failed to serialize proof options: {e}"))
     })?;
     let jcs_proof_config = to_string(&proof_config).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {}", e))
+        DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {e}"))
     })?;
-    debug!("proof options: {}", jcs_proof_config);
+    debug!("Proof options: {}", jcs_proof_config);
 
     // Hash the fields and join
     let hash_data = hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config);
+    debug!(
+        "Hash data = {}",
+        hash_data
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<String>>()
+            .join("")
+    );
 
     // Create public key bytes from Verification Material
     if !proof_options.verification_method.starts_with("did:key:") {
@@ -123,7 +131,7 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
         ));
     };
     let secret = Secret::decode_multikey(public_key)
-        .map_err(|e| DataIntegrityError::InputDataError(format!("Invalid public key: {}", e)))?;
+        .map_err(|e| DataIntegrityError::InputDataError(format!("Invalid public key: {e}")))?;
 
     // Verify the signature
     let crypto = CryptoSuite::EddsaJcs2022;
@@ -134,10 +142,12 @@ pub fn verify_data(signed_doc: &SignedDocument) -> Result<VerificationProof, Dat
             proof_value.1.as_slice(),
         )
         .map_err(|e| {
-            DataIntegrityError::VerificationError(format!("Signature verification failed: {}", e))
+            DataIntegrityError::VerificationError(format!("Signature verification failed: {e}"))
         })?;
 
     verification_proof_result.verified = true;
+
+    debug!("Sucessfully Verified");
     Ok(verification_proof_result)
 }
 
