@@ -12,7 +12,7 @@ fn test_first_log_entry_good() {
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
     assert!(first_log_entry.parameters.validate(None).is_ok());
-}
+
 
 #[ignore]
 #[test]

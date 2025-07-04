@@ -32,7 +32,7 @@ pub enum DataIntegrityError {
 }
 
 /// Signing Document structure that can be used for converting any Serializable document
-/// into a format this library can sign.
+/// into a format this library can understand.
 /// Flattens the structure into exra fields
 /// Signature is placed into proof
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -83,11 +83,14 @@ pub struct DataIntegrityProof {
 impl DataIntegrityProof {
     /// Creates a signature for the given data using the specified key.
     /// data_doc: JSON Schema (Modifies this document by inserting the proof)
+    /// secret: Secret containing the private key to sign with
+    /// created: Optional timestamp for the proof creation ("2023-02-24T23:36:38Z")
     ///
     /// Returns a Result containing a signed document
     pub fn sign_jcs_data(
         data_doc: &mut SigningDocument,
         secret: &Secret,
+        created: Option<String>,
     ) -> Result<(), DataIntegrityError> {
         // Initialise as required
         let crypto_suite: CryptoSuite = secret.get_key_type().try_into()?;
@@ -107,19 +110,23 @@ impl DataIntegrityProof {
             Ok(jcs) => jcs,
             Err(e) => {
                 return Err(DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize data document: {}",
-                    e
+                    "Failed to serialize data document: {e}",
                 )));
             }
         };
-        debug!("JCS Document: {}", jcs);
+        debug!("Document: {}", jcs);
+
+        let created = if created.is_some() {
+            created
+        } else {
+            Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        };
 
         // Create a Proof Options struct
-        let now = Utc::now();
         let mut proof_options = DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
             cryptosuite: crypto_suite.clone(),
-            created: Some(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            created,
             verification_method: secret.id.clone(),
             proof_purpose: "assertionMethod".to_string(),
             proof_value: None,
@@ -130,8 +137,7 @@ impl DataIntegrityProof {
             Ok(jcs) => jcs,
             Err(e) => {
                 return Err(DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize proof options: {}",
-                    e
+                    "Failed to serialize proof options: {e}",
                 )));
             }
         };
@@ -173,8 +179,7 @@ impl DataIntegrityProof {
             Ok(jcs) => jcs,
             Err(e) => {
                 return Err(DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize data document: {}",
-                    e
+                    "Failed to serialize data document: {e}",
                 )));
             }
         };
@@ -196,8 +201,7 @@ impl DataIntegrityProof {
             Ok(jcs) => jcs,
             Err(e) => {
                 return Err(DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize proof options: {}",
-                    e
+                    "Failed to serialize proof options: {e}",
                 )));
             }
         };
@@ -238,7 +242,7 @@ mod tests {
         let hash = hashing_eddsa_jcs("test1", "test2");
         let mut output = String::new();
         for x in hash {
-            output.push_str(&format!("{:02x}", x));
+            output.push_str(&format!("{x:02x}"));
         }
 
         assert_eq!(
@@ -254,14 +258,11 @@ mod tests {
 
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
         let pri_key = "z42tmXtqqQBLmEEwn8tfi1bA2ghBx9cBo6wo8a44kVJEiqyA";
-        let secret = Secret::from_multibase(
-            &format!("did:key:{}#{}", pub_key, pub_key),
-            pub_key,
-            pri_key,
-        )
-        .expect("Couldn't create test key data");
+        let secret =
+            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
+                .expect("Couldn't create test key data");
 
-        assert!(DataIntegrityProof::sign_jcs_data(&mut generic_doc, &secret).is_err());
+        assert!(DataIntegrityProof::sign_jcs_data(&mut generic_doc, &secret, None).is_err());
     }
     #[test]
     fn test_sign_jcs_data_good() {
@@ -272,15 +273,12 @@ mod tests {
 
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
         let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
-        let secret = Secret::from_multibase(
-            &format!("did:key:{}#{}", pub_key, pub_key),
-            pub_key,
-            pri_key,
-        )
-        .expect("Couldn't create test key data");
+        let secret =
+            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
+                .expect("Couldn't create test key data");
 
         assert!(
-            DataIntegrityProof::sign_jcs_data(&mut generic_doc, &secret).is_ok(),
+            DataIntegrityProof::sign_jcs_data(&mut generic_doc, &secret, None).is_ok(),
             "Signing failed"
         );
     }
@@ -294,12 +292,9 @@ mod tests {
 
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
         let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
-        let secret = Secret::from_multibase(
-            &format!("did:key:{}#{}", pub_key, pub_key),
-            pub_key,
-            pri_key,
-        )
-        .expect("Couldn't create test key data");
+        let secret =
+            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
+                .expect("Couldn't create test key data");
 
         assert!(
             DataIntegrityProof::sign_jcs_proof_only(&generic_doc, &secret).is_ok(),

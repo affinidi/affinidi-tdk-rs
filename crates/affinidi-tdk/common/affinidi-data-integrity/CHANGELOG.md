@@ -1,8 +1,16 @@
 # Affinidi Data Integrity Changelog
 
+## 4th July 2025 Release 0.1.4
+
+* **FEATURE:** `sign_jcs_data()` you can now specify a signature `created` attribute
+* **TESTING:** Added DataIntegrity Reference Test
+* **MAINTENANCE:** Addressing Rust lint warnings
+* **MAINTENANCE:** Updating crate dependencies
+
 ## 17th June 2025 Release 0.1.3
 
-* **FEATURE:** **BREAKING** `GenericDocument` replaced with `SigningDocument` and `SignedDocument`
+* **FEATURE:** **BREAKING** `GenericDocument` replaced with `SigningDocument` and
+`SignedDocument`
   * `SigningDocument`: Used when signing  data
   * `SignedDocument`: Used when verifying data
 
