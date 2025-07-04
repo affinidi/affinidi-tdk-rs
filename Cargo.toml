@@ -38,7 +38,7 @@ license = "Apache-2.0"
 keywords = ["ssi", "affinidi"]
 repository = "https://github.com/affinidi/affinidi-tdk-rs"
 publish = true
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 
 [workspace.dependencies]
 affinidi-did-resolver-cache-sdk = { version = "0.5.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
