@@ -39,7 +39,7 @@ pub fn witness_log_entry(
         };
 
         // Generate Signature
-        DataIntegrityProof::sign_jcs_data(&mut doc_to_sign, secret).map_err(|e| {
+        DataIntegrityProof::sign_jcs_data(&mut doc_to_sign, secret, None).map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
             ))

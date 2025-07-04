@@ -230,11 +230,13 @@ impl DIDWebVHState {
         // Generate the proof for the log entry
         let mut log_entry_unsigned: SigningDocument = (&log_entry).try_into()?;
 
-        DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, signing_key).map_err(|e| {
-            DIDWebVHError::SCIDError(format!(
-                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
-            ))
-        })?;
+        DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, signing_key, None).map_err(
+            |e| {
+                DIDWebVHError::SCIDError(format!(
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
+                ))
+            },
+        )?;
 
         if let Some(proof) = log_entry_unsigned.proof {
             log_entry.proof.push(proof);
