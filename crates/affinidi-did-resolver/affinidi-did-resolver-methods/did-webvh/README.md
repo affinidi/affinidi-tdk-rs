@@ -74,6 +74,34 @@ environment is not recommended.**
 
 `did.jsonl-secrets` is the default file containing key secrets
 
+## Is webvh performant?
+
+There is a lot going on with the webvh DID method. A lot of keys, signing and
+validations
+
+Depending on how often you are creating LogEntries, number of witnesses etc can
+have a big impact on performance.
+
+To help with testing different usage scenario's, there is an example tool that can
+help you with testing real-world performance of the webvh method.
+
+To get options for the `generate_history` performance tool, run:
+
+```Bash
+cargo run --release --example generate_history -- --help
+```
+
+For example, to generate 200 LogEntries with 10 witnesses each, you can run:
+
+```Bash
+cargo run --release --example generate_histroy -- -c 200 -w 10
+```
+
+This tool will generate the output to
+
+- did.jsonl (LogEntries)
+- did-witness.json (Witness Proofs)
+
 ## License
 
 Licensed under:
