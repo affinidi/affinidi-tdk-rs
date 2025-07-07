@@ -1,10 +1,10 @@
-use affinidi_data_integrity::{
-    DataIntegrityProof, SignedDocument, SigningDocument, verification_proof::verify_data,
-};
+use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use affinidi_secrets_resolver::secrets::Secret;
+use serde_json::json;
 
 fn main() {
-    let input_doc_str = r#"{
+    let input_doc = json!(
+        r#"{
   "version_id": "1-zQmW7ssogG8fwWBZTdH47S4vntYJzVB4vbXR1pYsAhriNh4",
   "version_time": "2025-05-31T02:11:02Z",
   "parameters": {
@@ -17,20 +17,6 @@ fn main() {
     "next_key_hashes": [
       "zQmcTKbHERk1Q5QsUBnTbnhJhdwnSREyoS3duyLuPBWDUPA"
     ],
-    "witness": {
-      "threshold": 2,
-      "witnesses": [
-        {
-          "id": "did:key:z6MkroJ5yTPH9CDGT1YqXXUPsiS46b7xoDFaKAAaH32FoNRG"
-        },
-        {
-          "id": "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm"
-        },
-        {
-          "id": "did:key:z6Mkp2m3BqokMHQ4f64HG1qxpZtjgfuT3NDZKVfsbdFnNsfH"
-        }
-      ]
-    },
     "deactivated": false
   },
   "state": {
@@ -60,10 +46,8 @@ fn main() {
       }
     ]
   }
-}"#;
-
-    let mut unsigned_values: SigningDocument =
-        serde_json::from_str(input_doc_str).expect("Couldn't serialize input string");
+}"#
+    );
 
     let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
     let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
@@ -71,17 +55,13 @@ fn main() {
     let secret = Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
         .expect("Couldn't create Secret");
 
-    DataIntegrityProof::sign_jcs_data(&mut unsigned_values, &secret, None)
+    let proof = DataIntegrityProof::sign_jcs_data(&input_doc, None, &secret, None)
         .expect("Couldn't sign Document");
 
-    let signed = SignedDocument {
-        extra: unsigned_values.extra,
-        proof: unsigned_values.proof,
-    };
-    let _ = verify_data(&signed).expect("Couldn't validate doc");
+    let _ = verify_data(&input_doc, None, &proof).expect("Couldn't validate doc");
 
     println!(
-        "Signed Document: {}",
-        serde_json::to_string_pretty(&signed).unwrap()
+        "Signed Document proof: {}",
+        serde_json::to_string_pretty(&proof).unwrap()
     );
 }

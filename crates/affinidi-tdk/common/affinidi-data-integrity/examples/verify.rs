@@ -1,5 +1,6 @@
-use affinidi_data_integrity::verification_proof::verify_data;
+use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use clap::Parser;
+use serde_json::json;
 use std::fs;
 
 /// Affinidi Data Integrity Verification Tool
@@ -21,7 +22,30 @@ fn main() {
 
     let input = load_file(&args.file_name);
 
-    let signed_doc = serde_json::from_str(&input).expect("Couldn't deserialize input");
+    let mut signed_doc = json!(&input);
 
-    verify_data(&signed_doc).expect("Failed to verify data integrity proof");
+    let proof = if let Some(proof) = signed_doc.get("proof") {
+        serde_json::from_value::<DataIntegrityProof>(proof.clone())
+            .expect("Failed to deserialize proof")
+    } else {
+        panic!("No proof found in Signed Document");
+    };
+    signed_doc.as_object_mut().unwrap().remove("proof");
+
+    let context = signed_doc.get("@context").map(|context| {
+        context
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap().to_string())
+            .collect::<Vec<String>>()
+    });
+
+    println!("Document to be verified:\n{signed_doc:#?}");
+    println!();
+    println!("Proof:\n{proof:#?}");
+    println!();
+    println!("Context:\n{context:#?}");
+
+    verify_data(&signed_doc, context, &proof).expect("Failed to verify data integrity proof");
 }
