@@ -531,72 +531,62 @@ mod tests {
     fn verification_ok() {
         let signed = json!(
                     {
-          "parameters": {
-            "deactivated": false,
-            "method": "did:webvh:1.0",
-            "next_key_hashes": [
-              "zQmcTKbHERk1Q5QsUBnTbnhJhdwnSREyoS3duyLuPBWDUPA"
-            ],
-            "portable": true,
-            "scid": "zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7",
-            "update_keys": [
-              "z6MkkkpnVE5PnEyJPLJ4GFdas8Grykt2L3E2gqCbK7ktui8v"
-            ],
-            "witness": {
-              "threshold": 2,
-              "witnesses": [
-                {
-                  "id": "did:key:z6MkroJ5yTPH9CDGT1YqXXUPsiS46b7xoDFaKAAaH32FoNRG"
-                },
-                {
-                  "id": "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm"
-                },
-                {
-                  "id": "did:key:z6Mkp2m3BqokMHQ4f64HG1qxpZtjgfuT3NDZKVfsbdFnNsfH"
-                }
-              ]
+            "versionId": "1-QmPoRiosXpDBFtybpTWCQfNwDiZSFCFcu18ynEKzSxTQDw",
+            "versionTime": "2025-07-07T10:26:45Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "scid": "QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR",
+                "updateKeys": [
+                    "z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4"
+                ],
+                "portable": true,
+                "nextKeyHashes": [
+                    "zQmSEh6RHcXfCFAb2ZbHDXvRSpeq6AhWiAzarsE9gNnJ6JF",
+                    "zQmdmsTj2ugvmAxCdBXK3ytzbSUoqpzEeEp3sbXBDZxG4t3"
+                ],
+                "watchers": [
+                    "daasds"
+                ],
+                "ttl2": 300
+            },
+            "state": {
+                "@context": [
+                    "https://www.w3.org/ns/did/v1",
+                    "https://www.w3.org/ns/cid/v1"
+                ],
+                "assertionMethod": [
+                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                ],
+                "authentication": [
+                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                ],
+                "capabilityDelegation": [],
+                "capabilityInvocation": [],
+                "id": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000",
+                "keyAgreement": [
+                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                ],
+                "service": [],
+                "verificationMethod": [
+                    {
+                        "controller": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000",
+                        "id": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0",
+                        "publicKeyMultibase": "z6Mknv5YjVe7VM1h7Gvgja568XmjxBjGVv8AHS7VSNyC5sQY",
+                        "type": "Multikey"
+                    }
+                ]
             }
-          },
-          "state": {
-            "@context": [
-              "https://www.w3.org/ns/did/v1",
-              "https://www.w3.org/ns/cid/v1"
-            ],
-            "assertionMethod": [
-              "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000#key-0"
-            ],
-            "authentication": [
-              "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000#key-0"
-            ],
-            "capabilityDelegation": [],
-            "capabilityInvocation": [],
-            "id": "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000",
-            "keyAgreement": [
-              "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000#key-0"
-            ],
-            "service": [],
-            "verificationMethod": [
-              {
-                "controller": "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000",
-                "id": "did:webvh:zQmQNi9ZDiNEAxkyLrjHjFFsSgb8fAs3P6bfwJhYbojVnB7:localhost%3A8000#key-0",
-                "publicKeyMultibase": "z6Mkn6Rwmuzpc8wvErSX4WbDW4Cu3XVtbdRV9fGdb2hea4Fs",
-                "type": "Multikey"
-              }
-            ]
-          },
-          "version_id": "1-zQmW7ssogG8fwWBZTdH47S4vntYJzVB4vbXR1pYsAhriNh4",
-          "version_time": "2025-05-31T02:11:02Z"
         }
-                );
+                        );
 
         let proof_raw = r#"{
-    "created": "2025-06-01T00:05:34Z",
-    "cryptosuite": "eddsa-jcs-2022",
-    "proofPurpose": "assertionMethod",
-    "proofValue": "z4y49Tm7xP5oGXoKyWdovvpkrRdVF3Fk8dxiSGuyWBy5cYLoabfiwtN68ZzDuHWYhdF8SpkJfgukcRLTZbmdqBbPt",
-    "type": "DataIntegrityProof",
-    "verificationMethod": "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm"
-  }"#;
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-jcs-2022",
+            "created": "2025-07-07T10:26:45Z",
+            "verificationMethod": "did:key:z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4#z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4",
+            "proofPurpose": "assertionMethod",
+            "proofValue": "z4r6iKy8weeytRA5kD3Ajhe3wePvYLU9DNZMXYxSGifuyooivDNq7SN8WmaVoki7jxCGKiX7Jy3r8XYivA2mrA9UK"
+        }"#;
         let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
 
         println!("input: {signed:#?}");
