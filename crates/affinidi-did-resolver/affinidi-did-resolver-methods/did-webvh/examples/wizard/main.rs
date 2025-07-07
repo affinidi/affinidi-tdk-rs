@@ -257,6 +257,9 @@ async fn create_new_did() -> Result<()> {
     // ************************************************************************
     // Store keys that we want to use for updates
     let mut authorization_secrets = ConfigInfo::default();
+    authorizing_keys.iter().for_each(|key| {
+        authorization_secrets.add_key(key);
+    });
     let parameters = loop {
         match configure_parameters(&webvh_did, &authorizing_keys, &mut authorization_secrets) {
             Ok(parameters) => break parameters,
@@ -300,7 +303,7 @@ async fn create_new_did() -> Result<()> {
     // Step 6: Validate the LogEntry
     // ************************************************************************
     // Validate the Log Entry
-    let meta_data = log_entry.verify_log_entry(None, None, None)?;
+    let (validated_parameters, meta_data) = log_entry.verify_log_entry(None, None, None)?;
     println!(
         "{}\n{}\n{}",
         style("Log Entry Metadata:").color256(69),

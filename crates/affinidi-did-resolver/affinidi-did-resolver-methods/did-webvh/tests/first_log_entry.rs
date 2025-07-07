@@ -30,10 +30,14 @@ fn test_first_log_entry_deactivated_error() {
 fn test_first_log_entry_verify_signature() {
     let first_log_entry = load_test_file("tests/test_vectors/first_log_entry_verify_full.jsonl");
 
-    let first_log_entry: SignedDocument =
+    let first_log_entry: LogEntry =
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    assert!(verify_data(&first_log_entry).is_ok());
+    let signed_document: SignedDocument = (&first_log_entry)
+        .try_into()
+        .expect("Failed to convert LogEntry to SignedDocument");
+
+    assert!(verify_data(&signed_document).is_ok());
 }
 
 #[test]
@@ -41,10 +45,14 @@ fn test_first_log_entry_verify_signature_tampered() {
     let first_log_entry =
         load_test_file("tests/test_vectors/first_log_entry_verify_tampered.jsonl");
 
-    let first_log_entry: SignedDocument =
+    let first_log_entry: LogEntry =
         serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    assert!(verify_data(&first_log_entry).is_err());
+    let signed_document: SignedDocument = (&first_log_entry)
+        .try_into()
+        .expect("Failed to convert LogEntry to SignedDocument");
+
+    assert!(verify_data(&signed_document).is_err());
 }
 
 #[test]

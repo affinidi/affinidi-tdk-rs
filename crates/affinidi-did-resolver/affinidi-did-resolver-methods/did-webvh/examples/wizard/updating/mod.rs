@@ -125,7 +125,34 @@ pub async fn edit_did() -> Result<()> {
             }
             1 => {
                 // DID Portability
-                migrate_did(&file_path, &mut webvh_state, &config_info)?;
+                migrate_did(&mut webvh_state, &mut config_info)?;
+
+                let new_entry = webvh_state.log_entries.last().ok_or_else(|| {
+                    DIDWebVHError::LogEntryError("No new LogEntry created".to_string())
+                })?;
+
+                let new_proofs = witness_log_entry(
+                    &mut webvh_state.witness_proofs,
+                    &new_entry.log_entry,
+                    &new_entry.validated_parameters.active_witness,
+                    &config_info,
+                )?;
+
+                // Save info to files
+                new_entry.log_entry.save_to_file(&file_path)?;
+                config_info.save_to_file(&[file_name_prefix, "-secrets.json"].concat())?;
+                println!(
+                    "{}",
+                    style("Successfully created new LogEntry")
+                        .color256(34)
+                        .blink()
+                );
+                if new_proofs.is_some() {
+                    webvh_state
+                        .witness_proofs
+                        .save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
+                }
+
                 break;
             }
             2 => {

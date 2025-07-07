@@ -7,6 +7,7 @@ use crate::{DIDWebVHError, witness::Witnesses};
 use affinidi_secrets_resolver::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use std::ops::Not;
+use tracing::debug;
 
 /// [https://identity.foundation/didwebvh/v1.0/#didwebvh-did-method-parameters]
 /// Parameters that help with the resolution of a webvh DID
@@ -88,6 +89,7 @@ pub struct Parameters {
         with = "::serde_with::rust::double_option",
     )]
     pub ttl: Option<Option<u32>>,
+    pub ttl2: u32,
 }
 
 impl Default for Parameters {
@@ -105,6 +107,7 @@ impl Default for Parameters {
             watchers: None,
             deactivated: false,
             ttl: None,
+            ttl2: 300,
         }
     }
 }
@@ -113,6 +116,9 @@ impl Parameters {
     /// validate and return a Parameters object based on the Log Entry that reflects the current
     /// state of the parameters
     pub fn validate(&self, previous: Option<&Parameters>) -> Result<Parameters, DIDWebVHError> {
+        debug!("self: {:#?}", self);
+        debug!("previous: {:#?}", previous);
+
         let mut new_parameters = Parameters {
             scid: self.scid.clone(),
             ..Default::default()
@@ -293,17 +299,21 @@ impl Parameters {
             }
         }
 
+        println!("TIMTAM: {:#?}", self);
         // Check deactivation status
         if self.deactivated && previous.is_none() {
             // Can't be deactivated on the first log entry
             return Err(DIDWebVHError::DeactivatedError(
                 "DID cannot be deactivated on the first Log Entry".to_string(),
             ));
-        } else if self.deactivated && (new_parameters.update_keys != Some(None)) {
+        } else if self.deactivated && (self.update_keys != Some(None)) {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
             ));
+        } else if self.deactivated {
+            new_parameters.update_keys = Some(None);
         }
+
         new_parameters.deactivated = self.deactivated;
 
         // Determine TTL
@@ -381,6 +391,10 @@ impl Parameters {
         // scid can not be changed, so leave it at default None
 
         // updateKeys may have changed
+        debug!(
+            "new_params.update_keys: {:#?} :: previous.update_keys: {:#?}",
+            new_params.update_keys, self.update_keys
+        );
         match new_params.update_keys {
             None => {
                 // If None, then keep current parameter updateKeys

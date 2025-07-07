@@ -14,6 +14,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use serde_json::Value;
 use thiserror::Error;
+use tracing::debug;
 
 pub mod log_entry;
 pub mod log_entry_state;
@@ -105,26 +106,31 @@ impl DIDWebVHState {
         let now = Utc::now();
 
         // Create a VerificationMethod ID from the first updatekey
-        let vm_id = if let Some(Some(value)) = &parameters.update_keys {
-            if let Some(key) = value.iter().next() {
+        if let Some(Some(value)) = &parameters.update_keys
+            && !parameters.deactivated
+        {
+            let vm_id = if let Some(key) = value.iter().next() {
                 // Create a VerificationMethod ID from the first update key
                 ["did:key:", key, "#", key].concat()
             } else {
                 return Err(DIDWebVHError::SCIDError(
                     "No update keys provided in parameters".to_string(),
                 ));
+            };
+            // Check that the vm_id matches the secret key id
+            if signing_key.id != vm_id {
+                return Err(DIDWebVHError::SCIDError(format!(
+                    "Secret key ID {} does not match VerificationMethod ID {}",
+                    signing_key.id, vm_id
+                )));
             }
+        } else if parameters.deactivated {
+            // This is the last LogEntry for a deactivated Entry
+            // Do nothing
         } else {
             return Err(DIDWebVHError::SCIDError(
                 "No update keys provided in parameters".to_string(),
             ));
-        };
-        // Check that the vm_id matches the secret key id
-        if signing_key.id != vm_id {
-            return Err(DIDWebVHError::SCIDError(format!(
-                "Secret key ID {} does not match VerificationMethod ID {}",
-                signing_key.id, vm_id
-            )));
         }
 
         let last_log_entry = self.log_entries.last();
@@ -132,6 +138,10 @@ impl DIDWebVHState {
         let mut log_entry = if let Some(last_log_entry) = last_log_entry {
             // Utilizes the previous LogEntry for some info
 
+            debug!(
+                "previous.validated parameters: {:#?}",
+                last_log_entry.validated_parameters
+            );
             LogEntry {
                 version_id: last_log_entry.log_entry.version_id.clone(),
                 version_time: version_time.unwrap_or_else(|| {
