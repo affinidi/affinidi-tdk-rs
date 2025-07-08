@@ -1,6 +1,6 @@
 # Affinidi Data Integrity Changelog
 
-## 7th July 2025 Release 0.2.0
+## 8th July 2025 Release 0.2.0
 
 * **BREAKING:** API Changed to use generics that implement Serialize/Deserialize
   * Fixes a problem where the JCS library converts a JSON Number to a Fixed Floating
