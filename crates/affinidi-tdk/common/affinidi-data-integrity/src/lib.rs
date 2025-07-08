@@ -112,13 +112,20 @@ impl DataIntegrityProof {
                 )));
             }
         };
-        debug!("proof options: {}", proof_jcs);
+        debug!("proof options (JCS): {}", proof_jcs);
 
         let hash_data = hashing_eddsa_jcs(&jcs, &proof_jcs);
 
         // Step 6: Sign the final hash
         let signed = crypto_suite.sign(secret, hash_data.as_slice())?;
-        debug!("{}", format!("signed: {:02x?}", &signed));
+        debug!(
+            "signature data = {}",
+            signed
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<String>>()
+                .join("")
+        );
 
         // Step 7: Encode using base58btc
         proof_options.proof_value =
@@ -127,6 +134,7 @@ impl DataIntegrityProof {
         Ok(proof_options)
     }
 
+    /*
     pub fn sign_jcs_proof_only<S>(
         data_doc: &S,
         context: Option<Vec<String>>,
@@ -188,7 +196,7 @@ impl DataIntegrityProof {
             Some(MultibaseBuf::encode(Base::Base58Btc, &signed).to_string());
 
         Ok(proof_options)
-    }
+    }*/
 }
 
 /// Hashing Algorithm for EDDSA JCS
@@ -255,6 +263,7 @@ mod tests {
         );
     }
 
+    /*
     #[test]
     fn test_sign_jcs_proof_only_good() {
         let generic_doc =
@@ -279,5 +288,5 @@ mod tests {
             DataIntegrityProof::sign_jcs_proof_only(&generic_doc, Some(context), &secret).is_ok(),
             "Signing failed"
         );
-    }
+    }*/
 }

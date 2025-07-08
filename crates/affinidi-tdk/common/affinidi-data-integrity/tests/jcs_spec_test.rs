@@ -13,8 +13,7 @@ fn eddsa_jcs_2022_reference() {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    let input_doc = json!(
-        r#"{
+    let input_doc = json!( {
     "@context": [
         "https://www.w3.org/ns/credentials/v2",
         "https://www.w3.org/ns/credentials/examples/v2"
@@ -28,8 +27,7 @@ fn eddsa_jcs_2022_reference() {
     "credentialSubject": {
         "id": "did:example:abcdefgh",
         "alumniOf": "The School of Examples"
-    }
-}"#
+    }}
     );
 
     let context: Vec<String> = input_doc
