@@ -21,6 +21,8 @@ pub struct VerificationProof {
 }
 
 /// Verify a signed JSON Schema document.
+/// You must strip `proof` from the document as needed
+/// Context is a copy of any context that needs to be passed in
 pub fn verify_data<S>(
     signed_doc: &S,
     context: Option<Vec<String>>,
