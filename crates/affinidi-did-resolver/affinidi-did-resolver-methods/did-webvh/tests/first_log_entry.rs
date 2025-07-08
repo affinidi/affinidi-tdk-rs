@@ -1,4 +1,4 @@
-use affinidi_data_integrity::{SignedDocument, verification_proof::verify_data};
+use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use common::load_test_file;
 use did_webvh::log_entry::LogEntry;
 
@@ -30,14 +30,23 @@ fn test_first_log_entry_deactivated_error() {
 fn test_first_log_entry_verify_signature() {
     let first_log_entry = load_test_file("tests/test_vectors/first_log_entry_verify_full.jsonl");
 
-    let first_log_entry: LogEntry =
-        serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
+    let mut first_log_entry =
+        serde_json::to_value(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    let signed_document: SignedDocument = (&first_log_entry)
-        .try_into()
-        .expect("Failed to convert LogEntry to SignedDocument");
+    let proof: DataIntegrityProof = serde_json::from_value(
+        first_log_entry
+            .get("proof")
+            .expect("Failed to get proof from first log entry")
+            .clone(),
+    )
+    .expect("Couldn't extra proof");
 
-    assert!(verify_data(&signed_document).is_ok());
+    first_log_entry
+        .as_object_mut()
+        .expect("Failed to get object from first log entry")
+        .remove("proof");
+
+    assert!(verify_data(&first_log_entry, None, &proof).is_ok());
 }
 
 #[test]
@@ -45,14 +54,23 @@ fn test_first_log_entry_verify_signature_tampered() {
     let first_log_entry =
         load_test_file("tests/test_vectors/first_log_entry_verify_tampered.jsonl");
 
-    let first_log_entry: LogEntry =
-        serde_json::from_str(&first_log_entry).expect("Failed to parse first log entry JSON");
+    let mut first_log_entry =
+        serde_json::to_value(&first_log_entry).expect("Failed to parse first log entry JSON");
 
-    let signed_document: SignedDocument = (&first_log_entry)
-        .try_into()
-        .expect("Failed to convert LogEntry to SignedDocument");
+    let proof: DataIntegrityProof = serde_json::from_value(
+        first_log_entry
+            .get("proof")
+            .expect("Failed to get proof from first log entry")
+            .clone(),
+    )
+    .expect("Couldn't extra proof");
 
-    assert!(verify_data(&signed_document).is_err());
+    first_log_entry
+        .as_object_mut()
+        .expect("Failed to get object from first log entry")
+        .remove("proof");
+
+    assert!(verify_data(&first_log_entry, None, &proof).is_err());
 }
 
 #[test]

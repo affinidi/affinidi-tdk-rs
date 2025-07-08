@@ -9,7 +9,7 @@ use crate::{
     parameters::Parameters,
     witness::proofs::WitnessProofCollection,
 };
-use affinidi_data_integrity::{DataIntegrityProof, SigningDocument};
+use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use serde_json::Value;
@@ -238,23 +238,15 @@ impl DIDWebVHState {
             };
 
         // Generate the proof for the log entry
-        let mut log_entry_unsigned: SigningDocument = (&log_entry).try_into()?;
-
-        DataIntegrityProof::sign_jcs_data(&mut log_entry_unsigned, signing_key, None).map_err(
-            |e| {
+        let proof = DataIntegrityProof::sign_jcs_data(&log_entry, None, signing_key, None)
+            .map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
+                    e
                 ))
-            },
-        )?;
+            })?;
 
-        if let Some(proof) = log_entry_unsigned.proof {
-            log_entry.proof.push(proof);
-        } else {
-            return Err(DIDWebVHError::SCIDError(
-                "LogEntry proof is missing after signing".to_string(),
-            ));
-        }
+        log_entry.proof = Some(proof);
 
         // Generate metadata for this LogEntry
         let metadata = MetaData {

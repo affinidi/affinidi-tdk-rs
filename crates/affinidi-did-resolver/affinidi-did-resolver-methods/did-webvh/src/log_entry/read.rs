@@ -80,8 +80,19 @@ impl LogEntry {
         }
 
         // Verify Signature
-        let verified = verify_data(&self.try_into()?).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Signature verification failed: {e}"))
+        let verify_doc = LogEntry {
+            proof: None,
+            ..self.clone()
+        };
+
+        let Some(proof) = self.proof.clone() else {
+            return Err(DIDWebVHError::LogEntryError(
+                "Missing proof in the signed LogEntry!".to_string(),
+            ));
+        };
+
+        let verified = verify_data(&verify_doc, None, &proof).map_err(|e| {
+            DIDWebVHError::LogEntryError(format!("Signature verification failed: {}", e))
         })?;
         if !verified.verified {
             return Err(DIDWebVHError::LogEntryError(
