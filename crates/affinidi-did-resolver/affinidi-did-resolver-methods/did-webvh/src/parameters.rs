@@ -89,7 +89,6 @@ pub struct Parameters {
         with = "::serde_with::rust::double_option",
     )]
     pub ttl: Option<Option<u32>>,
-    pub ttl2: u32,
 }
 
 impl Default for Parameters {
@@ -107,7 +106,6 @@ impl Default for Parameters {
             watchers: None,
             deactivated: false,
             ttl: None,
-            ttl2: 300,
         }
     }
 }
