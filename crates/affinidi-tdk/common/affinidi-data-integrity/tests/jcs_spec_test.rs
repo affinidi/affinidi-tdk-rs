@@ -1,7 +1,6 @@
-use affinidi_data_integrity::{
-    DataIntegrityProof, SignedDocument, SigningDocument, verification_proof::verify_data,
-};
+use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use affinidi_secrets_resolver::secrets::Secret;
+use serde_json::json;
 use tracing_subscriber::filter;
 
 #[test]
@@ -14,7 +13,7 @@ fn eddsa_jcs_2022_reference() {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    let input_doc_str = r#"{
+    let input_doc = json!( {
     "@context": [
         "https://www.w3.org/ns/credentials/v2",
         "https://www.w3.org/ns/credentials/examples/v2"
@@ -28,11 +27,17 @@ fn eddsa_jcs_2022_reference() {
     "credentialSubject": {
         "id": "did:example:abcdefgh",
         "alumniOf": "The School of Examples"
-    }
-}"#;
+    }}
+    );
 
-    let mut unsigned_values: SigningDocument =
-        serde_json::from_str(input_doc_str).expect("Couldn't serialize input string");
+    let context: Vec<String> = input_doc
+        .get("@context")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap().to_string())
+        .collect();
 
     let pub_key = "z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2";
     let pri_key = "z3u2en7t5LR2WtQH5PfFqMqwVHBeXouLzo6haApm8XHqvjxq";
@@ -40,24 +45,17 @@ fn eddsa_jcs_2022_reference() {
     let secret = Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
         .expect("Couldn't create Secret");
 
-    DataIntegrityProof::sign_jcs_data(
-        &mut unsigned_values,
+    let proof = DataIntegrityProof::sign_jcs_data(
+        &input_doc,
+        Some(context.clone()),
         &secret,
         Some("2023-02-24T23:36:38Z".to_string()),
     )
     .expect("Couldn't sign Document");
 
-    let signed = SignedDocument {
-        extra: unsigned_values.extra,
-        proof: unsigned_values.proof.clone(),
-    };
-    let validated = verify_data(&signed).expect("Couldn't validate doc");
+    let validated = verify_data(&input_doc, Some(context), &proof).expect("Couldn't validate doc");
 
     assert!(validated.verified);
-
-    let Some(proof) = &unsigned_values.proof else {
-        panic!("Proof should not be None");
-    };
 
     let Some(proof_value) = &proof.proof_value else {
         panic!("Proof value should not be None");

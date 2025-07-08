@@ -2,16 +2,14 @@
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
 use crate::{DIDWebVHError, parameters::Parameters, witness::Witnesses};
-use affinidi_data_integrity::{
-    DataIntegrityProof, SignedDocument, SigningDocument, verification_proof::verify_data,
-};
+use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use multibase::Base;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, fs::OpenOptions, io::Write};
+use std::{fs::OpenOptions, io::Write};
 use tracing::debug;
 
 pub mod read;
@@ -128,21 +126,8 @@ impl LogEntry {
         &self,
         witness_proof: &DataIntegrityProof,
     ) -> Result<bool, DIDWebVHError> {
-        // Create a SigningDocument from the LogEntry
-        let mut signing_doc: SignedDocument = self.try_into()?;
-        signing_doc.proof = Some(witness_proof.clone());
-        signing_doc.extra.insert(
-            "proof".to_string(),
-            serde_json::to_value(&self.proof).map_err(|e| {
-                DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize LogEntry Proof to JSON Value: {}",
-                    e
-                ))
-            })?,
-        );
-
         // Verify the Data Integrity Proof against the Signing Document
-        verify_data(&signing_doc).map_err(|e| {
+        verify_data(&self, None, witness_proof).map_err(|e| {
             DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {}", e))
         })?;
 
@@ -169,97 +154,5 @@ impl LogEntry {
             ))
         })?;
         Ok((id, hash.to_string()))
-    }
-}
-
-/// Converts a log entry to the Signing Document format.
-/// Allowing a LogEntry to be signed
-impl TryFrom<&LogEntry> for SigningDocument {
-    type Error = DIDWebVHError;
-
-    fn try_from(log_entry: &LogEntry) -> Result<Self, Self::Error> {
-        let mut signing = SigningDocument {
-            extra: HashMap::new(),
-            proof: None,
-        };
-
-        signing.extra.insert(
-            "versionId".to_string(),
-            log_entry.version_id.to_owned().into(),
-        );
-
-        signing.extra.insert(
-            "versionTime".to_string(),
-            log_entry.version_time.to_owned().into(),
-        );
-
-        signing.extra.insert(
-            "parameters".to_string(),
-            serde_json::to_value(&log_entry.parameters).map_err(|e| {
-                DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize Paramaters to JSON Value: {}",
-                    e
-                ))
-            })?,
-        );
-
-        signing
-            .extra
-            .insert("state".to_string(), log_entry.state.clone());
-
-        // If proof already exists in the document, then add it to extra as a signature will be
-        // created from it
-        if let Some(proof) = &log_entry.proof {
-            signing.extra.insert(
-                "proof".to_string(),
-                serde_json::to_value(proof).map_err(|e| {
-                    DIDWebVHError::LogEntryError(format!(
-                        "Couldn't serialize Data Integrity Proof to JSON Value: {}",
-                        e
-                    ))
-                })?,
-            );
-        }
-
-        Ok(signing)
-    }
-}
-
-/// Converts a signed log entry to the Signed Document format.
-/// Allowing a LogEntry to be verified
-impl TryFrom<&LogEntry> for SignedDocument {
-    type Error = DIDWebVHError;
-
-    fn try_from(log_entry: &LogEntry) -> Result<Self, Self::Error> {
-        let mut signing = SignedDocument {
-            extra: HashMap::new(),
-            proof: log_entry.proof.clone(),
-        };
-
-        signing.extra.insert(
-            "versionId".to_string(),
-            log_entry.version_id.to_owned().into(),
-        );
-
-        signing.extra.insert(
-            "versionTime".to_string(),
-            log_entry.version_time.to_owned().into(),
-        );
-
-        signing.extra.insert(
-            "parameters".to_string(),
-            serde_json::to_value(&log_entry.parameters).map_err(|e| {
-                DIDWebVHError::ParametersError(format!(
-                    "Couldn't serialize Paramaters to JSON Value: {}",
-                    e
-                ))
-            })?,
-        );
-
-        signing
-            .extra
-            .insert("state".to_string(), log_entry.state.clone());
-
-        Ok(signing)
     }
 }
