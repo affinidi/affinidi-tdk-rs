@@ -529,23 +529,18 @@ mod tests {
 
     #[test]
     fn verification_ok() {
-        let signed = json!(
-                    {
-            "versionId": "1-QmPoRiosXpDBFtybpTWCQfNwDiZSFCFcu18ynEKzSxTQDw",
-            "versionTime": "2025-07-07T10:26:45Z",
+        let signed = json!({
+            "versionId": "1-Qmd16PWfGVLnmUQ6K6hH3WCEWF9zxc76KtLpafGGn26EJu",
+            "versionTime": "2025-07-07T23:57:57Z",
             "parameters": {
                 "method": "did:webvh:1.0",
-                "scid": "QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR",
+                "scid": "QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr",
                 "updateKeys": [
-                    "z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4"
+                    "z6MkqodMFJ9rVXnhh4fi2qKAztN9EZYvxrnsJZsbfe7udUWH"
                 ],
                 "portable": true,
                 "nextKeyHashes": [
-                    "zQmSEh6RHcXfCFAb2ZbHDXvRSpeq6AhWiAzarsE9gNnJ6JF",
-                    "zQmdmsTj2ugvmAxCdBXK3ytzbSUoqpzEeEp3sbXBDZxG4t3"
-                ],
-                "watchers": [
-                    "daasds"
+                    "zQmW5Rh2MdjhNbdhyXUof9QWTr1A9B1NM47JcWy5C5wBqkq"
                 ],
                 "ttl2": 300
             },
@@ -555,37 +550,37 @@ mod tests {
                     "https://www.w3.org/ns/cid/v1"
                 ],
                 "assertionMethod": [
-                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                    "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000#key-0"
                 ],
                 "authentication": [
-                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                    "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000#key-0"
                 ],
                 "capabilityDelegation": [],
                 "capabilityInvocation": [],
-                "id": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000",
+                "id": "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000",
                 "keyAgreement": [
-                    "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0"
+                    "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000#key-0"
                 ],
                 "service": [],
                 "verificationMethod": [
                     {
-                        "controller": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000",
-                        "id": "did:webvh:QmQNyhYPQYKnUxmMwQYE1mGWtpqKL7Es2ankSWtKWeMGzR:localhost%3A8000#key-0",
-                        "publicKeyMultibase": "z6Mknv5YjVe7VM1h7Gvgja568XmjxBjGVv8AHS7VSNyC5sQY",
+                        "controller": "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000",
+                        "id": "did:webvh:QmZ6weBXW3NHpimMNXL8jNtbpWz3YZg79GTDfQMgSRYSWr:localhost%3A8000#key-0",
+                        "publicKeyMultibase": "z6Mki7NRnYmhgXzX9fW3HHfK3pFtJU1FFYtBiphtE8DkGhGT",
                         "type": "Multikey"
                     }
                 ]
             }
         }
-                        );
+        );
 
         let proof_raw = r#"{
             "type": "DataIntegrityProof",
             "cryptosuite": "eddsa-jcs-2022",
-            "created": "2025-07-07T10:26:45Z",
-            "verificationMethod": "did:key:z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4#z6MkwR9BkzLCFpWP4S8zSWHu82aKm5hbnrKPfJZ8TS48LNk4",
+            "created": "2025-07-07T23:57:57Z",
+            "verificationMethod": "did:key:z6MkqodMFJ9rVXnhh4fi2qKAztN9EZYvxrnsJZsbfe7udUWH#z6MkqodMFJ9rVXnhh4fi2qKAztN9EZYvxrnsJZsbfe7udUWH",
             "proofPurpose": "assertionMethod",
-            "proofValue": "z4r6iKy8weeytRA5kD3Ajhe3wePvYLU9DNZMXYxSGifuyooivDNq7SN8WmaVoki7jxCGKiX7Jy3r8XYivA2mrA9UK"
+            "proofValue": "zCGvUqC23S2PcxeYRUNFHuoBYSKGSj6XBjg2AgyuBFgo4AzitU5hykMtJcoLXAvibqTMMdVRVHV8hZ1PoHgB4UyR"
         }"#;
         let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
 
