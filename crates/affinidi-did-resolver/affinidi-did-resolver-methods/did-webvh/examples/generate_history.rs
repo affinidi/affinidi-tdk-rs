@@ -398,7 +398,7 @@ fn swap_watcher(params: &mut Parameters) -> Result<()> {
     new_watchers.remove(rn);
     new_watchers.push(
         [
-            "https://wacther-",
+            "https://watcher-",
             &new_watcher_id,
             ".affinidi.com/v1/webvh",
         ]
