@@ -23,7 +23,7 @@ site
 - [x] Update webvh DID
 - [x] Revoke webvh DID
 - [x] Witness webvh DID
-- [ ] Migration of DID (portability)
+- [x] Migration of DID (portability)
 - [x] Validate witness information
 
 ## Usage
