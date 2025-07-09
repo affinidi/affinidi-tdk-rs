@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 9th June 2025 (0.1.12)
+
+* **MAINTENANCE:** Dependencies updated
+* **MAINTENANCE:** Addressing Rust linting warnings
+* **CHANGE:** Hashing of publickeys returns base58 only not multiencode
+
 ## 14th June 2025 (0.1.11)
 
 * **MAINTENANCE:** Updated SSI crate from 0.11 to 0.12
