@@ -241,12 +241,11 @@ impl DIDWebVHState {
         let proof = DataIntegrityProof::sign_jcs_data(&log_entry, None, signing_key, None)
             .map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                    e
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}"
                 ))
             })?;
 
-        log_entry.proof = Some(proof);
+        log_entry.proof.push(proof);
 
         // Generate metadata for this LogEntry
         let metadata = MetaData {

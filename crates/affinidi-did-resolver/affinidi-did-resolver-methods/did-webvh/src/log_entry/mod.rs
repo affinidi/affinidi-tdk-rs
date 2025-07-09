@@ -3,7 +3,7 @@
 */
 use crate::{DIDWebVHError, parameters::Parameters, witness::Witnesses};
 use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
-use multibase::Base;
+use base58::ToBase58;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,7 +119,7 @@ impl LogEntry {
     ) -> Result<bool, DIDWebVHError> {
         // Verify the Data Integrity Proof against the Signing Document
         verify_data(&self, None, witness_proof).map_err(|e| {
-            DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {}", e))
+            DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {e}"))
         })?;
 
         Ok(true)

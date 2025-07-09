@@ -297,7 +297,6 @@ impl Parameters {
             }
         }
 
-        println!("TIMTAM: {:#?}", self);
         // Check deactivation status
         if self.deactivated && previous.is_none() {
             // Can't be deactivated on the first log entry

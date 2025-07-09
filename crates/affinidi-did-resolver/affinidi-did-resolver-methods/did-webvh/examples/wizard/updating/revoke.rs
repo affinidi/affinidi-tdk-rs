@@ -145,7 +145,6 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
         update_keys: Some(None),
         ..Default::default()
     };
-    println!("TIMTAM: {:#?}", new_params);
 
     didwebvh
         .create_log_entry(

@@ -41,15 +41,14 @@ pub fn witness_log_entry(
         let proof =
             DataIntegrityProof::sign_jcs_data(&log_entry, None, secret, None).map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                    e
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
                 ))
             })?;
 
         // Save proof to collection
         witness_proofs
             .add_proof(&log_entry.version_id, &proof, false)
-            .map_err(|e| DIDWebVHError::WitnessProofError(format!("Error adding proof: {}", e)))?;
+            .map_err(|e| DIDWebVHError::WitnessProofError(format!("Error adding proof: {e}",)))?;
 
         println!(
             "{}{}{}{}{}",

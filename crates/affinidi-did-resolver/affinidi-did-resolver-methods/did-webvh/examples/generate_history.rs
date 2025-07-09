@@ -7,7 +7,7 @@
 //! 4. They swap a watcher node once every 12 months (maintaining 3 watchers)
 //! 5. DID VM Key is rotated every 3 months
 
-use affinidi_data_integrity::{DataIntegrityProof, SigningDocument};
+use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::{SecretsResolver, SimpleSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{DID, KeyType};
 use anyhow::{Result, anyhow, bail};
@@ -107,6 +107,7 @@ pub async fn main() -> Result<()> {
         "Reading LogEntries Duration: {}ms",
         end.duration_since(start).unwrap().as_millis()
     );
+    let mut total_validation = end.duration_since(start).unwrap().as_millis();
 
     sleep(Duration::from_secs(3));
     let start2 = SystemTime::now();
@@ -118,6 +119,8 @@ pub async fn main() -> Result<()> {
         end.duration_since(start2).unwrap().as_millis()
     );
 
+    total_validation += end.duration_since(start2).unwrap().as_millis();
+
     sleep(Duration::from_secs(3));
     let start3 = SystemTime::now();
     verify_state.validate()?;
@@ -127,11 +130,9 @@ pub async fn main() -> Result<()> {
         "Validation Duration: {}ms",
         end.duration_since(start3).unwrap().as_millis()
     );
+    total_validation += end.duration_since(start3).unwrap().as_millis();
 
-    println!(
-        "Total validation: {}",
-        end.duration_since(start).unwrap().as_millis()
-    );
+    println!("Total validation: {total_validation}ms",);
 
     Ok(())
 }
@@ -262,8 +263,6 @@ async fn witness_log_entry(
         return Ok(());
     };
 
-    let mut doc_to_sign: SigningDocument =
-        (&didwebvh.log_entries.last().unwrap().log_entry).try_into()?;
     for witness in &witnesses.witnesses {
         let key = witness.id.split_at(8);
         // Get secret for Witness
@@ -275,38 +274,17 @@ async fn witness_log_entry(
         };
 
         // Generate Signature
-        DataIntegrityProof::sign_jcs_data(&mut doc_to_sign, &secret, None).map_err(|e| {
-            anyhow!(
-                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                e
-            )
-        })?;
+        let proof = DataIntegrityProof::sign_jcs_data(&log_entry.log_entry, None, &secret, None)
+            .map_err(|e| {
+                anyhow!("Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",)
+            })?;
 
         // Save proof to collection
-        if let Some(proof) = &doc_to_sign.proof {
-            didwebvh
-                .witness_proofs
-                .add_proof(&log_entry.log_entry.version_id, proof, false)
-                .map_err(|e| anyhow!("Error adding proof: {}", e))?;
-
-            doc_to_sign.proof = None; // Reset proof for next witness
-
-        // println!(
-        //     "{}{}{}{}{}",
-        //     style("Witness (").color256(69),
-        //     style(&witness.id).color256(45),
-        //     style("): Successfully witnessed LogEntry (").color256(69),
-        //     style(&log_entry.log_entry.version_id).color256(45),
-        //     style(")").color256(69),
-        // );
-        } else {
-            bail!("No proof generated from witness ({})!", witness.id);
-        }
+        didwebvh
+            .witness_proofs
+            .add_proof(&log_entry.log_entry.version_id, &proof, false)
+            .map_err(|e| anyhow!("Error adding proof: {e}"))?;
     }
-    // Strip out any duplicate records where we can
-    // println!("BEFORE Witness proofs: {:#?}", didwebvh.witness_proofs);
-    // didwebvh.witness_proofs.write_optimise_records()?;
-    // println!("AFTER Witness proofs: {:#?}", didwebvh.witness_proofs);
 
     Ok(())
 }
