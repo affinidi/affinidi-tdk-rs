@@ -19,6 +19,7 @@ use did_webvh::{
     witness::{Witness, Witnesses},
 };
 use rand::{Rng, distr::Alphabetic};
+use serde_json::json;
 use std::{
     fs::OpenOptions,
     io::Write,
@@ -274,10 +275,15 @@ async fn witness_log_entry(
         };
 
         // Generate Signature
-        let proof = DataIntegrityProof::sign_jcs_data(&log_entry.log_entry, None, &secret, None)
-            .map_err(|e| {
-                anyhow!("Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",)
-            })?;
+        let proof = DataIntegrityProof::sign_jcs_data(
+            &json!({"versionId": &log_entry.log_entry.version_id}),
+            None,
+            &secret,
+            None,
+        )
+        .map_err(|e| {
+            anyhow!("Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",)
+        })?;
 
         // Save proof to collection
         didwebvh

@@ -6,7 +6,7 @@ use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_dat
 use base58::ToBase58;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
 use std::{fs::OpenOptions, io::Write};
@@ -118,7 +118,7 @@ impl LogEntry {
         witness_proof: &DataIntegrityProof,
     ) -> Result<bool, DIDWebVHError> {
         // Verify the Data Integrity Proof against the Signing Document
-        verify_data(&self, None, witness_proof).map_err(|e| {
+        verify_data(&json!({"versionId": &self.version_id}), None, witness_proof).map_err(|e| {
             DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {e}"))
         })?;
 

@@ -7,6 +7,7 @@ use did_webvh::{
     log_entry::LogEntry,
     witness::{Witnesses, proofs::WitnessProofCollection},
 };
+use serde_json::json;
 
 /// Witnesses a LogEntry with the active LogEntries
 pub fn witness_log_entry(
@@ -38,12 +39,17 @@ pub fn witness_log_entry(
         };
 
         // Generate Signature
-        let proof =
-            DataIntegrityProof::sign_jcs_data(&log_entry, None, secret, None).map_err(|e| {
-                DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
-                ))
-            })?;
+        let proof = DataIntegrityProof::sign_jcs_data(
+            &json!({"versionId": &log_entry.version_id}),
+            None,
+            secret,
+            None,
+        )
+        .map_err(|e| {
+            DIDWebVHError::SCIDError(format!(
+                "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}",
+            ))
+        })?;
 
         // Save proof to collection
         witness_proofs
