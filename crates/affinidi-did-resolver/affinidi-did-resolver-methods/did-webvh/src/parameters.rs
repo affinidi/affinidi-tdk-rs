@@ -356,7 +356,7 @@ impl Parameters {
         };
         for key in update_keys.iter() {
             // Convert the key to the hash value
-            let check_hash = Secret::hash_string(key).map_err(|e| {
+            let check_hash = Secret::base58_hash_string(key).map_err(|e| {
                 DIDWebVHError::ValidationError(format!(
                     "Couldn't hash updateKeys key ({}). Reason: {}",
                     key, e
