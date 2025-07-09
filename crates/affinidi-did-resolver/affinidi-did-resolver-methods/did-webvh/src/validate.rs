@@ -8,7 +8,7 @@
 *   Step 5: Fully validated WebVH DID result
 */
 
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     DIDWebVHError, DIDWebVHState,
@@ -27,6 +27,11 @@ impl DIDWebVHState {
             match entry.verify_log_entry(previous_entry) {
                 Ok(()) => (),
                 Err(e) => {
+                    warn!(
+                        "There was an issue with LogEntry: {}! Reason: {e}",
+                        entry.log_entry.version_id
+                    );
+                    warn!("Falling back to last known good LogEntry!");
                     if previous_entry.is_some() {
                         // Return last known good LogEntry
                         break;

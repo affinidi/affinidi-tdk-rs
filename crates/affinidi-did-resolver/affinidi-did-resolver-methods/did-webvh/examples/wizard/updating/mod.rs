@@ -53,7 +53,25 @@ pub async fn edit_did() -> Result<()> {
     };
 
     // Validate webvh state
-    webvh_state.validate()?;
+    match webvh_state.validate() {
+        Ok(_) => {
+            println!(
+                "{}",
+                style("Successfully loaded DID WebVH state")
+                    .color256(34)
+                    .blink()
+            );
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                style(format!("Failed to validate DID WebVH state: {e}"))
+                    .color256(196)
+                    .blink()
+            );
+            return Err(e.into());
+        }
+    }
 
     let last_entry_state = webvh_state.log_entries.last().ok_or_else(|| {
         DIDWebVHError::ParametersError("No log entries found in the file".to_string())

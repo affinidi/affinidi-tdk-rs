@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::{self, BufRead},
 };
+use tracing::{debug, warn};
 
 impl LogEntry {
     /// Load all LogEntries from a file and return them as a vector
@@ -51,6 +52,8 @@ impl LogEntry {
         previous_parameters: Option<&Parameters>,
         previous_meta_data: Option<&MetaData>,
     ) -> Result<(Parameters, MetaData), DIDWebVHError> {
+        debug!("Verifiying LogEntry: {}", self.version_id);
+
         // Ensure we are dealing with a signed LogEntry
         let Some(proof) = &self.proof.first() else {
             return Err(DIDWebVHError::ValidationError(
@@ -67,12 +70,17 @@ impl LogEntry {
                 )));
             }
         };
+        debug!("Validated parameters: {parameters:#?}");
 
         // Ensure that the signed proof key is part of the authorized keys
         if !LogEntry::check_signing_key_authorized(
             &parameters.active_update_keys,
             &proof.verification_method,
         ) {
+            warn!(
+                "Signing key {} is not authorized",
+                &proof.verification_method
+            );
             return Err(DIDWebVHError::ValidationError(format!(
                 "Signing key ({}) is not authorized",
                 &proof.verification_method
@@ -124,6 +132,8 @@ impl LogEntry {
                 parameters.scid.clone().unwrap(),
             )
         };
+
+        debug!("LogEntry {} successfully verified", self.version_id);
 
         Ok((
             parameters.clone(),

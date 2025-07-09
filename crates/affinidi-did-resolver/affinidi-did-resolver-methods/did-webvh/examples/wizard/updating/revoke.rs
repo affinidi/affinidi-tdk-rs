@@ -10,6 +10,7 @@ use anyhow::{Result, anyhow, bail};
 use console::style;
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHState, parameters::Parameters};
+use tracing::debug;
 
 use crate::{ConfigInfo, witness::witness_log_entry};
 
@@ -146,6 +147,7 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
         ..Default::default()
     };
 
+    debug!("Creating final revocation LogEntry");
     didwebvh
         .create_log_entry(
             None,

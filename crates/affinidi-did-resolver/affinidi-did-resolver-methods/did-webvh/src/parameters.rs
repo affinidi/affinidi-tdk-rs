@@ -169,27 +169,45 @@ impl Parameters {
 
         // Validate and update UpdateKeys
         if let Some(previous) = previous {
-            if let Some(Some(update_keys)) = &self.update_keys {
-                // If pre-rotation is enabled, then validate and add immediately to active keys
-                if update_keys.is_empty() {
-                    return Err(DIDWebVHError::ParametersError(
-                        "updateKeys cannot be empty".to_string(),
-                    ));
+            match &self.update_keys {
+                None => {
+                    // If absent, keep current updateKeys
+                    new_parameters.active_update_keys = previous.active_update_keys.clone();
                 }
-                if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
-                    // Key pre-rotation has been turned off
-                    // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
-                    new_parameters.active_update_keys = update_keys.clone();
-                } else if new_parameters.pre_rotation_active {
-                    // Key pre-rotation is active
-                    // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
-                    new_parameters.active_update_keys = update_keys.clone();
-                } else {
-                    // No Key pre-rotation is active
-                    new_parameters.active_update_keys = update_keys.clone();
-                    new_parameters.update_keys = Some(Some(update_keys.clone()));
+                Some(None) => {
+                    // If None, turn off updateKeys
+                    new_parameters.update_keys = Some(None);
+                    new_parameters.active_update_keys = previous.active_update_keys.clone();
+                }
+                Some(Some(update_keys)) => {
+                    // If pre-rotation is enabled, then validate and add immediately to active keys
+                    if update_keys.is_empty() {
+                        return Err(DIDWebVHError::ParametersError(
+                            "updateKeys cannot be empty".to_string(),
+                        ));
+                    }
+                    if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
+                        // Key pre-rotation has been turned off
+                        // Update keys must be part of the previous nextKeyHashes
+                        Parameters::validate_pre_rotation_keys(
+                            &previous.next_key_hashes,
+                            update_keys,
+                        )?;
+                        new_parameters.active_update_keys = update_keys.clone();
+                        new_parameters.update_keys = Some(Some(update_keys.clone()));
+                    } else if new_parameters.pre_rotation_active {
+                        // Key pre-rotation is active
+                        // Update keys must be part of the previous nextKeyHashes
+                        Parameters::validate_pre_rotation_keys(
+                            &previous.next_key_hashes,
+                            update_keys,
+                        )?;
+                        new_parameters.active_update_keys = update_keys.clone();
+                    } else {
+                        // No Key pre-rotation is active
+                        new_parameters.active_update_keys = update_keys.clone();
+                        new_parameters.update_keys = Some(Some(update_keys.clone()));
+                    }
                 }
             }
         } else {
@@ -342,6 +360,7 @@ impl Parameters {
             }
         }
 
+        debug!("Parameters successfully validated");
         Ok(new_parameters)
     }
 
