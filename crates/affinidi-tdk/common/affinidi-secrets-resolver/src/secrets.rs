@@ -3,6 +3,7 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 use crate::errors::{Result, SecretsResolverError};
+use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl TryFrom<SecretShadow> for Secret {
         match shadow.secret_material {
             SecretMaterial::JWK { private_key_jwk } => {
                 let jwk: JWK = serde_json::from_value(private_key_jwk).map_err(|e| {
-                    SecretsResolverError::KeyError(format!("Failed to parse JWK: {}", e))
+                    SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}"))
                 })?;
                 let mut secret = Secret::from_jwk(&jwk)?;
                 secret.id = shadow.id;
@@ -163,7 +164,7 @@ impl Secret {
     /// ```
     pub fn from_str(key_id: &str, jwk: &Value) -> Result<Self> {
         let mut jwk: JWK = serde_json::from_value(jwk.to_owned())
-            .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {}", e)))?;
+            .map_err(|e| SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}")))?;
 
         jwk.key_id = Some(key_id.to_string());
         Self::from_jwk(&jwk)
@@ -173,17 +174,17 @@ impl Secret {
     /// Requires a key ID, public key, and private key
     pub fn from_multibase(key_id: &str, public: &str, private: &str) -> Result<Self> {
         let public_bytes = multibase::decode(public).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode public key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to decode public key: {e}"))
         })?;
         let private_bytes = multibase::decode(private).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode private key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
         })?;
 
         let public_bytes = MultiEncoded::new(public_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode public key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to decode public key: {e}"))
         })?;
         let private_bytes = MultiEncoded::new(private_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode private key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
         })?;
 
         let jwk = match (public_bytes.codec(), private_bytes.codec()) {
@@ -229,10 +230,10 @@ impl Secret {
     /// Decodes a multikey to raw bytes
     pub fn decode_multikey(key: &str) -> Result<Vec<u8>> {
         let bytes = multibase::decode(key).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to multibase.decode key: {e}"))
         })?;
         let bytes = MultiEncoded::new(bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to load decoded key: {}", e))
+            SecretsResolverError::KeyError(format!("Failed to load decoded key: {e}"))
         })?;
         Ok(bytes.data().to_vec())
     }
@@ -262,23 +263,20 @@ impl Secret {
     pub fn get_public_keymultibase_hash(&self) -> Result<String> {
         let key = self.get_public_keymultibase()?;
 
-        Secret::hash_string(&key)
+        Secret::base58_hash_string(&key)
     }
 
     /// Will convert a string to a base58btc encoded multihash (SHA256) representation
-    pub fn hash_string(key: &str) -> Result<String> {
+    /// base58<multihash<multikey>>
+    pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // SHA_256 code = 0x12
         let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!(
-                "Couldn't create multihash encoding for Public Key. Reason: {}",
-                e
+                "Couldn't create multihash encoding for Public Key. Reason: {e}",
             ))
         })?;
-        Ok(multibase::encode(
-            multibase::Base::Base58Btc,
-            hash_encoded.to_bytes(),
-        ))
+        Ok(hash_encoded.to_bytes().to_base58())
     }
 
     /// Get the multibase (Base58btc) encoded private key
@@ -354,8 +352,7 @@ impl TryFrom<&str> for KeyType {
             "P-521" => Ok(KeyType::P521),
             "secp256k1" => Ok(KeyType::Secp256k1),
             _ => Err(SecretsResolverError::KeyError(format!(
-                "Unknown key type: {}",
-                value
+                "Unknown key type: {value}",
             ))),
         }
     }
@@ -382,13 +379,13 @@ mod tests {
     #[test]
     fn check_hash() {
         let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD3";
-        let output = Secret::hash_string(input).expect("Hash of input");
+        let output = Secret::base58_hash_string(input).expect("Hash of input");
         assert_eq!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
     }
     #[test]
     fn check_hash_bad() {
         let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD4";
-        let output = Secret::hash_string(input).expect("Hash of input");
+        let output = Secret::base58_hash_string(input).expect("Hash of input");
         assert_ne!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
     }
 }

@@ -403,9 +403,10 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "ahash 0.8.12",
+ "base58",
  "base64 0.22.1",
  "multibase 0.9.1",
  "multihash 0.19.3",
