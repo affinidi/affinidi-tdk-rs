@@ -1,4 +1,4 @@
-use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
+use affinidi_data_integrity::verification_proof::verify_data;
 use common::load_test_file;
 use did_webvh::log_entry::LogEntry;
 
