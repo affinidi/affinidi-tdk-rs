@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+[![Crates.io](https://img.shields.io/crates/v/affinidi-secrets-resolver.svg)](https://crates.io/crates/affinidi-secrets-resolver)
+[![Documentation](https://docs.rs/affinidi-secrets-resolver/badge.svg)](https://docs.rs/affinidi-secrets-resolver)
+[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-secrets-resolver)
+
 **IMPORTANT:**
 > affinidi-secrets-manager crate is provided "as is" without any warranties or
 guarantees, and by using this framework, users agree to assume all risks
