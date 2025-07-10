@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### June 2025
+### 11th July 2025
 
 ## DID webvh method (0.1.6)
 
@@ -13,6 +13,8 @@
 * **FIX:** `active_witness` was leaking out from Parameters
 * **FIX:** `proof` attribute on LogEntry was not an array, now is an array
 * **FEATURE:** `generate_history` example added to create and validate larger DID
+  * Default simulates 10 years of change every month
+  * Including swapping a witness and a watcher node  every 12 months
 * **FEATURE:** webvh portability added to `wizard`
 
 ### 26th June 2025
