@@ -76,26 +76,20 @@ impl WitnessProofCollection {
     ) -> Result<(), DIDWebVHError> {
         let Some((id, _)) = version_id.split_once('-') else {
             return Err(DIDWebVHError::WitnessProofError(format!(
-                "Invalid versionID ({}) in witness proofs! Expected n-hash, but missing n",
-                version_id
+                "Invalid versionID ({version_id}) in witness proofs! Expected n-hash, but missing n",
             )));
         };
         let Ok(id): Result<u32, _> = str::parse(id) else {
             return Err(DIDWebVHError::WitnessProofError(format!(
-                "Invalid versionID ({}) in witness proofs! expected n-hash, where n is a number!",
-                version_id
+                "Invalid versionID ({version_id}) in witness proofs! expected n-hash, where n is a number!",
             )));
-        };
-
-        let witness_id = if let Some((prefix, _)) = proof.verification_method.split_once("#") {
-            prefix.to_string()
-        } else {
-            proof.verification_method.to_string()
         };
 
         if !future_entry {
             // Check if proof has an earlier version, remove it if so
-            if let Some((p_version, p_id, p)) = self.witness_version.get_mut(&witness_id) {
+            if let Some((p_version, p_id, p)) =
+                self.witness_version.get_mut(&proof.verification_method)
+            {
                 if &id > p_id {
                     // Remove the earlier proof
                     for e in self.proofs.0.iter_mut() {
@@ -133,8 +127,10 @@ impl WitnessProofCollection {
         };
 
         // Update the pointer to latest witness version proof
-        self.witness_version
-            .insert(witness_id, (version_id, id, rc_proof));
+        self.witness_version.insert(
+            proof.verification_method.clone(),
+            (version_id, id, rc_proof),
+        );
 
         Ok(())
     }
@@ -159,14 +155,12 @@ impl WitnessProofCollection {
     pub(crate) fn read_from_file(file_path: &str) -> Result<Self, DIDWebVHError> {
         let file = File::open(file_path).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't open Witness Proofs file ({}): {}",
-                file_path, e
+                "Couldn't open Witness Proofs file ({file_path}): {e}",
             ))
         })?;
         let proofs: WitnessProofShadow = serde_json::from_reader(file).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't deserialize Witness Proofs Data from file ({}): {}",
-                file_path, e
+                "Couldn't deserialize Witness Proofs Data from file ({file_path}): {e}",
             ))
         })?;
 
@@ -179,15 +173,13 @@ impl WitnessProofCollection {
     /// Save proofs to a file
     pub fn save_to_file(&self, file_path: &str) -> Result<(), DIDWebVHError> {
         let json_data = serde_json::to_string(&self.proofs).map_err(|e| {
-            DIDWebVHError::WitnessProofError(format!(
-                "Couldn't serialize Witness Proofs Data: {}",
-                e
-            ))
+            DIDWebVHError::WitnessProofError(
+                format!("Couldn't serialize Witness Proofs Data: {e}",),
+            )
         })?;
         std::fs::write(file_path, json_data).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
-                "Couldn't write to Witness Proofs file ({}): {}",
-                file_path, e
+                "Couldn't write to Witness Proofs file ({file_path}): {e}",
             ))
         })?;
         Ok(())
@@ -198,7 +190,7 @@ impl WitnessProofCollection {
         self.proofs.0.iter().find(|p| *p.version_id == version_id)
     }
 
-    /// Useed to regenerate the proof state table when you want ot cap the LogEntry
+    /// Useed to regenerate the proof state table when you want to cap the LogEntry
     /// version number to a specific value.
     /// This is can be used to exclude future proofs that are not yet valid or match
     /// a published LogEntry
@@ -236,8 +228,7 @@ impl WitnessProofCollection {
                     )
                     .map_err(|e| {
                         DIDWebVHError::WitnessProofError(format!(
-                            "Error adding witness proof state to table: {}",
-                            e
+                            "Error adding witness proof state to table: {e}",
                         ))
                     })?;
             }

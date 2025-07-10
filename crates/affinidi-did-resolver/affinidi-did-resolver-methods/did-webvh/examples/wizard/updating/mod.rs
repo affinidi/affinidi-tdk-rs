@@ -4,7 +4,7 @@
 use crate::{
     ConfigInfo, edit_did_document,
     updating::{
-        authorization::update_authorization_keys, revoke::revoke_did,
+        authorization::update_authorization_keys, portable::migrate_did, revoke::revoke_did,
         watchers::modify_watcher_params, witness::modify_witness_params,
     },
     witness::witness_log_entry,
@@ -17,6 +17,7 @@ use did_webvh::{
 };
 
 mod authorization;
+mod portable;
 mod revoke;
 mod watchers;
 mod witness;
@@ -44,17 +45,33 @@ pub async fn edit_did() -> Result<()> {
         webvh_state.load_witness_proofs_from_file(&[start, "-witness.json"].concat());
 
         // Load the secrets
-        let config_info =
-            ConfigInfo::read_from_file(&[start, "-secrets.json"].concat()).map_err(|e| {
-                DIDWebVHError::ParametersError(format!("Failed to read secrets: {}", e))
-            })?;
+        let config_info = ConfigInfo::read_from_file(&[start, "-secrets.json"].concat())
+            .map_err(|e| DIDWebVHError::ParametersError(format!("Failed to read secrets: {e}")))?;
         (config_info, start)
     } else {
         bail!("Invalid file path! Must end with .jsonl!");
     };
 
     // Validate webvh state
-    webvh_state.validate()?;
+    match webvh_state.validate() {
+        Ok(_) => {
+            println!(
+                "{}",
+                style("Successfully loaded DID WebVH state")
+                    .color256(34)
+                    .blink()
+            );
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                style(format!("Failed to validate DID WebVH state: {e}"))
+                    .color256(196)
+                    .blink()
+            );
+            return Err(e.into());
+        }
+    }
 
     let last_entry_state = webvh_state.log_entries.last().ok_or_else(|| {
         DIDWebVHError::ParametersError("No log entries found in the file".to_string())
@@ -125,10 +142,36 @@ pub async fn edit_did() -> Result<()> {
                 break;
             }
             1 => {
+                // DID Portability
+                migrate_did(&mut webvh_state, &mut config_info)?;
+
+                let new_entry = webvh_state.log_entries.last().ok_or_else(|| {
+                    DIDWebVHError::LogEntryError("No new LogEntry created".to_string())
+                })?;
+
+                let new_proofs = witness_log_entry(
+                    &mut webvh_state.witness_proofs,
+                    &new_entry.log_entry,
+                    &new_entry.validated_parameters.active_witness,
+                    &config_info,
+                )?;
+
+                // Save info to files
+                new_entry.log_entry.save_to_file(&file_path)?;
+                config_info.save_to_file(&[file_name_prefix, "-secrets.json"].concat())?;
                 println!(
                     "{}",
-                    style("Migrate to a new domain ** NOT IMPLEMENTED YET ** ").color256(214)
+                    style("Successfully created new LogEntry")
+                        .color256(34)
+                        .blink()
                 );
+                if new_proofs.is_some() {
+                    webvh_state
+                        .witness_proofs
+                        .save_to_file(&[file_name_prefix, "-witness.json"].concat())?;
+                }
+
+                break;
             }
             2 => {
                 revoke_did(&file_path, &mut webvh_state, &config_info).await?;
@@ -267,10 +310,7 @@ fn update_parameters(
                 .default(false)
                 .interact()
                 .map_err(|e| {
-                    DIDWebVHError::ParametersError(format!(
-                        "Invalid selection on portability: {}",
-                        e
-                    ))
+                    DIDWebVHError::ParametersError(format!("Invalid selection on portability: {e}"))
                 })?
             {
                 // Disable portability

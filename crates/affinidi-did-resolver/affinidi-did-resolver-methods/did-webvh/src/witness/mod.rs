@@ -60,3 +60,17 @@ impl Display for Witness {
         write!(f, "{}", self.id)
     }
 }
+
+impl Witness {
+    /// Returns the witness ID as a did:key
+    /// use [as_did_key] if you wan the DID#Key value
+    pub fn as_did(&self) -> String {
+        ["did:key:", &self.id].concat()
+    }
+
+    /// Returns the witness ID as a did:key:z6...#z6...
+    /// Use [as_did] if you want just the base DID
+    pub fn as_did_key(&self) -> String {
+        [&self.as_did(), "#", &self.id].concat()
+    }
+}

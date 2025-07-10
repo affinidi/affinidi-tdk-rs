@@ -7,6 +7,7 @@ use crate::{DIDWebVHError, witness::Witnesses};
 use affinidi_secrets_resolver::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use std::ops::Not;
+use tracing::debug;
 
 /// [https://identity.foundation/didwebvh/v1.0/#didwebvh-did-method-parameters]
 /// Parameters that help with the resolution of a webvh DID
@@ -66,11 +67,7 @@ pub struct Parameters {
 
     /// witness doesn't take effect till after this log entry
     /// This is the active witnesses for this log entry
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
+    #[serde(skip)]
     pub active_witness: Option<Option<Witnesses>>,
 
     /// DID watchers for this DID
@@ -117,6 +114,9 @@ impl Parameters {
     /// validate and return a Parameters object based on the Log Entry that reflects the current
     /// state of the parameters
     pub fn validate(&self, previous: Option<&Parameters>) -> Result<Parameters, DIDWebVHError> {
+        debug!("self: {:#?}", self);
+        debug!("previous: {:#?}", previous);
+
         let mut new_parameters = Parameters {
             scid: self.scid.clone(),
             ..Default::default()
@@ -169,27 +169,45 @@ impl Parameters {
 
         // Validate and update UpdateKeys
         if let Some(previous) = previous {
-            if let Some(Some(update_keys)) = &self.update_keys {
-                // If pre-rotation is enabled, then validate and add immediately to active keys
-                if update_keys.is_empty() {
-                    return Err(DIDWebVHError::ParametersError(
-                        "updateKeys cannot be empty".to_string(),
-                    ));
+            match &self.update_keys {
+                None => {
+                    // If absent, keep current updateKeys
+                    new_parameters.active_update_keys = previous.active_update_keys.clone();
                 }
-                if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
-                    // Key pre-rotation has been turned off
-                    // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
-                    new_parameters.active_update_keys = update_keys.clone();
-                } else if new_parameters.pre_rotation_active {
-                    // Key pre-rotation is active
-                    // Update keys must be part of the previous nextKeyHashes
-                    Parameters::validate_pre_rotation_keys(&previous.next_key_hashes, update_keys)?;
-                    new_parameters.active_update_keys = update_keys.clone();
-                } else {
-                    // No Key pre-rotation is active
-                    new_parameters.active_update_keys = update_keys.clone();
-                    new_parameters.update_keys = Some(Some(update_keys.clone()));
+                Some(None) => {
+                    // If None, turn off updateKeys
+                    new_parameters.update_keys = Some(None);
+                    new_parameters.active_update_keys = previous.active_update_keys.clone();
+                }
+                Some(Some(update_keys)) => {
+                    // If pre-rotation is enabled, then validate and add immediately to active keys
+                    if update_keys.is_empty() {
+                        return Err(DIDWebVHError::ParametersError(
+                            "updateKeys cannot be empty".to_string(),
+                        ));
+                    }
+                    if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
+                        // Key pre-rotation has been turned off
+                        // Update keys must be part of the previous nextKeyHashes
+                        Parameters::validate_pre_rotation_keys(
+                            &previous.next_key_hashes,
+                            update_keys,
+                        )?;
+                        new_parameters.active_update_keys = update_keys.clone();
+                        new_parameters.update_keys = Some(Some(update_keys.clone()));
+                    } else if new_parameters.pre_rotation_active {
+                        // Key pre-rotation is active
+                        // Update keys must be part of the previous nextKeyHashes
+                        Parameters::validate_pre_rotation_keys(
+                            &previous.next_key_hashes,
+                            update_keys,
+                        )?;
+                        new_parameters.active_update_keys = update_keys.clone();
+                    } else {
+                        // No Key pre-rotation is active
+                        new_parameters.active_update_keys = update_keys.clone();
+                        new_parameters.update_keys = Some(Some(update_keys.clone()));
+                    }
                 }
             }
         } else {
@@ -303,11 +321,14 @@ impl Parameters {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID cannot be deactivated on the first Log Entry".to_string(),
             ));
-        } else if self.deactivated && (new_parameters.update_keys != Some(None)) {
+        } else if self.deactivated && (self.update_keys != Some(None)) {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
             ));
+        } else if self.deactivated {
+            new_parameters.update_keys = Some(None);
         }
+
         new_parameters.deactivated = self.deactivated;
 
         // Determine TTL
@@ -339,6 +360,7 @@ impl Parameters {
             }
         }
 
+        debug!("Parameters successfully validated");
         Ok(new_parameters)
     }
 
@@ -358,14 +380,12 @@ impl Parameters {
             // Convert the key to the hash value
             let check_hash = Secret::base58_hash_string(key).map_err(|e| {
                 DIDWebVHError::ValidationError(format!(
-                    "Couldn't hash updateKeys key ({}). Reason: {}",
-                    key, e
+                    "Couldn't hash updateKeys key ({key}). Reason: {e}",
                 ))
             })?;
             if !next_key_hashes.contains(&check_hash) {
                 return Err(DIDWebVHError::ValidationError(format!(
-                    "updateKey ({}) hash({}) was not specified in the previous nextKeyHashes!",
-                    key, check_hash
+                    "updateKey ({key}) hash({check_hash}) was not specified in the previous nextKeyHashes!",
                 )));
             }
         }
@@ -387,6 +407,10 @@ impl Parameters {
         // scid can not be changed, so leave it at default None
 
         // updateKeys may have changed
+        debug!(
+            "new_params.update_keys: {:#?} :: previous.update_keys: {:#?}",
+            new_params.update_keys, self.update_keys
+        );
         match new_params.update_keys {
             None => {
                 // If None, then keep current parameter updateKeys

@@ -14,6 +14,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use serde_json::Value;
 use thiserror::Error;
+use tracing::debug;
 
 pub mod log_entry;
 pub mod log_entry_state;
@@ -105,26 +106,31 @@ impl DIDWebVHState {
         let now = Utc::now();
 
         // Create a VerificationMethod ID from the first updatekey
-        let vm_id = if let Some(Some(value)) = &parameters.update_keys {
-            if let Some(key) = value.iter().next() {
+        if let Some(Some(value)) = &parameters.update_keys
+            && !parameters.deactivated
+        {
+            let vm_id = if let Some(key) = value.iter().next() {
                 // Create a VerificationMethod ID from the first update key
                 ["did:key:", key, "#", key].concat()
             } else {
                 return Err(DIDWebVHError::SCIDError(
                     "No update keys provided in parameters".to_string(),
                 ));
+            };
+            // Check that the vm_id matches the secret key id
+            if signing_key.id != vm_id {
+                return Err(DIDWebVHError::SCIDError(format!(
+                    "Secret key ID {} does not match VerificationMethod ID {}",
+                    signing_key.id, vm_id
+                )));
             }
+        } else if parameters.deactivated {
+            // This is the last LogEntry for a deactivated Entry
+            // Do nothing
         } else {
             return Err(DIDWebVHError::SCIDError(
                 "No update keys provided in parameters".to_string(),
             ));
-        };
-        // Check that the vm_id matches the secret key id
-        if signing_key.id != vm_id {
-            return Err(DIDWebVHError::SCIDError(format!(
-                "Secret key ID {} does not match VerificationMethod ID {}",
-                signing_key.id, vm_id
-            )));
         }
 
         let last_log_entry = self.log_entries.last();
@@ -132,6 +138,10 @@ impl DIDWebVHState {
         let mut log_entry = if let Some(last_log_entry) = last_log_entry {
             // Utilizes the previous LogEntry for some info
 
+            debug!(
+                "previous.validated parameters: {:#?}",
+                last_log_entry.validated_parameters
+            );
             LogEntry {
                 version_id: last_log_entry.log_entry.version_id.clone(),
                 version_time: version_time.unwrap_or_else(|| {
@@ -140,7 +150,7 @@ impl DIDWebVHState {
                 // Only use the difference of the parameters
                 parameters: last_log_entry.validated_parameters.diff(parameters)?,
                 state: document.clone(),
-                proof: None,
+                proof: Vec::new(),
             }
         } else {
             // First LogEntry so we need to set up a few things first
@@ -152,7 +162,7 @@ impl DIDWebVHState {
                     .unwrap_or_else(|| now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
                 parameters: parameters.clone(),
                 state: document.clone(),
-                proof: None,
+                proof: Vec::new(),
             };
             log_entry.parameters.scid = Some(SCID_HOLDER.to_string());
 
@@ -162,15 +172,13 @@ impl DIDWebVHState {
             // Replace all instances of {SCID} with the actual SCID
             let le_str = serde_json::to_string(&log_entry).map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't serialize LogEntry to JSON. Reason: {}",
-                    e
+                    "Couldn't serialize LogEntry to JSON. Reason: {e}",
                 ))
             })?;
 
             serde_json::from_str(&le_str.replace(SCID_HOLDER, &scid)).map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't deserialize LogEntry from SCID conversion. Reason: {}",
-                    e
+                    "Couldn't deserialize LogEntry from SCID conversion. Reason: {e}",
                 ))
             })?
         };
@@ -178,8 +186,7 @@ impl DIDWebVHState {
         // Create the entry hash for this Log Entry
         let entry_hash = log_entry.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
-                "Couldn't generate entryHash for first LogEntry. Reason: {}",
-                e
+                "Couldn't generate entryHash for first LogEntry. Reason: {e}",
             ))
         })?;
 
@@ -212,17 +219,21 @@ impl DIDWebVHState {
                     ));
                 }
             } else {
+                // First LogEntry
                 log_entry.version_id = ["1-", &entry_hash].concat();
                 let Some(scid) = log_entry.parameters.scid.clone() else {
                     return Err(DIDWebVHError::LogEntryError(
                         "First LogEntry does not have a SCID!".to_string(),
                     ));
                 };
+
+                let mut validated_params = log_entry.parameters.clone();
+                validated_params.active_witness = log_entry.parameters.witness.clone();
                 (
                     log_entry.version_time.clone(),
                     scid,
                     log_entry.parameters.portable.unwrap_or_default(),
-                    log_entry.parameters.clone(),
+                    validated_params,
                 )
             };
 
@@ -230,12 +241,11 @@ impl DIDWebVHState {
         let proof = DataIntegrityProof::sign_jcs_data(&log_entry, None, signing_key, None)
             .map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
-                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {}",
-                    e
+                    "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}"
                 ))
             })?;
 
-        log_entry.proof = Some(proof);
+        log_entry.proof.push(proof);
 
         // Generate metadata for this LogEntry
         let metadata = MetaData {
@@ -296,7 +306,7 @@ mod tests {
         let parsed = serde_json::to_value(&params).expect("Couldn't parse parameters");
         let pretty = serde_json::to_string_pretty(&params).expect("Couldn't parse parameters");
 
-        println!("Parsed: {}", pretty);
+        println!("Parsed: {pretty}");
 
         assert_eq!(parsed.get("next_key_hashes"), None);
         assert!(parsed.get("witness").is_some_and(|s| s.is_null()));

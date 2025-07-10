@@ -82,8 +82,7 @@ impl WebVHURL {
                     Ok(port) => port,
                     Err(err) => {
                         return Err(DIDWebVHError::InvalidMethodIdentifier(format!(
-                            "Invalid URL: Port ({}) must be a number: {}",
-                            port, err
+                            "Invalid URL: Port ({port}) must be a number: {err}",
                         )));
                     }
                 };
@@ -173,21 +172,20 @@ impl WebVHURL {
         url_string.push_str(&self.domain);
 
         if let Some(port) = self.port {
-            url_string.push_str(&format!(":{}", port));
+            url_string.push_str(&format!(":{port}",));
         }
         url_string.push_str(&self.path);
         if let Some(query) = &self.query {
-            url_string.push_str(&format!("?{}", query));
+            url_string.push_str(&format!("?{query}",));
         }
         if let Some(fragment) = &self.fragment {
-            url_string.push_str(&format!("#{}", fragment));
+            url_string.push_str(&format!("#{fragment}",));
         }
 
         match Url::parse(&url_string) {
             Ok(url) => Ok(url),
             Err(err) => Err(DIDWebVHError::InvalidMethodIdentifier(format!(
-                "Invalid URL: {}",
-                err
+                "Invalid URL: {err}",
             ))),
         }
     }
@@ -201,7 +199,7 @@ impl Display for WebVHURL {
         url_string.push(':');
         url_string.push_str(&self.domain);
         if let Some(port) = self.port {
-            url_string.push_str(&format!("%3A{}", port));
+            url_string.push_str(&format!("%3A{port}",));
         }
         if !self.path.is_empty() && self.path != "/.well-known/did.jsonl" {
             let s = self.path.strip_suffix("/did.jsonl").unwrap();
@@ -216,7 +214,7 @@ impl Display for WebVHURL {
             url_string.push('#');
             url_string.push_str(fragment);
         }
-        write!(f, "{}", url_string)
+        write!(f, "{url_string}",)
     }
 }
 

@@ -17,7 +17,7 @@ impl DIDMethodResolver for DIDWebVH {
         _: Options,
     ) -> Result<ssi::dids::resolution::Output<Vec<u8>>, Error> {
         let parsed_did_url = WebVHURL::parse_did_url(method_specific_id)
-            .map_err(|err| Error::Internal(format!("webvh error: {}", err)))?;
+            .map_err(|err| Error::Internal(format!("webvh error: {err}",)))?;
 
         if parsed_did_url.type_ == URLType::WhoIs {
             // TODO: whois is not implemented yet
