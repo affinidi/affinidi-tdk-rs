@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### July 2025
+
+## DID webvh method (0.1.7)
+
+* **BREAKING CHANGE:** webvh v1.0 spec changes parameters definition
+  * empty arrays and objects replaces null values
+
 ### 11th July 2025
 
 ## DID webvh method (0.1.6)

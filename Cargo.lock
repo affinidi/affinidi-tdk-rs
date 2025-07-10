@@ -2741,7 +2741,7 @@ dependencies = [
 
 [[package]]
 name = "did-webvh"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-secrets-resolver",
