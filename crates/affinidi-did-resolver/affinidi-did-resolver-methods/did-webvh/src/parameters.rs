@@ -46,12 +46,8 @@ pub struct Parameters {
     pub portable: Option<bool>,
 
     /// pre-rotation keys that must be shared prior to updating update keys
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
-    pub next_key_hashes: Option<Option<Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_key_hashes: Option<Vec<String>>,
 
     /// Parameters for witness nodes
     #[serde(
@@ -146,20 +142,15 @@ impl Parameters {
                     ));
                 }
             }
-            Some(None) => {
-                // If None, turn off key rotation
-                new_parameters.next_key_hashes = None;
-                new_parameters.pre_rotation_active = false; // If None, pre-rotation is not active
-            }
             Some(next_key_hashes) => {
-                // Replace nextKeyHashes with the new value
-                if next_key_hashes.is_none() {
-                    return Err(DIDWebVHError::ParametersError(
-                        "nextKeyHashes cannot be empty".to_string(),
-                    ));
+                if next_key_hashes.is_empty() {
+                    // If None, turn off key rotation
+                    new_parameters.next_key_hashes = None;
+                    new_parameters.pre_rotation_active = false; // If None, pre-rotation is not active
+                } else {
+                    new_parameters.next_key_hashes = Some(next_key_hashes.clone());
+                    new_parameters.pre_rotation_active = true; // If Value, pre-rotation is active
                 }
-                new_parameters.next_key_hashes = Some(next_key_hashes.clone());
-                new_parameters.pre_rotation_active = true; // If Value, pre-rotation is active
             }
         }
 
@@ -368,10 +359,10 @@ impl Parameters {
     /// nextKeyHashes
     /// Returns an error if validation fails
     fn validate_pre_rotation_keys(
-        next_key_hashes: &Option<Option<Vec<String>>>,
+        next_key_hashes: &Option<Vec<String>>,
         update_keys: &[String],
     ) -> Result<(), DIDWebVHError> {
-        let Some(Some(next_key_hashes)) = next_key_hashes else {
+        let Some(next_key_hashes) = next_key_hashes else {
             return Err(DIDWebVHError::ValidationError(
                 "nextKeyHashes must be defined when pre-rotation is active".to_string(),
             ));
@@ -406,13 +397,23 @@ impl Parameters {
         // pre_rotation_active, active_update_keys, active_witness
         // scid can not be changed, so leave it at default None
 
+        // Check if portable has been turned off (can never be turned on except on first log entry)
+        if self.portable != new_params.portable {
+            if new_params.portable == Some(true) {
+                return Err(DIDWebVHError::ParametersError(
+                    "Portable cannot be set to true after the first Log Entry".to_string(),
+                ));
+            }
+            diff.portable = new_params.portable;
+        }
+
         // updateKeys may have changed
         debug!(
             "new_params.update_keys: {:#?} :: previous.update_keys: {:#?}",
             new_params.update_keys, self.update_keys
         );
         diff.update_keys =
-            Parameters::diff_update_keys(&self.update_keys, &new_params.update_keys)?;
+            Parameters::diff_tri_state(&self.update_keys, &new_params.update_keys, "updateKeys")?;
 
         if self.pre_rotation_active {
             if let Some(update_keys) = diff.update_keys.as_ref() {
@@ -428,54 +429,12 @@ impl Parameters {
             }
         }
 
-        // Check if portable has been turned off (can never be turned on except on first log entry)
-        if self.portable != new_params.portable {
-            if new_params.portable == Some(true) {
-                return Err(DIDWebVHError::ParametersError(
-                    "Portable cannot be set to true after the first Log Entry".to_string(),
-                ));
-            }
-            diff.portable = new_params.portable;
-        }
-
         // nextKeyHashes checks
-        match new_params.next_key_hashes {
-            None => {
-                // If None, then keep current parameter nextKeyHashes
-                diff.next_key_hashes = None;
-            }
-            Some(None) => {
-                // If Some(None), then cancel the nextKeyHashes
-                match self.next_key_hashes {
-                    None => {
-                        // If current nextKeyHashes is also None, then no change
-                        diff.next_key_hashes = None;
-                    }
-                    Some(Some(_)) => {
-                        // If current nextKeyHashes is Some(Some(_)), then set to None
-                        diff.next_key_hashes = Some(None);
-                    }
-                    Some(None) => {
-                        // If current nextKeyHashes is Some(None), then no change
-                        diff.next_key_hashes = None;
-                    }
-                }
-            }
-            Some(Some(ref next_key_hashes)) => {
-                if self.next_key_hashes == new_params.next_key_hashes {
-                    // If nextKeyHashes are the same, no change
-                    diff.next_key_hashes = None;
-                } else {
-                    // If Some(Some(next_key_hashes)), then set the new next key hashes
-                    if next_key_hashes.is_empty() {
-                        return Err(DIDWebVHError::ParametersError(
-                            "nextKeyHashes cannot be empty".to_string(),
-                        ));
-                    }
-                    diff.next_key_hashes = Some(Some(next_key_hashes.clone()));
-                }
-            }
-        }
+        diff.next_key_hashes = Parameters::diff_tri_state(
+            &self.next_key_hashes,
+            &new_params.next_key_hashes,
+            "nextKeyHashes",
+        )?;
 
         // Witness checks
         match new_params.witness {
@@ -607,24 +566,29 @@ impl Parameters {
         Ok(diff)
     }
 
-    /// Returns the differences in update_keys
-    fn diff_update_keys(
+    /// Returns the differences in Parameter attributes
+    /// that use tri-state logic
+    /// None = Absent, use previous value
+    /// Some(Empty) = Clear previous values and set to empty
+    /// Some(Value) = Use new value
+    fn diff_tri_state(
         previous: &Option<Vec<String>>,
         current: &Option<Vec<String>>,
+        attribute_name: &str,
     ) -> Result<Option<Vec<String>>, DIDWebVHError> {
         let Some(current) = current else {
-            // If current is None, then keep previous update_keys
+            // If current is None, then keep previous value
             return Ok(None);
         };
 
         if current.is_empty() {
             if let Some(previous) = previous {
                 if previous.is_empty() {
-                    // update_keys was already empty, and thus setting it again to empty would be
+                    // attribute was already empty, and thus setting it again to empty would be
                     // invalid
-                    return Err(DIDWebVHError::ParametersError(
-                        "updateKeys cannot be empty when previous was also empty!".to_string(),
-                    ));
+                    return Err(DIDWebVHError::ParametersError(format!(
+                        "{attribute_name} cannot be empty when previous was also empty!"
+                    )));
                 }
             }
             Ok(Some(Vec::new()))
@@ -669,10 +633,10 @@ mod tests {
                 "z6MkqUa1LbqZ7EpevqrFC7XHAWM8CE49AKFWVjyu543NfVAp".to_string(),
             ]),
             portable: Some(true),
-            next_key_hashes: Some(Some(vec![
+            next_key_hashes: Some(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
                 "zQmctZhRGCKrE2R58K9rkfA1aUL74mecrrJRvicz42resii".to_string(),
-            ])),
+            ]),
             witness: Some(Some(Witnesses {
                 threshold: 2,
                 witnesses: vec![
@@ -729,9 +693,9 @@ mod tests {
             update_keys: Some(vec![
                 "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
             ]),
-            next_key_hashes: Some(Some(vec![
+            next_key_hashes: Some(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
-            ])),
+            ]),
             ..Default::default()
         };
 
@@ -742,53 +706,57 @@ mod tests {
         assert!(validated.pre_rotation_active);
     }
 
+    // ****** Checking differential on Parameter attribute tri-state
     #[test]
-    fn diff_update_keys_absent() {
-        let diff = Parameters::diff_update_keys(&None, &None);
+    fn diff_tri_state_absent() {
+        let diff = Parameters::diff_tri_state(&None, &None, "test");
         assert!(diff.is_ok_and(|a| a.is_none()));
     }
 
     #[test]
-    fn diff_update_keys_empty() {
+    fn diff_tri_state_empty() {
         // Absent --> Empty = Empty
-        let diff = Parameters::diff_update_keys(&None, &Some(Vec::new()))
+        let diff = Parameters::diff_tri_state(&None, &Some(Vec::new()), "test")
             .expect("Parameters::diff_update_keys() error");
         assert!(diff.is_some_and(|a| a.is_empty()));
 
         // Values --> Empty = Empty
-        let diff = Parameters::diff_update_keys(&Some(vec!["test".to_string()]), &Some(Vec::new()))
-            .expect("Parameters::diff_update_keys() error");
+        let diff =
+            Parameters::diff_tri_state(&Some(vec!["test".to_string()]), &Some(Vec::new()), "test")
+                .expect("Parameters::diff_update_keys() error");
         assert!(diff.is_some_and(|a| a.is_empty()));
     }
 
     #[test]
-    fn diff_update_keys_double_empty() {
-        assert!(Parameters::diff_update_keys(&Some(Vec::new()), &Some(Vec::new())).is_err());
+    fn diff_tri_state_double_empty() {
+        assert!(Parameters::diff_tri_state(&Some(Vec::new()), &Some(Vec::new()), "test").is_err());
     }
 
     #[test]
-    fn diff_update_keys_value() {
+    fn diff_tri_state_value() {
         // From nothing to something
-        let diff = Parameters::diff_update_keys(&None, &Some(vec!["test".to_string()]))
+        let diff = Parameters::diff_tri_state(&None, &Some(vec!["test".to_string()]), "test")
             .expect("Parameters::diff_update_keys error");
         assert!(diff.is_some_and(|a| a == vec!["test".to_string()]));
     }
 
     #[test]
-    fn diff_update_keys_same_value() {
-        let diff = Parameters::diff_update_keys(
+    fn diff_tri_state_same_value() {
+        let diff = Parameters::diff_tri_state(
             &Some(vec!["test".to_string()]),
             &Some(vec!["test".to_string()]),
+            "test",
         )
         .expect("Parameters::diff_update_keys error");
         assert!(diff.is_none());
     }
 
     #[test]
-    fn diff_update_keys_different_value() {
-        let diff = Parameters::diff_update_keys(
+    fn diff_tri_state_different_value() {
+        let diff = Parameters::diff_tri_state(
             &Some(vec!["old".to_string()]),
             &Some(vec!["new".to_string()]),
+            "test",
         )
         .expect("Parameters::diff_update_keys error");
         assert!(diff.is_some_and(|a| a.first().unwrap().as_str() == "new"));

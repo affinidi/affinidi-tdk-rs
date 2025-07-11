@@ -30,7 +30,7 @@ pub fn update_authorization_keys(
         {
             // Disabling pre-rotation mode
             new_params.pre_rotation_active = false;
-            new_params.next_key_hashes = Some(None);
+            new_params.next_key_hashes = Some(Vec::new());
             let update_keys =
                 select_update_keys_from_next_hashes(&old_params.next_key_hashes, existing_secrets)?;
             let mut tmp_keys = Vec::new();
@@ -58,7 +58,7 @@ pub fn update_authorization_keys(
             if next_key_hashes.is_empty() {
                 bail!("No next key hashes created for pre-rotation mode");
             }
-            new_params.next_key_hashes = Some(Some(next_key_hashes.clone()));
+            new_params.next_key_hashes = Some(next_key_hashes.clone());
         }
     } else {
         // Non pre-rotation mode
@@ -77,7 +77,7 @@ pub fn update_authorization_keys(
             if next_key_hashes.is_empty() {
                 bail!("No next key hashes created for pre-rotation mode");
             }
-            new_params.next_key_hashes = Some(Some(next_key_hashes.clone()));
+            new_params.next_key_hashes = Some(next_key_hashes.clone());
         } else {
             // Stay in non pre-rotation mode
             // check if modify updateKeys
@@ -90,10 +90,10 @@ pub fn update_authorization_keys(
 /// What update key will we use? Must be from an existing set of keys authorized keys
 /// Returns array of Secrets
 fn select_update_keys_from_next_hashes(
-    next_key_hashes: &Option<Option<Vec<String>>>,
+    next_key_hashes: &Option<Vec<String>>,
     existing_secrets: &ConfigInfo,
 ) -> Result<Vec<Secret>> {
-    let Some(Some(hashes)) = next_key_hashes else {
+    let Some(hashes) = next_key_hashes else {
         bail!("No next key hashes found for pre-rotation mode".to_string());
     };
 

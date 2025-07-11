@@ -213,10 +213,10 @@ async fn generate_did(
         portable: Some(true),
         scid: Some(SCID_HOLDER.to_string()),
         update_keys: Some(vec![signing_did1_secret.get_public_keymultibase()?]),
-        next_key_hashes: Some(Some(vec![
+        next_key_hashes: Some(vec![
             next_key1.get_public_keymultibase_hash()?,
             next_key2.get_public_keymultibase_hash()?,
-        ])),
+        ]),
         witness,
         watchers: Some(Some(vec![
             "https://watcher-1.affinidi.com/v1/webvh".to_string(),
@@ -316,10 +316,10 @@ async fn create_log_entry(
     let next_key2 = DID::generate_did_key(KeyType::Ed25519)?.1;
     secrets.insert(next_key2.clone()).await;
 
-    new_params.next_key_hashes = Some(Some(vec![
+    new_params.next_key_hashes = Some(vec![
         next_key1.get_public_keymultibase_hash()?,
         next_key2.get_public_keymultibase_hash()?,
-    ]));
+    ]);
 
     // Modify update_key for this entry
     let update_keys = previous_keys

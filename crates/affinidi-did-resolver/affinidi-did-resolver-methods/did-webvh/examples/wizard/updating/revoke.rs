@@ -90,7 +90,7 @@ async fn deactivate_pre_rotation(didwebvh: &mut DIDWebVHState, secrets: &ConfigI
 
     // Create new Parameters with a valid updateKey from previous LogEntry
     let new_update_key =
-        if let Some(Some(next_key_hashes)) = &last_entry.validated_parameters.next_key_hashes {
+        if let Some(next_key_hashes) = &last_entry.validated_parameters.next_key_hashes {
             if let Some(hash) = next_key_hashes.first() {
                 if let Some(secret) = secrets.find_secret_by_hash(hash) {
                     secret.to_owned()
@@ -106,7 +106,7 @@ async fn deactivate_pre_rotation(didwebvh: &mut DIDWebVHState, secrets: &ConfigI
 
     let new_params = Parameters {
         update_keys: Some(vec![new_update_key.get_public_keymultibase()?]),
-        next_key_hashes: Some(None),
+        next_key_hashes: Some(Vec::new()),
         ..Default::default()
     };
 

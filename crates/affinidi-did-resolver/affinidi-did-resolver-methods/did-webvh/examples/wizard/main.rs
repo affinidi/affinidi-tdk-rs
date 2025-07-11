@@ -1006,7 +1006,7 @@ fn configure_parameters(
     if next_key_hashes.is_empty() {
         parameters.next_key_hashes = None;
     } else {
-        parameters.next_key_hashes = Some(Some(next_key_hashes));
+        parameters.next_key_hashes = Some(next_key_hashes);
     }
 
     // Witness Nodes
