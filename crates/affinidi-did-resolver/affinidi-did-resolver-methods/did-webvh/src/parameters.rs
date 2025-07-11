@@ -33,12 +33,8 @@ pub struct Parameters {
     pub scid: Option<String>,
 
     /// Keys that are authorized to update future log entries
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
-    pub update_keys: Option<Option<Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_keys: Option<Vec<String>>,
 
     /// Depending on if pre-rotation is active,
     /// the set of active updateKeys can change
@@ -174,51 +170,52 @@ impl Parameters {
                     // If absent, keep current updateKeys
                     new_parameters.active_update_keys = previous.active_update_keys.clone();
                 }
-                Some(None) => {
-                    // If None, turn off updateKeys
-                    new_parameters.update_keys = Some(None);
-                    new_parameters.active_update_keys = previous.active_update_keys.clone();
-                }
-                Some(Some(update_keys)) => {
-                    // If pre-rotation is enabled, then validate and add immediately to active keys
+                Some(update_keys) => {
                     if update_keys.is_empty() {
-                        return Err(DIDWebVHError::ParametersError(
-                            "updateKeys cannot be empty".to_string(),
-                        ));
-                    }
-                    if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
-                        // Key pre-rotation has been turned off
-                        // Update keys must be part of the previous nextKeyHashes
-                        Parameters::validate_pre_rotation_keys(
-                            &previous.next_key_hashes,
-                            update_keys,
-                        )?;
-                        new_parameters.active_update_keys = update_keys.clone();
-                        new_parameters.update_keys = Some(Some(update_keys.clone()));
-                    } else if new_parameters.pre_rotation_active {
-                        // Key pre-rotation is active
-                        // Update keys must be part of the previous nextKeyHashes
-                        Parameters::validate_pre_rotation_keys(
-                            &previous.next_key_hashes,
-                            update_keys,
-                        )?;
-                        new_parameters.active_update_keys = update_keys.clone();
+                        // If empty, turn off updateKeys
+                        new_parameters.update_keys = Some(Vec::new());
+                        new_parameters.active_update_keys = previous.active_update_keys.clone();
                     } else {
-                        // No Key pre-rotation is active
-                        new_parameters.active_update_keys = update_keys.clone();
-                        new_parameters.update_keys = Some(Some(update_keys.clone()));
+                        // If pre-rotation is enabled, then validate and add immediately to active keys
+                        if update_keys.is_empty() {
+                            return Err(DIDWebVHError::ParametersError(
+                                "updateKeys cannot be empty".to_string(),
+                            ));
+                        }
+                        if !new_parameters.pre_rotation_active && pre_rotation_previous_value {
+                            // Key pre-rotation has been turned off
+                            // Update keys must be part of the previous nextKeyHashes
+                            Parameters::validate_pre_rotation_keys(
+                                &previous.next_key_hashes,
+                                update_keys,
+                            )?;
+                            new_parameters.active_update_keys = update_keys.clone();
+                            new_parameters.update_keys = Some(update_keys.clone());
+                        } else if new_parameters.pre_rotation_active {
+                            // Key pre-rotation is active
+                            // Update keys must be part of the previous nextKeyHashes
+                            Parameters::validate_pre_rotation_keys(
+                                &previous.next_key_hashes,
+                                update_keys,
+                            )?;
+                            new_parameters.active_update_keys = update_keys.clone();
+                        } else {
+                            // No Key pre-rotation is active
+                            new_parameters.active_update_keys = update_keys.clone();
+                            new_parameters.update_keys = Some(update_keys.clone());
+                        }
                     }
                 }
             }
         } else {
             // First Log Entry checks
-            if let Some(Some(update_keys)) = &self.update_keys {
+            if let Some(update_keys) = &self.update_keys {
                 if update_keys.is_empty() {
                     return Err(DIDWebVHError::ParametersError(
                         "updateKeys cannot be empty".to_string(),
                     ));
                 }
-                new_parameters.update_keys = Some(Some(update_keys.clone()));
+                new_parameters.update_keys = Some(update_keys.clone());
                 new_parameters.active_update_keys = update_keys.clone();
             } else {
                 return Err(DIDWebVHError::ParametersError(
@@ -321,12 +318,15 @@ impl Parameters {
             return Err(DIDWebVHError::DeactivatedError(
                 "DID cannot be deactivated on the first Log Entry".to_string(),
             ));
-        } else if self.deactivated && (self.update_keys != Some(None)) {
-            return Err(DIDWebVHError::DeactivatedError(
-                "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
-            ));
         } else if self.deactivated {
-            new_parameters.update_keys = Some(None);
+            if let Some(update_keys) = &self.update_keys {
+                if !update_keys.is_empty() {
+                    return Err(DIDWebVHError::DeactivatedError(
+                        "DID Parameters say deactivated, yet updateKeys are not null!".to_string(),
+                    ));
+                }
+            }
+            new_parameters.update_keys = Some(Vec::new());
         }
 
         new_parameters.deactivated = self.deactivated;
@@ -411,47 +411,20 @@ impl Parameters {
             "new_params.update_keys: {:#?} :: previous.update_keys: {:#?}",
             new_params.update_keys, self.update_keys
         );
-        match new_params.update_keys {
-            None => {
-                // If None, then keep current parameter updateKeys
-                diff.update_keys = None;
-            }
-            Some(None) => {
-                // If Some(None), then cancel the updateKeys
-                match self.update_keys {
-                    None => {
-                        // If current updateKeys is also None, then no change
-                        diff.update_keys = None;
-                    }
-                    Some(Some(_)) => {
-                        // If current updateKeys is Some(Some(_)), then set to None
-                        diff.update_keys = Some(None);
-                    }
-                    Some(None) => {
-                        // If current updateKeys is Some(None), then no change
-                        diff.update_keys = None;
-                    }
-                }
-            }
-            Some(Some(ref update_keys)) => {
-                if self.update_keys == new_params.update_keys {
-                    // If updateKeys are the same, no change
-                    diff.update_keys = None;
-                } else if self.pre_rotation_active && self.next_key_hashes.is_none() {
-                    // If pre-rotation is active, but nextKeyHashes is None, then error
+        diff.update_keys =
+            Parameters::diff_update_keys(&self.update_keys, &new_params.update_keys)?;
+
+        if self.pre_rotation_active {
+            if let Some(update_keys) = diff.update_keys.as_ref() {
+                if update_keys.is_empty() {
                     return Err(DIDWebVHError::ParametersError(
-                        "nextKeyHashes must be defined when pre-rotation is active".to_string(),
+                        "updateKeys cannot be empty when pre-rotation is active".to_string(),
                     ));
-                } else {
-                    // If Some(Some(update_keys)), then set the new update keys
-                    if update_keys.is_empty() {
-                        return Err(DIDWebVHError::ParametersError(
-                            "updateKeys cannot be empty".to_string(),
-                        ));
-                    }
-                    // Ensure they are included in the previous nextKeyHashes
-                    diff.update_keys = Some(Some(update_keys.clone()));
                 }
+            } else {
+                return Err(DIDWebVHError::ParametersError(
+                    "updateKeys must be defined when pre-rotation is active".to_string(),
+                ));
             }
         }
 
@@ -633,6 +606,38 @@ impl Parameters {
 
         Ok(diff)
     }
+
+    /// Returns the differences in update_keys
+    fn diff_update_keys(
+        previous: &Option<Vec<String>>,
+        current: &Option<Vec<String>>,
+    ) -> Result<Option<Vec<String>>, DIDWebVHError> {
+        let Some(current) = current else {
+            // If current is None, then keep previous update_keys
+            return Ok(None);
+        };
+
+        if current.is_empty() {
+            if let Some(previous) = previous {
+                if previous.is_empty() {
+                    // update_keys was already empty, and thus setting it again to empty would be
+                    // invalid
+                    return Err(DIDWebVHError::ParametersError(
+                        "updateKeys cannot be empty when previous was also empty!".to_string(),
+                    ));
+                }
+            }
+            Ok(Some(Vec::new()))
+        } else {
+            // There are values
+            if let Some(previous) = previous {
+                if previous == current {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(current.to_owned()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -659,10 +664,10 @@ mod tests {
         let old_params = Parameters {
             method: Some("did:webvh:1.0".to_string()),
             scid: Some("scid123".to_string()),
-            update_keys: Some(Some(vec![
+            update_keys: Some(vec![
                 "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
                 "z6MkqUa1LbqZ7EpevqrFC7XHAWM8CE49AKFWVjyu543NfVAp".to_string(),
-            ])),
+            ]),
             portable: Some(true),
             next_key_hashes: Some(Some(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
@@ -718,12 +723,12 @@ mod tests {
     }
 
     #[test]
-    fn test_pre_rotation_active() {
+    fn pre_rotation_active() {
         // On first LogEntry, if next_hashes is configured, then pre-rotation is active
         let first_params = Parameters {
-            update_keys: Some(Some(vec![
+            update_keys: Some(vec![
                 "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
-            ])),
+            ]),
             next_key_hashes: Some(Some(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
             ])),
@@ -735,5 +740,85 @@ mod tests {
             .expect("First Log Entry should be valid");
 
         assert!(validated.pre_rotation_active);
+    }
+
+    #[test]
+    fn diff_update_keys_absent() {
+        let diff = Parameters::diff_update_keys(&None, &None);
+        assert!(diff.is_ok_and(|a| a.is_none()));
+    }
+
+    #[test]
+    fn diff_update_keys_empty() {
+        // Absent --> Empty = Empty
+        let diff = Parameters::diff_update_keys(&None, &Some(Vec::new()))
+            .expect("Parameters::diff_update_keys() error");
+        assert!(diff.is_some_and(|a| a.is_empty()));
+
+        // Values --> Empty = Empty
+        let diff = Parameters::diff_update_keys(&Some(vec!["test".to_string()]), &Some(Vec::new()))
+            .expect("Parameters::diff_update_keys() error");
+        assert!(diff.is_some_and(|a| a.is_empty()));
+    }
+
+    #[test]
+    fn diff_update_keys_double_empty() {
+        assert!(Parameters::diff_update_keys(&Some(Vec::new()), &Some(Vec::new())).is_err());
+    }
+
+    #[test]
+    fn diff_update_keys_value() {
+        // From nothing to something
+        let diff = Parameters::diff_update_keys(&None, &Some(vec!["test".to_string()]))
+            .expect("Parameters::diff_update_keys error");
+        assert!(diff.is_some_and(|a| a == vec!["test".to_string()]));
+    }
+
+    #[test]
+    fn diff_update_keys_same_value() {
+        let diff = Parameters::diff_update_keys(
+            &Some(vec!["test".to_string()]),
+            &Some(vec!["test".to_string()]),
+        )
+        .expect("Parameters::diff_update_keys error");
+        assert!(diff.is_none());
+    }
+
+    #[test]
+    fn diff_update_keys_different_value() {
+        let diff = Parameters::diff_update_keys(
+            &Some(vec!["old".to_string()]),
+            &Some(vec!["new".to_string()]),
+        )
+        .expect("Parameters::diff_update_keys error");
+        assert!(diff.is_some_and(|a| a.first().unwrap().as_str() == "new"));
+    }
+
+    #[test]
+    fn diff_update_keys_pre_rotation_empty() {
+        let previous = Parameters {
+            pre_rotation_active: true,
+            ..Default::default()
+        };
+
+        let current = Parameters {
+            update_keys: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert!(previous.diff(&current).is_err());
+    }
+
+    #[test]
+    fn diff_update_keys_pre_rotation_none() {
+        let previous = Parameters {
+            pre_rotation_active: true,
+            ..Default::default()
+        };
+
+        let current = Parameters {
+            update_keys: None,
+            ..Default::default()
+        };
+        assert!(previous.diff(&current).is_err());
     }
 }

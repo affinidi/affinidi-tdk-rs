@@ -106,7 +106,7 @@ impl DIDWebVHState {
         let now = Utc::now();
 
         // Create a VerificationMethod ID from the first updatekey
-        if let Some(Some(value)) = &parameters.update_keys
+        if let Some(value) = &parameters.update_keys
             && !parameters.deactivated
         {
             let vm_id = if let Some(key) = value.iter().next() {

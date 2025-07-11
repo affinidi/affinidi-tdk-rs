@@ -212,7 +212,7 @@ async fn generate_did(
     let params = Parameters {
         portable: Some(true),
         scid: Some(SCID_HOLDER.to_string()),
-        update_keys: Some(Some(vec![signing_did1_secret.get_public_keymultibase()?])),
+        update_keys: Some(vec![signing_did1_secret.get_public_keymultibase()?]),
         next_key_hashes: Some(Some(vec![
             next_key1.get_public_keymultibase_hash()?,
             next_key2.get_public_keymultibase_hash()?,
@@ -326,7 +326,7 @@ async fn create_log_entry(
         .iter()
         .map(|s| s.get_public_keymultibase().unwrap())
         .collect();
-    new_params.update_keys = Some(Some(update_keys));
+    new_params.update_keys = Some(update_keys);
 
     // Swap a witness node?
     if args.witnesses > 0 && count % 12 == 6 {

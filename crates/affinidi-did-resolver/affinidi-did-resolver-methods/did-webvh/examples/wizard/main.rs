@@ -974,7 +974,7 @@ fn configure_parameters(
     for key in authorizing_keys {
         update_keys.push(key.get_public_keymultibase()?);
     }
-    parameters.update_keys = Some(Some(update_keys));
+    parameters.update_keys = Some(update_keys);
 
     // Portable
     println!(

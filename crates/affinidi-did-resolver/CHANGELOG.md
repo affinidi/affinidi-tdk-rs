@@ -8,6 +8,7 @@
 
 * **BREAKING CHANGE:** webvh v1.0 spec changes parameters definition
   * empty arrays and objects replaces null values
+* **TESTS:** Additional tests added for complete testing of Parameters Differentials
 
 ### 11th July 2025
 

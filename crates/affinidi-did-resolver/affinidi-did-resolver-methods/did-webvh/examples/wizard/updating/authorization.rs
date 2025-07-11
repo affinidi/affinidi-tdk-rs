@@ -37,7 +37,7 @@ pub fn update_authorization_keys(
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
             }
-            new_params.update_keys = Some(Some(tmp_keys.clone()));
+            new_params.update_keys = Some(tmp_keys.clone());
             new_params.active_update_keys = tmp_keys;
         } else {
             // Staying in pre-rotation mode
@@ -50,7 +50,7 @@ pub fn update_authorization_keys(
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
             }
-            new_params.update_keys = Some(Some(tmp_keys.clone()));
+            new_params.update_keys = Some(tmp_keys.clone());
             new_params.active_update_keys = tmp_keys;
 
             // Create new next_key_hashes
@@ -163,7 +163,7 @@ fn modify_update_keys(params: &mut Parameters, existing_secrets: &mut ConfigInfo
             }
         }
 
-        params.update_keys = Some(Some(new_update_keys));
+        params.update_keys = Some(new_update_keys);
     } else {
         // No changes made to existing authorization keys
         params.update_keys = None;

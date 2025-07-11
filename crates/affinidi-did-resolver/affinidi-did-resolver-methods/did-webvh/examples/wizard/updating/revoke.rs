@@ -105,7 +105,7 @@ async fn deactivate_pre_rotation(didwebvh: &mut DIDWebVHState, secrets: &ConfigI
         };
 
     let new_params = Parameters {
-        update_keys: Some(Some(vec![new_update_key.get_public_keymultibase()?])),
+        update_keys: Some(vec![new_update_key.get_public_keymultibase()?]),
         next_key_hashes: Some(None),
         ..Default::default()
     };
@@ -143,7 +143,7 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
 
     let new_params = Parameters {
         deactivated: true,
-        update_keys: Some(None),
+        update_keys: Some(Vec::new()),
         ..Default::default()
     };
 
