@@ -195,16 +195,18 @@ async fn generate_did(
 
     // Generate witnesses
     let witness = if args.witnesses > 0 {
-        let mut witness = Witnesses {
-            threshold: args.witnesses,
-            witnesses: Vec::new(),
-        };
+        let mut witness_nodes = Vec::new();
+
         for _ in 0..args.witnesses {
             let (w_did, w_secret) = DID::generate_did_key(KeyType::Ed25519)?;
             secrets.insert(w_secret.clone()).await;
-            witness.witnesses.push(Witness { id: w_did });
+            witness_nodes.push(Witness { id: w_did });
         }
-        Some(Some(witness))
+
+        Some(Witnesses::Value {
+            threshold: args.witnesses,
+            witnesses: witness_nodes,
+        })
     } else {
         None
     };
@@ -255,7 +257,7 @@ async fn witness_log_entry(
         .last()
         .ok_or_else(|| anyhow!("Couldn't find a LogEntry to witness"))?;
 
-    let Some(Some(witnesses)) = &log_entry.validated_parameters.active_witness else {
+    let Some(witnesses) = &log_entry.validated_parameters.active_witness else {
         println!(
             "{}",
             style("Witnesses are not being used for this LogEntry. No witnessing is required")
@@ -264,7 +266,11 @@ async fn witness_log_entry(
         return Ok(());
     };
 
-    for witness in &witnesses.witnesses {
+    let Some(witness_nodes) = witnesses.witnesses() else {
+        bail!("No witness nodes found!");
+    };
+
+    for witness in witness_nodes {
         let key = witness.id.split_at(8);
         // Get secret for Witness
         let Some(secret) = secrets
@@ -363,24 +369,37 @@ async fn swap_witness(params: &mut Parameters, secrets: &mut SimpleSecretsResolv
     // Pick a random witness and remove it
     let mut rng = rand::rng();
 
-    let Some(Some(witnesses)) = &params.witness else {
+    let Some(witnesses) = &params.witness else {
         bail!("Witnesses incorrectly configured for this test!");
     };
-    let mut new_witnesses = witnesses.clone();
 
-    let rn = rng.random_range(0..new_witnesses.witnesses.len());
+    let (threshold, mut new_witnesses) = if let Witnesses::Value {
+        threshold,
+        witnesses,
+        ..
+    } = witnesses
+    {
+        (*threshold, witnesses.clone())
+    } else {
+        bail!("Witnesses incorrectly configured for this test!");
+    };
+
+    let rn = rng.random_range(0..new_witnesses.len());
 
     // remove random witness
-    new_witnesses.witnesses.remove(rn);
+    new_witnesses.remove(rn);
 
     let (new_witness_did, secret) = DID::generate_did_key(KeyType::Ed25519)?;
     secrets.insert(secret.clone()).await;
 
-    new_witnesses.witnesses.push(Witness {
+    new_witnesses.push(Witness {
         id: new_witness_did,
     });
 
-    params.witness = Some(Some(new_witnesses));
+    params.witness = Some(Witnesses::Value {
+        threshold,
+        witnesses: new_witnesses,
+    });
 
     Ok(())
 }

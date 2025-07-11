@@ -18,6 +18,7 @@ use did_webvh::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fs::File;
+use tracing::debug;
 use tracing_subscriber::filter;
 use url::Url;
 
@@ -273,6 +274,7 @@ async fn create_new_did() -> Result<()> {
             }
         }
     };
+    debug!("Parameters: {parameters:#?}");
 
     // ************************************************************************
     // Step 5: Create preliminary JSON Log Entry
@@ -295,7 +297,7 @@ async fn create_new_did() -> Result<()> {
 
     println!(
         "{}\n{}",
-        style("Log Entry:").color256(69),
+        style("First Log Entry:").color256(69),
         style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
     );
 
@@ -1103,10 +1105,7 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
         .interact()
         .unwrap();
 
-    let mut witnesses = Witnesses {
-        threshold,
-        witnesses: Vec::new(),
-    };
+    let mut witness_nodes = Vec::new();
 
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Generate witness DIDs for you?")
@@ -1127,22 +1126,22 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
                 style("privateKeyMultibase:").color256(69),
                 style(&key.get_private_keymultibase()?).color256(214)
             );
-            witnesses.witnesses.push(Witness { id: did.clone() });
+            witness_nodes.push(Witness { id: did.clone() });
             secrets.witnesses.insert(did, key);
         }
     } else {
         loop {
             let did: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("Witness #{:02} DID?", witnesses.witnesses.len()))
+                .with_prompt(format!("Witness #{:02} DID?", witness_nodes.len()))
                 .interact()
                 .unwrap();
 
-            witnesses.witnesses.push(Witness { id: did });
+            witness_nodes.push(Witness { id: did });
 
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
                     "Add another witness: current:({:02}) threshold:({:02})?",
-                    witnesses.witnesses.len(),
+                    witness_nodes.len(),
                     threshold
                 ))
                 .default(true)
@@ -1153,7 +1152,10 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
         }
     }
 
-    parameters.witness = Some(Some(witnesses));
+    parameters.witness = Some(Witnesses::Value {
+        threshold,
+        witnesses: witness_nodes,
+    });
     Ok(())
 }
 

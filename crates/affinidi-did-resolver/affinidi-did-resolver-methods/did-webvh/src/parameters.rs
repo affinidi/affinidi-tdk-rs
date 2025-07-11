@@ -50,17 +50,13 @@ pub struct Parameters {
     pub next_key_hashes: Option<Vec<String>>,
 
     /// Parameters for witness nodes
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
-    pub witness: Option<Option<Witnesses>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witness: Option<Witnesses>,
 
     /// witness doesn't take effect till after this log entry
     /// This is the active witnesses for this log entry
     #[serde(skip)]
-    pub active_witness: Option<Option<Witnesses>>,
+    pub active_witness: Option<Witnesses>,
 
     /// DID watchers for this DID
     #[serde(
@@ -240,31 +236,32 @@ impl Parameters {
                     new_parameters.active_witness = previous.witness.clone();
                     new_parameters.witness = previous.witness.clone();
                 }
-                Some(None) => {
-                    // If None, turn off witness
-                    new_parameters.witness = None;
-                    // Still needs to be witnessed
-                    new_parameters.active_witness = previous.witness.clone();
-                }
-                Some(Some(witnesses)) => {
-                    // Replace witness with the new value
-                    witnesses.validate()?;
-                    new_parameters.witness = Some(Some(witnesses.clone()));
-                    new_parameters.active_witness = previous.witness.clone();
+                Some(witnesses) => {
+                    if witnesses.is_empty() {
+                        // If None, turn off witness
+                        new_parameters.witness = None;
+                        // Still needs to be witnessed
+                        new_parameters.active_witness = previous.witness.clone();
+                    } else {
+                        // Replace witness with the new value
+                        witnesses.validate()?;
+                        new_parameters.witness = Some(witnesses.clone());
+                        new_parameters.active_witness = previous.witness.clone();
+                    }
                 }
             }
         } else {
             // First Log Entry
             match &self.witness {
-                None | Some(None) => {
+                None => {
                     new_parameters.active_witness = None;
                     new_parameters.witness = None;
                 }
-                Some(Some(witnesses)) => {
+                Some(witnesses) => {
                     // Replace witness with the new value
                     witnesses.validate()?;
-                    new_parameters.witness = Some(Some(witnesses.clone()));
-                    new_parameters.active_witness = Some(Some(witnesses.clone()));
+                    new_parameters.witness = Some(witnesses.clone());
+                    new_parameters.active_witness = Some(witnesses.clone());
                 }
             }
         }
@@ -437,44 +434,7 @@ impl Parameters {
         )?;
 
         // Witness checks
-        match new_params.witness {
-            None => {
-                // If None, then keep current parameter witness
-                diff.witness = None;
-            }
-            Some(None) => {
-                // If Some(None), then cancel the witness
-                match self.witness {
-                    None => {
-                        // If current witness is also None, then no change
-                        diff.witness = None;
-                    }
-                    Some(Some(_)) => {
-                        // If current witness is Some(Some(_)), then set to None
-                        diff.witness = Some(None);
-                    }
-                    Some(None) => {
-                        // If current witness is Some(None), then no change
-                        diff.witness = None;
-                    }
-                }
-            }
-            Some(Some(ref witnesses)) => {
-                // If Some(Some(witnesses)), then set the new witnesses
-                witnesses.validate()?;
-                if self.witness == new_params.witness {
-                    // If witnesses are the same, no change
-                    diff.witness = None;
-                } else if witnesses.is_empty() {
-                    return Err(DIDWebVHError::ParametersError(
-                        "witnesses cannot be empty".to_string(),
-                    ));
-                } else {
-                    // If witnesses are different, set the new witnesses
-                    diff.witness = Some(Some(witnesses.clone()));
-                }
-            }
-        }
+        diff.witness = Parameters::diff_witness(&self.witness, &new_params.witness)?;
 
         // Watcher checks
         match new_params.watchers {
@@ -602,6 +562,41 @@ impl Parameters {
             Ok(Some(current.to_owned()))
         }
     }
+
+    /// Returns the differences in witness parameters
+    /// the entire witness struct is treated as a singleton
+    fn diff_witness(
+        previous: &Option<Witnesses>,
+        current: &Option<Witnesses>,
+    ) -> Result<Option<Witnesses>, DIDWebVHError> {
+        let Some(current) = current else {
+            // If current is None, then keep previous value
+            return Ok(None);
+        };
+
+        if current.is_empty() {
+            if let Some(previous) = previous {
+                if previous.is_empty() {
+                    // attribute was already empty, and thus setting it again to empty would be
+                    // invalid
+                    return Err(DIDWebVHError::ParametersError(
+                        "Witnesses cannot be empty when previous was also empty!".to_string(),
+                    ));
+                }
+            }
+            Ok(Some(Witnesses::Empty {}))
+        } else {
+            // There are values
+            debug!("values: {current:#?}");
+            current.validate()?;
+            if let Some(previous) = previous {
+                if previous == current {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(current.to_owned()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -637,7 +632,7 @@ mod tests {
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
                 "zQmctZhRGCKrE2R58K9rkfA1aUL74mecrrJRvicz42resii".to_string(),
             ]),
-            witness: Some(Some(Witnesses {
+            witness: Some(Witnesses::Value {
                 threshold: 2,
                 witnesses: vec![
                     Witness {
@@ -647,7 +642,7 @@ mod tests {
                         id: "witness2".to_string(),
                     },
                 ],
-            })),
+            }),
             watchers: Some(Some(vec!["watcher1".to_string()])),
             deactivated: false,
             ttl: Some(Some(3600)),

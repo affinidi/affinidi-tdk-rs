@@ -5,7 +5,7 @@
 */
 
 use affinidi_tdk::dids::{DID, KeyType};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, theme::ColorfulTheme};
 use did_webvh::{
@@ -23,13 +23,21 @@ pub fn modify_witness_params(
 ) -> Result<()> {
     // Print the existing Witness Configuration
     if let Some(witnesses) = old_witness {
-        println!(
-            "{}{}",
-            style("Witness threshold: ").color256(69),
-            style(witnesses.threshold).color256(34)
-        );
-        for w in &witnesses.witnesses {
-            println!("\t{}", style(w.id.to_string()).color256(34));
+        if let Witnesses::Value {
+            threshold,
+            witnesses,
+        } = witnesses
+        {
+            println!(
+                "{}{}",
+                style("Witness threshold: ").color256(69),
+                style(threshold).color256(34)
+            );
+            for w in witnesses {
+                println!("\t{}", style(w.id.to_string()).color256(34));
+            }
+        } else {
+            bail!("Invalid Witness Parameter state");
         }
     } else {
         println!(
@@ -53,19 +61,29 @@ pub fn modify_witness_params(
                 .interact()?
             {
                 // Disable witness parameters
-                new_params.witness = Some(None);
+                new_params.witness = Some(Witnesses::Empty {});
                 return Ok(());
             }
 
-            // Edit existing witness parameters
-            let new_threshold = change_threshold(witnesses.threshold);
-
-            let witnesses = modify_witness_nodes(witnesses, new_threshold, secrets)?;
-
-            new_params.witness = Some(Some(Witnesses {
-                threshold: new_threshold,
+            let (threshold, witness_nodes) = if let Witnesses::Value {
+                threshold,
                 witnesses,
-            }));
+            } = witnesses
+            {
+                (*threshold, witnesses)
+            } else {
+                bail!("Empty Witness Parameters is an invalid state");
+            };
+
+            // Edit existing witness parameters
+            let new_threshold = change_threshold(threshold);
+
+            let witness_nodes = modify_witness_nodes(witness_nodes, new_threshold, secrets)?;
+
+            new_params.witness = Some(Witnesses::Value {
+                threshold: new_threshold,
+                witnesses: witness_nodes,
+            });
         } else {
             // No existing witness setup, create a new one
             manage_witnesses(new_params, secrets)?;
@@ -89,7 +107,7 @@ fn change_threshold(existing: u32) -> u32 {
 
 /// Any changes to the witnesses?
 fn modify_witness_nodes(
-    witnesses: &Witnesses,
+    witnesses: &[Witness],
     threshold: u32,
     secrets: &mut ConfigInfo,
 ) -> Result<Vec<Witness>> {
@@ -97,13 +115,13 @@ fn modify_witness_nodes(
 
     let selected = MultiSelect::with_theme(&ColorfulTheme::default())
         .with_prompt("Which Witness Nodes do you want to keep?")
-        .items(&witnesses.witnesses)
+        .items(witnesses)
         .interact()
         .unwrap();
 
     // Add selected witnesses
     for i in selected {
-        new_witnesses.push(witnesses.witnesses[i].clone());
+        new_witnesses.push(witnesses[i].clone());
     }
 
     loop {
@@ -155,7 +173,7 @@ fn modify_witness_nodes(
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
                     "Add another witness: current:({:02}) threshold:({:02})?",
-                    witnesses.witnesses.len(),
+                    new_witnesses.len(),
                     threshold
                 ))
                 .default(true)

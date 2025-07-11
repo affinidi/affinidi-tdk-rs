@@ -18,7 +18,12 @@ impl WitnessProofCollection {
         highest_version_number: u32,
     ) -> Result<(), DIDWebVHError> {
         // Determine witnesses for this LogEntry
-        let Some(Some(witnesses)) = &log_entry.validated_parameters.active_witness else {
+        let Some(witnesses) = &log_entry.validated_parameters.active_witness else {
+            // There are no active witnesses for this LogEntry
+            return Ok(());
+        };
+
+        let Some(witness_nodes) = witnesses.witnesses() else {
             // There are no active witnesses for this LogEntry
             return Ok(());
         };
@@ -28,7 +33,7 @@ impl WitnessProofCollection {
 
         // For each witness, check if there is a proof available
         let mut valid_proofs = 0;
-        for w in &witnesses.witnesses {
+        for w in witness_nodes {
             let key = w.id.split_at(8);
             let Some((_, oldest_id, proof)) =
                 self.witness_version.get(&[&w.id, "#", key.1].concat())
@@ -84,15 +89,21 @@ impl WitnessProofCollection {
             }
         }
 
-        if valid_proofs < witnesses.threshold {
+        let Some(threshold) = witnesses.threshold() else {
+            // No threshold set, so we consider this as a state error
+            return Err(DIDWebVHError::ValidationError(
+                "Witness threshold not defined when witnessing seems to be enabled!".to_string(),
+            ));
+        };
+
+        if valid_proofs < threshold {
             // Not enough valid proofs to consider this LogEntry as witnessed
             warn!(
                 "LogEntry ({}): Witness threshold ({}) not met. Only ({} valid proofs!",
-                log_entry.log_entry.version_id, witnesses.threshold, valid_proofs
+                log_entry.log_entry.version_id, threshold, valid_proofs
             );
             Err(DIDWebVHError::WitnessProofError(format!(
-                "Witness proof threshold ({}) was not met. Only ({}) proofs were validated",
-                witnesses.threshold, valid_proofs
+                "Witness proof threshold ({threshold}) was not met. Only ({valid_proofs}) proofs were validated",
             )))
         } else {
             debug!(

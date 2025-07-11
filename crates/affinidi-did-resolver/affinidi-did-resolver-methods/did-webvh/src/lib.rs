@@ -261,11 +261,7 @@ impl DIDWebVHState {
             } else {
                 None
             },
-            witness: if let Some(Some(witnesses)) = &parameters.active_witness {
-                Some(witnesses.clone())
-            } else {
-                None
-            },
+            witness: parameters.active_witness.clone(),
         };
 
         let id_number = log_entry.get_version_id_fields()?.0;
@@ -283,7 +279,7 @@ impl DIDWebVHState {
 
 #[cfg(test)]
 mod tests {
-    use crate::parameters::Parameters;
+    use crate::{parameters::Parameters, witness::Witnesses};
 
     #[test]
     fn check_serialization_field_action() {
@@ -296,8 +292,8 @@ mod tests {
             active_update_keys: Vec::new(),
             portable: None,
             next_key_hashes: None,
-            witness: Some(None),
-            active_witness: Some(None),
+            witness: Some(Witnesses::Empty {}),
+            active_witness: Some(Witnesses::Empty {}),
             watchers: Some(Some(watchers)),
             deactivated: false,
             ttl: None,

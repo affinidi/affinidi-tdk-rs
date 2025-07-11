@@ -325,13 +325,11 @@ fn update_parameters(
     // ************************************************************************
     // Witnesses
     // ************************************************************************
-    let old_witness = if let Some(witnesses) = &old_log_entry.validated_parameters.witness {
-        witnesses
-    } else {
-        &None
-    };
-
-    modify_witness_params(old_witness.as_ref(), &mut new_params, secrets)?;
+    modify_witness_params(
+        old_log_entry.validated_parameters.witness.as_ref(),
+        &mut new_params,
+        secrets,
+    )?;
 
     // ************************************************************************
     // Watchers

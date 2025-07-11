@@ -13,10 +13,10 @@ use serde_json::json;
 pub fn witness_log_entry(
     witness_proofs: &mut WitnessProofCollection,
     log_entry: &LogEntry,
-    witnesses: &Option<Option<Witnesses>>,
+    witnesses: &Option<Witnesses>,
     secrets: &ConfigInfo,
 ) -> Result<Option<()>> {
-    let Some(Some(witnesses)) = witnesses else {
+    let Some(witnesses) = witnesses else {
         println!(
             "{}",
             style("Witnesses are not being used for this LogEntry. No witnessing is required")
@@ -25,14 +25,24 @@ pub fn witness_log_entry(
         return Ok(None);
     };
 
+    let (threshold, witness_nodes) = if let Witnesses::Value {
+        threshold,
+        witnesses,
+    } = witnesses
+    {
+        (*threshold, witnesses)
+    } else {
+        bail!("No valid witness paremeter config found!");
+    };
+
     println!(
         "{}{}{}",
         style("Witnessing enabled. Requires at least (").color256(69),
-        style(witnesses.threshold).color256(45),
+        style(threshold).color256(45),
         style(") proofs from witnesses").color256(69)
     );
 
-    for witness in &witnesses.witnesses {
+    for witness in witness_nodes {
         // Get secret for Witness
         let Some(secret) = secrets.witnesses.get(&witness.id) else {
             bail!("Couldn't find secret for witness ({})!", witness.id)
@@ -73,7 +83,7 @@ pub fn witness_log_entry(
         style("Witnessing completed: ").color256(69),
         style(witness_proofs.get_proof_count(&log_entry.version_id)).color256(45),
         style("/").color256(69),
-        style(witnesses.threshold).color256(45),
+        style(threshold).color256(45),
     );
 
     Ok(Some(()))

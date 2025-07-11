@@ -11,40 +11,75 @@ pub mod validate;
 
 /// Witness nodes
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct Witnesses {
-    /// Number of witnesses required to witness a change
-    /// Must be 1 or greater
-    pub threshold: u32,
-
-    /// Set of witness nodes
-    pub witnesses: Vec<Witness>,
+#[serde(untagged)]
+pub enum Witnesses {
+    Value {
+        threshold: u32,
+        witnesses: Vec<Witness>,
+    },
+    // WARN: This must always go last, otherwise it will become the default as it matches on
+    // anything
+    Empty {},
 }
 
 impl Witnesses {
     /// Are any witnesses configured?
     pub fn is_empty(&self) -> bool {
-        self.witnesses.is_empty()
+        match self {
+            Witnesses::Empty {} => true,
+            Witnesses::Value { witnesses, .. } => witnesses.is_empty(),
+        }
     }
 
     /// Checks Witnesses parameters for errors
     pub fn validate(&self) -> Result<(), DIDWebVHError> {
         if self.is_empty() {
-            Err(DIDWebVHError::ValidationError(
+            return Err(DIDWebVHError::ValidationError(
                 "Witnesses are enabled, but no witness nodes are specified! Can not be empty!"
                     .to_string(),
-            ))
-        } else if self.threshold < 1 {
-            Err(DIDWebVHError::ValidationError(
-                "Witness threshold must be 1 or more".to_string(),
-            ))
-        } else if self.witnesses.len() < self.threshold as usize {
-            Err(DIDWebVHError::ValidationError(format!(
-                "Number of Witnesses ({}) is less than the threshold ({})",
-                self.witnesses.len(),
-                self.threshold
-            )))
-        } else {
-            Ok(())
+            ));
+        }
+
+        match self {
+            Witnesses::Value {
+                threshold,
+                witnesses,
+            } => {
+                if threshold < &1 {
+                    return Err(DIDWebVHError::ValidationError(
+                        "Witness threshold must be 1 or more".to_string(),
+                    ));
+                } else if witnesses.len() < *threshold as usize {
+                    return Err(DIDWebVHError::ValidationError(format!(
+                        "Number of Witnesses ({}) is less than the threshold ({})",
+                        witnesses.len(),
+                        threshold
+                    )));
+                }
+            }
+            _ => {
+                return Err(DIDWebVHError::ValidationError(
+                    "Empty Witness Parameter config found, but it wasn't detected. INTERNAL ERROR STATE"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns witnesses if they exist
+    pub fn witnesses(&self) -> Option<&[Witness]> {
+        match self {
+            Witnesses::Empty {} => None,
+            Witnesses::Value { witnesses, .. } => Some(witnesses),
+        }
+    }
+
+    /// Returns threshold if it exists
+    pub fn threshold(&self) -> Option<u32> {
+        match self {
+            Witnesses::Empty {} => None,
+            Witnesses::Value { threshold, .. } => Some(*threshold),
         }
     }
 }

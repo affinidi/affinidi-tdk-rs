@@ -150,11 +150,7 @@ impl LogEntry {
                 } else {
                     None
                 },
-                witness: if let Some(Some(witnesses)) = parameters.active_witness {
-                    Some(witnesses)
-                } else {
-                    None
-                },
+                witness: parameters.active_witness,
             },
         ))
     }
