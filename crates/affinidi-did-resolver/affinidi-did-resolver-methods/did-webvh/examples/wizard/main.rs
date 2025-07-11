@@ -1038,7 +1038,7 @@ fn configure_parameters(
             .with_prompt("TTL in Seconds?")
             .interact()
             .unwrap();
-        parameters.ttl = Some(Some(ttl));
+        parameters.ttl = Some(ttl);
     }
 
     Ok(parameters)
@@ -1192,6 +1192,6 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
         }
     }
 
-    parameters.watchers = Some(Some(watchers));
+    parameters.watchers = Some(watchers);
     Ok(())
 }

@@ -59,24 +59,16 @@ pub struct Parameters {
     pub active_witness: Option<Witnesses>,
 
     /// DID watchers for this DID
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
-    pub watchers: Option<Option<Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watchers: Option<Vec<String>>,
 
     /// Has this DID been revoked?
     #[serde(skip_serializing_if = "<&bool>::not", default)]
     pub deactivated: bool,
 
     /// time to live in seconds for a resolved DID document
-    #[serde(
-        default,                                    // <- important for deserialization
-        skip_serializing_if = "Option::is_none",    // <- important for serialization
-        with = "::serde_with::rust::double_option",
-    )]
-    pub ttl: Option<Option<u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<u32>,
 }
 
 impl Default for Parameters {
@@ -93,7 +85,7 @@ impl Default for Parameters {
             active_witness: None,
             watchers: None,
             deactivated: false,
-            ttl: None,
+            ttl: Some(3600),
         }
     }
 }
@@ -273,29 +265,30 @@ impl Parameters {
                     // If absent, keep current watchers
                     new_parameters.watchers = previous.watchers.clone();
                 }
-                Some(None) => {
-                    // If None, turn off watchers
-                    new_parameters.watchers = None;
-                }
-                Some(Some(watchers)) => {
-                    // Replace watchers with the new value
-                    new_parameters.watchers = Some(Some(watchers.clone()));
+                Some(watchers) => {
+                    if watchers.is_empty() {
+                        // If None, turn off watchers
+                        new_parameters.watchers = None;
+                    } else {
+                        // Replace watchers with the new value
+                        new_parameters.watchers = Some(watchers.clone());
+                    }
                 }
             }
         } else {
             // First Log Entry
             match &self.watchers {
-                None | Some(None) => {
+                None => {
                     new_parameters.watchers = None;
                 }
-                Some(Some(watchers)) => {
+                Some(watchers) => {
                     // Replace watchers with the new value
                     if watchers.is_empty() {
                         return Err(DIDWebVHError::ParametersError(
                             "watchers cannot be empty".to_string(),
                         ));
                     }
-                    new_parameters.watchers = Some(Some(watchers.clone()));
+                    new_parameters.watchers = Some(watchers.clone());
                 }
             }
         }
@@ -326,24 +319,20 @@ impl Parameters {
                     // If absent, keep current TTL
                     new_parameters.ttl = previous.ttl;
                 }
-                Some(None) => {
-                    // If None, turn off TTL
-                    new_parameters.ttl = None;
-                }
-                Some(Some(ttl)) => {
+                Some(ttl) => {
                     // Replace ttl with the new value
-                    new_parameters.ttl = Some(Some(*ttl));
+                    new_parameters.ttl = Some(*ttl);
                 }
             }
         } else {
             // First Log Entry
             match &self.ttl {
-                None | Some(None) => {
+                None => {
                     new_parameters.ttl = None;
                 }
-                Some(Some(ttl)) => {
+                Some(ttl) => {
                     // Replace ttl with the new value
-                    new_parameters.ttl = Some(Some(*ttl));
+                    new_parameters.ttl = Some(*ttl);
                 }
             }
         }
@@ -437,44 +426,8 @@ impl Parameters {
         diff.witness = Parameters::diff_witness(&self.witness, &new_params.witness)?;
 
         // Watcher checks
-        match new_params.watchers {
-            None => {
-                // If None, then keep current parameter watchers
-                diff.watchers = None;
-            }
-            Some(None) => {
-                // If Some(None), then cancel the watchers
-                match self.watchers {
-                    None => {
-                        // If current watchers is also None, then no change
-                        diff.watchers = None;
-                    }
-                    Some(Some(_)) => {
-                        // If current watchers is Some(Some(_)), then set to None
-                        diff.watchers = Some(None);
-                    }
-                    Some(None) => {
-                        // If current watchers is Some(None), then no change
-                        diff.watchers = None;
-                    }
-                }
-            }
-            Some(Some(ref watchers)) => {
-                // If Some(Some(watchers)), then set the new watchers
-                if watchers.is_empty() {
-                    return Err(DIDWebVHError::ParametersError(
-                        "watchers cannot be empty".to_string(),
-                    ));
-                }
-                if self.watchers == new_params.watchers {
-                    // If watchers are the same, no change
-                    diff.watchers = None;
-                } else {
-                    // If watchers are different, set the new watchers
-                    diff.watchers = Some(Some(watchers.clone()));
-                }
-            }
-        }
+        diff.watchers =
+            Parameters::diff_tri_state(&self.watchers, &new_params.watchers, "watchers")?;
 
         // Deactivated
         if new_params.deactivated && self.pre_rotation_active {
@@ -491,34 +444,13 @@ impl Parameters {
                 // If None, then keep current parameter ttl
                 diff.ttl = None;
             }
-            Some(None) => {
-                // If Some(None), then cancel the ttl
-                match self.ttl {
-                    None => {
-                        // If current ttl is also None, then no change
-                        diff.ttl = None;
-                    }
-                    Some(None) => {
-                        // If current ttl is Some(None), then set to None
-                        diff.ttl = None;
-                    }
-                    Some(Some(_)) => {
-                        diff.ttl = Some(None);
-                    }
-                }
-            }
-            Some(Some(ttl)) => {
+            Some(ttl) => {
                 // If Some(ttl), then set the new ttl
-                if ttl == 0 {
-                    return Err(DIDWebVHError::ParametersError(
-                        "TTL cannot be zero".to_string(),
-                    ));
-                }
                 if self.ttl == new_params.ttl {
                     // If ttl is the same, no change
                     diff.ttl = None;
                 } else {
-                    diff.ttl = Some(Some(ttl));
+                    diff.ttl = Some(ttl);
                 }
             }
         }
@@ -643,9 +575,9 @@ mod tests {
                     },
                 ],
             }),
-            watchers: Some(Some(vec!["watcher1".to_string()])),
+            watchers: Some(vec!["watcher1".to_string()]),
             deactivated: false,
-            ttl: Some(Some(3600)),
+            ttl: Some(3600),
             ..Default::default()
         };
 

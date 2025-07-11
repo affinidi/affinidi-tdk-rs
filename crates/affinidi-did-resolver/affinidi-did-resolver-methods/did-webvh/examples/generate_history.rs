@@ -220,12 +220,12 @@ async fn generate_did(
             next_key2.get_public_keymultibase_hash()?,
         ]),
         witness,
-        watchers: Some(Some(vec![
+        watchers: Some(vec![
             "https://watcher-1.affinidi.com/v1/webvh".to_string(),
             "https://watcher-2.affinidi.com/v1/webvh".to_string(),
             "https://watcher-3.affinidi.com/v1/webvh".to_string(),
-        ])),
-        ttl: Some(Some(300)),
+        ]),
+        ttl: Some(3600),
         ..Default::default()
     };
 
@@ -408,7 +408,7 @@ fn swap_watcher(params: &mut Parameters) -> Result<()> {
     // Pick a random witness and remove it
     let mut rng = rand::rng();
 
-    let Some(Some(watchers)) = &params.watchers else {
+    let Some(watchers) = &params.watchers else {
         bail!("Watchers incorrectly configured for this test!");
     };
     let mut new_watchers = watchers.clone();
@@ -430,7 +430,7 @@ fn swap_watcher(params: &mut Parameters) -> Result<()> {
         .concat(),
     );
 
-    params.watchers = Some(Some(new_watchers));
+    params.watchers = Some(new_watchers);
 
     Ok(())
 }

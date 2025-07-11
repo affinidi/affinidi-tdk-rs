@@ -334,13 +334,11 @@ fn update_parameters(
     // ************************************************************************
     // Watchers
     // ************************************************************************
-    let old_watchers = if let Some(watchers) = &old_log_entry.validated_parameters.watchers {
-        watchers
-    } else {
-        &None
-    };
 
-    modify_watcher_params(old_watchers.as_ref(), &mut new_params)?;
+    modify_watcher_params(
+        old_log_entry.validated_parameters.watchers.as_ref(),
+        &mut new_params,
+    )?;
 
     // ************************************************************************
     // TTL
@@ -353,9 +351,9 @@ fn update_parameters(
 }
 
 /// Modify the TTL for this DID?
-fn modify_ttl_params(ttl: &Option<Option<u32>>, params: &mut Parameters) -> Result<()> {
+fn modify_ttl_params(ttl: &Option<u32>, params: &mut Parameters) -> Result<()> {
     print!("{}", style("Existing TTL: ").color256(69));
-    let current_ttl = if let Some(Some(ttl)) = ttl {
+    let current_ttl = if let Some(ttl) = ttl {
         println!("{}", style(ttl).color256(34));
         ttl.to_owned()
     } else {
@@ -375,10 +373,10 @@ fn modify_ttl_params(ttl: &Option<Option<u32>>, params: &mut Parameters) -> Resu
 
         if new_ttl == 0 {
             // Disable TTL
-            params.ttl = Some(None);
+            params.ttl = Some(3600);
         } else {
             // Set new TTL
-            params.ttl = Some(Some(new_ttl));
+            params.ttl = Some(new_ttl);
         }
     } else {
         // Keep existing TTL

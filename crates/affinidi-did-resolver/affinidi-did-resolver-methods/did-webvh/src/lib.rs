@@ -256,11 +256,7 @@ impl DIDWebVHState {
             deactivated: parameters.deactivated,
             portable,
             scid,
-            watchers: if let Some(Some(watchers)) = &parameters.watchers {
-                Some(watchers.clone())
-            } else {
-                None
-            },
+            watchers: parameters.watchers.clone(),
             witness: parameters.active_witness.clone(),
         };
 
@@ -294,7 +290,7 @@ mod tests {
             next_key_hashes: None,
             witness: Some(Witnesses::Empty {}),
             active_witness: Some(Witnesses::Empty {}),
-            watchers: Some(Some(watchers)),
+            watchers: Some(watchers),
             deactivated: false,
             ttl: None,
         };

@@ -39,14 +39,14 @@ pub fn modify_watcher_params(
                 .interact()?
             {
                 // Disable watcher parameters
-                new_params.watchers = Some(None);
+                new_params.watchers = Some(Vec::new());
                 return Ok(());
             }
 
             // Edit existing watcher parameters
             let watchers = modify_watcher_nodes(watchers)?;
 
-            new_params.watchers = Some(Some(watchers));
+            new_params.watchers = Some(watchers);
         } else {
             // No existing watcher setup, create a new one
             manage_watchers(new_params)?;

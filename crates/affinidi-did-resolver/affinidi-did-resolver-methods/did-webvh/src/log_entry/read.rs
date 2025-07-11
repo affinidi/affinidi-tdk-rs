@@ -145,11 +145,7 @@ impl LogEntry {
                 deactivated: parameters.deactivated,
                 portable,
                 scid,
-                watchers: if let Some(Some(watchers)) = parameters.watchers {
-                    Some(watchers)
-                } else {
-                    None
-                },
+                watchers: parameters.watchers,
                 witness: parameters.active_witness,
             },
         ))
