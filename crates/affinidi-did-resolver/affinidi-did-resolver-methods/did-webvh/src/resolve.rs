@@ -26,6 +26,9 @@ impl DIDMethodResolver for DIDWebVH {
             ));
         }
 
+        // Async download did.jsonl and did-witness.json
+        println!("URL: {}", parsed_did_url.get_http_url().unwrap());
+
         Err(Error::NotFound)
     }
 }
