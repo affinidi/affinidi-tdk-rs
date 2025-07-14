@@ -19,7 +19,7 @@ async fn main() {
     let output = match peer.resolve(DID::new::<String>(&args[1]).unwrap()).await {
         Ok(res) => res,
         Err(e) => {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
             return;
         }
     };

@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "did-example"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "ahash 0.8.12",
  "ssi",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "did-peer"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "askar-crypto",
  "base64 0.22.1",
