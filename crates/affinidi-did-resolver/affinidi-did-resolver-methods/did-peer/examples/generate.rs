@@ -109,7 +109,7 @@ async fn main() {
     let (did_peer, _) =
         DIDPeer::create_peer_did(&keys, Some(&services)).expect("Failed to create did:peer");
 
-    println!("{}", did_peer);
+    println!("{did_peer}",);
 
     println!();
 
@@ -119,7 +119,7 @@ async fn main() {
     let output = match peer.resolve(DID::new::<String>(&did_peer).unwrap()).await {
         Ok(res) => res,
         Err(e) => {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
             return;
         }
     };
@@ -146,10 +146,10 @@ async fn main() {
     println!("key :\n{:#?}", output.document);
 
     let a = multibase::decode("z6Mkp89diy1PZkbUBDTpiqZBotddb1VV7JnY8qiZMGErUbFe").unwrap();
-    println!("{:?}", a);
+    println!("{a:?}",);
     let b = MultiEncoded::new(&a.1).unwrap();
     let jwk = JWK::from_multicodec(b).unwrap();
-    println!("{}", jwk);
+    println!("{jwk}",);
 
     //let jwk = JWK::from
 }

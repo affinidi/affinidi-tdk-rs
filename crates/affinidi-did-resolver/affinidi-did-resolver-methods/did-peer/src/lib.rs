@@ -204,14 +204,12 @@ impl DIDPeerService {
                             Some(OneOrMany::One(Endpoint::Uri(uri)))
                         } else {
                             return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
-                                "Couldn't convert ServiceEndPoint to a valid URI: {}",
-                                value
+                                "Couldn't convert ServiceEndPoint to a valid URI: {value}",
                             )));
                         }
                     } else {
                         return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
-                            "Service URI appears to be a string, but can't parse as a string: {}",
-                            value
+                            "Service URI appears to be a string, but can't parse as a string: {value}",
                         )));
                     }
                 } else {
@@ -220,8 +218,7 @@ impl DIDPeerService {
             }
             Err(err) => {
                 return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
-                    "Couldn't convert ServiceEndPoint to a valid representation. Reason: {}",
-                    err
+                    "Couldn't convert ServiceEndPoint to a valid representation. Reason: {err}",
                 )));
             }
         };
@@ -236,8 +233,7 @@ impl DIDPeerService {
             Ok(uri) => uri,
             Err(e) => {
                 return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
-                    "Error parsing service id: {}. Reason: {:?}",
-                    id, e
+                    "Error parsing service id: {id}. Reason: {e:?}",
                 )));
             }
         };
@@ -531,8 +527,7 @@ impl DIDMethodResolver for DIDPeer {
                         }
                         other => {
                             return Err(Error::RepresentationNotSupported(format!(
-                                "An invalid Purpose Code ({}) was found in the DID",
-                                other
+                                "An invalid Purpose Code ({other}) was found in the DID",
                             )));
                         }
                     }
@@ -653,8 +648,7 @@ impl DIDPeer {
                             Ok(k) => k,
                             Err(e) => {
                                 return Err(DIDPeerError::InternalError(format!(
-                                    "Failed to generate ed25519 key. Reason: {}",
-                                    e
+                                    "Failed to generate ed25519 key. Reason: {e}",
                                 )));
                             }
                         },
@@ -734,10 +728,10 @@ impl DIDPeer {
             // Place based on key types
             match key.purpose {
                 DIDPeerKeys::Verification => {
-                    result.push_str(&format!(".V{}", public_key));
+                    result.push_str(&format!(".V{public_key}",));
                 }
                 DIDPeerKeys::Encryption => {
-                    result.push_str(&format!(".E{}", public_key));
+                    result.push_str(&format!(".E{public_key}",));
                 }
             }
         }
@@ -746,8 +740,7 @@ impl DIDPeer {
             for service in services {
                 let service = serde_json::to_string(&service).map_err(|e| {
                     DIDPeerError::SyntaxErrorServiceDefinition(format!(
-                        "Error parsing service: {}",
-                        e
+                        "Error parsing service: {e}",
                     ))
                 })?;
                 result.push_str(&format!(".S{}", BASE64_URL_SAFE_NO_PAD.encode(service)));
@@ -807,8 +800,7 @@ impl DIDPeer {
             Ok(output) => output.content,
             Err(e) => {
                 return Err(DIDPeerError::KeyParsingError(format!(
-                    "Failed to resolve key ({}). Reason: {}",
-                    did_key, e
+                    "Failed to resolve key ({did_key}). Reason: {e}",
                 )));
             }
         };
@@ -1318,13 +1310,11 @@ pub async fn resolve_did_peer(did: &str) -> Result<String, DIDPeerError> {
         Ok(output) => match serde_json::to_string_pretty(&output.document) {
             Ok(json) => Ok(json),
             Err(e) => Err(DIDPeerError::JsonParsingError(format!(
-                "Couldn't convert DID Document to JSON. Reason: {}",
-                e
+                "Couldn't convert DID Document to JSON. Reason: {e}",
             ))),
         },
         Err(e) => Err(DIDPeerError::KeyParsingError(format!(
-            "Failed to resolve key ({}). Reason: {}",
-            did, e
+            "Failed to resolve key ({did}). Reason: {e}",
         ))),
     }
 }
