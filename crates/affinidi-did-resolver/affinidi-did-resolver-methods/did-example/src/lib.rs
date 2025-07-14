@@ -25,10 +25,7 @@ impl DiDExampleCache {
     fn from_string(document: String) -> Result<(String, Document), DidExampleError> {
         let doc = Document::from_json(&document)
             .map_err(|e| {
-                DidExampleError::DocumentParseError(format!(
-                    "Couldn't parse Document String: {}",
-                    e
-                ))
+                DidExampleError::DocumentParseError(format!("Couldn't parse Document String: {e}",))
             })?
             .into_document();
 

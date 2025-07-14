@@ -4,6 +4,11 @@
 
 ### 14th July 2025
 
+## DID example method (0.5.4)
+
+* **MAINTENANCE:** Updating crate dependencies
+* **MAINTENANCE:** Fixing rust lint warnings
+
 ## DID peer method (0.6.3)
 
 * **MAINTENANCE:** Updating crate dependencies
