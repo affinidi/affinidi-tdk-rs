@@ -296,12 +296,11 @@ mod tests {
         };
 
         let parsed = serde_json::to_value(&params).expect("Couldn't parse parameters");
-        let pretty = serde_json::to_string_pretty(&params).expect("Couldn't parse parameters");
-
-        println!("Parsed: {pretty}");
 
         assert_eq!(parsed.get("next_key_hashes"), None);
-        assert!(parsed.get("witness").is_some_and(|s| s.is_null()));
+        assert!(parsed.get("witness").is_some_and(|s| s.is_object()));
+        let witnesses = parsed.get("witness").unwrap().as_object();
+        assert!(witnesses.is_some_and(|w| w.is_empty()));
         assert!(parsed.get("watchers").is_some_and(|s| s.is_array()));
     }
 }

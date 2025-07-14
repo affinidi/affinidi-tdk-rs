@@ -480,7 +480,7 @@ fn get_address() -> Result<(String, String)> {
             }
         };
 
-        let http_url = match did_url.get_http_url() {
+        let http_url = match did_url.get_http_url(None) {
             Ok(http_url) => http_url,
             Err(e) => {
                 println!(

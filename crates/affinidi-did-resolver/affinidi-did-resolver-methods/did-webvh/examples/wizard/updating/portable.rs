@@ -46,12 +46,12 @@ pub fn migrate_did(didwebvh: &mut DIDWebVHState, secrets: &mut ConfigInfo) -> Re
     println!(
         "{} {}",
         style("Current DID URL:").color256(69),
-        style(&did_url.get_http_url()?).color256(45)
+        style(&did_url.get_http_url(None)?).color256(45)
     );
 
     let new_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("New URL")
-        .with_initial_text(did_url.get_http_url()?)
+        .with_initial_text(did_url.get_http_url(None)?)
         .interact_text()?;
 
     let new_url = Url::parse(&new_url).map_err(|_| anyhow!("Invalid URL format"))?;
