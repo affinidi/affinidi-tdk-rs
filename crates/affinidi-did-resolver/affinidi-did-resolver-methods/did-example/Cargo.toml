@@ -1,6 +1,6 @@
 [package]
 name = "did-example"
-version = "0.5.3"
+version = "0.5.4"
 description = "Implementation of did:example in Rust"
 repository.workspace = true
 edition.workspace = true
