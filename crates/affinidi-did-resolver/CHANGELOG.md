@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### 14th July 2025
+
+## DID peer method (0.6.3)
+
+* **MAINTENANCE:** Updating crate dependencies
+* **MAINTENANCE:** Fixing rust lint warnings
+
 ### 11th July 2025
 
 ## DID webvh method (0.1.6)
