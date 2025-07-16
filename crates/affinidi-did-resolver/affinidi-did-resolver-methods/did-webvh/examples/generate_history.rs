@@ -8,7 +8,6 @@
 //! 2. They rotate webVH keys every month (two keys per update)
 //! 3. They swap a witness node once every 12 months (maintaining 3 threashold, 4 witnesses)
 //! 4. They swap a watcher node once every 12 months (maintaining 3 watchers)
-//! 5. DID VM Key is rotated every 3 months
 
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::{SecretsResolver, SimpleSecretsResolver, secrets::Secret};
