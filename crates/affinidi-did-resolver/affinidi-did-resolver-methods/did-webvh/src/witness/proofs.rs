@@ -4,7 +4,7 @@
 *   When saving or serializing the Witness Proofs, you should run `optimise_records` first
 *   THis will ensure that previous witness proof records have been removed
 */
-use std::{fs::File, rc::Rc};
+use std::{fs::File, sync::Arc};
 
 use crate::DIDWebVHError;
 use affinidi_data_integrity::DataIntegrityProof;
@@ -26,9 +26,9 @@ pub struct WitnessProofShadow(Vec<WitnessProof>);
 #[serde(rename_all = "camelCase")]
 pub struct WitnessProof {
     /// versionId of the DID Log Entry to which witness proofs apply.
-    pub version_id: Rc<String>,
+    pub version_id: Arc<String>,
     /// Array of DataIntegrity Proofs from each Witness
-    pub proof: Vec<Rc<DataIntegrityProof>>,
+    pub proof: Vec<Arc<DataIntegrityProof>>,
 
     /// Internally used for partial proofs
     /// Set to true if versionId relates to an unpublished LogEntry
@@ -46,7 +46,7 @@ pub struct WitnessProofCollection {
     /// Mapping of Proofs by witness. Points to the highest versionId
     /// Value = versionId, integer prefix of versionId, Data Integrity Proof
     #[serde(skip)]
-    pub(crate) witness_version: HashMap<String, (Rc<String>, u32, Rc<DataIntegrityProof>)>,
+    pub(crate) witness_version: HashMap<String, (Arc<String>, u32, Arc<DataIntegrityProof>)>,
 }
 
 /// Converts the inner Secret Shadow to a public Shadow Struct
@@ -105,7 +105,7 @@ impl WitnessProofCollection {
             }
         }
 
-        let rc_proof = Rc::new(proof.clone());
+        let rc_proof = Arc::new(proof.clone());
         let version_id = if let Some(record) = self
             .proofs
             .0
@@ -117,7 +117,7 @@ impl WitnessProofCollection {
             record.version_id.clone()
         } else {
             // Need to create a new WitnessProof record
-            let version_id = Rc::new(version_id.to_string());
+            let version_id = Arc::new(version_id.to_string());
             self.proofs.0.push(WitnessProof {
                 version_id: version_id.clone(),
                 future_entry,

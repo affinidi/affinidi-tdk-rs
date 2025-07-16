@@ -2764,6 +2764,7 @@ dependencies = [
  "serde_with 3.14.0",
  "sha2 0.10.9",
  "ssi",
+ "static-iref",
  "thiserror 2.0.12",
  "tokio",
  "tracing",

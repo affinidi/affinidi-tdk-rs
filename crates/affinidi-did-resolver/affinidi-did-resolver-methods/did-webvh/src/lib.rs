@@ -37,6 +37,8 @@ pub enum DIDWebVHError {
     InvalidMethodIdentifier(String),
     #[error("LogEntryError: {0}")]
     LogEntryError(String),
+    #[error("NetworkError: {0}")]
+    NetworkError(String),
     #[error("DID Query NotFound")]
     NotFound,
     #[error("NotImplemented: {0}")]

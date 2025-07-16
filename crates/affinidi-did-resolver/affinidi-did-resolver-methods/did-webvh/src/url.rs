@@ -2,7 +2,7 @@ use crate::DIDWebVHError;
 use std::fmt::{Display, Formatter};
 use url::Url;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum URLType {
     /// Regular DID Documentation lookup
     DIDDoc,
@@ -12,6 +12,7 @@ pub enum URLType {
 }
 
 /// Breakdown of a WebVH URL into its components
+#[derive(Clone)]
 pub struct WebVHURL {
     /// What type of URL is this?
     pub type_: URLType,
