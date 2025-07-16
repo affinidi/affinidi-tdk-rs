@@ -171,18 +171,20 @@ impl WitnessProofCollection {
     }
 
     /// Save proofs to a file
-    pub fn save_to_file(&self, file_path: &str) -> Result<(), DIDWebVHError> {
+    /// Returns bytes written
+    pub fn save_to_file(&self, file_path: &str) -> Result<u32, DIDWebVHError> {
         let json_data = serde_json::to_string(&self.proofs).map_err(|e| {
             DIDWebVHError::WitnessProofError(
                 format!("Couldn't serialize Witness Proofs Data: {e}",),
             )
         })?;
+        let bytes = json_data.len() as u32;
         std::fs::write(file_path, json_data).map_err(|e| {
             DIDWebVHError::WitnessProofError(format!(
                 "Couldn't write to Witness Proofs file ({file_path}): {e}",
             ))
         })?;
-        Ok(())
+        Ok(bytes)
     }
 
     /// Get WitnessProof record for a given version_id
@@ -304,5 +306,10 @@ impl WitnessProofCollection {
         });
 
         Ok(())
+    }
+
+    /// Returns the number of Witness Proofs in the collection
+    pub fn get_total_count(&self) -> usize {
+        self.proofs.0.iter().map(|p| p.proof.len()).sum()
     }
 }

@@ -6,13 +6,14 @@
 //! Model an business DID with the following characteristics
 //! 1. Must be used for 10 years
 //! 2. They rotate webVH keys every month (two keys per update)
-//! 3. They swap a witness node once every 12 months (maintaining 3 threashold, 4 witnesses)
-//! 4. They swap a watcher node once every 12 months (maintaining 3 watchers)
+//! 3. They swap a witness node once every 6 months (maintaining 3 threashold, 4 witnesses)
+//! 4. They swap a watcher node once every 6 months (maintaining 3 watchers)
 
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::{SecretsResolver, SimpleSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{DID, KeyType};
 use anyhow::{Result, anyhow, bail};
+use byte_unit::{Byte, UnitType};
 use clap::Parser;
 use console::style;
 use did_webvh::{
@@ -20,6 +21,7 @@ use did_webvh::{
     parameters::Parameters,
     witness::{Witness, Witnesses},
 };
+use format_num::format_num;
 use rand::{Rng, distr::Alphabetic};
 use serde_json::json;
 use std::{
@@ -57,7 +59,10 @@ pub async fn main() -> Result<()> {
     let mut didwebvh = DIDWebVHState::default();
     let mut secrets = SimpleSecretsResolver::new(&[]).await;
 
-    println!("System resting before starting...");
+    println!(
+        "{}",
+        style("System rest - Sleeping for 3 seconds...").color256(214)
+    );
     sleep(Duration::from_secs(3));
     let start = SystemTime::now();
 
@@ -72,70 +77,170 @@ pub async fn main() -> Result<()> {
     let end = SystemTime::now();
 
     println!(
-        "Generation Duration: {}ms",
-        end.duration_since(start).unwrap().as_millis()
+        "\t{}{}",
+        style("WebVH DID Generation Duration: ").color256(34),
+        style(format!(
+            "{}ms",
+            &end.duration_since(start).unwrap().as_millis()
+        ))
+        .color256(141)
     );
 
-    println!("Writing to disk");
     // Write records to disk
+    let start = SystemTime::now();
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .open("did.jsonl")?;
 
+    let mut byte_count: u64 = 0;
     for entry in didwebvh.log_entries.iter() {
         // Convert LogEntry to JSON and write to file
         let json_entry = serde_json::to_string(&entry.log_entry)?;
         file.write_all(json_entry.as_bytes())?;
         file.write_all("\n".as_bytes())?;
+        byte_count += 2 + json_entry.len() as u64; // 2 for newline characters
     }
+    let end = SystemTime::now();
+
+    let bytes = Byte::from_u64(byte_count).get_appropriate_unit(UnitType::Decimal);
+
+    println!(
+        "\t{}{} {}{}",
+        style("LogEntries Count: ").color256(34),
+        style(format_num!(",.0", didwebvh.log_entries.len() as f64)).color256(69),
+        style("File Size (bytes): ").color256(34),
+        style(format!("{bytes:#.2}")).color256(69),
+    );
+
+    println!(
+        "\t{}{}",
+        style("WebVH DID LogEntry Save Duration: ").color256(34),
+        style(format!(
+            "{}ms",
+            &end.duration_since(start).unwrap().as_millis()
+        ))
+        .color256(141)
+    );
 
     if args.witnesses > 0 {
-        println!("Witnesses enabled with threshold: {}", args.witnesses);
+        println!();
+        println!(
+            "\t{}{}",
+            style("Witnesses enabled with threshold: ").color256(34),
+            style(args.witnesses).color256(69)
+        );
+        let start = SystemTime::now();
         // Witness proofs
         didwebvh.witness_proofs.write_optimise_records()?;
-        didwebvh.witness_proofs.save_to_file("did-witness.json")?;
+        let bytes = didwebvh.witness_proofs.save_to_file("did-witness.json")?;
+        let end = SystemTime::now();
+        let bytes = Byte::from_u64(bytes as u64).get_appropriate_unit(UnitType::Decimal);
+
+        println!(
+            "\t{}{} {}{}",
+            style("Witness Proof Count: ").color256(34),
+            style(didwebvh.witness_proofs.get_total_count().to_string()).color256(69),
+            style("File Size (bytes): ").color256(34),
+            style(format!("{bytes:#.2}")).color256(69),
+        );
+        println!(
+            "\t{}{}",
+            style("WebVH DID Witness-Proofs Save Duration: ").color256(34),
+            style(format!(
+                "{}ms",
+                &end.duration_since(start).unwrap().as_millis()
+            ))
+            .color256(141)
+        );
     }
 
-    println!("Resetting.. ready for validation");
+    println!();
+    println!(
+        "{}",
+        style("Resetting state... ready for validation").color256(214)
+    );
 
     let mut verify_state = DIDWebVHState::default();
+    println!("{}", style("Sleeping for 3 seconds...").color256(214));
     sleep(Duration::from_secs(3));
     let start = SystemTime::now();
     verify_state.load_log_entries_from_file("did.jsonl")?;
     let end = SystemTime::now();
 
+    let throughput = (1000.0 / end.duration_since(start).unwrap().as_millis() as f64)
+        * verify_state.log_entries.len() as f64;
+
+    let throughput = format_num!(",.02", throughput);
+
     println!(
-        "Reading LogEntries Duration: {}ms",
-        end.duration_since(start).unwrap().as_millis()
+        "\t{}{} {} {}{}",
+        style("Reading LogEntries from file Duration: ").color256(34),
+        style(format!(
+            "{}ms",
+            end.duration_since(start).unwrap().as_millis()
+        ))
+        .color256(141),
+        style("@").color256(34),
+        style(throughput).color256(69),
+        style(" LogEntries/Second throughput").color256(34),
     );
     let mut total_validation = end.duration_since(start).unwrap().as_millis();
 
+    println!("{}", style("Sleeping for 3 seconds...").color256(214));
     sleep(Duration::from_secs(3));
     let start2 = SystemTime::now();
     verify_state.load_witness_proofs_from_file("did-witness.json");
     let end = SystemTime::now();
 
+    let throughput = (1000.0 / end.duration_since(start2).unwrap().as_millis() as f64)
+        * verify_state.witness_proofs.get_total_count() as f64;
+    let throughput = format_num!(",.02", throughput);
+
     println!(
-        "Reading Witness Proofs Duration: {}ms",
-        end.duration_since(start2).unwrap().as_millis()
+        "\t{}{} {} {}{}",
+        style("Reading Witness-Proofs from file Duration: ").color256(34),
+        style(format!(
+            "{}ms",
+            end.duration_since(start2).unwrap().as_millis()
+        ))
+        .color256(141),
+        style("@").color256(34),
+        style(throughput).color256(69),
+        style(" Witness-Proofs/Second throughput").color256(34),
     );
 
     total_validation += end.duration_since(start2).unwrap().as_millis();
 
+    println!("{}", style("Sleeping for 3 seconds...").color256(214));
     sleep(Duration::from_secs(3));
     let start3 = SystemTime::now();
     verify_state.validate()?;
     let end = SystemTime::now();
 
     println!(
-        "Validation Duration: {}ms",
-        end.duration_since(start3).unwrap().as_millis()
+        "\t{}{}",
+        style("Full WebVH DID Validation Duration: ").color256(34),
+        style(format!(
+            "{}ms",
+            end.duration_since(start3).unwrap().as_millis()
+        ))
+        .color256(141)
     );
     total_validation += end.duration_since(start3).unwrap().as_millis();
 
-    println!("Total validation: {total_validation}ms",);
+    let throughput = (1000.0 / total_validation as f64) * verify_state.log_entries.len() as f64;
+    let throughput = format_num!(",.02", throughput);
+    println!();
+    println!(
+        "{}{} {} {}{}",
+        style("Total Validation including data load: ").color256(34),
+        style(format!("{total_validation}ms")).color256(141),
+        style("@").color256(34),
+        style(throughput).color256(69),
+        style(" Entries/Second throughput").color256(34),
+    );
 
     Ok(())
 }
@@ -243,8 +348,9 @@ async fn generate_did(
 
     let log_entry = didwebvh.log_entries.last().unwrap();
     println!(
-        "DID First LogEntry created: {}",
-        log_entry.log_entry.version_id
+        "\t{}{}",
+        style("DID First LogEntry created: ").color256(34),
+        style(&log_entry.log_entry.version_id).color256(69)
     );
 
     Ok(vec![next_key1, next_key2])
@@ -337,12 +443,12 @@ async fn create_log_entry(
     new_params.update_keys = Some(update_keys);
 
     // Swap a witness node?
-    if args.witnesses > 0 && count % 12 == 6 {
+    if args.witnesses > 0 && count % 6 == 3 {
         swap_witness(&mut new_params, secrets).await?;
     }
 
     // Swap a watcher node?
-    if count % 12 == 0 {
+    if count % 6 == 0 {
         swap_watcher(&mut new_params)?;
     }
 
