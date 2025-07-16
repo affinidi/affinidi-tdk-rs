@@ -1,5 +1,8 @@
 //! Generate a large WebVH DID
 //!
+//! Test different complex larger history DIDs
+//!
+//! Example:
 //! Model an business DID with the following characteristics
 //! 1. Must be used for 10 years
 //! 2. They rotate webVH keys every month (two keys per update)
@@ -404,24 +407,26 @@ async fn swap_witness(params: &mut Parameters, secrets: &mut SimpleSecretsResolv
     Ok(())
 }
 
+/// Removes a random watcher and adds a new one
 fn swap_watcher(params: &mut Parameters) -> Result<()> {
-    // Pick a random witness and remove it
+    // Instantiate RNG
     let mut rng = rand::rng();
 
-    let Some(watchers) = &params.watchers else {
+    let Some(watchers) = params.watchers.as_mut() else {
         bail!("Watchers incorrectly configured for this test!");
     };
-    let mut new_watchers = watchers.clone();
-    let rn = rng.random_range(0..new_watchers.len());
 
+    // remove a random watcher
+    watchers.remove(rng.random_range(0..watchers.len()));
+
+    // Generate random watcher ID for new watcher
     let new_watcher_id: String = rng
         .sample_iter(&Alphabetic)
         .take(4)
         .map(char::from)
         .collect();
 
-    new_watchers.remove(rn);
-    new_watchers.push(
+    watchers.push(
         [
             "https://watcher-",
             &new_watcher_id,
@@ -429,8 +434,6 @@ fn swap_watcher(params: &mut Parameters) -> Result<()> {
         ]
         .concat(),
     );
-
-    params.watchers = Some(new_watchers);
 
     Ok(())
 }
