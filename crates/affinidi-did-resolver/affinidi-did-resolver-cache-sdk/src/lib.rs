@@ -146,8 +146,7 @@ impl DIDCacheClient {
         let parts: Vec<&str> = did.split(':').collect();
         if parts.len() < 3 {
             return Err(DIDCacheError::DIDError(format!(
-                "did isn't to spec! did ({})",
-                did
+                "did isn't to spec! did ({did})",
             )));
         }
 
@@ -318,8 +317,7 @@ impl DIDCacheClient {
         match serde_wasm_bindgen::to_value(&response.doc) {
             Ok(values) => Ok(values),
             Err(err) => Err(DIDCacheError::DIDError(format!(
-                "Error serializing DID Document: {}",
-                err
+                "Error serializing DID Document: {err}",
             ))),
         }
     }
@@ -328,7 +326,7 @@ impl DIDCacheClient {
     pub fn add_example_did(&mut self, doc: &str) -> Result<(), DIDCacheError> {
         self.did_example_cache
             .insert_from_string(doc)
-            .map_err(|e| DIDCacheError::DIDError(format!("Couldn't parse example DID: {}", e)))
+            .map_err(|e| DIDCacheError::DIDError(format!("Couldn't parse example DID: {e}")))
     }
 }
 

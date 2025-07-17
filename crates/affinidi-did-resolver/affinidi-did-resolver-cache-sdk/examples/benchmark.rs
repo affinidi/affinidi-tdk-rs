@@ -54,7 +54,7 @@ async fn main() -> Result<(), DIDCacheError> {
     if let Some(_address) = &args.network_address {
         #[cfg(feature = "network")]
         {
-            println!("Running in network mode with address: {}", _address);
+            println!("Running in network mode with address: {_address}");
             cache_config = cache_config.with_network_mode(_address);
         }
         #[cfg(not(feature = "network"))]
@@ -127,10 +127,10 @@ fn pretty_print_float(f: f64) -> String {
 fn pretty_print_binary_size(n: f64) -> String {
     match NumberPrefix::binary(n) {
         NumberPrefix::Standalone(bytes) => {
-            format!("{} bytes", bytes)
+            format!("{bytes} bytes",)
         }
         NumberPrefix::Prefixed(prefix, n) => {
-            format!("{:.1} {}B", n, prefix)
+            format!("{n:.1} {prefix}B",)
         }
     }
 }
@@ -165,7 +165,7 @@ async fn generate_dids(count: u32) -> Vec<String> {
 }
 
 async fn resolve_dids_no_cache(dids: Arc<Vec<String>>, count: u32) -> Result<(), DIDCacheError> {
-    println!("Resolving {} dids, NO-CACHE!!!", count);
+    println!("Resolving {count} dids, NO-CACHE!!!",);
     let dids_len = dids.len();
     let mut handles = Vec::new();
 
@@ -186,7 +186,7 @@ async fn resolve_dids_no_cache(dids: Arc<Vec<String>>, count: u32) -> Result<(),
             {
                 Ok(res) => Some(res.document.into_document()),
                 Err(e) => {
-                    eprintln!("Error: {:?}", e);
+                    eprintln!("Error: {e:?}");
                     None
                 }
             };
@@ -236,7 +236,7 @@ async fn resolve_dids(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: {:?}", e);
+                    eprintln!("Error: {e:?}");
                 }
             }
         }));

@@ -44,10 +44,9 @@ impl HttpRequest {
         let mut lines = reader.lines();
 
         let Some(prefix) = lines.next_line().await.map_err(|err| {
-            DIDCacheError::TransportError(format!(
-                "Incorrect response from WebSocket Setup: {}",
-                err
-            ))
+            DIDCacheError::TransportError(
+                format!("Incorrect response from WebSocket Setup: {err}",),
+            )
         })?
         else {
             return Err(DIDCacheError::TransportError(
@@ -58,10 +57,9 @@ impl HttpRequest {
         let mut headers = HashMap::new();
 
         while let Some(line) = lines.next_line().await.map_err(|err| {
-            DIDCacheError::TransportError(format!(
-                "Incorrect response from WebSocket Setup: {}",
-                err
-            ))
+            DIDCacheError::TransportError(
+                format!("Incorrect response from WebSocket Setup: {err}",),
+            )
         })? {
             if line.is_empty() {
                 break;
@@ -81,8 +79,7 @@ pub async fn connect(
     } else {
         error!("Websocket address {}: no valid host found", url);
         return Err(DIDCacheError::TransportError(format!(
-            "Websocket address {}: no valid host found",
-            url
+            "Websocket address {url}: no valid host found",
         )));
     };
 
@@ -91,8 +88,7 @@ pub async fn connect(
             if addrs.is_empty() {
                 error!("Websocket address {}: no valid address found", url);
                 return Err(DIDCacheError::TransportError(format!(
-                    "Websocket address {}: no valid address found",
-                    url
+                    "Websocket address {url}: no valid address found",
                 )));
             }
             addrs.remove(0)
@@ -100,14 +96,13 @@ pub async fn connect(
         Err(err) => {
             error!("Websocket address {}: invalid address: {}", url, err);
             return Err(DIDCacheError::TransportError(format!(
-                "Websocket address {}: invalid address: {}",
-                url, err
+                "Websocket address {url}: invalid address: {err}",
             )));
         }
     };
 
     let stream = TcpStream::connect(address).await.map_err(|err| {
-        DIDCacheError::TransportError(format!("TcpStream::Connect({}) failed: {}", address, err))
+        DIDCacheError::TransportError(format!("TcpStream::Connect({address}) failed: {err}"))
     })?;
 
     let stream: Pin<Box<dyn ReadWrite>> = if url.scheme() == "wss" {
@@ -115,17 +110,16 @@ pub async fn connect(
         let dns_name = match DnsName::try_from_str(host.as_str()) {
             Ok(dns_name) => dns_name.to_owned(),
             Err(err) => {
-                error!("Websocket address {}: invalid host name: {}", host, err);
+                error!("Websocket address {host}: invalid host name: {err}",);
                 return Err(DIDCacheError::TransportError(format!(
-                    "Websocket address {}: invalid host name: {}",
-                    host, err
+                    "Websocket address {host}: invalid host name: {err}",
                 )));
             }
         };
 
         let connector = TlsConnector::from(Arc::new(
             ClientConfig::with_platform_verifier().map_err(|e| {
-                DIDCacheError::TransportError(format!("TLS Platform Configuration failed: {}", e))
+                DIDCacheError::TransportError(format!("TLS Platform Configuration failed: {e}"))
             })?,
         ));
         Box::pin(
@@ -134,8 +128,7 @@ pub async fn connect(
                 .await
                 .map_err(|err| {
                     DIDCacheError::TransportError(format!(
-                        "TlsConnector::connect({}) failed: {}",
-                        host, err
+                        "TlsConnector::connect({host}) failed: {err}",
                     ))
                 })?,
         )
@@ -148,7 +141,7 @@ pub async fn connect(
     let (req, sec_key) = handshake::request(host, path, None::<(&str, &str)>);
 
     stream.write_all(req.as_bytes()).await.map_err(|err| {
-        DIDCacheError::TransportError(format!("websocket handshake failed: {}", err))
+        DIDCacheError::TransportError(format!("websocket handshake failed: {err}"))
     })?;
 
     let http = HttpRequest::parse(&mut stream).await?;

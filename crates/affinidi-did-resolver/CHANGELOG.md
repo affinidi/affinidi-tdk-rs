@@ -10,6 +10,12 @@
   * empty arrays and objects replaces null values
 * **TESTS:** Additional tests added for complete testing of Parameters Differentials
 
+## Affinidi DID Resolver Cache SDK (0.5.6)
+
+* **MAINTENANCE:** Addressing Rust clippy warnings due to new linting rules
+* **MAINTENANCE:** Adding Documentation
+* **FEATURE:** WebVH method enabled on SDK
+
 ### 14th July 2025
 
 ## DID example method (0.5.4)

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.5.5"
+version = "0.5.6"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -53,7 +53,7 @@ serde-wasm-bindgen = "0.6.5"
 sha1 = { version = "0.10", optional = true }
 ssi = { version = "0.12", features = ["secp384r1"] }
 thiserror = "2.0"
-tokio = { version = "1.45", features = ["full"] }
+tokio = { version = "1.46", features = ["full"] }
 tokio-rustls = { version = "0.26", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
