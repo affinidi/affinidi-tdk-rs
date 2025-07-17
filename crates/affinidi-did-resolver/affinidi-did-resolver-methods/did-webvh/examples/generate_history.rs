@@ -464,12 +464,6 @@ async fn create_log_entry(
     // Witness LogEntry
     witness_log_entry(didwebvh, secrets).await?;
 
-    // let log_entry = didwebvh.log_entries.last().unwrap();
-    // println!(
-    //     "{:03}: DID LogEntry created: {}",
-    //     count, log_entry.log_entry.version_id
-    // );
-
     Ok(vec![next_key1, next_key2])
 }
 
