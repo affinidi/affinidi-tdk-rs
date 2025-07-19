@@ -25,6 +25,7 @@ site
 - [x] Witness webvh DID
 - [x] Migration of DID (portability)
 - [x] Validate witness information
+- [x] DID Query Parameters versionId and versionTime implemented
 
 ## Usage
 

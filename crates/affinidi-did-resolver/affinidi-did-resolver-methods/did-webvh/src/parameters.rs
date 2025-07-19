@@ -97,10 +97,7 @@ impl Parameters {
         debug!("self: {:#?}", self);
         debug!("previous: {:#?}", previous);
 
-        let mut new_parameters = Parameters {
-            scid: self.scid.clone(),
-            ..Default::default()
-        };
+        let mut new_parameters = Parameters::default();
 
         // Handle previous values
         let mut pre_rotation_previous_value: bool = false;
@@ -109,6 +106,7 @@ impl Parameters {
             pre_rotation_previous_value = previous.pre_rotation_active;
             new_parameters.portable = previous.portable;
             new_parameters.next_key_hashes = previous.next_key_hashes.clone();
+            new_parameters.scid = previous.scid.clone();
             if previous.deactivated {
                 // If previous is deactivated, then no more log entries can be made
                 return Err(DIDWebVHError::DeactivatedError(
@@ -117,6 +115,15 @@ impl Parameters {
                 ));
             } else {
                 new_parameters.deactivated = previous.deactivated
+            }
+        } else {
+            // First Log entry
+            if let Some(scid) = &self.scid {
+                new_parameters.scid = Some(scid.to_string());
+            } else {
+                return Err(DIDWebVHError::ParametersError(
+                    "scid must be provided on first Log Entry".to_string(),
+                ));
             }
         }
 

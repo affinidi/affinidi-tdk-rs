@@ -64,6 +64,15 @@ pub enum DIDWebVHError {
 pub struct DIDWebVHState {
     pub log_entries: Vec<LogEntryState>,
     pub witness_proofs: WitnessProofCollection,
+
+    /// What SCID is this state representing?
+    pub scid: String,
+
+    /// Timestamp for when this DID will expire and need to be reloaded
+    pub expires: DateTime<FixedOffset>,
+
+    /// Validated?
+    pub validated: bool,
 }
 
 impl DIDWebVHState {
