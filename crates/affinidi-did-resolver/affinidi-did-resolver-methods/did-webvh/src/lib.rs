@@ -11,7 +11,7 @@ use crate::{
 };
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
-use chrono::Utc;
+use chrono::{DateTime, FixedOffset, Utc};
 use serde_json::Value;
 use thiserror::Error;
 use tracing::debug;
@@ -100,7 +100,7 @@ impl DIDWebVHState {
     /// signing_key is the Secret used to sign the Log Entry
     pub fn create_log_entry(
         &mut self,
-        version_time: Option<String>,
+        version_time: Option<DateTime<FixedOffset>>,
         document: &Value,
         parameters: &Parameters,
         signing_key: &Secret,
@@ -146,9 +146,7 @@ impl DIDWebVHState {
             );
             LogEntry {
                 version_id: last_log_entry.log_entry.version_id.clone(),
-                version_time: version_time.unwrap_or_else(|| {
-                    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-                }),
+                version_time: version_time.unwrap_or_else(|| now.fixed_offset()),
                 // Only use the difference of the parameters
                 parameters: last_log_entry.validated_parameters.diff(parameters)?,
                 state: document.clone(),
@@ -160,8 +158,7 @@ impl DIDWebVHState {
 
             let mut log_entry = LogEntry {
                 version_id: SCID_HOLDER.to_string(),
-                version_time: version_time
-                    .unwrap_or_else(|| now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                version_time: version_time.unwrap_or_else(|| now.fixed_offset()),
                 parameters: parameters.clone(),
                 state: document.clone(),
                 proof: Vec::new(),
@@ -204,7 +201,7 @@ impl DIDWebVHState {
                         ));
                     };
                     (
-                        first_entry.log_entry.version_time.clone(),
+                        first_entry.log_entry.version_time.to_string(),
                         scid,
                         first_entry
                             .log_entry
@@ -232,7 +229,7 @@ impl DIDWebVHState {
                 let mut validated_params = log_entry.parameters.clone();
                 validated_params.active_witness = log_entry.parameters.witness.clone();
                 (
-                    log_entry.version_time.clone(),
+                    log_entry.version_time.to_string(),
                     scid,
                     log_entry.parameters.portable.unwrap_or_default(),
                     validated_params,
@@ -252,9 +249,9 @@ impl DIDWebVHState {
         // Generate metadata for this LogEntry
         let metadata = MetaData {
             version_id: log_entry.version_id.clone(),
-            version_time: log_entry.version_time.clone(),
+            version_time: log_entry.version_time.to_string(),
             created,
-            updated: log_entry.version_time.clone(),
+            updated: log_entry.version_time.to_string(),
             deactivated: parameters.deactivated,
             portable,
             scid,
@@ -272,6 +269,42 @@ impl DIDWebVHState {
         });
 
         Ok(self.log_entries.last())
+    }
+
+    /// Gets a specific LogEntry based on versionId and versionTime
+    pub fn get_specific_log_entry(
+        &self,
+        version_id: Option<&str>,
+        version_time: Option<DateTime<FixedOffset>>,
+    ) -> Result<&LogEntryState, DIDWebVHError> {
+        if let Some(version_id) = version_id {
+            for log_entry in self.log_entries.iter() {
+                if log_entry.log_entry.version_id == version_id {
+                    if let Some(version_time) = version_time {
+                        if version_time < log_entry.log_entry.version_time {
+                            return Err(DIDWebVHError::NotFound);
+                        }
+                    }
+                    return Ok(log_entry);
+                }
+            }
+        }
+
+        if let Some(version_time) = version_time {
+            let mut found = None;
+            for log_entry in self.log_entries.iter() {
+                if log_entry.log_entry.version_time <= version_time {
+                    found = Some(log_entry);
+                } else {
+                    break;
+                }
+            }
+            if let Some(found) = found {
+                return Ok(found);
+            }
+        }
+
+        Err(DIDWebVHError::NotFound)
     }
 }
 

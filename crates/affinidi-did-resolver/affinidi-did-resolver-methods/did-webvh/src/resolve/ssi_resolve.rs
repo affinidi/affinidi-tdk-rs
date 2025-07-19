@@ -130,15 +130,25 @@ impl DIDMethodResolver for DIDWebVH {
                 .validate()
                 .map_err(|e| Error::internal(format!("validation failed: {e}")))?;
 
-            let last_entry_state = didwebvh_state
-                .log_entries
-                .last()
-                .ok_or_else(|| Error::internal("No log entries found"))?;
+            // DID is fully validated
+            let log_entry = if parsed_did_url.query_version_id.is_some()
+                || parsed_did_url.query_version_time.is_some()
+            {
+                didwebvh_state
+                    .get_specific_log_entry(
+                        parsed_did_url.query_version_id.as_deref(),
+                        parsed_did_url.query_version_time,
+                    )
+                    .map_err(|_| Error::NotFound)?
+            } else {
+                didwebvh_state
+                    .log_entries
+                    .last()
+                    .ok_or_else(|| Error::internal("No log entries found"))?
+            };
 
-            // Get the latest DID Document
-            let document: Document =
-                serde_json::from_value(last_entry_state.log_entry.state.clone())
-                    .map_err(|e| Error::internal(format!("Failed to parse DID Document: {e}")))?;
+            let document: Document = serde_json::from_value(log_entry.log_entry.state.clone())
+                .map_err(|e| Error::internal(format!("Failed to parse DID Document: {e}")))?;
 
             let content_type = options.accept.unwrap_or(MediaType::Json);
             let represented = document.into_representation(representation::Options::Json);

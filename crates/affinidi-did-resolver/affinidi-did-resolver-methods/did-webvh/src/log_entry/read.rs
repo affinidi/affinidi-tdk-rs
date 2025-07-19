@@ -5,7 +5,7 @@
 use super::LogEntry;
 use crate::{DIDWebVHError, SCID_HOLDER, log_entry::MetaData, parameters::Parameters};
 use affinidi_data_integrity::verification_proof::verify_data;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::{
     fs::File,
     io::{self, BufRead},
@@ -127,7 +127,7 @@ impl LogEntry {
             )
         } else {
             (
-                self.version_time.clone(),
+                self.version_time.to_string(),
                 parameters.portable.unwrap_or(false),
                 parameters.scid.clone().unwrap(),
             )
@@ -139,9 +139,9 @@ impl LogEntry {
             parameters.clone(),
             MetaData {
                 version_id: self.version_id.clone(),
-                version_time: self.version_time.clone(),
+                version_time: self.version_time.to_string(),
                 created,
-                updated: self.version_time.clone(),
+                updated: self.version_time.to_string(),
                 deactivated: parameters.deactivated,
                 portable,
                 scid,
@@ -214,14 +214,7 @@ impl LogEntry {
 
     /// Verifies everything is ok with the versionTime LogEntry field
     fn verify_version_time(&self, previous: Option<&LogEntry>) -> Result<(), DIDWebVHError> {
-        let current_time = self.version_time.parse::<DateTime<Utc>>().map_err(|e| {
-            DIDWebVHError::ValidationError(format!(
-                "Failed to parse versionTime ({}) as DateTime<Utc>: {}",
-                self.version_time, e
-            ))
-        })?;
-
-        if current_time > Utc::now() {
+        if self.version_time > Utc::now() {
             return Err(DIDWebVHError::ValidationError(format!(
                 "versionTime ({}) cannot be in the future",
                 self.version_time
@@ -230,17 +223,7 @@ impl LogEntry {
 
         if let Some(previous) = previous {
             // Current time must be greater than the previous time
-            let previous_time = previous
-                .version_time
-                .parse::<DateTime<Utc>>()
-                .map_err(|e| {
-                    DIDWebVHError::ValidationError(format!(
-                        "Failed to parse previous versionTime ({}) as DateTime<Utc>: {}",
-                        self.version_time, e
-                    ))
-                })?;
-
-            if current_time < previous_time {
+            if self.version_time < previous.version_time {
                 return Err(DIDWebVHError::ValidationError(format!(
                     "Current versionTime ({}) must be greater than previous versionTime ({})",
                     self.version_time, previous.version_time

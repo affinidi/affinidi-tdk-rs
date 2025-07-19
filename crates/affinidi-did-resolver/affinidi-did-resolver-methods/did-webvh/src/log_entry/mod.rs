@@ -4,6 +4,7 @@
 use crate::{DIDWebVHError, parameters::Parameters, witness::Witnesses};
 use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use base58::ToBase58;
+use chrono::{DateTime, FixedOffset};
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -39,7 +40,8 @@ pub struct LogEntry {
     pub version_id: String,
 
     /// ISO 8601 date format
-    pub version_time: String,
+    #[serde(serialize_with = "format_version_time")]
+    pub version_time: DateTime<FixedOffset>,
 
     /// configuration options from the controller
     pub parameters: Parameters,
@@ -50,6 +52,14 @@ pub struct LogEntry {
     /// Data Integrity Proof
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub proof: Vec<DataIntegrityProof>,
+}
+
+// Helper function to serialize versionTime with seconds only precision
+fn format_version_time<S>(date: &DateTime<FixedOffset>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&date.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 impl LogEntry {

@@ -76,9 +76,6 @@ impl WebVHURL {
         };
 
         let (query_version_id, query_version_time) = Self::parse_query(query.as_deref())?;
-        println!(
-            "TIMTAM: version_id = {query_version_id:?}, version_time = {query_version_time:?}"
-        );
 
         // Expect minimum of two parts (SCID, domain)
         // May contain three parts (SCID, domain, path)
