@@ -6,9 +6,15 @@
 
 ## DID webvh method (0.1.7)
 
-* **BREAKING CHANGE:** webvh v1.0 spec changes parameters definition
+* **BREAKING CHANGE:** WebVH v1.0 spec changes parameters definition
   * empty arrays and objects replaces null values
+  * Existing LogEntries using the old format of nulls will still work for reading
 * **TESTS:** Additional tests added for complete testing of Parameters Differentials
+* **FEATURE:** DID Query parameters added
+  * `?versionId=` will resolve a specific versionId LogEntry for the DID
+  * `?versionTime=` will resolve to what LogEntry was active at that time
+* **FEATURE:** Network based WebVH DID resolution is now enabled
+  * call the `resolove()` method to resolve a WebVH DID
 
 ### 14th July 2025
 

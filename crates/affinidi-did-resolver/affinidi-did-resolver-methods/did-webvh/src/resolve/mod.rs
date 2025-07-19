@@ -5,7 +5,6 @@ use crate::{
     log_entry::{LogEntry, MetaData},
     log_entry_state::{LogEntryState, LogEntryValidationStatus},
     parameters::Parameters,
-    resolve::ssi_resolve::DIDWebVH,
     url::WebVHURL,
     witness::proofs::WitnessProofCollection,
 };
@@ -16,8 +15,7 @@ use url::Url;
 /// Integration with the Spruice ID SSI Library
 pub mod ssi_resolve;
 
-/// Non SSI Library resolver
-pub mod std_resolve;
+pub struct DIDWebVH;
 
 impl DIDWebVH {
     // Handles the fetching of the file from a given URL

@@ -4,25 +4,20 @@
 
 use crate::{
     DIDWebVHState,
+    resolve::DIDWebVH,
     url::{URLType, WebVHURL},
     witness::proofs::WitnessProofCollection,
 };
-use ssi::{
-    dids::{
-        DIDMethod, DIDMethodResolver, Document,
-        document::{
-            self,
-            representation::{self, MediaType},
-        },
-        resolution::{self, Error, Options, Parameter},
+use ssi::dids::{
+    DIDMethod, DIDMethodResolver, Document,
+    document::{
+        self,
+        representation::{self, MediaType},
     },
-    json_ld::syntax::ContextEntry,
+    resolution::{self, Error, Options, Parameter},
 };
-use static_iref::iri_ref;
 use std::time::Duration;
 use tracing::{Instrument, Level, span, warn};
-
-pub struct DIDWebVH;
 
 impl DIDMethodResolver for DIDWebVH {
     /// Resolves a webvh DID
@@ -145,19 +140,8 @@ impl DIDMethodResolver for DIDWebVH {
                 serde_json::from_value(last_entry_state.log_entry.state.clone())
                     .map_err(|e| Error::internal(format!("Failed to parse DID Document: {e}")))?;
 
-            let content_type = options.accept.unwrap_or(MediaType::JsonLd);
-            let represented = document.into_representation(
-                representation::Options::from_media_type(content_type, move || {
-                    representation::json_ld::Options {
-                        context: representation::json_ld::Context::array(
-                            representation::json_ld::DIDContext::V1,
-                            vec![ContextEntry::IriRef(
-                                iri_ref!("https://w3id.org/security/multikey/v1").to_owned(),
-                            )],
-                        ),
-                    }
-                }),
-            );
+            let content_type = options.accept.unwrap_or(MediaType::Json);
+            let represented = document.into_representation(representation::Options::Json);
 
             Ok(resolution::Output::new(
                 represented.to_bytes(),

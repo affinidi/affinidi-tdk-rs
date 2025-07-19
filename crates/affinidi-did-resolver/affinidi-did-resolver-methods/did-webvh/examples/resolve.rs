@@ -1,4 +1,4 @@
-use did_webvh::resolve::ssi_resolve::DIDWebVH;
+use did_webvh::resolve::DIDWebVH;
 use ssi::dids::{DID, DIDResolver};
 use std::env;
 

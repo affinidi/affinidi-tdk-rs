@@ -1,4 +1,5 @@
 use crate::DIDWebVHError;
+use chrono::{DateTime, FixedOffset};
 use std::fmt::{Display, Formatter};
 use url::Url;
 
@@ -40,6 +41,14 @@ pub struct WebVHURL {
 
     /// file_name
     pub file_name: Option<String>,
+
+    /// WebVH supports query options to resolve a specific version or which LogEntry was active at
+    /// a particuliar time
+    /// Helper pointing to versionId
+    pub query_version_id: Option<String>,
+
+    /// Helper pointing to versionTime
+    pub query_version_time: Option<DateTime<FixedOffset>>,
 }
 
 impl WebVHURL {
@@ -65,6 +74,11 @@ impl WebVHURL {
             Some((prefix, query)) => (prefix, Some(query.to_string())),
             None => (url, None),
         };
+
+        let (query_version_id, query_version_time) = Self::parse_query(query.as_deref())?;
+        println!(
+            "TIMTAM: version_id = {query_version_id:?}, version_time = {query_version_time:?}"
+        );
 
         // Expect minimum of two parts (SCID, domain)
         // May contain three parts (SCID, domain, path)
@@ -124,6 +138,8 @@ impl WebVHURL {
             fragment,
             query,
             file_name: Some(file_name),
+            query_version_id,
+            query_version_time,
         })
     }
 
@@ -136,7 +152,8 @@ impl WebVHURL {
         }
 
         let fragment = url.fragment();
-        let query = url.query();
+        let (query_version_id, query_version_time) = Self::parse_query(url.query())?;
+
         let Some(domain) = url.domain() else {
             return Err(DIDWebVHError::InvalidMethodIdentifier(
                 "Invalid URL: Must contain domain".to_string(),
@@ -177,9 +194,45 @@ impl WebVHURL {
             port,
             path,
             fragment: fragment.map(|s| s.to_string()),
-            query: query.map(|s| s.to_string()),
+            query: url.query().map(|s| s.to_string()),
             file_name,
+            query_version_id,
+            query_version_time,
         })
+    }
+
+    /// Parses URL query parameters and returns:
+    /// Error if versionTime or VersionId are invalid parameters
+    /// None if there is no valid qauery
+    /// (versionId, versionTime) if valid query parameters exist
+    fn parse_query(
+        // Example query string = "versionId=1-test&versionTime=1996-12-19T16:39:57-08:00"
+        query: Option<&str>,
+    ) -> Result<(Option<String>, Option<DateTime<FixedOffset>>), DIDWebVHError> {
+        if let Some(query) = query {
+            let mut version_id = None;
+            let mut version_time = None;
+            for parameter in query.split('&') {
+                if let Some((key, value)) = parameter.split_once('=') {
+                    if key == "versionId" {
+                        version_id = Some(value.to_string());
+                    } else if key == "versionTime" {
+                        version_time = Some(DateTime::parse_from_rfc3339(value)
+                            .map_err(|e| {
+                                DIDWebVHError::DIDError(format!("DID Query parameter (versionTime) is invalid. Must be RFC 3339 compliant: {e}"
+                                ))
+                            })?);
+                    }
+                } else {
+                    return Err(DIDWebVHError::DIDError(format!(
+                        "DID Query parameter ({parameter}) is invalid. Must be in the format key=value."
+                    )));
+                }
+            }
+            Ok((version_id, version_time))
+        } else {
+            Ok((None, None))
+        }
     }
 
     /// Creates a HTTP URL from webvh DID
