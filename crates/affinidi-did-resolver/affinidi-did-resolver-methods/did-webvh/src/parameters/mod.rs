@@ -20,18 +20,23 @@ pub(crate) mod spec_1_0_pre;
 #[derive(Clone, Default, Debug, Serialize)]
 pub struct Parameters {
     /// SCID (this is often automatically generated))
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scid: Option<Arc<String>>,
 
     /// DID version specification
+    #[serde(serialize_with = "method_from_version")]
     pub method: Version,
 
     /// Keys that are authorized to update future log entries
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub update_keys: Option<Arc<Vec<String>>>,
 
     /// Can you change the web address for this DID?
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub portable: Option<bool>,
 
     /// pre-rotation keys that must be shared prior to updating update keys
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_key_hashes: Option<Arc<Vec<String>>>,
 
     /// Parameters for witness nodes
@@ -39,15 +44,18 @@ pub struct Parameters {
     /// for the LogEntry
     ///
     /// Use [LogEntryState::get_active_witnesses] to get the active witnesses for a logEntry
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub witness: Option<Arc<Witnesses>>,
 
     /// DID watchers for this DID
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub watchers: Option<Arc<Vec<String>>>,
 
     /// Has this DID been revoked?
     pub deactivated: bool,
 
     /// time to live in seconds for a resolved DID document
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl: Option<u32>,
 
     /// Is key pre-rotation active?
@@ -63,6 +71,13 @@ pub struct Parameters {
     /// active_witness: Option<Arc<Mutex<Witnesses>>>
     #[serde(skip)]
     pub active_witness: Option<Arc<Witnesses>>,
+}
+
+fn method_from_version<S>(data: &Version, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&data.to_string())
 }
 
 impl Parameters {
