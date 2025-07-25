@@ -259,8 +259,9 @@ impl Parameters {
     /// 1. Validated Parameters (Fully formed set of Parameters that match the state of the WebVH
     ///    DID )
     pub fn validate(&self, previous: Option<&Parameters>) -> Result<Parameters, DIDWebVHError> {
-        debug!("self: {:#?}", self);
-        debug!("previous: {:#?}", previous);
+        debug!(">>>> Validating Parameters");
+        debug!("current parameters: {:#?}", self);
+        debug!("previous parameters: {:#?}", previous);
 
         let mut new_parameters = Parameters::default();
 
@@ -511,6 +512,7 @@ impl Parameters {
         }
 
         debug!("Parameters successfully validated");
+        debug!("Validated Parameters: {new_parameters:#?}");
         Ok(new_parameters)
     }
 
