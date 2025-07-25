@@ -10,14 +10,14 @@ use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
-    DIDWebVHError, DIDWebVHState, SCID_HOLDER,
+    DIDWebVHError, DIDWebVHState,
     parameters::Parameters,
     url::WebVHURL,
     witness::{Witness, Witnesses, proofs::WitnessProofCollection},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::fs::File;
+use std::{fs::File, sync::Arc};
 use tracing::debug;
 use tracing_subscriber::filter;
 use url::Url;
@@ -287,8 +287,8 @@ async fn create_new_did() -> Result<()> {
         authorizing_keys.first().unwrap(),
     )?;
 
-    let log_entry = if let Some(log_entry_state) = &log_entry_result {
-        &log_entry_state.log_entry
+    let log_entry = if let Some(log_entry_state) = log_entry_result {
+        log_entry_state
     } else {
         bail!(
             "This is likely an SDK bug. Creating first DID succeeded, but no LogEntry has been logged and saved."
@@ -298,18 +298,18 @@ async fn create_new_did() -> Result<()> {
     println!(
         "{}\n{}",
         style("First Log Entry:").color256(69),
-        style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
+        style(serde_json::to_string_pretty(&log_entry.log_entry).unwrap()).color256(34)
     );
 
     // ************************************************************************
     // Step 6: Validate the LogEntry
     // ************************************************************************
     // Validate the Log Entry
-    let (_, meta_data) = log_entry.verify_log_entry(None, None, None)?;
+    let validated_params = log_entry.log_entry.verify_log_entry(None, None)?;
     println!(
         "{}\n{}\n{}",
-        style("Log Entry Metadata:").color256(69),
-        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(69),
+        style("Log Entry Validated Parameters:").color256(69),
+        style(serde_json::to_string_pretty(&validated_params).unwrap()).color256(69),
         style("Successfully Validated").color256(34).blink(),
     );
 
@@ -320,7 +320,7 @@ async fn create_new_did() -> Result<()> {
     let new_proofs = witness_log_entry(
         &mut witness_proofs,
         log_entry,
-        &log_entry.parameters.witness,
+        &log_entry.get_active_witnesses(),
         &authorization_secrets,
     )?;
 
@@ -345,7 +345,7 @@ async fn create_new_did() -> Result<()> {
             .unwrap();
 
         if let Some((start, _)) = file_name.split_once(".") {
-            log_entry.save_to_file(&file_name)?;
+            log_entry.log_entry.save_to_file(&file_name)?;
 
             // Save the authorization keys
             authorization_secrets.save_to_file(&[start, "-secrets.json"].concat())?;
@@ -965,18 +965,14 @@ fn configure_parameters(
         style(webvh_did).color256(141),
     );
 
-    let mut parameters = Parameters {
-        scid: Some(SCID_HOLDER.to_string()),
-        deactivated: false,
-        ..Default::default()
-    };
+    let mut parameters = Parameters::default();
 
     // Update Keys
     let mut update_keys = Vec::new();
     for key in authorizing_keys {
         update_keys.push(key.get_public_keymultibase()?);
     }
-    parameters.update_keys = Some(update_keys);
+    parameters.update_keys = Some(Arc::new(update_keys));
 
     // Portable
     println!(
@@ -994,8 +990,6 @@ fn configure_parameters(
         .interact()?
     {
         parameters.portable = Some(true);
-    } else {
-        parameters.portable = None;
     }
 
     // Next Key Hashes
@@ -1005,10 +999,8 @@ fn configure_parameters(
             .color256(69)
     );
     let next_key_hashes = create_next_key_hashes(keys)?;
-    if next_key_hashes.is_empty() {
-        parameters.next_key_hashes = None;
-    } else {
-        parameters.next_key_hashes = Some(next_key_hashes);
+    if !next_key_hashes.is_empty() {
+        parameters.next_key_hashes = Some(Arc::new(next_key_hashes));
     }
 
     // Witness Nodes
@@ -1152,10 +1144,10 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
         }
     }
 
-    parameters.witness = Some(Witnesses::Value {
+    parameters.witness = Some(Arc::new(Witnesses::Value {
         threshold,
-        witnesses: witness_nodes,
-    });
+        witnesses: witness_nodes.clone(),
+    }));
     Ok(())
 }
 
@@ -1192,6 +1184,6 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
         }
     }
 
-    parameters.watchers = Some(watchers);
+    parameters.watchers = Some(Arc::new(watchers));
     Ok(())
 }

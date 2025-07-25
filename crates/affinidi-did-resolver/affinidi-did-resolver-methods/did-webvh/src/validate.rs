@@ -30,7 +30,7 @@ impl DIDWebVHState {
                 Err(e) => {
                     warn!(
                         "There was an issue with LogEntry: {}! Reason: {e}",
-                        entry.log_entry.version_id
+                        entry.get_version_id()
                     );
                     warn!("Falling back to last known good LogEntry!");
                     if previous_entry.is_some() {
@@ -44,7 +44,7 @@ impl DIDWebVHState {
             }
             // Check if this valid LogEntry has been deactivated, if so then ignore any other
             // Entries
-            if entry.metadata.deactivated {
+            if entry.validated_parameters.deactivated {
                 // Deactivated, return the current LogEntry and MetaData
                 deactivated_flag = true;
             }
@@ -79,10 +79,7 @@ impl DIDWebVHState {
 
         // Step 4: Validate the witness proofs
         for log_entry in self.log_entries.iter_mut() {
-            debug!(
-                "Witness Proof Validating: {}",
-                log_entry.log_entry.version_id
-            );
+            debug!("Witness Proof Validating: {}", log_entry.get_version_id());
             self.witness_proofs
                 .validate_log_entry(log_entry, highest_version_number)?;
             log_entry.validation_status = LogEntryValidationStatus::Ok;

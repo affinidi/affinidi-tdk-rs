@@ -6,13 +6,13 @@
 *   2. Deactivate the DID
 */
 
+use crate::{ConfigInfo, witness::witness_log_entry};
 use anyhow::{Result, anyhow, bail};
 use console::style;
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHState, parameters::Parameters};
+use std::sync::Arc;
 use tracing::debug;
-
-use crate::{ConfigInfo, witness::witness_log_entry};
 
 /// Revokes a webvh DID method
 pub async fn revoke_did(
@@ -32,7 +32,7 @@ pub async fn revoke_did(
         .last()
         .ok_or_else(|| anyhow!("No LogEntries found!"))?;
 
-    let our_did = if let Some(did) = last_entry.log_entry.state.get("id") {
+    let our_did = if let Some(did) = last_entry.get_state().get("id") {
         if let Some(did) = did.as_str() {
             did.to_string()
         } else {
@@ -71,7 +71,7 @@ pub async fn revoke_did(
         };
         println!(
             "{}{}{}{}{}",
-            style(&log_entry.log_entry.version_id).color256(141),
+            style(&log_entry.get_version_id()).color256(141),
             style(": ").color256(69),
             style("DID (").color256(9),
             style(&our_did).color256(141),
@@ -105,15 +105,15 @@ async fn deactivate_pre_rotation(didwebvh: &mut DIDWebVHState, secrets: &ConfigI
         };
 
     let new_params = Parameters {
-        update_keys: Some(vec![new_update_key.get_public_keymultibase()?]),
-        next_key_hashes: Some(Vec::new()),
+        update_keys: Some(Arc::new(vec![new_update_key.get_public_keymultibase()?])),
+        next_key_hashes: Some(Arc::new(Vec::new())),
         ..Default::default()
     };
 
     didwebvh
         .create_log_entry(
             None,
-            &last_entry.log_entry.state.clone(),
+            &last_entry.get_state().clone(),
             &new_params,
             &new_update_key,
         )
@@ -143,18 +143,14 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
 
     let new_params = Parameters {
         deactivated: true,
-        update_keys: Some(Vec::new()),
+        update_keys: Some(Arc::new(Vec::new())),
         ..Default::default()
     };
 
     debug!("Creating final revocation LogEntry");
+    let state = last_entry.get_state().clone();
     didwebvh
-        .create_log_entry(
-            None,
-            &last_entry.log_entry.state.clone(),
-            &new_params,
-            &new_update_key,
-        )
+        .create_log_entry(None, &state, &new_params, &new_update_key)
         .map_err(|e| anyhow!("Couldn't create LogEntry: {}", e))?;
 
     Ok(())
@@ -175,7 +171,7 @@ fn save_to_files(
 
     let new_proofs = witness_log_entry(
         &mut webvh_state.witness_proofs,
-        &new_entry.log_entry,
+        new_entry,
         &new_entry.validated_parameters.active_witness,
         config_info,
     )?;

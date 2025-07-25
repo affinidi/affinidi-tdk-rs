@@ -4,6 +4,8 @@
 *   New witness parameters only take effect on the next update, not the current LogEntry
 */
 
+use std::sync::Arc;
+
 use affinidi_tdk::dids::{DID, KeyType};
 use anyhow::{Result, bail};
 use console::style;
@@ -17,27 +19,27 @@ use crate::{ConfigInfo, manage_witnesses};
 
 /// Modify Witness Parameters for an existing DID
 pub fn modify_witness_params(
-    old_witness: Option<&Witnesses>,
+    old_witness: Option<Arc<Witnesses>>,
     new_params: &mut Parameters,
     secrets: &mut ConfigInfo,
 ) -> Result<()> {
     // Print the existing Witness Configuration
-    if let Some(witnesses) = old_witness {
-        if let Witnesses::Value {
-            threshold,
-            witnesses,
-        } = witnesses
-        {
-            println!(
-                "{}{}",
-                style("Witness threshold: ").color256(69),
-                style(threshold).color256(34)
-            );
-            for w in witnesses {
-                println!("\t{}", style(w.id.to_string()).color256(34));
+    if let Some(witnesses) = &old_witness {
+        match &**witnesses {
+            Witnesses::Value {
+                threshold,
+                witnesses,
+            } => {
+                println!(
+                    "{}{}",
+                    style("Witness threshold: ").color256(69),
+                    style(threshold).color256(34)
+                );
+                for w in witnesses {
+                    println!("\t{}", style(w.id.to_string()).color256(34));
+                }
             }
-        } else {
-            bail!("Invalid Witness Parameter state");
+            _ => bail!("Invalid Witness Parameter state"),
         }
     } else {
         println!(
@@ -54,25 +56,23 @@ pub fn modify_witness_params(
         .interact()?
     {
         // If witnesses are being used - disable them alltogether?
-        if let Some(witnesses) = old_witness {
+        if let Some(witnesses) = &old_witness {
             if Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt("Disable Witnessing for this DID?")
                 .default(false)
                 .interact()?
             {
                 // Disable witness parameters
-                new_params.witness = Some(Witnesses::Empty {});
+                new_params.witness = Some(Arc::new(Witnesses::Empty {}));
                 return Ok(());
             }
 
-            let (threshold, witness_nodes) = if let Witnesses::Value {
-                threshold,
-                witnesses,
-            } = witnesses
-            {
-                (*threshold, witnesses)
-            } else {
-                bail!("Empty Witness Parameters is an invalid state");
+            let (threshold, witness_nodes) = match &**witnesses {
+                Witnesses::Value {
+                    threshold,
+                    witnesses,
+                } => (threshold.to_owned(), witnesses),
+                _ => bail!("Empty Witness Parameters is an invalid state"),
             };
 
             // Edit existing witness parameters
@@ -80,10 +80,10 @@ pub fn modify_witness_params(
 
             let witness_nodes = modify_witness_nodes(witness_nodes, new_threshold, secrets)?;
 
-            new_params.witness = Some(Witnesses::Value {
+            new_params.witness = Some(Arc::new(Witnesses::Value {
                 threshold: new_threshold,
                 witnesses: witness_nodes,
-            });
+            }));
         } else {
             // No existing witness setup, create a new one
             manage_witnesses(new_params, secrets)?;

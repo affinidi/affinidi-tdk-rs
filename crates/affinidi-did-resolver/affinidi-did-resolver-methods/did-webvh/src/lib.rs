@@ -4,7 +4,7 @@
 */
 
 use crate::{
-    log_entry::{LogEntry, MetaData},
+    log_entry::{LogEntry, LogEntryMethods, MetaData},
     log_entry_state::{LogEntryState, LogEntryValidationStatus},
     parameters::Parameters,
     witness::proofs::WitnessProofCollection,
@@ -12,7 +12,9 @@ use crate::{
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::{DateTime, FixedOffset, Utc};
+use serde::Serialize;
 use serde_json::Value;
+use std::{fmt, sync::Arc};
 use thiserror::Error;
 use tracing::debug;
 
@@ -24,6 +26,50 @@ pub mod url;
 pub mod validate;
 pub mod witness;
 
+/// WebVH Specification supports multiple LogEntry versions in the same DID
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub enum Version {
+    /// Official v1.0 specification
+    #[default]
+    V1_0,
+
+    /// Pre 1.0 ratification, there was a change in how Parameters were reset
+    /// Null values vs. empty arrays
+    V1_0Pre,
+}
+
+impl fmt::Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Version::V1_0 => write!(f, "did:webvh:1.0"),
+            Version::V1_0Pre => write!(f, "did:webvh:1.0"),
+        }
+    }
+}
+
+impl TryFrom<&str> for Version {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "did:webvh:1.0" => Ok(Version::V1_0),
+            _ => Err(format!("Invalid WebVH Version: {value}")),
+        }
+    }
+}
+
+impl Version {
+    /// Turns the Version to a number so we can compare for version control
+    pub(crate) fn as_f32(&self) -> f32 {
+        match self {
+            Version::V1_0Pre => 0.9, // Pre 1.0 is considered 0.9
+            Version::V1_0 => 1.0,
+        }
+    }
+}
+
+/// Magic string used for first LogEntry
 pub const SCID_HOLDER: &str = "{SCID}";
 
 /// Error types for WebVH method
@@ -68,6 +114,12 @@ pub struct DIDWebVHState {
     /// What SCID is this state representing?
     pub scid: String,
 
+    /// Timestamp of the first LogEntry
+    pub meta_first_ts: String,
+
+    /// Timestamp of the last LogEntry
+    pub meta_last_ts: String,
+
     /// Timestamp for when this DID will expire and need to be reloaded
     pub expires: DateTime<FixedOffset>,
 
@@ -82,7 +134,6 @@ impl DIDWebVHState {
         for log_entry in LogEntry::load_from_file(file_path)? {
             self.log_entries.push(LogEntryState {
                 log_entry: log_entry.clone(),
-                metadata: MetaData::default(),
                 version_number: log_entry.get_version_id_fields()?.0,
                 validation_status: LogEntryValidationStatus::NotValidated,
                 validated_parameters: Parameters::default(),
@@ -116,23 +167,16 @@ impl DIDWebVHState {
     ) -> Result<Option<&LogEntryState>, DIDWebVHError> {
         let now = Utc::now();
 
-        // Create a VerificationMethod ID from the first updatekey
-        if let Some(value) = &parameters.update_keys
+        // Create a VerificationMethod ID from the signing key matched to an updateKey
+        if let Some(keys) = &parameters.update_keys
             && !parameters.deactivated
         {
-            let vm_id = if let Some(key) = value.iter().next() {
-                // Create a VerificationMethod ID from the first update key
-                ["did:key:", key, "#", key].concat()
-            } else {
-                return Err(DIDWebVHError::SCIDError(
-                    "No update keys provided in parameters".to_string(),
-                ));
-            };
-            // Check that the vm_id matches the secret key id
-            if signing_key.id != vm_id {
+            if !keys.contains(&signing_key.get_public_keymultibase().map_err(|e| {
+                DIDWebVHError::LogEntryError(format!("signing_key isn't valid: {e}"))
+            })?) {
                 return Err(DIDWebVHError::SCIDError(format!(
-                    "Secret key ID {} does not match VerificationMethod ID {}",
-                    signing_key.id, vm_id
+                    "Signing key ID {} does not match any updateKey {keys:#?}",
+                    signing_key.get_public_keymultibase().unwrap(),
                 )));
             }
         } else if parameters.deactivated {
@@ -146,36 +190,55 @@ impl DIDWebVHState {
 
         let last_log_entry = self.log_entries.last();
 
-        let mut log_entry = if let Some(last_log_entry) = last_log_entry {
+        let mut new_entry = if let Some(last_log_entry) = last_log_entry {
             // Utilizes the previous LogEntry for some info
 
             debug!(
                 "previous.validated parameters: {:#?}",
                 last_log_entry.validated_parameters
             );
-            LogEntry {
-                version_id: last_log_entry.log_entry.version_id.clone(),
-                version_time: version_time.unwrap_or_else(|| now.fixed_offset()),
-                // Only use the difference of the parameters
-                parameters: last_log_entry.validated_parameters.diff(parameters)?,
-                state: document.clone(),
-                proof: Vec::new(),
+
+            // Check version info
+            if parameters.method == Version::V1_0Pre {
+                // Creating this version is NOT VALID.
+                return Err(DIDWebVHError::LogEntryError(
+                    "WebVH Version must be 1.0 or higher".to_string(),
+                ));
+            } else if parameters.method.as_f32() < last_log_entry.get_webvh_version().as_f32() {
+                return Err(DIDWebVHError::LogEntryError(format!(
+                    "LogEntry WebVH Version ({}) cannot be lower than previous LogEntry ({})",
+                    parameters.method,
+                    last_log_entry.get_webvh_version()
+                )));
             }
+
+            LogEntry::create(
+                last_log_entry.get_version_id(),
+                version_time.unwrap_or_else(|| now.fixed_offset()),
+                // Only use the difference of the parameters
+                parameters.diff(&last_log_entry.validated_parameters)?,
+                document.clone(),
+                parameters.method,
+            )?
         } else {
             // First LogEntry so we need to set up a few things first
             // Ensure SCID field is set correctly
 
-            let mut log_entry = LogEntry {
-                version_id: SCID_HOLDER.to_string(),
-                version_time: version_time.unwrap_or_else(|| now.fixed_offset()),
-                parameters: parameters.clone(),
-                state: document.clone(),
-                proof: Vec::new(),
-            };
-            log_entry.parameters.scid = Some(SCID_HOLDER.to_string());
+            let webvh_version = parameters.method;
+            let mut parameters = parameters.clone();
+            parameters.scid = Some(Arc::new(SCID_HOLDER.to_string()));
+
+            let log_entry = LogEntry::create(
+                SCID_HOLDER.to_string(),
+                version_time.unwrap_or_else(|| now.fixed_offset()),
+                // Only use the difference of the parameters
+                parameters,
+                document.clone(),
+                webvh_version,
+            )?;
 
             // Create the SCID from the first log entry
-            let scid = log_entry.generate_scid()?;
+            let scid = log_entry.generate_first_scid()?;
             //
             // Replace all instances of {SCID} with the actual SCID
             let le_str = serde_json::to_string(&log_entry).map_err(|e| {
@@ -184,94 +247,61 @@ impl DIDWebVHState {
                 ))
             })?;
 
-            serde_json::from_str(&le_str.replace(SCID_HOLDER, &scid)).map_err(|e| {
-                DIDWebVHError::SCIDError(format!(
-                    "Couldn't deserialize LogEntry from SCID conversion. Reason: {e}",
-                ))
-            })?
+            LogEntry::from_string_to_known_version(
+                &le_str.replace(SCID_HOLDER, &scid),
+                webvh_version,
+            )?
         };
 
         // Create the entry hash for this Log Entry
-        let entry_hash = log_entry.generate_log_entry_hash().map_err(|e| {
+        let entry_hash = new_entry.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate entryHash for first LogEntry. Reason: {e}",
             ))
         })?;
 
-        let (created, scid, portable, validated_parameters) =
-            if let Some(last_entry) = last_log_entry {
-                // Increment the version-id if NOT first LogEntry
-                let (current_id, _) = log_entry.get_version_id_fields()?;
-                log_entry.version_id = [&(current_id + 1).to_string(), "-", &entry_hash].concat();
-                if let Some(first_entry) = self.log_entries.first() {
-                    let Some(scid) = first_entry.log_entry.parameters.scid.clone() else {
-                        return Err(DIDWebVHError::LogEntryError(
-                            "First LogEntry does not have a SCID!".to_string(),
-                        ));
-                    };
-                    (
-                        first_entry.log_entry.version_time.to_string(),
-                        scid,
-                        first_entry
-                            .log_entry
-                            .parameters
-                            .portable
-                            .unwrap_or_default(),
-                        log_entry
-                            .parameters
-                            .validate(Some(&last_entry.validated_parameters))?,
-                    )
-                } else {
-                    return Err(DIDWebVHError::LogEntryError(
-                        "Expected a First LogEntry, but none exist!".to_string(),
-                    ));
-                }
-            } else {
-                // First LogEntry
-                log_entry.version_id = ["1-", &entry_hash].concat();
-                let Some(scid) = log_entry.parameters.scid.clone() else {
-                    return Err(DIDWebVHError::LogEntryError(
-                        "First LogEntry does not have a SCID!".to_string(),
-                    ));
-                };
+        let new_params = new_entry.get_parameters();
 
-                let mut validated_params = log_entry.parameters.clone();
-                validated_params.active_witness = log_entry.parameters.witness.clone();
-                (
-                    log_entry.version_time.to_string(),
-                    scid,
-                    log_entry.parameters.portable.unwrap_or_default(),
-                    validated_params,
-                )
+        let validated_parameters = if let Some(last_entry) = last_log_entry {
+            // NOT first LogEntry
+            // Increment the version-id
+            let current_id = last_entry.get_version_number();
+            new_entry.set_version_id(&[&(current_id + 1).to_string(), "-", &entry_hash].concat());
+            self.meta_last_ts = new_entry.get_version_time().to_string();
+            new_params.validate(Some(&last_entry.validated_parameters))?
+        } else {
+            // First LogEntry
+            new_entry.set_version_id(&["1-", &entry_hash].concat());
+            let scid = if let Some(scid) = new_entry.get_scid() {
+                scid
+            } else {
+                return Err(DIDWebVHError::LogEntryError(
+                    "First LogEntry does not have a SCID!".to_string(),
+                ));
             };
 
+            let mut validated_params = new_entry.get_parameters();
+            validated_params.active_witness = validated_params.witness.clone();
+            self.meta_first_ts = new_entry.get_version_time_string().to_string();
+            self.meta_last_ts = self.meta_first_ts.clone();
+            self.scid = scid.clone();
+            validated_params
+        };
+
         // Generate the proof for the log entry
-        let proof = DataIntegrityProof::sign_jcs_data(&log_entry, None, signing_key, None)
+        let proof = DataIntegrityProof::sign_jcs_data(&new_entry, None, signing_key, None)
             .map_err(|e| {
                 DIDWebVHError::SCIDError(format!(
                     "Couldn't generate Data Integrity Proof for LogEntry. Reason: {e}"
                 ))
             })?;
 
-        log_entry.proof.push(proof);
+        new_entry.add_proof(proof);
 
-        // Generate metadata for this LogEntry
-        let metadata = MetaData {
-            version_id: log_entry.version_id.clone(),
-            version_time: log_entry.version_time.to_string(),
-            created,
-            updated: log_entry.version_time.to_string(),
-            deactivated: parameters.deactivated,
-            portable,
-            scid,
-            watchers: parameters.watchers.clone(),
-            witness: parameters.active_witness.clone(),
-        };
+        let id_number = new_entry.get_version_id_fields()?.0;
 
-        let id_number = log_entry.get_version_id_fields()?.0;
         self.log_entries.push(LogEntryState {
-            log_entry,
-            metadata,
+            log_entry: new_entry,
             version_number: id_number,
             validation_status: LogEntryValidationStatus::Ok,
             validated_parameters,
@@ -288,9 +318,9 @@ impl DIDWebVHState {
     ) -> Result<&LogEntryState, DIDWebVHError> {
         if let Some(version_id) = version_id {
             for log_entry in self.log_entries.iter() {
-                if log_entry.log_entry.version_id == version_id {
+                if log_entry.get_version_id() == version_id {
                     if let Some(version_time) = version_time {
-                        if version_time < log_entry.log_entry.version_time {
+                        if version_time < log_entry.get_version_time() {
                             return Err(DIDWebVHError::NotFound);
                         }
                     }
@@ -302,7 +332,7 @@ impl DIDWebVHState {
         if let Some(version_time) = version_time {
             let mut found = None;
             for log_entry in self.log_entries.iter() {
-                if log_entry.log_entry.version_time <= version_time {
+                if log_entry.get_version_time() <= version_time {
                     found = Some(log_entry);
                 } else {
                     break;
@@ -315,36 +345,23 @@ impl DIDWebVHState {
 
         Err(DIDWebVHError::NotFound)
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use crate::{parameters::Parameters, witness::Witnesses};
-
-    #[test]
-    fn check_serialization_field_action() {
-        let watchers = vec!["did:webvh:watcher1".to_string()];
-        let params = Parameters {
-            pre_rotation_active: false,
-            method: None,
-            scid: None,
-            update_keys: None,
-            active_update_keys: Vec::new(),
-            portable: None,
-            next_key_hashes: None,
-            witness: Some(Witnesses::Empty {}),
-            active_witness: Some(Witnesses::Empty {}),
-            watchers: Some(watchers),
-            deactivated: false,
-            ttl: None,
-        };
-
-        let parsed = serde_json::to_value(&params).expect("Couldn't parse parameters");
-
-        assert_eq!(parsed.get("next_key_hashes"), None);
-        assert!(parsed.get("witness").is_some_and(|s| s.is_object()));
-        let witnesses = parsed.get("witness").unwrap().as_object();
-        assert!(witnesses.is_some_and(|w| w.is_empty()));
-        assert!(parsed.get("watchers").is_some_and(|s| s.is_array()));
+    /// Creates a MatatData struct from a validaed LogEntryState
+    pub fn generate_meta_data(&self, log_entry: &LogEntryState) -> MetaData {
+        MetaData {
+            version_id: log_entry.get_version_id().to_string(),
+            version_time: log_entry.get_version_time_string().to_string(),
+            created: self.meta_first_ts.clone(),
+            updated: self.meta_last_ts.clone(),
+            scid: self.scid.clone(),
+            portable: log_entry.validated_parameters.portable.unwrap_or(false),
+            deactivated: log_entry.validated_parameters.deactivated,
+            witness: log_entry
+                .validated_parameters
+                .active_witness
+                .as_deref()
+                .cloned(),
+            watchers: log_entry.validated_parameters.watchers.as_deref().cloned(),
+        }
     }
 }

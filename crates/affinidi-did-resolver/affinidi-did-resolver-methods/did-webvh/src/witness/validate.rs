@@ -2,11 +2,10 @@
 *   Validating LogEntries using Witness Proofs
 */
 
-use tracing::{debug, warn};
-
 use crate::{
     DIDWebVHError, log_entry_state::LogEntryState, witness::proofs::WitnessProofCollection,
 };
+use tracing::{debug, warn};
 
 impl WitnessProofCollection {
     /// Validates if a LogEntry was correctly witnessed
@@ -50,8 +49,10 @@ impl WitnessProofCollection {
             if oldest_id > &highest_version_number {
                 // This proof is for a future LogEntry, skip it
                 debug!(
-                    "LogEntry ({}): Skipping witness proof from {} (oldest: {}, highest: {})",
-                    log_entry.log_entry.version_id, w.id, oldest_id, highest_version_number
+                    "LogEntry ({}): Skipping witness proof from {} (oldest: {oldest_id}, highest: {})",
+                    log_entry.get_version_id(),
+                    w.id,
+                    highest_version_number
                 );
                 continue;
             }
@@ -63,8 +64,9 @@ impl WitnessProofCollection {
             if oldest_id > &version_number {
                 // This proof is older than the current LogEntry, skip it
                 debug!(
-                    "LogEntry ({}): Skipping witness proof from {} (oldest: {})",
-                    log_entry.log_entry.version_id, w.id, oldest_id
+                    "LogEntry ({}): Skipping witness proof from {} (oldest: {oldest_id})",
+                    log_entry.get_version_id(),
+                    w.id,
                 );
                 // Still counts as a valid proof
                 valid_proofs += 1;
@@ -78,13 +80,15 @@ impl WitnessProofCollection {
                     .map_err(|e| {
                         DIDWebVHError::WitnessProofError(format!(
                             "LogEntry ({}): Witness proof validation failed: {}",
-                            log_entry.log_entry.version_id, e
+                            log_entry.get_version_id(),
+                            e
                         ))
                     })?;
                 valid_proofs += 1;
                 debug!(
                     "LogEntry ({}): Witness proof ({}) verified ok",
-                    log_entry.log_entry.version_id, w.id
+                    log_entry.get_version_id(),
+                    w.id
                 );
             }
         }
@@ -99,8 +103,8 @@ impl WitnessProofCollection {
         if valid_proofs < threshold {
             // Not enough valid proofs to consider this LogEntry as witnessed
             warn!(
-                "LogEntry ({}): Witness threshold ({}) not met. Only ({} valid proofs!",
-                log_entry.log_entry.version_id, threshold, valid_proofs
+                "LogEntry ({}): Witness threshold ({threshold}) not met. Only ({valid_proofs} valid proofs!",
+                log_entry.get_version_id(),
             );
             Err(DIDWebVHError::WitnessProofError(format!(
                 "Witness proof threshold ({threshold}) was not met. Only ({valid_proofs}) proofs were validated",
@@ -108,7 +112,7 @@ impl WitnessProofCollection {
         } else {
             debug!(
                 "LogEntry ({}): Witness proofs fully passed",
-                log_entry.log_entry.version_id
+                log_entry.get_version_id()
             );
             Ok(())
         }

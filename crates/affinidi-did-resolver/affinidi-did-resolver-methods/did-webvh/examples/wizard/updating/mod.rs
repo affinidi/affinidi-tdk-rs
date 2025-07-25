@@ -76,7 +76,7 @@ pub async fn edit_did() -> Result<()> {
     let last_entry_state = webvh_state.log_entries.last().ok_or_else(|| {
         DIDWebVHError::ParametersError("No log entries found in the file".to_string())
     })?;
-    let metadata = &last_entry_state.metadata;
+    let metadata = webvh_state.generate_meta_data(last_entry_state);
 
     println!(
         "{}\n{}",
@@ -88,7 +88,7 @@ pub async fn edit_did() -> Result<()> {
     println!(
         "{}\n{}\n\n{}",
         style("Log Entry Metadata:").color256(69),
-        style(serde_json::to_string_pretty(metadata).unwrap()).color256(34),
+        style(serde_json::to_string_pretty(&metadata).unwrap()).color256(34),
         style("Successfully Loaded").color256(34).blink(),
     );
 
@@ -120,8 +120,8 @@ pub async fn edit_did() -> Result<()> {
 
                 let new_proofs = witness_log_entry(
                     &mut webvh_state.witness_proofs,
-                    &new_entry.log_entry,
-                    &new_entry.validated_parameters.active_witness,
+                    new_entry,
+                    &new_entry.get_active_witnesses(),
                     &config_info,
                 )?;
 
@@ -151,8 +151,8 @@ pub async fn edit_did() -> Result<()> {
 
                 let new_proofs = witness_log_entry(
                     &mut webvh_state.witness_proofs,
-                    &new_entry.log_entry,
-                    &new_entry.validated_parameters.active_witness,
+                    new_entry,
+                    &new_entry.get_active_witnesses(),
                     &config_info,
                 )?;
 
@@ -212,9 +212,9 @@ async fn create_log_entry(
         .default(false)
         .interact()?
     {
-        edit_did_document(&previous_log_entry.log_entry.state)?
+        edit_did_document(previous_log_entry.get_state())?
     } else {
-        previous_log_entry.log_entry.state.clone()
+        previous_log_entry.get_state().clone()
     };
 
     // ************************************************************************
@@ -326,7 +326,7 @@ fn update_parameters(
     // Witnesses
     // ************************************************************************
     modify_witness_params(
-        old_log_entry.validated_parameters.witness.as_ref(),
+        old_log_entry.validated_parameters.witness.clone(),
         &mut new_params,
         secrets,
     )?;
@@ -336,7 +336,7 @@ fn update_parameters(
     // ************************************************************************
 
     modify_watcher_params(
-        old_log_entry.validated_parameters.watchers.as_ref(),
+        old_log_entry.validated_parameters.watchers.clone(),
         &mut new_params,
     )?;
 

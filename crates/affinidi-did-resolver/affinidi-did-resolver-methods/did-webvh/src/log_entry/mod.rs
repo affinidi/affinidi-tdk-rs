@@ -1,7 +1,12 @@
 /*!
 *   Webvh utilizes Log Entries for each version change of the DID Document.
 */
-use crate::{DIDWebVHError, parameters::Parameters, witness::Witnesses};
+use crate::{
+    DIDWebVHError, Version,
+    log_entry::{spec_1_0::LogEntry1_0, spec_1_0_pre::LogEntry1_0Pre},
+    parameters::Parameters,
+    witness::Witnesses,
+};
 use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
 use base58::ToBase58;
 use chrono::{DateTime, FixedOffset};
@@ -11,13 +16,16 @@ use serde_json::{Value, json};
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
 use std::{fs::OpenOptions, io::Write};
+
 use tracing::debug;
 
 pub mod read;
+pub mod spec_1_0;
+pub mod spec_1_0_pre;
 
 /// Resolved Document MetaData
 /// Returned as reolved Document MetaData on a successful resolve
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaData {
     pub version_id: String,
@@ -33,36 +41,85 @@ pub struct MetaData {
 
 /// Each version of the DID gets a new log entry
 /// [Log Entries](https://identity.foundation/didwebvh/v1.0/#the-did-log-file)
+#[non_exhaustive]
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogEntry {
-    /// format integer-prev_hash
-    pub version_id: String,
+#[serde(untagged)]
+pub enum LogEntry {
+    /// Official v1.0 specification
+    Spec1_0(LogEntry1_0),
 
-    /// ISO 8601 date format
-    #[serde(serialize_with = "format_version_time")]
-    pub version_time: DateTime<FixedOffset>,
-
-    /// configuration options from the controller
-    pub parameters: Parameters,
-
-    /// DID document
-    pub state: Value,
-
-    /// Data Integrity Proof
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub proof: Vec<DataIntegrityProof>,
+    /// Interim 1.0 spec where nulls were used instyead of empty arrays and objects
+    Spec1_0Pre(LogEntry1_0Pre),
 }
 
-// Helper function to serialize versionTime with seconds only precision
-fn format_version_time<S>(date: &DateTime<FixedOffset>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&date.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+pub trait LogEntryMethods {
+    /// LogEntry Parameters versionTime
+    fn get_version_time_string(&self) -> String;
+
+    /// LogEntry Parameters versionTime
+    fn get_version_time(&self) -> DateTime<FixedOffset>;
+
+    /// Set the versionId to an updated value
+    fn get_version_id(&self) -> String;
+
+    /// Set the versionId to an updated value
+    fn set_version_id(&mut self, version_id: &str);
+
+    /// Get Parameters
+    fn get_parameters(&self) -> Parameters;
+
+    /// Add a proof for this LogeEntry
+    fn add_proof(&mut self, proof: DataIntegrityProof);
+
+    /// Get proofs
+    fn get_proofs(&self) -> &Vec<DataIntegrityProof>;
+
+    /// Resets all proofs for this LogEntry
+    fn clear_proofs(&mut self);
+
+    fn get_scid(&self) -> Option<String>;
+
+    fn get_state(&self) -> &Value;
+}
+
+/// Where-ever we need to create a LogEntry across versions
+pub(crate) trait LogEntryCreate {
+    fn create(
+        version_id: String,
+        version_time: DateTime<FixedOffset>,
+        parameters: Parameters,
+        state: Value,
+    ) -> Result<LogEntry, DIDWebVHError>;
 }
 
 impl LogEntry {
+    /// Get the WebVH Specification version for this LogEntry
+    pub fn get_webvh_version(&self) -> Version {
+        match self {
+            LogEntry::Spec1_0(_) => Version::V1_0,
+            LogEntry::Spec1_0Pre(_) => Version::V1_0Pre,
+        }
+    }
+
+    /// Converts a string into the correct version when version is known
+    pub fn from_string_to_known_version(
+        input: &str,
+        version: Version,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        match version {
+            Version::V1_0 => serde_json::from_str::<LogEntry1_0>(input)
+                .map(LogEntry::Spec1_0)
+                .map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to parse LogEntry: {e}"))
+                }),
+            Version::V1_0Pre => serde_json::from_str::<LogEntry1_0Pre>(input)
+                .map(LogEntry::Spec1_0Pre)
+                .map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to parse LogEntry: {e}"))
+                }),
+        }
+    }
+
     /// Append a valid LogEntry to a file
     pub fn save_to_file(&self, file_path: &str) -> Result<(), DIDWebVHError> {
         let mut file = OpenOptions::new()
@@ -98,7 +155,7 @@ impl LogEntry {
 
     /// Generates a SCID from a preliminary LogEntry
     /// This only needs to be called once when the DID is first created.
-    pub(crate) fn generate_scid(&self) -> Result<String, DIDWebVHError> {
+    pub(crate) fn generate_first_scid(&self) -> Result<String, DIDWebVHError> {
         self.generate_log_entry_hash().map_err(|e| {
             DIDWebVHError::SCIDError(format!(
                 "Couldn't generate SCID from preliminary LogEntry. Reason: {e}",
@@ -128,7 +185,12 @@ impl LogEntry {
         witness_proof: &DataIntegrityProof,
     ) -> Result<bool, DIDWebVHError> {
         // Verify the Data Integrity Proof against the Signing Document
-        verify_data(&json!({"versionId": &self.version_id}), None, witness_proof).map_err(|e| {
+        verify_data(
+            &json!({"versionId": &self.get_version_id()}),
+            None,
+            witness_proof,
+        )
+        .map_err(|e| {
             DIDWebVHError::LogEntryError(format!("Data Integrity Proof verification failed: {e}"))
         })?;
 
@@ -137,7 +199,14 @@ impl LogEntry {
 
     /// Splits the version number and the version hash for a DID versionId
     pub fn get_version_id_fields(&self) -> Result<(u32, String), DIDWebVHError> {
-        LogEntry::parse_version_id_fields(&self.version_id)
+        match self {
+            LogEntry::Spec1_0(log_entry) => {
+                LogEntry::parse_version_id_fields(&log_entry.version_id)
+            }
+            LogEntry::Spec1_0Pre(log_entry) => {
+                LogEntry::parse_version_id_fields(&log_entry.version_id)
+            }
+        }
     }
 
     /// Splits the version number and the version hash for a DID versionId
@@ -153,5 +222,95 @@ impl LogEntry {
             )
         })?;
         Ok((id, hash.to_string()))
+    }
+
+    /// Create a new LogEntry depending on the WebVH Version
+    pub(crate) fn create(
+        version_id: String,
+        version_time: DateTime<FixedOffset>,
+        parameters: Parameters,
+        state: Value,
+        webvh_version: Version,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        match webvh_version {
+            Version::V1_0 => LogEntry1_0::create(version_id, version_time, parameters, state),
+            Version::V1_0Pre => Err(DIDWebVHError::LogEntryError(
+                "WebVH Version must be 1.0 or higher".to_string(),
+            )),
+        }
+    }
+}
+
+impl LogEntryMethods for LogEntry {
+    fn get_version_time_string(&self) -> String {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_version_time_string(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_version_time_string(),
+        }
+    }
+
+    fn get_version_id(&self) -> String {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_version_id(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_version_id(),
+        }
+    }
+
+    fn set_version_id(&mut self, version_id: &str) {
+        match self {
+            LogEntry::Spec1_0(log_entry) => {
+                log_entry.set_version_id(version_id);
+            }
+            LogEntry::Spec1_0Pre(log_entry) => {
+                log_entry.set_version_id(version_id);
+            }
+        }
+    }
+
+    fn get_parameters(&self) -> Parameters {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_parameters(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_parameters(),
+        }
+    }
+
+    fn add_proof(&mut self, proof: DataIntegrityProof) {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.add_proof(proof),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.add_proof(proof),
+        }
+    }
+
+    fn get_proofs(&self) -> &Vec<DataIntegrityProof> {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_proofs(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_proofs(),
+        }
+    }
+
+    fn clear_proofs(&mut self) {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.clear_proofs(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.clear_proofs(),
+        }
+    }
+
+    fn get_scid(&self) -> Option<String> {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_scid(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_scid(),
+        }
+    }
+    fn get_version_time(&self) -> DateTime<FixedOffset> {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_version_time(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_version_time(),
+        }
+    }
+    fn get_state(&self) -> &Value {
+        match self {
+            LogEntry::Spec1_0(log_entry) => log_entry.get_state(),
+            LogEntry::Spec1_0Pre(log_entry) => log_entry.get_state(),
+        }
     }
 }

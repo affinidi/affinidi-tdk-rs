@@ -17,7 +17,7 @@ use byte_unit::{Byte, UnitType};
 use clap::Parser;
 use console::style;
 use did_webvh::{
-    DIDWebVHState, SCID_HOLDER,
+    DIDWebVHState,
     parameters::Parameters,
     witness::{Witness, Witnesses},
 };
@@ -27,6 +27,7 @@ use serde_json::json;
 use std::{
     fs::OpenOptions,
     io::Write,
+    sync::Arc,
     thread::sleep,
     time::{Duration, SystemTime},
 };
@@ -318,23 +319,21 @@ async fn generate_did(
         None
     };
 
-    let params = Parameters {
-        portable: Some(true),
-        scid: Some(SCID_HOLDER.to_string()),
-        update_keys: Some(vec![signing_did1_secret.get_public_keymultibase()?]),
-        next_key_hashes: Some(vec![
+    let params = Parameters::new()
+        .with_portable(true)
+        .with_update_keys(vec![signing_did1_secret.get_public_keymultibase()?])
+        .with_next_key_hashes(vec![
             next_key1.get_public_keymultibase_hash()?,
             next_key2.get_public_keymultibase_hash()?,
-        ]),
-        witness,
-        watchers: Some(vec![
+        ])
+        .with_witnesses(witness.unwrap())
+        .with_watchers(vec![
             "https://watcher-1.affinidi.com/v1/webvh".to_string(),
             "https://watcher-2.affinidi.com/v1/webvh".to_string(),
             "https://watcher-3.affinidi.com/v1/webvh".to_string(),
-        ]),
-        ttl: Some(3600),
-        ..Default::default()
-    };
+        ])
+        .with_ttl(3600)
+        .build();
 
     let _ = didwebvh.create_log_entry(
         None,
@@ -350,7 +349,7 @@ async fn generate_did(
     println!(
         "\t{}{}",
         style("DID First LogEntry created: ").color256(34),
-        style(&log_entry.log_entry.version_id).color256(69)
+        style(&log_entry.get_version_id()).color256(69)
     );
 
     Ok(vec![next_key1, next_key2])
@@ -365,7 +364,7 @@ async fn witness_log_entry(
         .last()
         .ok_or_else(|| anyhow!("Couldn't find a LogEntry to witness"))?;
 
-    let Some(witnesses) = &log_entry.validated_parameters.active_witness else {
+    let Some(witnesses) = &log_entry.get_active_witnesses() else {
         println!(
             "{}",
             style("Witnesses are not being used for this LogEntry. No witnessing is required")
@@ -390,7 +389,7 @@ async fn witness_log_entry(
 
         // Generate Signature
         let proof = DataIntegrityProof::sign_jcs_data(
-            &json!({"versionId": &log_entry.log_entry.version_id}),
+            &json!({"versionId": &log_entry.get_version_id()}),
             None,
             &secret,
             None,
@@ -402,7 +401,7 @@ async fn witness_log_entry(
         // Save proof to collection
         didwebvh
             .witness_proofs
-            .add_proof(&log_entry.log_entry.version_id, &proof, false)
+            .add_proof(&log_entry.get_version_id(), &proof, false)
             .map_err(|e| anyhow!("Error adding proof: {e}"))?;
     }
 
@@ -420,7 +419,7 @@ async fn create_log_entry(
         .log_entries
         .last()
         .ok_or_else(|| anyhow!("No previous log entry found. Please generate a DID first."))?;
-    let new_state = old_log_entry.log_entry.state.clone();
+    let new_state = old_log_entry.get_state().clone();
 
     let mut new_params = old_log_entry.validated_parameters.clone();
 
@@ -430,17 +429,17 @@ async fn create_log_entry(
     let next_key2 = DID::generate_did_key(KeyType::Ed25519)?.1;
     secrets.insert(next_key2.clone()).await;
 
-    new_params.next_key_hashes = Some(vec![
+    new_params.next_key_hashes = Some(Arc::new(vec![
         next_key1.get_public_keymultibase_hash()?,
         next_key2.get_public_keymultibase_hash()?,
-    ]);
+    ]));
 
     // Modify update_key for this entry
     let update_keys = previous_keys
         .iter()
         .map(|s| s.get_public_keymultibase().unwrap())
         .collect();
-    new_params.update_keys = Some(update_keys);
+    new_params.update_keys = Some(Arc::new(update_keys));
 
     // Swap a witness node?
     if args.witnesses > 0 && count % 6 == 3 {
@@ -475,15 +474,12 @@ async fn swap_witness(params: &mut Parameters, secrets: &mut SimpleSecretsResolv
         bail!("Witnesses incorrectly configured for this test!");
     };
 
-    let (threshold, mut new_witnesses) = if let Witnesses::Value {
-        threshold,
-        witnesses,
-        ..
-    } = witnesses
-    {
-        (*threshold, witnesses.clone())
-    } else {
-        bail!("Witnesses incorrectly configured for this test!");
+    let (threshold, mut new_witnesses) = match &**witnesses {
+        Witnesses::Value {
+            threshold,
+            witnesses,
+        } => (threshold, witnesses.clone()),
+        _ => bail!("Witnesses incorrectly configured for this test!"),
     };
 
     let rn = rng.random_range(0..new_witnesses.len());
@@ -498,10 +494,10 @@ async fn swap_witness(params: &mut Parameters, secrets: &mut SimpleSecretsResolv
         id: new_witness_did,
     });
 
-    params.witness = Some(Witnesses::Value {
-        threshold,
+    params.witness = Some(Arc::new(Witnesses::Value {
+        threshold: threshold.to_owned(),
         witnesses: new_witnesses,
-    });
+    }));
 
     Ok(())
 }
@@ -511,7 +507,9 @@ fn swap_watcher(params: &mut Parameters) -> Result<()> {
     // Instantiate RNG
     let mut rng = rand::rng();
 
-    let Some(watchers) = params.watchers.as_mut() else {
+    let mut watchers = if let Some(watchers) = params.watchers.as_deref() {
+        watchers.to_owned()
+    } else {
         bail!("Watchers incorrectly configured for this test!");
     };
 

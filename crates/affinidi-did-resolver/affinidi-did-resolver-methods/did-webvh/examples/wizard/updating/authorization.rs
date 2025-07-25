@@ -3,6 +3,8 @@
 *   in pre-rotation mode or not
 */
 
+use std::sync::Arc;
+
 use crate::{ConfigInfo, create_next_key_hashes, get_keys};
 use affinidi_secrets_resolver::secrets::Secret;
 use anyhow::{Result, bail};
@@ -30,15 +32,16 @@ pub fn update_authorization_keys(
         {
             // Disabling pre-rotation mode
             new_params.pre_rotation_active = false;
-            new_params.next_key_hashes = Some(Vec::new());
+            new_params.next_key_hashes = Some(Arc::new(Vec::new()));
             let update_keys =
                 select_update_keys_from_next_hashes(&old_params.next_key_hashes, existing_secrets)?;
             let mut tmp_keys = Vec::new();
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
             }
-            new_params.update_keys = Some(tmp_keys.clone());
-            new_params.active_update_keys = tmp_keys;
+            let new_keys = Arc::new(tmp_keys);
+            new_params.update_keys = Some(new_keys.clone());
+            new_params.active_update_keys = new_keys;
         } else {
             // Staying in pre-rotation mode
             new_params.pre_rotation_active = true;
@@ -50,15 +53,16 @@ pub fn update_authorization_keys(
             for key in update_keys {
                 tmp_keys.push(key.get_public_keymultibase()?);
             }
-            new_params.update_keys = Some(tmp_keys.clone());
-            new_params.active_update_keys = tmp_keys;
+            let new_keys = Arc::new(tmp_keys);
+            new_params.update_keys = Some(new_keys.clone());
+            new_params.active_update_keys = new_keys;
 
             // Create new next_key_hashes
             let next_key_hashes = create_next_key_hashes(existing_secrets)?;
             if next_key_hashes.is_empty() {
                 bail!("No next key hashes created for pre-rotation mode");
             }
-            new_params.next_key_hashes = Some(next_key_hashes.clone());
+            new_params.next_key_hashes = Some(Arc::new(next_key_hashes));
         }
     } else {
         // Non pre-rotation mode
@@ -72,16 +76,15 @@ pub fn update_authorization_keys(
             .interact()?
         {
             // Enable pre-rotation mode
-            new_params.update_keys = None;
             let next_key_hashes = create_next_key_hashes(existing_secrets)?;
             if next_key_hashes.is_empty() {
                 bail!("No next key hashes created for pre-rotation mode");
             }
-            new_params.next_key_hashes = Some(next_key_hashes.clone());
+            new_params.next_key_hashes = Some(Arc::new(next_key_hashes));
         } else {
             // Stay in non pre-rotation mode
             // check if modify updateKeys
-            modify_update_keys(new_params, existing_secrets)?;
+            modify_update_keys(new_params, old_params, existing_secrets)?;
         }
     }
     Ok(())
@@ -90,7 +93,7 @@ pub fn update_authorization_keys(
 /// What update key will we use? Must be from an existing set of keys authorized keys
 /// Returns array of Secrets
 fn select_update_keys_from_next_hashes(
-    next_key_hashes: &Option<Vec<String>>,
+    next_key_hashes: &Option<Arc<Vec<String>>>,
     existing_secrets: &ConfigInfo,
 ) -> Result<Vec<Secret>> {
     let Some(hashes) = next_key_hashes else {
@@ -131,23 +134,31 @@ fn select_update_keys_from_next_hashes(
 }
 
 /// Any changes to the updateKeys?
-fn modify_update_keys(params: &mut Parameters, existing_secrets: &mut ConfigInfo) -> Result<()> {
+fn modify_update_keys(
+    new_params: &mut Parameters,
+    old_params: &Parameters,
+    existing_secrets: &mut ConfigInfo,
+) -> Result<()> {
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Do you want to change authorization keys going forward from this update?")
         .default(false)
         .interact()?
     {
+        if old_params.active_update_keys.is_empty() {
+            bail!("No active update keys found in previous LogEntry parameters");
+        }
+
         let mut new_update_keys = Vec::new();
 
         let selected = MultiSelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Which existing authorization keys do you want to keep?")
-            .items(&params.active_update_keys)
+            .items(&old_params.active_update_keys)
             .interact()
             .unwrap();
 
         // Add new keys
         for i in selected {
-            new_update_keys.push(params.active_update_keys[i].clone());
+            new_update_keys.push(new_params.active_update_keys[i].clone());
         }
 
         // Do we want to add new keys?
@@ -163,10 +174,10 @@ fn modify_update_keys(params: &mut Parameters, existing_secrets: &mut ConfigInfo
             }
         }
 
-        params.update_keys = Some(new_update_keys);
+        new_params.update_keys = Some(Arc::new(new_update_keys));
     } else {
         // No changes made to existing authorization keys
-        params.update_keys = None;
+        new_params.update_keys = None;
     }
 
     Ok(())
