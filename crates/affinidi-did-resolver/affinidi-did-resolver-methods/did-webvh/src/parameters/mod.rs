@@ -24,8 +24,11 @@ pub struct Parameters {
     pub scid: Option<Arc<String>>,
 
     /// DID version specification
-    #[serde(serialize_with = "method_from_version")]
-    pub method: Version,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "method_from_version"
+    )]
+    pub method: Option<Version>,
 
     /// Keys that are authorized to update future log entries
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +55,8 @@ pub struct Parameters {
     pub watchers: Option<Arc<Vec<String>>>,
 
     /// Has this DID been revoked?
-    pub deactivated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deactivated: Option<bool>,
 
     /// time to live in seconds for a resolved DID document
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,11 +77,15 @@ pub struct Parameters {
     pub active_witness: Option<Arc<Witnesses>>,
 }
 
-fn method_from_version<S>(data: &Version, serializer: S) -> Result<S::Ok, S::Error>
+fn method_from_version<S>(data: &Option<Version>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    serializer.serialize_str(&data.to_string())
+    if let Some(data) = data {
+        serializer.serialize_str(&data.to_string())
+    } else {
+        serializer.serialize_none()
+    }
 }
 
 impl Parameters {
@@ -106,6 +114,15 @@ impl Parameters {
         // Calculated fields can be left at defaults as they are ignored in serialization
         // pre_rotation_active, active_update_keys, active_witness
         // scid can not be changed, so leave it at default None
+
+        // Are we changing WebVH Version?
+        if let Some(this_version) = self.method {
+            if let Some(previous_version) = old_params.method {
+                if this_version != previous_version {
+                    diff.method = self.method
+                }
+            }
+        }
 
         // Check if portable has been turned off (can never be turned on except on first log entry)
         if self.portable != old_params.portable {
@@ -153,12 +170,14 @@ impl Parameters {
         diff.watchers = Self::diff_tri_state(&old_params.watchers, &self.watchers, "watchers")?;
 
         // Deactivated
-        if self.deactivated && old_params.pre_rotation_active {
-            return Err(DIDWebVHError::DeactivatedError(
-                "DID cannot be deactivated while pre-rotation is active".to_string(),
-            ));
-        } else {
-            diff.deactivated = self.deactivated;
+        if let Some(deactivated) = self.deactivated {
+            if deactivated && old_params.pre_rotation_active {
+                return Err(DIDWebVHError::DeactivatedError(
+                    "DID cannot be deactivated while pre-rotation is active".to_string(),
+                ));
+            } else if self.deactivated != old_params.deactivated {
+                diff.deactivated = self.deactivated;
+            }
         }
 
         // TTL Checks
@@ -274,7 +293,9 @@ impl Parameters {
             new_parameters.next_key_hashes = previous.next_key_hashes.clone();
             new_parameters.scid = previous.scid.clone();
 
-            if previous.deactivated {
+            if let Some(deactivated) = previous.deactivated
+                && deactivated
+            {
                 // If previous is deactivated, then no more log entries can be made
                 return Err(DIDWebVHError::DeactivatedError(
                     "DID was deactivated previous Log Entry, no more log entries are allowed."
@@ -468,12 +489,17 @@ impl Parameters {
         }
 
         // Check deactivation status
-        if self.deactivated && previous.is_none() {
+        if let Some(deactivated) = self.deactivated
+            && deactivated
+            && previous.is_none()
+        {
             // Can't be deactivated on the first log entry
             return Err(DIDWebVHError::DeactivatedError(
                 "DID cannot be deactivated on the first Log Entry".to_string(),
             ));
-        } else if self.deactivated {
+        } else if let Some(deactivated) = self.deactivated
+            && deactivated
+        {
             if let Some(update_keys) = &self.update_keys {
                 if !update_keys.is_empty() {
                     return Err(DIDWebVHError::DeactivatedError(
@@ -638,13 +664,13 @@ impl ParametersBuilder {
         Parameters {
             scid: None, // SCID is not set in the builder, it is set during validation
             pre_rotation_active: self.pre_rotation_active,
-            method: self.method,
+            method: Some(self.method),
             update_keys: self.update_keys.clone(),
             portable: self.portable,
             next_key_hashes: self.next_key_hashes.clone(),
             witness: self.witness.clone(),
             watchers: self.watchers.clone(),
-            deactivated: self.deactivated,
+            deactivated: Some(self.deactivated),
             ttl: self.ttl,
             active_update_keys: Arc::new(Vec::new()), // Will be set during validation
             active_witness: None,                     // Will be set during validation

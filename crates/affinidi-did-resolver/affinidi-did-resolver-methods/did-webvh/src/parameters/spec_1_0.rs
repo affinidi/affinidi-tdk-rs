@@ -78,9 +78,9 @@ impl Default for Parameters1_0 {
 impl From<Parameters> for Parameters1_0 {
     fn from(value: Parameters) -> Self {
         Parameters1_0 {
-            deactivated: value.deactivated,
+            deactivated: value.deactivated.unwrap_or_default(),
             pre_rotation_active: value.pre_rotation_active,
-            method: Some(value.method.to_string()),
+            method: Some(Version::V1_0.to_string()),
             next_key_hashes: value.next_key_hashes.clone(),
             scid: value.scid.clone(),
             ttl: value.ttl,
@@ -95,9 +95,9 @@ impl From<Parameters> for Parameters1_0 {
 impl From<Parameters1_0> for Parameters {
     fn from(value: Parameters1_0) -> Parameters {
         Parameters {
-            deactivated: value.deactivated,
+            deactivated: Some(value.deactivated),
             pre_rotation_active: value.pre_rotation_active,
-            method: Version::V1_0,
+            method: Some(Version::V1_0),
             next_key_hashes: value.next_key_hashes.clone(),
             scid: value.scid.clone(),
             ttl: value.ttl,
@@ -111,10 +111,14 @@ impl From<Parameters1_0> for Parameters {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
-    use crate::witness::{Witness, Witnesses};
+    use std::sync::Arc;
+
+    use crate::{
+        SCID_HOLDER,
+        witness::{Witness, Witnesses},
+    };
 
     use super::Parameters;
 
@@ -134,18 +138,18 @@ mod tests {
     #[test]
     fn diff_no_changes_full() {
         let old_params = Parameters {
-            method: Some("did:webvh:1.0".to_string()),
-            scid: Some("scid123".to_string()),
-            update_keys: Some(vec![
+            method: Some(crate::Version::V1_0),
+            scid: Some(Arc::new("scid123".to_string())),
+            update_keys: Some(Arc::new(vec![
                 "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
                 "z6MkqUa1LbqZ7EpevqrFC7XHAWM8CE49AKFWVjyu543NfVAp".to_string(),
-            ]),
+            ])),
             portable: Some(true),
-            next_key_hashes: Some(vec![
+            next_key_hashes: Some(Arc::new(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
                 "zQmctZhRGCKrE2R58K9rkfA1aUL74mecrrJRvicz42resii".to_string(),
-            ]),
-            witness: Some(Witnesses::Value {
+            ])),
+            witness: Some(Arc::new(Witnesses::Value {
                 threshold: 2,
                 witnesses: vec![
                     Witness {
@@ -155,9 +159,9 @@ mod tests {
                         id: "witness2".to_string(),
                     },
                 ],
-            }),
-            watchers: Some(vec!["watcher1".to_string()]),
-            deactivated: false,
+            })),
+            watchers: Some(Arc::new(vec!["watcher1".to_string()])),
+            deactivated: Some(false),
             ttl: Some(3600),
             ..Default::default()
         };
@@ -171,7 +175,7 @@ mod tests {
     #[test]
     fn diff_no_changes_empty() {
         let old_params = Parameters {
-            method: None,
+            method: Some(crate::Version::V1_0),
             ..Default::default()
         };
 
@@ -186,7 +190,7 @@ mod tests {
         let old_params = Parameters::default();
 
         let new_params = Parameters {
-            method: None,
+            method: Some(crate::Version::V1_0),
             ..Default::default()
         };
 
@@ -198,12 +202,13 @@ mod tests {
     fn pre_rotation_active() {
         // On first LogEntry, if next_hashes is configured, then pre-rotation is active
         let first_params = Parameters {
-            update_keys: Some(vec![
+            update_keys: Some(Arc::new(vec![
                 "z6Mkp7QveNebyWs4z1kJ7Aa7CymUjRpjPYnBYh6Cr1t6JoXY".to_string(),
-            ]),
-            next_key_hashes: Some(vec![
+            ])),
+            next_key_hashes: Some(Arc::new(vec![
                 "zQmS6fKbreQixpa6JueaSuDiL2VQAGosC45TDQdKHf5E155".to_string(),
-            ]),
+            ])),
+            scid: Some(Arc::new(SCID_HOLDER.to_string())),
             ..Default::default()
         };
 
@@ -224,35 +229,46 @@ mod tests {
     #[test]
     fn diff_tri_state_empty() {
         // Absent --> Empty = Empty
-        let diff = Parameters::diff_tri_state(&None, &Some(Vec::new()), "test")
+        let diff = Parameters::diff_tri_state(&None, &Some(Arc::new(Vec::new())), "test")
             .expect("Parameters::diff_update_keys() error");
         assert!(diff.is_some_and(|a| a.is_empty()));
 
         // Values --> Empty = Empty
-        let diff =
-            Parameters::diff_tri_state(&Some(vec!["test".to_string()]), &Some(Vec::new()), "test")
-                .expect("Parameters::diff_update_keys() error");
+        let diff = Parameters::diff_tri_state(
+            &Some(Arc::new(vec!["test".to_string()])),
+            &Some(Arc::new(Vec::new())),
+            "test",
+        )
+        .expect("Parameters::diff_update_keys() error");
         assert!(diff.is_some_and(|a| a.is_empty()));
     }
 
     #[test]
     fn diff_tri_state_double_empty() {
-        assert!(Parameters::diff_tri_state(&Some(Vec::new()), &Some(Vec::new()), "test").is_err());
+        assert!(
+            Parameters::diff_tri_state(
+                &Some(Arc::new(Vec::new())),
+                &Some(Arc::new(Vec::new())),
+                "test"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn diff_tri_state_value() {
         // From nothing to something
-        let diff = Parameters::diff_tri_state(&None, &Some(vec!["test".to_string()]), "test")
+        let test = Some(Arc::new(vec!["test".to_string()]));
+        let diff = Parameters::diff_tri_state(&None, &test.clone(), "test")
             .expect("Parameters::diff_update_keys error");
-        assert!(diff.is_some_and(|a| a == vec!["test".to_string()]));
+        assert!(diff == test);
     }
 
     #[test]
     fn diff_tri_state_same_value() {
         let diff = Parameters::diff_tri_state(
-            &Some(vec!["test".to_string()]),
-            &Some(vec!["test".to_string()]),
+            &Some(Arc::new(vec!["test".to_string()])),
+            &Some(Arc::new(vec!["test".to_string()])),
             "test",
         )
         .expect("Parameters::diff_update_keys error");
@@ -262,8 +278,8 @@ mod tests {
     #[test]
     fn diff_tri_state_different_value() {
         let diff = Parameters::diff_tri_state(
-            &Some(vec!["old".to_string()]),
-            &Some(vec!["new".to_string()]),
+            &Some(Arc::new(vec!["old".to_string()])),
+            &Some(Arc::new(vec!["new".to_string()])),
             "test",
         )
         .expect("Parameters::diff_update_keys error");
@@ -278,7 +294,7 @@ mod tests {
         };
 
         let current = Parameters {
-            update_keys: Some(Vec::new()),
+            update_keys: Some(Arc::new(Vec::new())),
             ..Default::default()
         };
         assert!(previous.diff(&current).is_err());
@@ -298,4 +314,3 @@ mod tests {
         assert!(previous.diff(&current).is_err());
     }
 }
-*/

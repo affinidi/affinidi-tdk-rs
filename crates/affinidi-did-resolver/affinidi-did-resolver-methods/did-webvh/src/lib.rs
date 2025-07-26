@@ -169,7 +169,8 @@ impl DIDWebVHState {
 
         // Create a VerificationMethod ID from the signing key matched to an updateKey
         if let Some(keys) = &parameters.update_keys
-            && !parameters.deactivated
+            && let Some(deactivated) = parameters.deactivated
+            && !deactivated
         {
             if !keys.contains(&signing_key.get_public_keymultibase().map_err(|e| {
                 DIDWebVHError::LogEntryError(format!("signing_key isn't valid: {e}"))
@@ -179,7 +180,9 @@ impl DIDWebVHState {
                     signing_key.get_public_keymultibase().unwrap(),
                 )));
             }
-        } else if parameters.deactivated {
+        } else if let Some(deactivated) = parameters.deactivated
+            && deactivated
+        {
             // This is the last LogEntry for a deactivated Entry
             // Do nothing
         } else {
@@ -198,19 +201,24 @@ impl DIDWebVHState {
                 last_log_entry.validated_parameters
             );
 
-            // Check version info
-            if parameters.method == Version::V1_0Pre {
-                // Creating this version is NOT VALID.
-                return Err(DIDWebVHError::LogEntryError(
-                    "WebVH Version must be 1.0 or higher".to_string(),
-                ));
-            } else if parameters.method.as_f32() < last_log_entry.get_webvh_version().as_f32() {
-                return Err(DIDWebVHError::LogEntryError(format!(
-                    "LogEntry WebVH Version ({}) cannot be lower than previous LogEntry ({})",
-                    parameters.method,
-                    last_log_entry.get_webvh_version()
-                )));
-            }
+            // Ensure correct webvh version is being used
+            let webvh_version = if let Some(this_version) = parameters.method {
+                if this_version.as_f32() < 1.0 {
+                    return Err(DIDWebVHError::LogEntryError(
+                        "WebVH Version must be 1.0 or higher".to_string(),
+                    ));
+                } else if this_version.as_f32() < last_log_entry.get_webvh_version().as_f32() {
+                    return Err(DIDWebVHError::LogEntryError(format!(
+                        "This LogEntry WebVH Version ({}) must be equal or higher than the previous LogEntry version ({})",
+                        this_version.as_f32(),
+                        last_log_entry.get_webvh_version().as_f32()
+                    )));
+                } else {
+                    this_version
+                }
+            } else {
+                Version::default()
+            };
 
             LogEntry::create(
                 last_log_entry.get_version_id(),
@@ -218,13 +226,24 @@ impl DIDWebVHState {
                 // Only use the difference of the parameters
                 parameters.diff(&last_log_entry.validated_parameters)?,
                 document.clone(),
-                parameters.method,
+                webvh_version,
             )?
         } else {
             // First LogEntry so we need to set up a few things first
             // Ensure SCID field is set correctly
 
-            let webvh_version = parameters.method;
+            // Ensure correct webvh version is being used
+            let webvh_version = if let Some(this_version) = parameters.method {
+                if this_version.as_f32() < 1.0 {
+                    return Err(DIDWebVHError::LogEntryError(
+                        "WebVH Version must be 1.0 or higher".to_string(),
+                    ));
+                } else {
+                    this_version
+                }
+            } else {
+                Version::default()
+            };
             let mut parameters = parameters.clone();
             parameters.scid = Some(Arc::new(SCID_HOLDER.to_string()));
 
@@ -355,7 +374,10 @@ impl DIDWebVHState {
             updated: self.meta_last_ts.clone(),
             scid: self.scid.clone(),
             portable: log_entry.validated_parameters.portable.unwrap_or(false),
-            deactivated: log_entry.validated_parameters.deactivated,
+            deactivated: log_entry
+                .validated_parameters
+                .deactivated
+                .unwrap_or_default(),
             witness: log_entry
                 .validated_parameters
                 .active_witness

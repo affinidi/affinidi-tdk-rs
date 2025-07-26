@@ -92,7 +92,7 @@ impl LogEntryState {
     /// WebVH Specification Version
     /// If not specified, will default to the Default Version
     pub(crate) fn get_webvh_version(&self) -> Version {
-        self.validated_parameters.method
+        self.validated_parameters.method.unwrap_or_default()
     }
 
     pub fn get_version_id(&self) -> String {

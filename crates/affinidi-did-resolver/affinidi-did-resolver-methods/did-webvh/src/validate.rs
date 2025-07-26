@@ -44,7 +44,9 @@ impl DIDWebVHState {
             }
             // Check if this valid LogEntry has been deactivated, if so then ignore any other
             // Entries
-            if entry.validated_parameters.deactivated {
+            if let Some(deactivated) = entry.validated_parameters.deactivated
+                && deactivated
+            {
                 // Deactivated, return the current LogEntry and MetaData
                 deactivated_flag = true;
             }

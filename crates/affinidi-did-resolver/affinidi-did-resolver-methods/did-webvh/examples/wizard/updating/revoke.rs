@@ -142,7 +142,7 @@ async fn revoke_entry(didwebvh: &mut DIDWebVHState, secrets: &ConfigInfo) -> Res
         };
 
     let new_params = Parameters {
-        deactivated: true,
+        deactivated: Some(true),
         update_keys: Some(Arc::new(Vec::new())),
         ..Default::default()
     };
