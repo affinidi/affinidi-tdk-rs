@@ -251,16 +251,17 @@ impl LogEntry {
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::log_entry::LogEntry;
 
     #[test]
     fn test_authorized_keys_fail() {
         let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15#z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }
@@ -269,7 +270,7 @@ mod tests {
     fn test_authorized_keys_missing_key_id_fail() {
         let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }
@@ -280,9 +281,8 @@ mod tests {
             vec!["z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15".to_string()];
 
         assert!(LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15#z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }
 }
-*/
