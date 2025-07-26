@@ -122,13 +122,11 @@ impl DIDWebVHState {
                         Ok(entries) => match entries {
                             Ok(log_entries_text) => {
                                 let mut log_entries = Vec::new();
-
+                                let mut version = None;
                                 for line in log_entries_text.lines() {
-                                    let log_entry: LogEntry = serde_json::from_str(line).map_err(|e| {
-                                        DIDWebVHError::LogEntryError(format!(
-                                            "Failed to parse log entry from line: {line}. Error: {e}"
-                                        ))
-                                    })?;
+                                    let log_entry = LogEntry::deserialize_string(line, version)?;
+
+                                    version = Some(log_entry.get_webvh_version());
 
                                     log_entries.push(LogEntryState {
                                         log_entry: log_entry.clone(),
@@ -169,16 +167,14 @@ impl DIDWebVHState {
                 let witness_proofs = if let Ok(proofs) = r2 {
                     match proofs {
                         Ok(proofs) => match proofs {
-                            Ok(proofs_string) => {
-                                WitnessProofCollection {
-                                    proofs: serde_json::from_str(&proofs_string).map_err(|e| {
-                                        DIDWebVHError::WitnessProofError(format!(
-                                            "Couldn't deserialize Witness Proofs Data: {e}",
-                                        ))
-                                    })?,
-                                    ..Default::default()
-                                }
-                            }
+                            Ok(proofs_string) => WitnessProofCollection {
+                                proofs: serde_json::from_str(&proofs_string).map_err(|e| {
+                                    DIDWebVHError::WitnessProofError(format!(
+                                        "Couldn't deserialize Witness Proofs Data: {e}",
+                                    ))
+                                })?,
+                                ..Default::default()
+                            },
                             Err(e) => {
                                 warn!("Error downloading witness proofs: {e}");
                                 WitnessProofCollection::default()
@@ -220,12 +216,12 @@ impl DIDWebVHState {
                     parsed_did_url.query_version_id.as_deref(),
                     parsed_did_url.query_version_time,
                 ) {
-                        Ok(entry) => {
-                    let metadata = self.generate_meta_data(entry);
-                            Ok((&entry.log_entry, metadata))
-                        },
-                        Err(_) => Err(DIDWebVHError::NotFound),
+                    Ok(entry) => {
+                        let metadata = self.generate_meta_data(entry);
+                        Ok((&entry.log_entry, metadata))
                     }
+                    Err(_) => Err(DIDWebVHError::NotFound),
+                }
             } else if let Some(last) = self.log_entries.last() {
                 let metadata = self.generate_meta_data(last);
                 Ok((&last.log_entry, metadata))

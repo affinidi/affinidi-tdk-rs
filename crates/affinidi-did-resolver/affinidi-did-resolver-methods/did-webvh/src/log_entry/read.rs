@@ -27,14 +27,12 @@ impl LogEntry {
         let buf_reader = io::BufReader::new(file);
 
         let mut entries = Vec::new();
+        let mut version = None;
         for line in buf_reader.lines() {
             match line {
                 Ok(line) => {
-                    let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
-                        DIDWebVHError::LogEntryError(format!(
-                            "Failed to deserialize log entry: {e}",
-                        ))
-                    })?;
+                    let log_entry = LogEntry::deserialize_string(&line, version)?;
+                    version = Some(log_entry.get_webvh_version());
                     entries.push(log_entry);
                 }
                 Err(e) => {
@@ -229,10 +227,18 @@ impl LogEntry {
             DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {e}"))
         })?;
 
-        let scid_entry: LogEntry = serde_json::from_str(&temp.replace(&scid, SCID_HOLDER))
-            .map_err(|e| {
-                DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
-            })?;
+        let scid_entry: LogEntry = match self {
+            LogEntry::Spec1_0(_) => LogEntry::Spec1_0(
+                serde_json::from_str(&temp.replace(&scid, SCID_HOLDER)).map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
+                })?,
+            ),
+            LogEntry::Spec1_0Pre(_) => LogEntry::Spec1_0Pre(
+                serde_json::from_str(&temp.replace(&scid, SCID_HOLDER)).map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
+                })?,
+            ),
+        };
 
         let verify_scid = scid_entry.generate_first_scid()?;
         if scid != verify_scid {

@@ -42,7 +42,7 @@ pub struct MetaData {
 /// Each version of the DID gets a new log entry
 /// [Log Entries](https://identity.foundation/didwebvh/v1.0/#the-did-log-file)
 #[non_exhaustive]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum LogEntry {
     /// Official v1.0 specification
@@ -93,6 +93,98 @@ pub(crate) trait LogEntryCreate {
 }
 
 impl LogEntry {
+    /// Reading in a LogEntry and converting it requires custom logic.
+    /// [deserialize_string] handles detecting the version and deserializing the LogEntry correctly
+    /// Attributes:
+    /// - input: The input string to deserialize
+    /// - version: If you want to override the default latest version, specify the previous
+    ///   LogEntry version here
+    pub fn deserialize_string(
+        input: &str,
+        version: Option<Version>,
+    ) -> Result<LogEntry, DIDWebVHError> {
+        // Step 1: Parse the String to generic JSON Values
+        let values: Value = serde_json::from_str(input).map_err(|e| {
+            DIDWebVHError::LogEntryError(format!("Couldn't deserialize LogEntry. Reason: {e}"))
+        })?;
+
+        println!("{values:#?}");
+
+        // Step 2: Detect method version
+        let version = if let Some(parameters) = values.get("parameters") {
+            if let Some(method) = parameters.get("method") {
+                if let Some(method) = method.as_str() {
+                    Version::try_from(method).unwrap_or(version.unwrap_or_default())
+                } else {
+                    version.unwrap_or_default()
+                }
+            } else {
+                version.unwrap_or_default()
+            }
+        } else {
+            version.unwrap_or_default()
+        };
+
+        // Step 3: Deserialize using the LogEntry method version
+
+        match version {
+            Version::V1_0 => {
+                // There is a pre-ratified difference in the v1.0 spec where nulls were used
+                // instead of empty arrays and objects
+                let Some(parameters) = values.get("parameters") else {
+                    return Err(DIDWebVHError::LogEntryError(
+                        "No parameters exist in the LogEntry!".to_string(),
+                    ));
+                };
+
+                // Check if there are JSON nulls in the parameters
+                let mut pre_version = false;
+                if let Some(v) = parameters.get("updateKeys") {
+                    if v.is_null() {
+                        pre_version = true;
+                    }
+                }
+                if let Some(v) = parameters.get("nextKeyHashes") {
+                    if v.is_null() {
+                        pre_version = true;
+                    }
+                }
+                if let Some(v) = parameters.get("witness") {
+                    if v.is_null() {
+                        pre_version = true;
+                    }
+                }
+                if let Some(v) = parameters.get("watchers") {
+                    if v.is_null() {
+                        pre_version = true;
+                    }
+                }
+                if let Some(v) = parameters.get("ttl") {
+                    if v.is_null() {
+                        pre_version = true;
+                    }
+                }
+
+                if pre_version {
+                    Ok(LogEntry::Spec1_0Pre(
+                        serde_json::from_value::<LogEntry1_0Pre>(values).map_err(|e| {
+                            DIDWebVHError::LogEntryError(format!("Failed to parse LogEntry: {e}"))
+                        })?,
+                    ))
+                } else {
+                    Ok(LogEntry::Spec1_0(
+                        serde_json::from_value::<LogEntry1_0>(values).map_err(|e| {
+                            DIDWebVHError::LogEntryError(format!("Failed to parse LogEntry: {e}"))
+                        })?,
+                    ))
+                }
+            }
+            _ => Err(DIDWebVHError::LogEntryError(format!(
+                "Version ({version}) is not supported!"
+            ))),
+        }
+    }
+
     /// Get the WebVH Specification version for this LogEntry
     pub fn get_webvh_version(&self) -> Version {
         match self {
