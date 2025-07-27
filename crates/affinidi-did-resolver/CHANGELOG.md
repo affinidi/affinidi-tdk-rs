@@ -15,6 +15,9 @@
   * `?versionTime=` will resolve to what LogEntry was active at that time
 * **FEATURE:** Network based WebVH DID resolution is now enabled
   * call the `resolove()` method to resolve a WebVH DID
+* **FEATURE:** LogEntries and Parameters now support versioned schemas
+  * V1.0 and pre-V1.0 specification is implemented
+  * You can mix and match LogEntry WebVH versions in the same DID
 
 ### 14th July 2025
 

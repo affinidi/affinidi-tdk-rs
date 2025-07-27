@@ -23,8 +23,6 @@ ahash = { version = "0.8", features = ["serde"] }
 base58 = "0.2.0"
 chrono = { version = "0.4", features = ["serde"] }
 iref = { version = "3.2.2", features = ["serde"] }
-static-iref = "3.0.0"
-multibase = "0.9"
 multihash = "0.19"
 reqwest = "0.12"
 serde = { version = "1.0", features = ["derive", "rc"] }
@@ -34,7 +32,7 @@ serde_with = "3.14"
 sha2 = "0.10"
 ssi = { version = "0.12", features = ["secp384r1"] }
 thiserror = "2.0"
-tokio = { version = "1.46", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
