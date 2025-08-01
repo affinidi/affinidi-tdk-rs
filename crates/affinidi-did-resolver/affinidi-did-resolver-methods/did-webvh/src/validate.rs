@@ -8,6 +8,7 @@
 *   Step 5: Fully validated WebVH DID result
 */
 
+use chrono::{Duration, Utc};
 use tracing::{debug, warn};
 
 use crate::{
@@ -29,7 +30,7 @@ impl DIDWebVHState {
                 Err(e) => {
                     warn!(
                         "There was an issue with LogEntry: {}! Reason: {e}",
-                        entry.log_entry.version_id
+                        entry.get_version_id()
                     );
                     warn!("Falling back to last known good LogEntry!");
                     if previous_entry.is_some() {
@@ -43,7 +44,9 @@ impl DIDWebVHState {
             }
             // Check if this valid LogEntry has been deactivated, if so then ignore any other
             // Entries
-            if entry.metadata.deactivated {
+            if let Some(deactivated) = entry.validated_parameters.deactivated
+                && deactivated
+            {
                 // Deactivated, return the current LogEntry and MetaData
                 deactivated_flag = true;
             }
@@ -78,14 +81,30 @@ impl DIDWebVHState {
 
         // Step 4: Validate the witness proofs
         for log_entry in self.log_entries.iter_mut() {
-            debug!(
-                "Witness Proof Validating: {}",
-                log_entry.log_entry.version_id
-            );
+            debug!("Witness Proof Validating: {}", log_entry.get_version_id());
             self.witness_proofs
                 .validate_log_entry(log_entry, highest_version_number)?;
             log_entry.validation_status = LogEntryValidationStatus::Ok;
         }
+
+        // Set to validated and timestamp
+        self.validated = true;
+        let last_log_entry = self.log_entries.last().unwrap();
+        self.scid = if let Some(scid) = &last_log_entry.validated_parameters.scid {
+            scid.to_string()
+        } else {
+            return Err(DIDWebVHError::ValidationError(
+                "No SCID found in last LogEntry".to_string(),
+            ));
+        };
+        let ttl = if let Some(ttl) = last_log_entry.validated_parameters.ttl {
+            if ttl == 0 { 3600_u32 } else { ttl }
+        } else {
+            // Use default TTL of 1 hour
+            3600_u32
+        };
+
+        self.expires = Utc::now().fixed_offset() + Duration::seconds(ttl as i64);
 
         Ok(())
     }

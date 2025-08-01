@@ -1,7 +1,7 @@
-use std::env;
-
+use chrono::{TimeDelta, Utc};
 use did_webvh::resolve::DIDWebVH;
 use ssi::dids::{DID, DIDResolver};
+use std::env;
 
 #[tokio::main]
 async fn main() {
@@ -13,22 +13,29 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Resolve the did:webvh DID to a Document
-    let webvh = DIDWebVH;
+    let did = unsafe { DID::new_unchecked(args[1].as_bytes()) };
 
-    let output = unsafe {
-        match webvh.resolve(DID::new_unchecked(args[1].as_bytes())).await {
-            Ok(res) => res,
-            Err(e) => {
-                println!("Error: {e:?}");
-                return;
-            }
+    let elapsed = ssi_resolve(did).await;
+    println!("Time Taken: {}ms", elapsed.num_milliseconds());
+}
+
+// Resolves usiong the SSI Library traits
+async fn ssi_resolve(did: &DID) -> TimeDelta {
+    let webvh = DIDWebVH;
+    let start = Utc::now();
+    let output = match webvh.resolve(did).await {
+        Ok(res) => res,
+        Err(e) => {
+            panic!("Error: {e:?}");
         }
     };
+    let stop = Utc::now();
 
     println!(
         "DID Document:\n{}",
         serde_json::to_string_pretty(&output.document).unwrap()
     );
     println!("Metadata: {:?}", output.metadata);
+
+    stop.signed_duration_since(start)
 }

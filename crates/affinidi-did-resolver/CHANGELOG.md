@@ -2,6 +2,23 @@
 
 ## Changelog history
 
+### July 2025
+
+## DID webvh method (0.1.7)
+
+* **BREAKING CHANGE:** WebVH v1.0 spec changes parameters definition
+  * empty arrays and objects replaces null values
+  * Existing LogEntries using the old format of nulls will still work for reading
+* **TESTS:** Additional tests added for complete testing of Parameters Differentials
+* **FEATURE:** DID Query parameters added
+  * `?versionId=` will resolve a specific versionId LogEntry for the DID
+  * `?versionTime=` will resolve to what LogEntry was active at that time
+* **FEATURE:** Network based WebVH DID resolution is now enabled
+  * call the `resolove()` method to resolve a WebVH DID
+* **FEATURE:** LogEntries and Parameters now support versioned schemas
+  * V1.0 and pre-V1.0 specification is implemented
+  * You can mix and match LogEntry WebVH versions in the same DID
+
 ### 14th July 2025
 
 ## DID example method (0.5.4)

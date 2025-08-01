@@ -1,20 +1,20 @@
 /*!
 *   Manage the parameters for watchers
 */
+use crate::manage_watchers;
 use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, theme::ColorfulTheme};
 use did_webvh::parameters::Parameters;
-
-use crate::manage_watchers;
+use std::sync::Arc;
 
 pub fn modify_watcher_params(
-    old_watchers: Option<&Vec<String>>,
+    old_watchers: Option<Arc<Vec<String>>>,
     new_params: &mut Parameters,
 ) -> Result<()> {
     // Print the existing Watcher Configuration
-    if let Some(watchers) = old_watchers {
-        for w in watchers {
+    if let Some(watchers) = &old_watchers {
+        for w in watchers.iter() {
             println!("\t{}", style(w).color256(34));
         }
     } else {
@@ -39,14 +39,14 @@ pub fn modify_watcher_params(
                 .interact()?
             {
                 // Disable watcher parameters
-                new_params.watchers = Some(None);
+                new_params.watchers = Some(Arc::new(Vec::new()));
                 return Ok(());
             }
 
             // Edit existing watcher parameters
-            let watchers = modify_watcher_nodes(watchers)?;
+            let watchers = modify_watcher_nodes(&watchers)?;
 
-            new_params.watchers = Some(Some(watchers));
+            new_params.watchers = Some(Arc::new(watchers));
         } else {
             // No existing watcher setup, create a new one
             manage_watchers(new_params)?;
@@ -59,7 +59,7 @@ pub fn modify_watcher_params(
 }
 
 /// Any changes to the watchers?
-fn modify_watcher_nodes(watchers: &[String]) -> Result<Vec<String>> {
+fn modify_watcher_nodes(watchers: &Arc<Vec<String>>) -> Result<Vec<String>> {
     let mut new_watchers = Vec::new();
 
     let selected = MultiSelect::with_theme(&ColorfulTheme::default())

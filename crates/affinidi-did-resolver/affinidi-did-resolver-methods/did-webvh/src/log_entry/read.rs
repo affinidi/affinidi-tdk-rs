@@ -3,13 +3,19 @@
 */
 
 use super::LogEntry;
-use crate::{DIDWebVHError, SCID_HOLDER, log_entry::MetaData, parameters::Parameters};
+use crate::{
+    DIDWebVHError, SCID_HOLDER,
+    log_entry::{LogEntryMethods, spec_1_0::LogEntry1_0, spec_1_0_pre::LogEntry1_0Pre},
+    parameters::Parameters,
+};
 use affinidi_data_integrity::verification_proof::verify_data;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::{
     fs::File,
     io::{self, BufRead},
+    sync::Arc,
 };
+
 use tracing::{debug, warn};
 
 impl LogEntry {
@@ -21,14 +27,12 @@ impl LogEntry {
         let buf_reader = io::BufReader::new(file);
 
         let mut entries = Vec::new();
+        let mut version = None;
         for line in buf_reader.lines() {
             match line {
                 Ok(line) => {
-                    let log_entry: LogEntry = serde_json::from_str(&line).map_err(|e| {
-                        DIDWebVHError::LogEntryError(format!(
-                            "Failed to deserialize log entry: {e}",
-                        ))
-                    })?;
+                    let log_entry = LogEntry::deserialize_string(&line, version)?;
+                    version = Some(log_entry.get_webvh_version());
                     entries.push(log_entry);
                 }
                 Err(e) => {
@@ -50,19 +54,18 @@ impl LogEntry {
         &self,
         previous_log_entry: Option<&LogEntry>,
         previous_parameters: Option<&Parameters>,
-        previous_meta_data: Option<&MetaData>,
-    ) -> Result<(Parameters, MetaData), DIDWebVHError> {
-        debug!("Verifiying LogEntry: {}", self.version_id);
+    ) -> Result<Parameters, DIDWebVHError> {
+        debug!("Verifiying LogEntry: {}", self.get_version_id());
 
         // Ensure we are dealing with a signed LogEntry
-        let Some(proof) = &self.proof.first() else {
+        let Some(proof) = &self.get_proofs().first() else {
             return Err(DIDWebVHError::ValidationError(
                 "Missing proof in the signed LogEntry!".to_string(),
             ));
         };
 
         // Ensure the Parameters are correctly setup
-        let parameters = match self.parameters.validate(previous_parameters) {
+        let parameters = match self.get_parameters().validate(previous_parameters) {
             Ok(params) => params,
             Err(e) => {
                 return Err(DIDWebVHError::LogEntryError(format!(
@@ -88,9 +91,15 @@ impl LogEntry {
         }
 
         // Verify Signature
-        let verify_doc = LogEntry {
-            proof: Vec::new(),
-            ..self.clone()
+        let verify_doc = match self {
+            LogEntry::Spec1_0(log_entry) => LogEntry::Spec1_0(LogEntry1_0 {
+                proof: Vec::new(),
+                ..log_entry.clone()
+            }),
+            LogEntry::Spec1_0Pre(log_entry) => LogEntry::Spec1_0Pre(LogEntry1_0Pre {
+                proof: Vec::new(),
+                ..log_entry.clone()
+            }),
         };
 
         let verified = verify_data(&verify_doc, None, proof).map_err(|e| {
@@ -105,7 +114,7 @@ impl LogEntry {
         // As a version of this LogEntry gets modified to recalculate hashes,
         // we create a clone once and reuse it for verification
         let mut working_entry = self.clone();
-        working_entry.proof.clear();
+        working_entry.clear_proofs();
 
         // Verify the version ID
         working_entry.verify_version_id(previous_log_entry)?;
@@ -119,53 +128,23 @@ impl LogEntry {
             working_entry.verify_scid()?;
         }
 
-        let (created, portable, scid) = if let Some(metadata) = previous_meta_data {
-            (
-                metadata.created.clone(),
-                metadata.portable,
-                metadata.scid.clone(),
-            )
-        } else {
-            (
-                self.version_time.clone(),
-                parameters.portable.unwrap_or(false),
-                parameters.scid.clone().unwrap(),
-            )
-        };
+        debug!("LogEntry {} successfully verified", self.get_version_id());
 
-        debug!("LogEntry {} successfully verified", self.version_id);
-
-        Ok((
-            parameters.clone(),
-            MetaData {
-                version_id: self.version_id.clone(),
-                version_time: self.version_time.clone(),
-                created,
-                updated: self.version_time.clone(),
-                deactivated: parameters.deactivated,
-                portable,
-                scid,
-                watchers: if let Some(Some(watchers)) = parameters.watchers {
-                    Some(watchers)
-                } else {
-                    None
-                },
-                witness: if let Some(Some(witnesses)) = parameters.active_witness {
-                    Some(witnesses)
-                } else {
-                    None
-                },
-            },
-        ))
+        Ok(parameters)
     }
 
     /// Ensures that the signing key exists in the currently aothorized keys
     /// Format of authorized keys will be a multikey E.g. z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15
     /// Format of proof_key will be a DID (only supports DID:key)
     /// Returns true if key is authorized or false if not
-    fn check_signing_key_authorized(authorized_keys: &[String], proof_key: &str) -> bool {
+    fn check_signing_key_authorized(authorized_keys: &Arc<Vec<String>>, proof_key: &str) -> bool {
+        if authorized_keys.is_empty() {
+            warn!("No authorized keys found, skipping signing key check");
+            return false;
+        }
+
         if let Some((_, key)) = proof_key.split_once('#') {
-            authorized_keys.iter().any(|f| f.as_str() == key)
+            authorized_keys.iter().any(|f| f == key)
         } else {
             false
         }
@@ -177,36 +156,26 @@ impl LogEntry {
 
         // Check if the version number is incremented correctly
         if let Some(previous) = previous {
-            let Some((id, _)) = previous.version_id.split_once('-') else {
-                return Err(DIDWebVHError::ValidationError(format!(
-                    "versionID ({}) doesn't match format <int>-<hash>",
-                    previous.version_id
-                )));
-            };
-            let id = id.parse::<u32>().map_err(|e| {
-                DIDWebVHError::ValidationError(format!(
-                    "Failed to parse version ID ({id}) as u32: {e}",
-                ))
-            })?;
+            let (id, _) = previous.get_version_id_fields()?;
+
             if current_id != id + 1 {
                 return Err(DIDWebVHError::ValidationError(format!(
                     "Current LogEntry version ID ({current_id}) must be one greater than previous version ID ({id})",
                 )));
             }
             // Set the versionId to the previous versionId to calculate the hash
-            self.version_id = previous.version_id.clone();
+            self.set_version_id(&previous.get_version_id());
         } else if current_id != 1 {
             return Err(DIDWebVHError::ValidationError(format!(
                 "First LogEntry must have version ID 1, got {current_id}",
             )));
         } else {
-            self.version_id = if let Some(scid) = &self.parameters.scid {
-                scid.to_string()
-            } else {
+            let Some(scid) = self.get_scid() else {
                 return Err(DIDWebVHError::ValidationError(
                     "First LogEntry must have a valid SCID".to_string(),
                 ));
-            }
+            };
+            self.set_version_id(&scid);
         };
 
         // Validate the entryHash
@@ -222,36 +191,20 @@ impl LogEntry {
 
     /// Verifies everything is ok with the versionTime LogEntry field
     fn verify_version_time(&self, previous: Option<&LogEntry>) -> Result<(), DIDWebVHError> {
-        let current_time = self.version_time.parse::<DateTime<Utc>>().map_err(|e| {
-            DIDWebVHError::ValidationError(format!(
-                "Failed to parse versionTime ({}) as DateTime<Utc>: {}",
-                self.version_time, e
-            ))
-        })?;
-
-        if current_time > Utc::now() {
+        if self.get_version_time() > Utc::now() {
             return Err(DIDWebVHError::ValidationError(format!(
                 "versionTime ({}) cannot be in the future",
-                self.version_time
+                self.get_version_time_string()
             )));
         }
 
         if let Some(previous) = previous {
             // Current time must be greater than the previous time
-            let previous_time = previous
-                .version_time
-                .parse::<DateTime<Utc>>()
-                .map_err(|e| {
-                    DIDWebVHError::ValidationError(format!(
-                        "Failed to parse previous versionTime ({}) as DateTime<Utc>: {}",
-                        self.version_time, e
-                    ))
-                })?;
-
-            if current_time < previous_time {
+            if self.get_version_time() < previous.get_version_time() {
                 return Err(DIDWebVHError::ValidationError(format!(
                     "Current versionTime ({}) must be greater than previous versionTime ({})",
-                    self.version_time, previous.version_time
+                    self.get_version_time_string(),
+                    previous.get_version_time_string()
                 )));
             }
         }
@@ -261,9 +214,9 @@ impl LogEntry {
 
     /// Verifies that the SCID is correct for the first log entry
     fn verify_scid(&mut self) -> Result<(), DIDWebVHError> {
-        self.version_id = SCID_HOLDER.to_string();
+        self.set_version_id(SCID_HOLDER);
 
-        let Some(scid) = self.parameters.scid.clone() else {
+        let Some(scid) = self.get_scid() else {
             return Err(DIDWebVHError::ValidationError(
                 "First LogEntry must have a valid SCID".to_string(),
             ));
@@ -274,12 +227,20 @@ impl LogEntry {
             DIDWebVHError::LogEntryError(format!("Failed to serialize log entry: {e}"))
         })?;
 
-        let scid_entry: LogEntry = serde_json::from_str(&temp.replace(&scid, SCID_HOLDER))
-            .map_err(|e| {
-                DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
-            })?;
+        let scid_entry: LogEntry = match self {
+            LogEntry::Spec1_0(_) => LogEntry::Spec1_0(
+                serde_json::from_str(&temp.replace(&scid, SCID_HOLDER)).map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
+                })?,
+            ),
+            LogEntry::Spec1_0Pre(_) => LogEntry::Spec1_0Pre(
+                serde_json::from_str(&temp.replace(&scid, SCID_HOLDER)).map_err(|e| {
+                    DIDWebVHError::LogEntryError(format!("Failed to deserialize log entry: {e}"))
+                })?,
+            ),
+        };
 
-        let verify_scid = scid_entry.generate_scid()?;
+        let verify_scid = scid_entry.generate_first_scid()?;
         if scid != verify_scid {
             return Err(DIDWebVHError::ValidationError(format!(
                 "SCID ({scid}) does not match calculated SCID ({verify_scid})",
@@ -292,13 +253,15 @@ impl LogEntry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::log_entry::LogEntry;
 
     #[test]
     fn test_authorized_keys_fail() {
         let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15#z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }
@@ -307,7 +270,7 @@ mod tests {
     fn test_authorized_keys_missing_key_id_fail() {
         let authorized_keys: Vec<String> = Vec::new();
         assert!(!LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }
@@ -318,7 +281,7 @@ mod tests {
             vec!["z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15".to_string()];
 
         assert!(LogEntry::check_signing_key_authorized(
-            &authorized_keys,
+            &Arc::new(authorized_keys),
             "did:key:z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15#z6Mkr46vzpmne5FJTE1TgRHrWkoc5j9Kb1suMYtxkdvgMu15"
         ));
     }

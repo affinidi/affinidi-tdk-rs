@@ -1,10 +1,14 @@
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::{
-    DIDWebVHError,
-    log_entry::{LogEntry, MetaData},
+    DIDWebVHError, Version,
+    log_entry::{LogEntry, LogEntryMethods},
     parameters::Parameters,
+    witness::Witnesses,
 };
+use chrono::{DateTime, FixedOffset};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Tracks validation status of a LogEntry
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -28,9 +32,6 @@ pub struct LogEntryState {
     /// webvh LogEntry record
     pub log_entry: LogEntry,
 
-    /// MetaData for this LogEntry record
-    pub metadata: MetaData,
-
     /// Integer representing versionId for this LogEntry
     pub version_number: u32,
 
@@ -53,21 +54,55 @@ impl LogEntryState {
             return Ok(());
         }
 
-        let (parameters, metadata) = self.log_entry.verify_log_entry(
+        let parameters = self.log_entry.verify_log_entry(
             previous_log_entry.map(|e| &e.log_entry),
             previous_log_entry.map(|e| &e.validated_parameters),
-            previous_log_entry.map(|e| &e.metadata),
         )?;
 
         self.validated_parameters = parameters;
-        self.metadata = metadata;
         self.validation_status = LogEntryValidationStatus::LogEntryOnly;
 
         Ok(())
     }
 
+    /// Returns the active witnesses for this LogEntry
+    pub fn get_active_witnesses(&self) -> Option<Arc<Witnesses>> {
+        self.validated_parameters.active_witness.as_ref().cloned()
+    }
+
+    /// Get LogEntry State (DID Document)
+    pub fn get_state(&self) -> &Value {
+        self.log_entry.get_state()
+    }
+
     /// Get the version Number of this LogEntry
-    pub fn get_version_number(&self) -> u32 {
+    /// WHich is the prefix in versionId
+    pub(crate) fn get_version_number(&self) -> u32 {
         self.version_number
+    }
+
+    pub(crate) fn get_version_time_string(&self) -> String {
+        self.log_entry.get_version_time_string()
+    }
+
+    pub(crate) fn get_version_time(&self) -> DateTime<FixedOffset> {
+        self.log_entry.get_version_time()
+    }
+
+    /// WebVH Specification Version
+    /// If not specified, will default to the Default Version
+    pub(crate) fn get_webvh_version(&self) -> Version {
+        self.validated_parameters.method.unwrap_or_default()
+    }
+
+    pub fn get_version_id(&self) -> String {
+        self.log_entry.get_version_id()
+    }
+
+    pub(crate) fn get_scid(&self) -> Option<String> {
+        self.validated_parameters
+            .scid
+            .clone()
+            .map(|scid| scid.to_string())
     }
 }

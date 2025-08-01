@@ -25,6 +25,8 @@ site
 - [x] Witness webvh DID
 - [x] Migration of DID (portability)
 - [x] Validate witness information
+- [x] DID Query Parameters versionId and versionTime implemented
+- [x] WebVH DID specification version support (v1.0 and pre-v1.0)
 
 ## Usage
 
@@ -32,7 +34,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-did-webvh = "0.1.6"
+did-webvh = "0.1.7"
 ```
 
 Then:
@@ -74,7 +76,7 @@ environment is not recommended.**
 
 `did.jsonl-secrets` is the default file containing key secrets
 
-## Is webvh performant?
+## Is WebVH performant?
 
 There is a lot going on with the webvh DID method. A lot of keys, signing and
 validations

@@ -10,14 +10,15 @@ use anyhow::{Result, bail};
 use console::style;
 use dialoguer::{Confirm, Editor, Input, MultiSelect, Select, theme::ColorfulTheme};
 use did_webvh::{
-    DIDWebVHError, DIDWebVHState, SCID_HOLDER,
+    DIDWebVHError, DIDWebVHState,
     parameters::Parameters,
     url::WebVHURL,
     witness::{Witness, Witnesses, proofs::WitnessProofCollection},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::fs::File;
+use std::{fs::File, sync::Arc};
+use tracing::debug;
 use tracing_subscriber::filter;
 use url::Url;
 
@@ -273,6 +274,7 @@ async fn create_new_did() -> Result<()> {
             }
         }
     };
+    debug!("Parameters: {parameters:#?}");
 
     // ************************************************************************
     // Step 5: Create preliminary JSON Log Entry
@@ -285,8 +287,8 @@ async fn create_new_did() -> Result<()> {
         authorizing_keys.first().unwrap(),
     )?;
 
-    let log_entry = if let Some(log_entry_state) = &log_entry_result {
-        &log_entry_state.log_entry
+    let log_entry = if let Some(log_entry_state) = log_entry_result {
+        log_entry_state
     } else {
         bail!(
             "This is likely an SDK bug. Creating first DID succeeded, but no LogEntry has been logged and saved."
@@ -295,19 +297,19 @@ async fn create_new_did() -> Result<()> {
 
     println!(
         "{}\n{}",
-        style("Log Entry:").color256(69),
-        style(serde_json::to_string_pretty(&log_entry).unwrap()).color256(34)
+        style("First Log Entry:").color256(69),
+        style(serde_json::to_string_pretty(&log_entry.log_entry).unwrap()).color256(34)
     );
 
     // ************************************************************************
     // Step 6: Validate the LogEntry
     // ************************************************************************
     // Validate the Log Entry
-    let (_, meta_data) = log_entry.verify_log_entry(None, None, None)?;
+    let validated_params = log_entry.log_entry.verify_log_entry(None, None)?;
     println!(
         "{}\n{}\n{}",
-        style("Log Entry Metadata:").color256(69),
-        style(serde_json::to_string_pretty(&meta_data).unwrap()).color256(69),
+        style("Log Entry Validated Parameters:").color256(69),
+        style(serde_json::to_string_pretty(&validated_params).unwrap()).color256(69),
         style("Successfully Validated").color256(34).blink(),
     );
 
@@ -318,7 +320,7 @@ async fn create_new_did() -> Result<()> {
     let new_proofs = witness_log_entry(
         &mut witness_proofs,
         log_entry,
-        &log_entry.parameters.witness,
+        &log_entry.get_active_witnesses(),
         &authorization_secrets,
     )?;
 
@@ -343,7 +345,7 @@ async fn create_new_did() -> Result<()> {
             .unwrap();
 
         if let Some((start, _)) = file_name.split_once(".") {
-            log_entry.save_to_file(&file_name)?;
+            log_entry.log_entry.save_to_file(&file_name)?;
 
             // Save the authorization keys
             authorization_secrets.save_to_file(&[start, "-secrets.json"].concat())?;
@@ -478,7 +480,7 @@ fn get_address() -> Result<(String, String)> {
             }
         };
 
-        let http_url = match did_url.get_http_url() {
+        let http_url = match did_url.get_http_url(None) {
             Ok(http_url) => http_url,
             Err(e) => {
                 println!(
@@ -963,18 +965,14 @@ fn configure_parameters(
         style(webvh_did).color256(141),
     );
 
-    let mut parameters = Parameters {
-        scid: Some(SCID_HOLDER.to_string()),
-        deactivated: false,
-        ..Default::default()
-    };
+    let mut parameters = Parameters::default();
 
     // Update Keys
     let mut update_keys = Vec::new();
     for key in authorizing_keys {
         update_keys.push(key.get_public_keymultibase()?);
     }
-    parameters.update_keys = Some(Some(update_keys));
+    parameters.update_keys = Some(Arc::new(update_keys));
 
     // Portable
     println!(
@@ -992,8 +990,6 @@ fn configure_parameters(
         .interact()?
     {
         parameters.portable = Some(true);
-    } else {
-        parameters.portable = None;
     }
 
     // Next Key Hashes
@@ -1003,10 +999,8 @@ fn configure_parameters(
             .color256(69)
     );
     let next_key_hashes = create_next_key_hashes(keys)?;
-    if next_key_hashes.is_empty() {
-        parameters.next_key_hashes = None;
-    } else {
-        parameters.next_key_hashes = Some(Some(next_key_hashes));
+    if !next_key_hashes.is_empty() {
+        parameters.next_key_hashes = Some(Arc::new(next_key_hashes));
     }
 
     // Witness Nodes
@@ -1036,7 +1030,7 @@ fn configure_parameters(
             .with_prompt("TTL in Seconds?")
             .interact()
             .unwrap();
-        parameters.ttl = Some(Some(ttl));
+        parameters.ttl = Some(ttl);
     }
 
     Ok(parameters)
@@ -1103,10 +1097,7 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
         .interact()
         .unwrap();
 
-    let mut witnesses = Witnesses {
-        threshold,
-        witnesses: Vec::new(),
-    };
+    let mut witness_nodes = Vec::new();
 
     if Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Generate witness DIDs for you?")
@@ -1127,22 +1118,22 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
                 style("privateKeyMultibase:").color256(69),
                 style(&key.get_private_keymultibase()?).color256(214)
             );
-            witnesses.witnesses.push(Witness { id: did.clone() });
+            witness_nodes.push(Witness { id: did.clone() });
             secrets.witnesses.insert(did, key);
         }
     } else {
         loop {
             let did: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt(format!("Witness #{:02} DID?", witnesses.witnesses.len()))
+                .with_prompt(format!("Witness #{:02} DID?", witness_nodes.len()))
                 .interact()
                 .unwrap();
 
-            witnesses.witnesses.push(Witness { id: did });
+            witness_nodes.push(Witness { id: did });
 
             if !Confirm::with_theme(&ColorfulTheme::default())
                 .with_prompt(format!(
                     "Add another witness: current:({:02}) threshold:({:02})?",
-                    witnesses.witnesses.len(),
+                    witness_nodes.len(),
                     threshold
                 ))
                 .default(true)
@@ -1153,7 +1144,10 @@ fn manage_witnesses(parameters: &mut Parameters, secrets: &mut ConfigInfo) -> Re
         }
     }
 
-    parameters.witness = Some(Some(witnesses));
+    parameters.witness = Some(Arc::new(Witnesses::Value {
+        threshold,
+        witnesses: witness_nodes.clone(),
+    }));
     Ok(())
 }
 
@@ -1190,6 +1184,6 @@ fn manage_watchers(parameters: &mut Parameters) -> Result<()> {
         }
     }
 
-    parameters.watchers = Some(Some(watchers));
+    parameters.watchers = Some(Arc::new(watchers));
     Ok(())
 }

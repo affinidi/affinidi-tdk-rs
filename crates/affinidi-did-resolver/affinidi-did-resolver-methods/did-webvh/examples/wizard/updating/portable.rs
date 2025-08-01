@@ -5,8 +5,6 @@
 //! 2. SCID must be the same
 //! 3. DID Doc must have alsoKnownAs attribute set to prior DID
 
-use std::str::FromStr;
-
 use crate::{ConfigInfo, updating::authorization::update_authorization_keys};
 use anyhow::{Result, anyhow, bail};
 use console::style;
@@ -14,6 +12,7 @@ use dialoguer::{Confirm, Input, theme::ColorfulTheme};
 use did_webvh::{DIDWebVHState, parameters::Parameters, url::WebVHURL};
 use iref::IriBuf;
 use ssi::dids::Document;
+use std::str::FromStr;
 use url::Url;
 
 /// Revokes a webvh DID method
@@ -27,8 +26,7 @@ pub fn migrate_did(didwebvh: &mut DIDWebVHState, secrets: &mut ConfigInfo) -> Re
     }
 
     let did = log_entry
-        .log_entry
-        .state
+        .get_state()
         .get("id")
         .ok_or_else(|| anyhow::anyhow!("DID not found in the log entry state"))?
         .as_str();
@@ -46,12 +44,12 @@ pub fn migrate_did(didwebvh: &mut DIDWebVHState, secrets: &mut ConfigInfo) -> Re
     println!(
         "{} {}",
         style("Current DID URL:").color256(69),
-        style(&did_url.get_http_url()?).color256(45)
+        style(&did_url.get_http_url(None)?).color256(45)
     );
 
     let new_url: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("New URL")
-        .with_initial_text(did_url.get_http_url()?)
+        .with_initial_text(did_url.get_http_url(None)?)
         .interact_text()?;
 
     let new_url = Url::parse(&new_url).map_err(|_| anyhow!("Invalid URL format"))?;
@@ -74,7 +72,7 @@ pub fn migrate_did(didwebvh: &mut DIDWebVHState, secrets: &mut ConfigInfo) -> Re
     }
 
     // Modify the DID Doc and create new LogEntry
-    let did_doc: String = serde_json::to_string(&log_entry.log_entry.state)?;
+    let did_doc: String = serde_json::to_string(&log_entry.get_state())?;
     let new_did_doc = did_doc.replace(&did_url.to_string(), &new_did_url.to_string());
     let mut new_did_doc: Document = serde_json::from_str(&new_did_doc)?;
 
