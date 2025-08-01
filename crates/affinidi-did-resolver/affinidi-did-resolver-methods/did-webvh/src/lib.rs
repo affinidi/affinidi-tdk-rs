@@ -168,10 +168,11 @@ impl DIDWebVHState {
         let now = Utc::now();
 
         // Create a VerificationMethod ID from the signing key matched to an updateKey
+        let deactivated = parameters.deactivated.unwrap_or_default();
         if let Some(keys) = &parameters.update_keys
-            && let Some(deactivated) = parameters.deactivated
             && !deactivated
         {
+            // update_keys exist and DID is NOT deactovated
             if !keys.contains(&signing_key.get_public_keymultibase().map_err(|e| {
                 DIDWebVHError::LogEntryError(format!("signing_key isn't valid: {e}"))
             })?) {
@@ -180,9 +181,7 @@ impl DIDWebVHState {
                     signing_key.get_public_keymultibase().unwrap(),
                 )));
             }
-        } else if let Some(deactivated) = parameters.deactivated
-            && deactivated
-        {
+        } else if deactivated {
             // This is the last LogEntry for a deactivated Entry
             // Do nothing
         } else {
@@ -385,5 +384,86 @@ impl DIDWebVHState {
                 .cloned(),
             watchers: log_entry.validated_parameters.watchers.as_deref().cloned(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::{DIDWebVHState, Version, parameters::Parameters};
+    use affinidi_secrets_resolver::secrets::Secret;
+    use serde_json::Value;
+    use ssi::JWK;
+
+    fn did_doc() -> Value {
+        let raw_did = r#"{
+    "@context": [
+        "https://www.w3.org/ns/did/v1"
+    ],
+    "assertionMethod": [
+        "did:webvh:{SCID}:test.affinidi.com#key-0"
+    ],
+    "authentication": [
+        "did:webvh:{SCID}:test.affinidi.com#key-0"
+    ],
+    "id": "did:webvh:{SCID}:test.affinidi.com",
+    "service": [
+        {
+        "id": "did:webvh:{SCID}:test.affinidi.com#service-0",
+        "serviceEndpoint": [
+            {
+            "accept": [
+                "didcomm/v2"
+            ],
+            "routingKeys": [],
+            "uri": "http://mediator.affinidi.com:/api"
+            }
+        ],
+        "type": "DIDCommMessaging"
+        }
+    ],
+    "verificationMethod": [
+        {
+        "controller": "did:webvh:{SCID}:test.affinidi.com",
+        "id": "did:webvh:{SCID}:test.affinidi.com#key-0",
+        "publicKeyMultibase": "test1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+        "type": "Multikey"
+        }
+    ]
+    }"#;
+
+        serde_json::from_str(raw_did).expect("Couldn't parse raw DID Doc")
+    }
+
+    #[test]
+    fn version_try_from() {
+        assert_eq!(Version::try_from("did:webvh:1.0").unwrap(), Version::V1_0);
+    }
+
+    #[test]
+    fn version_as_f32() {
+        assert_eq!(Version::V1_0.as_f32(), 1_f32);
+    }
+
+    #[test]
+    fn webvh_create_log_entry() {
+        let key = Secret::from_jwk(&JWK::generate_ed25519().unwrap())
+            .expect("Couldn't create signing key");
+
+        let state = did_doc();
+
+        let parameters = Parameters {
+            update_keys: Some(Arc::new(vec![key.get_public_keymultibase().unwrap()])),
+            ..Default::default()
+        };
+
+        let mut didwebvh = DIDWebVHState::default();
+
+        let log_entry = didwebvh
+            .create_log_entry(None, &state, &parameters, &key)
+            .expect("Failed to create LogEntry");
+
+        assert!(log_entry.is_some());
     }
 }
