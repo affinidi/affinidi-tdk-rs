@@ -1,6 +1,6 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use did_peer::DIDPeer;
-use did_webvh::resolve::ssi_resolve::DIDWebVH;
+use didwebvh_rs::resolve::DIDWebVH;
 use ssi::dids::{DID, DIDEthr, DIDJWK, DIDKey, DIDPKH, DIDResolver, DIDWeb, Document};
 use tracing::error;
 

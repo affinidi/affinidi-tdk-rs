@@ -163,16 +163,16 @@ impl DIDCacheClient {
 
         #[cfg(feature = "did_example")]
         // Short-circuit for example DIDs
-        if parts[1] == "example" {
-            if let Some(doc) = self.did_example_cache.get(did) {
-                return Ok(ResolveResponse {
-                    did: did.to_string(),
-                    method: parts[1].try_into()?,
-                    did_hash: hash,
-                    doc: doc.clone(),
-                    cache_hit: true,
-                });
-            }
+        if parts[1] == "example"
+            && let Some(doc) = self.did_example_cache.get(did)
+        {
+            return Ok(ResolveResponse {
+                did: did.to_string(),
+                method: parts[1].try_into()?,
+                did_hash: hash,
+                doc: doc.clone(),
+                cache_hit: true,
+            });
         }
 
         // Check if the DID is in the cache

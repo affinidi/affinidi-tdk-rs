@@ -2,9 +2,17 @@
 
 ## Changelog history
 
-### August 2025
+### 14th August 2025
 
-Crate donated to [Decentralized Identity Foundation](https://identity.foundation/)
+## DID webvh method (0.1.8)
+
+### Crate donated to [Decentralized Identity Foundation](https://identity.foundation/)
+
+## DID Resolver Cache SDK (0.5.6)
+
+* **MAINTENANCE:** WebVH DID crate now using the `didwebvh-rs` crate
+* **MAINTENANCE:** Crate dependencies updated
+* MAINTENANCE: Rust analyzer warnings addressed
 
 ### July 2025
 
