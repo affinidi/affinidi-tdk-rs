@@ -32,12 +32,12 @@ did_example = ["dep:did-example"]
 [dependencies]
 # Affinidi Crates
 did-peer.workspace = true
-did-webvh.workspace = true
 did-example = { workspace = true, optional = true }
 
 # External Crates
 ahash = "0.8"
 base64 = { version = "0.22", optional = true }
+didwebvh-rs = "0.1"
 futures-util = "0.3"
 highway = "1.3.0"
 moka = { version = "0.12", features = ["future"] }
