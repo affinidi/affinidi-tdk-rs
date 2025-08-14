@@ -2,6 +2,10 @@
 
 ## Changelog history
 
+### August 2025
+
+Crate donated to [Decentralized Identity Foundation](https://identity.foundation/)
+
 ### July 2025
 
 ## DID webvh method (0.1.7)
