@@ -100,12 +100,12 @@ impl RequestList {
             };
 
             // If the list is empty, remove the key
-            if let Some(channels) = self.list.get(key) {
-                if channels.is_empty() {
-                    self.list.remove(key);
-                    self.total_count -= 1;
-                    self.list_full = false;
-                }
+            if let Some(channels) = self.list.get(key)
+                && channels.is_empty()
+            {
+                self.list.remove(key);
+                self.total_count -= 1;
+                self.list_full = false;
             }
 
             response
