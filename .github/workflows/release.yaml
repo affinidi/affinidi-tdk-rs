@@ -10,6 +10,7 @@ jobs:
     uses: affinidi/pipeline-rust/.github/workflows/release.yaml@main
     secrets: inherit
     with:
+      toolchain: "1.88.0"
       rustflags: "-D warnings --cfg tracing_unstable"
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
       release_debug: true
