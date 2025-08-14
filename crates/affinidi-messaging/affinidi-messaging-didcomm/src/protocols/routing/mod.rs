@@ -272,7 +272,7 @@ fn build_forward_message(
 ///
 /// # Returns
 /// `Some` with `ParsedForward` structure if `msg` is Forward message, otherwise `None`.
-pub fn try_parse_forward(msg: &Message) -> Option<ParsedForward> {
+pub fn try_parse_forward<'a>(msg: &'a Message) -> Option<ParsedForward<'a>> {
     if msg.type_ != FORWARD_MSG_TYPE {
         return None;
     }
