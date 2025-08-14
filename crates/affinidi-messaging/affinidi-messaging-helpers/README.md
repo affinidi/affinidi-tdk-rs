@@ -35,5 +35,6 @@ Using run-time option:
 ```bash
 cargo run --example mediator_ping -- -e local
 ```
+>_**Note**_ - Incase of errors, tune the ACL's as described in [Supported Access Control Lists (ACLs)](#supported-access-control-lists-acls) to ensure messages are allowed by the mediator.
 
 Go to the [examples folder](./examples/) to explore and run other examples.

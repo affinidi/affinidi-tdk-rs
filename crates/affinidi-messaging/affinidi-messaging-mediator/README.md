@@ -35,13 +35,15 @@ To build and run this project, you need to set up the following:
 
    The latest supported version of Redis is version 8.0.
 
-2. Run `setup_environment` to configure the mediator with all the required information to run locally.
+2. Run `setup_environment` and `setup_local_mediator` to configure the mediator with all the required information to run locally.
 
    You must run the following from the top-level directory of `affinidi-messaging`.
 
    ```bash
-   cargo run --bin setup_environment
-   ```
+   cargo run --bin setup_environment  # Wizard based to configure various parameters
+   cargo run --bin setup_local_mediator  # creates and updates secrets
+   ````
+   >_**Note**_- Be sure to delete the `affinidi-messaging-mediator/conf/secrets.json` before running `setup_local_mediator` more than once.
 
    This will generate:
 
@@ -57,6 +59,8 @@ To build and run this project, you need to set up the following:
    export REDIS_URL=redis://@localhost:6379
    cargo run
    ```
+
+   >_**Note**_- Please destroy and re-create a new redis container incase you re-configure using `setup_environment` or `setup_local_mediator`.
 
 ## Supported Access Control Lists (ACLs)
 
@@ -234,7 +238,7 @@ The private channel DID follow the existing `global_acl_default`.
 
 ## Examples
 
-_**NOTE | _ _Ensure Mediator is configured and running before using the following examples._
+_**NOTE |**_ _Ensure Mediator is configured and running before using the following examples._
 
 ### Mediator Specific Examples
 
