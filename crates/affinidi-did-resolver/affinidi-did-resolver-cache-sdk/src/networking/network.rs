@@ -272,8 +272,7 @@ impl NetworkTask {
             Err(err) => {
                 warn!("WebSocket failed. Reason: {}", err);
                 return Err(DIDCacheError::TransportError(format!(
-                    "Websocket connection failed: {}",
-                    err
+                    "Websocket connection failed: {err}",
                 )));
             }
         };
@@ -298,8 +297,7 @@ impl NetworkTask {
                 Ok(())
             }
             Err(e) => Err(DIDCacheError::TransportError(format!(
-                "Couldn't send request to network_task. Reason: {}",
-                e
+                "Couldn't send request to network_task. Reason: {e}",
             ))),
         }
     }

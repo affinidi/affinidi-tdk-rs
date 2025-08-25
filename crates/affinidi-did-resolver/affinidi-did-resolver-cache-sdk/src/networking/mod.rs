@@ -91,8 +91,7 @@ impl DIDCacheClient {
                 .await
                 .map_err(|e| {
                     DIDCacheError::TransportError(format!(
-                        "Couldn't send request to network_task. Reason: {}",
-                        e
+                        "Couldn't send request to network_task. Reason: {e}",
                     ))
                 })?;
 
@@ -106,7 +105,7 @@ impl DIDCacheClient {
                     _ = &mut sleep => {
                         warn!("Timeout reached, no message received did_hash ({:#?})", did_hash);
                         network_task_tx.send(WSCommands::TimeOut(unique_id, did_hash)).await.map_err(|err| {
-                            DIDCacheError::TransportError(format!("Could not send timeout message to ws_handler: {:?}", err))
+                            DIDCacheError::TransportError(format!("Could not send timeout message to ws_handler: {err:?}"))
                         })?;
                          Err(DIDCacheError::NetworkTimeout)
                     }
@@ -126,7 +125,7 @@ impl DIDCacheClient {
                             }
                             Err(e) => {
                                 debug!("Error receiving response from network task: {:?}", e);
-                                 Err(DIDCacheError::TransportError(format!("Error receiving response from network task: {:?}", e)))
+                                 Err(DIDCacheError::TransportError(format!("Error receiving response from network task: {e:?}")))
                             }
                         }
                     }
