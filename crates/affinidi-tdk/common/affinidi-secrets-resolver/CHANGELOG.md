@@ -1,5 +1,10 @@
 # Affinidi Secrets Manager
 
+## 2nd September 2025 (0.1.13)
+
+* **FEATURE:** Ability to convert a ED25519 Secret to a X25519 Secret added
+* **MAINTENANCE:** Dependencies updated
+
 ## 9th June 2025 (0.1.12)
 
 * **MAINTENANCE:** Dependencies updated
