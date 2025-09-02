@@ -3,6 +3,10 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 use crate::errors::{Result, SecretsResolverError};
+use askar_crypto::{
+    alg::ed25519::Ed25519KeyPair,
+    repr::{KeySecretBytes, ToPublicBytes, ToSecretBytes},
+};
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use multihash::Multihash;
@@ -14,9 +18,10 @@ use ssi::{
     jwk::{Base64urlUInt, Params},
     multicodec::{
         ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB,
+        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
+use tracing::warn;
 
 /// A Shadow inner struct that helps with deserializing
 /// Allows for post-processing of the JWK material
@@ -242,6 +247,7 @@ impl Secret {
     pub fn get_public_keymultibase(&self) -> Result<String> {
         let encoded = match self.key_type {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
+            KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
             KeyType::P256 => MultiEncodedBuf::encode_bytes(P256_PUB, &self.public_bytes),
             KeyType::P384 => MultiEncodedBuf::encode_bytes(P384_PUB, &self.public_bytes),
             KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PUB, &self.public_bytes),
@@ -283,6 +289,7 @@ impl Secret {
     pub fn get_private_keymultibase(&self) -> Result<String> {
         let encoded = match self.key_type {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PRIV, &self.private_bytes),
+            KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PRIV, &self.private_bytes),
             KeyType::P256 => MultiEncodedBuf::encode_bytes(P256_PRIV, &self.private_bytes),
             KeyType::P384 => MultiEncodedBuf::encode_bytes(P384_PRIV, &self.private_bytes),
             KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PRIV, &self.private_bytes),
@@ -315,6 +322,75 @@ impl Secret {
     pub fn get_key_type(&self) -> KeyType {
         self.key_type
     }
+
+    pub fn to_x25519(&self) -> Result<Secret> {
+        if self.key_type != KeyType::Ed25519 {
+            warn!(
+                "Can only convert ED25519 to X25519! Current key type is {:#?}",
+                self.key_type
+            );
+            Err(SecretsResolverError::KeyError(format!(
+                "Can only convert ED25519 to X25519! Current key type is {:#?}",
+                self.key_type
+            )))
+        } else {
+            let x25519 = Ed25519KeyPair::from_secret_bytes(self.private_bytes.as_slice())
+                .map_err(|e| {
+                    SecretsResolverError::KeyError(format!(
+                        "Couldn't derive X25519 from ED25519 secret. Reason: {}",
+                        e
+                    ))
+                })?
+                .to_x25519_keypair();
+
+            let secret = match x25519.to_secret_bytes() {
+                Ok(s) => {
+                    if let Some(secret) = s.first_chunk::<32>() {
+                        BASE64_URL_SAFE_NO_PAD.encode(secret)
+                    } else {
+                        return Err(SecretsResolverError::KeyError(format!(
+                            "Couldn't get secret bytes for key ({})",
+                            self.id
+                        )));
+                    }
+                }
+                Err(e) => {
+                    return Err(SecretsResolverError::KeyError(format!(
+                        "Couldn't get X25519 secret_key bytes. Reason: {}",
+                        e
+                    )));
+                }
+            };
+
+            let public = match x25519.to_public_bytes() {
+                Ok(s) => {
+                    if let Some(public) = s.first_chunk::<32>() {
+                        BASE64_URL_SAFE_NO_PAD.encode(public)
+                    } else {
+                        return Err(SecretsResolverError::KeyError(format!(
+                            "Couldn't get public bytes for key ({})",
+                            self.id
+                        )));
+                    }
+                }
+                Err(e) => {
+                    return Err(SecretsResolverError::KeyError(format!(
+                        "Couldn't get X25519 public_key bytes. Reason: {}",
+                        e
+                    )));
+                }
+            };
+
+            let jwk = json!({
+                "crv": "Ed25519",
+                "d": secret,
+                "kty": "OKP",
+                "x": public
+            });
+
+            Secret::from_str(&self.id, &jwk)
+        }
+    }
 }
 
 /// Must have the same semantics as type ('type' field) of the corresponding method in DID Doc containing a public key.
@@ -330,9 +406,10 @@ pub enum SecretType {
 }
 
 /// Known Crypto types
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq)]
 pub enum KeyType {
     Ed25519,
+    X25519,
     P256,
     P384,
     P521,
@@ -347,6 +424,7 @@ impl TryFrom<&str> for KeyType {
     fn try_from(value: &str) -> Result<Self> {
         match value {
             "Ed25519" => Ok(KeyType::Ed25519),
+            "X25519" => Ok(KeyType::X25519),
             "P-256" => Ok(KeyType::P256),
             "P-384" => Ok(KeyType::P384),
             "P-521" => Ok(KeyType::P521),
@@ -374,18 +452,52 @@ pub enum SecretMaterial {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::Secret;
 
     #[test]
     fn check_hash() {
         let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD3";
         let output = Secret::base58_hash_string(input).expect("Hash of input");
-        assert_eq!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
+        assert_eq!(&output, "QmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
     }
+
     #[test]
     fn check_hash_bad() {
         let input = "z6MkgfFvvWA7sw8WkNWyK3y74kwNVvWc7Qrs5tWnsnqMfLD4";
         let output = Secret::base58_hash_string(input).expect("Hash of input");
-        assert_ne!(&output, "zQmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
+        assert_ne!(&output, "QmY1kaguPMgjndEh1sdDZ8kdjX4Uc1SW4vziMfgWC6ndnJ")
+    }
+
+    #[test]
+    fn check_x25519() {
+        // ED25519 Secret Key
+        // https://docs.rs/ed25519_to_curve25519/latest/ed25519_to_curve25519/fn.ed25519_sk_to_curve25519.html
+        /* let ed25519_sk_bytes: [u8; 32] = [
+            202, 104, 239, 81, 53, 110, 80, 252, 198, 23, 155, 162, 215, 98, 223, 173, 227, 188,
+            110, 54, 127, 45, 185, 206, 174, 29, 44, 147, 76, 66, 196, 195,
+        ]; */
+
+        let x25519_sk_bytes: [u8; 32] = [
+            200, 255, 64, 61, 17, 52, 112, 33, 205, 71, 186, 13, 131, 12, 241, 136, 223, 5, 152,
+            40, 95, 187, 83, 168, 142, 10, 234, 215, 70, 210, 148, 104,
+        ];
+
+        // The following JWK is created from the ed25519 secret key above
+        let jwk = json!({
+        "crv": "Ed25519",
+        "d": "ymjvUTVuUPzGF5ui12LfreO8bjZ_LbnOrh0sk0xCxMM",
+        "kty": "OKP",
+        "x": "d17TbZmkoYHZUQpzJTcuOtq0tjWYm8CKvKGYHDW6ZaE"
+        });
+
+        let ed25519 = Secret::from_str("test", &jwk).unwrap();
+
+        let x25519 = ed25519
+            .to_x25519()
+            .expect("Couldn't convert ed25519 to x25519");
+
+        assert_eq!(x25519.private_bytes.as_slice(), x25519_sk_bytes);
     }
 }
