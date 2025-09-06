@@ -255,7 +255,7 @@ dependencies = [
  "console 0.16.0",
  "dialoguer 0.12.0",
  "did-peer",
- "rcgen 0.14.3",
+ "rcgen",
  "regex",
  "reqwest 0.12.23",
  "ring",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-messaging-didcomm",
@@ -362,12 +362,12 @@ dependencies = [
  "ahash 0.8.12",
  "base64 0.22.1",
  "clap",
- "console 0.15.11",
- "dialoguer 0.11.0",
+ "console 0.16.0",
+ "dialoguer 0.12.0",
  "did-peer",
  "futures-util",
  "rand 0.9.2",
- "rcgen 0.13.2",
+ "rcgen",
  "regex",
  "ring",
  "rustls 0.23.31",
@@ -6265,19 +6265,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "rcgen"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
-dependencies = [
- "aws-lc-rs",
- "pem",
- "rustls-pki-types",
- "time",
- "yasna",
 ]
 
 [[package]]
