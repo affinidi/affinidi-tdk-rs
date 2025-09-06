@@ -9,7 +9,7 @@ use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
 use regex::Regex;
 use sha256::digest;
 use ssi::crypto::p384::elliptic_curve::subtle::ConstantTimeEq;
-use std::sync::Arc;
+use std::{slice, sync::Arc};
 
 use crate::SharedConfig;
 
@@ -133,7 +133,7 @@ pub(crate) async fn add_admin(
     {
         match protocols
             .mediator
-            .add_admins(atm, profile, &[input.clone()])
+            .add_admins(atm, profile, slice::from_ref(&input))
             .await
         {
             Ok(result) => {

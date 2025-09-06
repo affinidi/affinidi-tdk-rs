@@ -337,18 +337,16 @@ pub(crate) async fn init_local_mediator(
             return Err("Could not find listen_address in server configuration block".into());
         };
 
-        if let Some(groups) = re.captures(listen_address) {
-            if groups.len() == 2 {
-                if let Some(api_prefix) = server_block.get("api_prefix") {
-                    if let Some(api_prefix) = api_prefix.as_str() {
-                        return Ok(format!(
-                            "https://localhost:{}{}",
-                            &groups[1],
-                            api_prefix.trim_end_matches("/")
-                        ));
-                    }
-                }
-            }
+        if let Some(groups) = re.captures(listen_address)
+            && groups.len() == 2
+            && let Some(api_prefix) = server_block.get("api_prefix")
+            && let Some(api_prefix) = api_prefix.as_str()
+        {
+            return Ok(format!(
+                "https://localhost:{}{}",
+                &groups[1],
+                api_prefix.trim_end_matches("/")
+            ));
         }
         Err("Could not determine network address from mediator configuration".into())
     }
@@ -359,28 +357,28 @@ pub(crate) async fn init_local_mediator(
         new_config: &mut MediatorConfig,
         theme: &ColorfulTheme,
     ) -> Result<(), Box<dyn Error>> {
-        if let Some(mediator_did) = config.get("mediator_did") {
-            if let Some(mediator_did) = mediator_did.as_str() {
-                let mediator_did = if let Some(mediator_did) = mediator_did.strip_prefix("did://") {
-                    mediator_did
-                } else {
-                    mediator_did
-                };
+        if let Some(mediator_did) = config.get("mediator_did")
+            && let Some(mediator_did) = mediator_did.as_str()
+        {
+            let mediator_did = if let Some(mediator_did) = mediator_did.strip_prefix("did://") {
+                mediator_did
+            } else {
+                mediator_did
+            };
 
-                println!(
-                    "  {}{}",
-                    style("Mediator DID: ").blue(),
-                    style(mediator_did).color256(208)
-                );
-                if Confirm::with_theme(theme)
-                    .with_prompt("Use existing Mediator DID?")
-                    .default(true)
-                    .interact()?
-                {
-                    new_config.mediator_did = Some(mediator_did.to_string());
-                    println!("  {}", style("You will need to ensure that the secrets for the Mediator DID are saved as well!!!").cyan());
-                    return Ok(());
-                }
+            println!(
+                "  {}{}",
+                style("Mediator DID: ").blue(),
+                style(mediator_did).color256(208)
+            );
+            if Confirm::with_theme(theme)
+                .with_prompt("Use existing Mediator DID?")
+                .default(true)
+                .interact()?
+            {
+                new_config.mediator_did = Some(mediator_did.to_string());
+                println!("  {}", style("You will need to ensure that the secrets for the Mediator DID are saved as well!!!").cyan());
+                return Ok(());
             }
         }
 

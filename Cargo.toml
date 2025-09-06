@@ -50,7 +50,7 @@ did-peer = { version = "0.6.3", path = "crates/affinidi-did-resolver/affinidi-di
 did-webvh = { version = "0.1.8", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh" }
 affinidi-meeting-place = { version = "0.1.10", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.10.9", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
-affinidi-messaging-helpers = { version = "0.10.7", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
+affinidi-messaging-helpers = { version = "0.10.9", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
 affinidi-messaging-mediator = { version = "0.10.12", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.10.8", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.10.7", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }

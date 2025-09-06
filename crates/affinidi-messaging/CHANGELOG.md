@@ -10,6 +10,11 @@ tooling.
 
 ## 6th September 2025
 
+### Helpers (0.10.9)
+
+* **MAINTENANCE:** Fixing clippy warnings
+* **MAINTENANCE:** Updating dependencies to latest versions
+
 ### DIDComm (0.10.9)
 
 * **MAINTENANCE:** Fixing clippy warnings

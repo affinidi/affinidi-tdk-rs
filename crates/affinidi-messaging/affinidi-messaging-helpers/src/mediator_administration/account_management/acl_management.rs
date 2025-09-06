@@ -2,6 +2,7 @@
  * Handles ACL management tasks for an account
  */
 
+use crate::SharedConfig;
 use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
 use affinidi_messaging_sdk::{
     ATM,
@@ -17,8 +18,6 @@ use affinidi_messaging_sdk::{
 use console::style;
 use dialoguer::{MultiSelect, Select, theme::ColorfulTheme};
 use std::sync::Arc;
-
-use crate::SharedConfig;
 
 pub(crate) async fn manage_account_acls(
     atm: &ATM,
@@ -126,7 +125,7 @@ async fn _modify_acl_flags(
     println!("self-change? : If set, allows the DID to change its own ACL flag");
 
     let acls = MediatorACLSet::from_u64(account.acls);
-    let selections = &[
+    let selections = [
         (
             "Access List Mode: explicit_deny if set, explicit_allow if not",
             acls.get_access_list_mode().0 == AccessListModeType::ExplicitDeny,
@@ -184,7 +183,7 @@ async fn _modify_acl_flags(
     // returns a vector of chosen indices
     let selection = MultiSelect::with_theme(theme)
         .with_prompt("Select an action? (space to select, enter to confirm)")
-        .items_checked(&selections[..])
+        .items_checked(selections)
         .report(false)
         .interact()
         .unwrap();
