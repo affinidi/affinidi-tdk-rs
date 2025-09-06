@@ -175,13 +175,13 @@ impl OOBDiscovery {
             let msg: Message =
                 serde_json::from_str(&msg_str).expect("Can't deserialize Invitation");
 
-            if let Some(expires_time) = msg.expires_time {
-                if expires_time <= now {
-                    return Err(ATMError::MediatorError(
-                        "EXPIRED".into(),
-                        "Invitation has expired...".into(),
-                    ));
-                }
+            if let Some(expires_time) = msg.expires_time
+                && expires_time <= now
+            {
+                return Err(ATMError::MediatorError(
+                    "EXPIRED".into(),
+                    "Invitation has expired...".into(),
+                ));
             }
             Ok(msg)
         } else {

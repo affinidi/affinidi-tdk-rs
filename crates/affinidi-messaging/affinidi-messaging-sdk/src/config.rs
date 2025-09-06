@@ -34,7 +34,7 @@ impl ATMConfig {
         ATMConfigBuilder::default()
     }
 
-    pub fn get_ssl_certificates(&self) -> &Vec<CertificateDer> {
+    pub fn get_ssl_certificates(&'_ self) -> &'_ Vec<CertificateDer<'_>> {
         &self.ssl_certificates
     }
 }

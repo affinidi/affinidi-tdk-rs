@@ -181,15 +181,15 @@ impl ATMProfile {
     /// Stops the WebSocket connection for this profile
     /// This will stop the WebSocket connection and any related tasks
     pub async fn stop_websocket(&self) -> Result<(), ATMError> {
-        if let Some(mediator) = &*self.inner.mediator {
-            if let Some(channel) = &*mediator.ws_channel_tx.read().await {
-                channel.send(WebSocketCommands::Stop).await.map_err(|err| {
-                    ATMError::TransportError(format!(
-                        "Could not send websocket Stop command: {:?}",
-                        err
-                    ))
-                })?;
-            }
+        if let Some(mediator) = &*self.inner.mediator
+            && let Some(channel) = &*mediator.ws_channel_tx.read().await
+        {
+            channel.send(WebSocketCommands::Stop).await.map_err(|err| {
+                ATMError::TransportError(format!(
+                    "Could not send websocket Stop command: {:?}",
+                    err
+                ))
+            })?;
         }
 
         Ok(())
@@ -235,32 +235,30 @@ impl Mediator {
     /// Helper function to find the endpoint for the Mediator
     /// protocol allows you to specify the URI scheme (http, ws, etc)
     fn _find_endpoint(service: &Service, protocol: &str) -> Option<String> {
-        if service.type_.contains(&"DIDCommMessaging".to_string()) {
-            if let Some(endpoint) = &service.service_endpoint {
-                for endpoint in endpoint.into_iter() {
-                    match endpoint {
-                        Endpoint::Map(map) => {
-                            if let Some(accept) = map.get("accept") {
-                                let accept: Vec<String> =
-                                    match serde_json::from_value(accept.to_owned()) {
-                                        Ok(accept) => accept,
-                                        Err(_) => continue,
-                                    };
+        if service.type_.contains(&"DIDCommMessaging".to_string())
+            && let Some(endpoint) = &service.service_endpoint
+        {
+            for endpoint in endpoint.into_iter() {
+                match endpoint {
+                    Endpoint::Map(map) => {
+                        if let Some(accept) = map.get("accept") {
+                            let accept: Vec<String> =
+                                match serde_json::from_value(accept.to_owned()) {
+                                    Ok(accept) => accept,
+                                    Err(_) => continue,
+                                };
 
-                                if accept.contains(&"didcomm/v2".to_string()) {
-                                    if let Some(uri) = map.get("uri") {
-                                        if let Some(uri) = uri.as_str() {
-                                            if uri.starts_with(protocol) {
-                                                return Some(uri.to_string());
-                                            }
-                                        }
-                                    }
-                                }
+                            if accept.contains(&"didcomm/v2".to_string())
+                                && let Some(uri) = map.get("uri")
+                                && let Some(uri) = uri.as_str()
+                                && uri.starts_with(protocol)
+                            {
+                                return Some(uri.to_string());
                             }
                         }
-                        _ => {
-                            // Ignore URI}
-                        }
+                    }
+                    _ => {
+                        // Ignore URI}
                     }
                 }
             }

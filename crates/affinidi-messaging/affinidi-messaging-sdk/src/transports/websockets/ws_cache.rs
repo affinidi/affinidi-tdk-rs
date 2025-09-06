@@ -72,16 +72,16 @@ impl MessageCache {
         message: &Message,
     ) -> Option<oneshot::Sender<WebSocketResponses>> {
         // Can we find a match on thid?
-        if let Some(thid) = &message.thid {
-            if let Some(sender) = self.wanted_list.remove(thid) {
-                return Some(sender);
-            }
+        if let Some(thid) = &message.thid
+            && let Some(sender) = self.wanted_list.remove(thid)
+        {
+            return Some(sender);
         }
 
-        if let Some(pthid) = &message.pthid {
-            if let Some(sender) = self.wanted_list.remove(pthid) {
-                return Some(sender);
-            }
+        if let Some(pthid) = &message.pthid
+            && let Some(sender) = self.wanted_list.remove(pthid)
+        {
+            return Some(sender);
         }
 
         self.wanted_list.remove(&message.id)

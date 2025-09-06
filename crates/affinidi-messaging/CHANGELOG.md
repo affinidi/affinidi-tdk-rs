@@ -10,6 +10,11 @@ tooling.
 
 ## 6th September 2025
 
+### SDK (0.11.3)
+
+* **MAINTENANCE:** Fixing clippy warnings
+* **MAINTENANCE:** Updating dependencies to latest versions
+
 ### Helpers (0.10.9)
 
 * **MAINTENANCE:** Fixing clippy warnings
