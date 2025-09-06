@@ -38,7 +38,7 @@ where
 }
 
 impl SharedData {
-    pub async fn stats(&self) -> MutexGuard<Statistics> {
+    pub async fn stats(&'_ self) -> MutexGuard<'_, Statistics> {
         self.stats.lock().await
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "did-peer"
-version = "0.6.3"
+version = "0.6.4"
 description = "Implementation of the did:peer method in Rust, uses the ssi crate"
 repository.workspace = true
 edition.workspace = true
@@ -30,5 +30,5 @@ wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 askar-crypto = { version = "0.3", features = ["alloc"] }
-tokio = { version = "1.46", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 multibase = "0.9.1"

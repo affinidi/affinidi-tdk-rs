@@ -805,13 +805,13 @@ impl DIDPeer {
             }
         };
 
-        if let Content::Resource(Resource::Document(doc)) = output {
-            if let Some(vm) = doc.into_any_verification_method() {
-                let mut new_vm = vm.clone();
-                new_vm.controller = current_controller;
-                new_vm.id = current_id;
-                return Ok(new_vm);
-            }
+        if let Content::Resource(Resource::Document(doc)) = output
+            && let Some(vm) = doc.into_any_verification_method()
+        {
+            let mut new_vm = vm.clone();
+            new_vm.controller = current_controller;
+            new_vm.id = current_id;
+            return Ok(new_vm);
         }
 
         Err(DIDPeerError::KeyParsingError(
