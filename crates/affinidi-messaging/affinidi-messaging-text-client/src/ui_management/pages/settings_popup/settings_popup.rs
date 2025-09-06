@@ -12,7 +12,7 @@ use tui_input::{Input, backend::crossterm::EventHandler};
 use crate::{
     InputType,
     state_store::{CommonSettings, State, actions::Action},
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 
 pub struct Props {

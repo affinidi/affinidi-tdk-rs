@@ -1,3 +1,4 @@
+use crate::ui_management::components::component::ComponentRender;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -5,8 +6,6 @@ use ratatui::{
     widgets::Block,
 };
 use tui_logger::{TuiLoggerLevelOutput, TuiLoggerWidget};
-
-use crate::ui_management::components::ComponentRender;
 
 pub struct ChatLogs;
 

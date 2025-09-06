@@ -17,7 +17,7 @@ use crate::{
         State,
         actions::{Action, invitation::InvitePopupState},
     },
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 
 pub struct Props {

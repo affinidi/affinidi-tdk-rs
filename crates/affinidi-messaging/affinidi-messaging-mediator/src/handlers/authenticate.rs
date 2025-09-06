@@ -531,8 +531,7 @@ pub async fn authentication_response(
         };
 
         // check that the DID matches from what was given for the initial challenge request to what was used for the message response
-        if let Some(from_did) = &msg.from {
-            if from_did != &session.did {
+        if let Some(from_did) = &msg.from && from_did != &session.did {
                 return Err(MediatorError::MediatorError(
                     33,
                     "".to_string(),
@@ -552,7 +551,6 @@ pub async fn authentication_response(
                     ),
                 )
                 .into());
-            }
         }
 
         // Check that this isn't a replay attack

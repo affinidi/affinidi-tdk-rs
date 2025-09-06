@@ -7,7 +7,7 @@
 use crate::{
     InputType,
     state_store::{State, actions::Action},
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{

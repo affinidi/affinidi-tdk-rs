@@ -1,13 +1,3 @@
-use crossterm::event::KeyEvent;
-use ratatui::{
-    Frame,
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState},
-};
-use tokio::sync::mpsc::UnboundedSender;
-
 use crate::{
     state_store::{
         State,
@@ -17,13 +7,22 @@ use crate::{
         },
     },
     ui_management::{
-        components::{Component, ComponentRender},
+        components::component::{Component, ComponentRender},
         pages::main_page::section::{
             SectionActivation,
             usage::{HasUsageInfo, UsageInfo},
         },
     },
 };
+use crossterm::event::KeyEvent;
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState},
+};
+use tokio::sync::mpsc::UnboundedSender;
 
 pub struct Props {
     /// List of chats and current state of those chats

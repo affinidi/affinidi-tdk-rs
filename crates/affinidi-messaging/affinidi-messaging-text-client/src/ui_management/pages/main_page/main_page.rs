@@ -6,12 +6,15 @@ use crate::{
             chat_list::{Chat, ChatList},
         },
     },
-    ui_management::pages::{
-        accept_invite_popup::accept_invite_popup::AcceptInvitePopup,
-        chat_details_popup::chat_details_popup::ChatDetailsPopup,
-        invite_popup::invite_popup::InvitePopup,
-        manual_connect_popup::manual_connect_popup::ManualConnectPopup,
-        settings_popup::settings_popup::SettingsPopup,
+    ui_management::{
+        components::component::{Component, ComponentRender},
+        pages::{
+            accept_invite_popup::accept_invite_popup::AcceptInvitePopup,
+            chat_details_popup::chat_details_popup::ChatDetailsPopup,
+            invite_popup::invite_popup::InvitePopup,
+            manual_connect_popup::manual_connect_popup::ManualConnectPopup,
+            settings_popup::settings_popup::SettingsPopup,
+        },
     },
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -36,7 +39,6 @@ use super::{
         usage::{HasUsageInfo, UsageInfo, UsageInfoLine, widget_usage_to_text},
     },
 };
-use crate::ui_management::components::{Component, ComponentRender};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Section {
@@ -265,23 +267,23 @@ impl Component for MainPage {
                     KeyCode::Up => {
                         self.chat_list.previous();
 
-                        if let Some(selected_idx) = self.chat_list.list_state.selected() {
-                            if let Some(chat) = self.chat_list.chats().get(selected_idx) {
-                                let _ = self.action_tx.send(Action::SetCurrentChat {
-                                    chat: chat.name.clone(),
-                                });
-                            }
+                        if let Some(selected_idx) = self.chat_list.list_state.selected()
+                            && let Some(chat) = self.chat_list.chats().get(selected_idx)
+                        {
+                            let _ = self.action_tx.send(Action::SetCurrentChat {
+                                chat: chat.name.clone(),
+                            });
                         }
                     }
                     KeyCode::Down => {
                         self.chat_list.next();
 
-                        if let Some(selected_idx) = self.chat_list.list_state.selected() {
-                            if let Some(chat) = self.chat_list.chats().get(selected_idx) {
-                                let _ = self.action_tx.send(Action::SetCurrentChat {
-                                    chat: chat.name.clone(),
-                                });
-                            }
+                        if let Some(selected_idx) = self.chat_list.list_state.selected()
+                            && let Some(chat) = self.chat_list.chats().get(selected_idx)
+                        {
+                            let _ = self.action_tx.send(Action::SetCurrentChat {
+                                chat: chat.name.clone(),
+                            });
                         }
                     }
                     KeyCode::Left => self.hover_previous(),

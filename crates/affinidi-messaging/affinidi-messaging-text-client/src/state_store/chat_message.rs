@@ -40,7 +40,7 @@ impl ChatMessage {
         }
     }
     // (2025-02-01 20:17:27: << )
-    pub fn render(&self, width: usize) -> Vec<Line> {
+    pub fn render(&'_ self, width: usize) -> Vec<Line<'_>> {
         let mut lines: Vec<Line> = Vec::new();
         match &self._type {
             ChatMessageType::Inbound => {

@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{slice, time::SystemTime};
 
 use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
@@ -159,7 +159,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {
@@ -272,7 +272,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {
@@ -329,7 +329,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {
@@ -423,7 +423,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {
@@ -516,7 +516,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {
@@ -588,7 +588,7 @@ pub(crate) async fn process(
                 // Check permissions and ACLs
                 if !check_permissions(
                     session,
-                    &[did_hash.clone()],
+                    slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
                     &metadata.sign_from,
                 ) {

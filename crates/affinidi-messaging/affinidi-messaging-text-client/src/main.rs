@@ -8,7 +8,8 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, filter, fmt};
 use tui_logger::TuiTracingSubscriberLayer;
-use ui_management::UiManager;
+
+use crate::ui_management::ui_manager::UiManager;
 
 mod state_store;
 mod termination;

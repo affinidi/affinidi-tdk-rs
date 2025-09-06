@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.10.12"
+version = "0.10.13"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -29,14 +29,14 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
-aws-sdk-secretsmanager = "1.77"
-aws-sdk-ssm = "1.81"
+aws-sdk-secretsmanager = "1.87"
+aws-sdk-ssm = "1.92"
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.10", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
-deadpool-redis = { version = "0.21", features = ["rt_tokio_1"] }
+deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
 jsonwebtoken = "9.3"
@@ -44,7 +44,7 @@ itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
 # Redis can only be updated when deadpool-redis supports the new version
-redis = { version = "0.31", features = [
+redis = { version = "0.32", features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
   "ahash",
@@ -61,9 +61,9 @@ serde_json = "1.0"
 sha256 = "1.6"
 ssi = { version = "0.12" }
 subtle = "2.6"
-tokio = { version = "1.45", features = ["full"] }
+tokio = { version = "1.47", features = ["full"] }
 tokio-stream = "0.1"
-toml = "0.8"
+toml = "0.9"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 tracing = { version = "0.1", features = [
   "max_level_debug",
@@ -76,10 +76,10 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.17", features = ["v4", "fast-rng"] }
+uuid = { version = "1.18", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-console = "0.15"
-dialoguer = "0.11"
+console = "0.16"
+dialoguer = "0.12"
 lazy_static = "1.5"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }

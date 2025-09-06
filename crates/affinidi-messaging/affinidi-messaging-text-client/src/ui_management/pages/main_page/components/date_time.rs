@@ -1,7 +1,6 @@
+use crate::ui_management::components::component::ComponentRender;
 use chrono::Local;
 use ratatui::{Frame, layout::Rect, style::Stylize, widgets::Paragraph};
-
-use crate::ui_management::components::ComponentRender;
 
 pub struct DateTime;
 

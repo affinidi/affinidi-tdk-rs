@@ -213,11 +213,11 @@ impl Database {
                 .await?;
 
             // If DID is an admin account then remove from the admin list
-            if let Some(current) = current {
-                if current._type.is_admin() {
-                    self.strip_admin_accounts(vec![did_hash.to_string()])
-                        .await?;
-                }
+            if let Some(current) = current
+                && current._type.is_admin()
+            {
+                self.strip_admin_accounts(vec![did_hash.to_string()])
+                    .await?;
             }
 
             // Remove from Known DIDs

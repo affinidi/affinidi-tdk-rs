@@ -1,11 +1,10 @@
+use crate::ui_management::components::component::ComponentRender;
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style, Stylize},
     text::{self, Span},
 };
-
-use crate::ui_management::components::ComponentRender;
 
 pub struct BottomMenu;
 

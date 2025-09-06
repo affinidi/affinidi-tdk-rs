@@ -75,8 +75,7 @@ pub async fn inbox_fetch_handler(
         // Check for valid start_id (unixtime in milliseconds including+1 digit so we are ok for another 3,114 years!)
         // Supports up to 999 messages per millisecond
         let re = Regex::new(r"\d{13,14}-\d{1,3}$").unwrap();
-        if let Some(start_id) = &body.start_id {
-            if ! re.is_match(start_id) {
+        if let Some(start_id) = &body.start_id && ! re.is_match(start_id) {
                 return Err(MediatorError::MediatorError(
                     42,
                     session.session_id,
@@ -94,7 +93,6 @@ pub async fn inbox_fetch_handler(
                 )
                 .into());
             }
-        }
 
         // Fetch messages if possible
         let results = state.database.fetch_messages(&session.session_id, &session.did_hash, &body).await.map_err(|e| {MediatorError::MediatorError(

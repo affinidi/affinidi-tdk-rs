@@ -448,10 +448,10 @@ pub async fn handle_message(
                 break 'label_break;
             };
 
-            if let Some(active_chat) = &state.chat_list.active_chat {
-                if active_chat != &chat.name {
-                    mut_chat.has_unread = true;
-                }
+            if let Some(active_chat) = &state.chat_list.active_chat
+                && active_chat != &chat.name
+            {
+                mut_chat.has_unread = true;
             }
             mut_chat.messages.push(ChatMessage::new(
                 ChatMessageType::Inbound,
@@ -540,10 +540,10 @@ pub async fn handle_message(
                 break 'label_break;
             };
 
-            if let Some(active_chat) = &state.chat_list.active_chat {
-                if active_chat != &chat.name {
-                    mut_chat.has_unread = true;
-                }
+            if let Some(active_chat) = &state.chat_list.active_chat
+                && active_chat != &chat.name
+            {
+                mut_chat.has_unread = true;
             }
 
             let effect = match chat_msg.effect.unwrap().as_str() {
@@ -800,10 +800,10 @@ pub async fn handle_message(
                 break 'label_break;
             };
 
-            if let Some(active_chat) = &state.chat_list.active_chat {
-                if active_chat != &chat.name {
-                    mut_chat.has_unread = true;
-                }
+            if let Some(active_chat) = &state.chat_list.active_chat
+                && active_chat != &chat.name
+            {
+                mut_chat.has_unread = true;
             }
 
             mut_chat.messages.push(ChatMessage::new(

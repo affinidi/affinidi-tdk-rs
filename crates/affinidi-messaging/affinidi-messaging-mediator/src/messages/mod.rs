@@ -246,24 +246,24 @@ impl MessageHandler for Message {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        if let Some(expires) = self.expires_time {
-            if expires <= now {
-                return Err(MediatorError::MediatorError(
-                    31,
-                    session.session_id.to_string(),
-                    Some(self.id.clone()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "message.expired".into(),
-                        "Message has expired: {1}".into(),
-                        vec![expires.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Message has expired".to_string(),
-                ));
-            }
+        if let Some(expires) = self.expires_time
+            && expires <= now
+        {
+            return Err(MediatorError::MediatorError(
+                31,
+                session.session_id.to_string(),
+                Some(self.id.clone()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.expired".into(),
+                    "Message has expired: {1}".into(),
+                    vec![expires.to_string()],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Message has expired".to_string(),
+            ));
         }
 
         msg_type.process(self, state, session, metadata).await
