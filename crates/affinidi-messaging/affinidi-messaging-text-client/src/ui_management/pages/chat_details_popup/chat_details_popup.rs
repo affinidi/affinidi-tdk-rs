@@ -6,7 +6,7 @@ use crate::{
             chat_list::{Chat, ChatStatus},
         },
     },
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 use circular_queue::CircularQueue;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
@@ -78,10 +78,6 @@ impl Component for ChatDetailsPopup {
             props: Props::from(state),
             ..self
         }
-    }
-
-    fn name(&self) -> &str {
-        "Chat Details"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

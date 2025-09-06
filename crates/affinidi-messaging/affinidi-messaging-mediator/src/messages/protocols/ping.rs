@@ -46,24 +46,24 @@ pub(crate) fn process(
         .unwrap()
         .as_secs();
 
-    if let Some(expires) = msg.expires_time {
-        if expires <= now {
-            return Err(MediatorError::MediatorError(
-                31,
-                session.session_id.to_string(),
-                Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "message.expired".into(),
-                    "Message has expired: {1}".into(),
-                    vec![expires.to_string()],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Message has expired".to_string(),
-            ));
-        }
+    if let Some(expires) = msg.expires_time
+        && expires <= now
+    {
+        return Err(MediatorError::MediatorError(
+            31,
+            session.session_id.to_string(),
+            Some(msg.id.to_string()),
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.expired".into(),
+                "Message has expired: {1}".into(),
+                vec![expires.to_string()],
+                None,
+            )),
+            StatusCode::BAD_REQUEST.as_u16(),
+            "Message has expired".to_string(),
+        ));
     }
 
     let to = if let Some(to) = &msg.to {

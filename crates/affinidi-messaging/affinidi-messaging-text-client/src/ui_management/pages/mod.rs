@@ -1,5 +1,7 @@
-use super::components::{Component, ComponentRender};
-use crate::state_store::{State, actions::Action};
+use crate::{
+    state_store::{State, actions::Action},
+    ui_management::components::component::{Component, ComponentRender},
+};
 use crossterm::event::KeyEvent;
 use invite_popup::invite_popup::InvitePopup;
 use main_page::MainPage;
@@ -39,12 +41,6 @@ pub struct AppRouter {
 }
 
 impl AppRouter {
-    fn get_active_page_component(&self) -> &dyn Component {
-        match self.props.active_page {
-            ActivePage::MainPage => &self.main_page,
-        }
-    }
-
     fn get_active_page_component_mut(&mut self) -> &mut dyn Component {
         match self.props.active_page {
             ActivePage::MainPage => &mut self.main_page,
@@ -78,11 +74,6 @@ impl Component for AppRouter {
             settings_popup: self.settings_popup.move_with_state(state),
             invite_popup: self.invite_popup.move_with_state(state),
         }
-    }
-
-    // route all functions to the active page
-    fn name(&self) -> &str {
-        self.get_active_page_component().name()
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

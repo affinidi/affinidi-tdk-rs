@@ -1,10 +1,10 @@
 use crate::{
     state_store::{State, actions::Action},
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame,
+    crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Alignment, Constraint, Flex, Layout, Position},
     style::{Color, Style, Stylize},
     text::{Line, Span},
@@ -66,10 +66,6 @@ impl Component for AcceptInvitePopup {
             props: Props::from(state),
             ..self
         }
-    }
-
-    fn name(&self) -> &str {
-        "Accept Invite"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

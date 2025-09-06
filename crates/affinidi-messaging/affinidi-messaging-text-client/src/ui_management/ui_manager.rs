@@ -1,15 +1,17 @@
+use anyhow::Context;
+use crossterm::event::EventStream;
+use ratatui::{
+    crossterm::{
+        event::{DisableMouseCapture, Event},
+        execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    },
+    prelude::*,
+};
 use std::{
     io::{self, Stdout},
     time::Duration,
 };
-
-use anyhow::Context;
-use crossterm::{
-    event::{DisableMouseCapture, Event, EventStream},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use ratatui::prelude::*;
 use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver},
@@ -21,10 +23,11 @@ const RENDERING_TICK_RATE: Duration = Duration::from_millis(250);
 use crate::{
     state_store::{State, actions::Action},
     termination::Interrupted,
-    ui_management::components::ComponentRender,
+    ui_management::{
+        components::component::{Component, ComponentRender},
+        pages::AppRouter,
+    },
 };
-
-use super::{components::Component, pages::AppRouter};
 
 pub struct UiManager {
     action_tx: mpsc::UnboundedSender<Action>,

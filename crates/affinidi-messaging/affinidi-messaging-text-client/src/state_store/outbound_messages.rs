@@ -75,30 +75,30 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
         return;
     };
 
-    if let Some(forwarded) = packed_meta.messaging_service {
-        if forwarded.routing_keys.contains(&mediator_did.to_string()) {
-            // Already forwarded
-            match atm
-                .send_message(&our_profile, &packed, &id, false, false)
-                .await
-            {
-                Ok(_) => {
-                    // Update the chat with the new message
-                    mut_chat.messages.push(ChatMessage::new(
-                        ChatMessageType::Outbound,
-                        chat_msg.to_string(),
-                    ));
-                }
-                Err(e) => {
-                    mut_chat.messages.push(ChatMessage::new(
-                        ChatMessageType::Error,
-                        chat_msg.to_string(),
-                    ));
-                    warn!("Failed to send message: {}", e);
-                }
+    if let Some(forwarded) = packed_meta.messaging_service
+        && forwarded.routing_keys.contains(&mediator_did.to_string())
+    {
+        // Already forwarded
+        match atm
+            .send_message(&our_profile, &packed, &id, false, false)
+            .await
+        {
+            Ok(_) => {
+                // Update the chat with the new message
+                mut_chat.messages.push(ChatMessage::new(
+                    ChatMessageType::Outbound,
+                    chat_msg.to_string(),
+                ));
             }
-            return;
+            Err(e) => {
+                mut_chat.messages.push(ChatMessage::new(
+                    ChatMessageType::Error,
+                    chat_msg.to_string(),
+                ));
+                warn!("Failed to send message: {}", e);
+            }
         }
+        return;
     }
 
     // Forward wrap and send the message

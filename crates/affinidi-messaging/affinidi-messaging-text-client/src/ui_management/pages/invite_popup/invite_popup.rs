@@ -17,7 +17,7 @@ use crate::{
         State,
         actions::{Action, invitation::InvitePopupState},
     },
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 
 pub struct Props {
@@ -78,10 +78,6 @@ impl Component for InvitePopup {
             props: Props::from(state),
             ..self
         }
-    }
-
-    fn name(&self) -> &str {
-        "Invite"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

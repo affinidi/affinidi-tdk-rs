@@ -1,3 +1,7 @@
+use crate::{
+    state_store::{State, actions::Action},
+    ui_management::components::component::{Component, ComponentRender},
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
     Frame,
@@ -7,10 +11,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use tokio::sync::mpsc::UnboundedSender;
-
-use crate::state_store::{State, actions::Action};
-
-use super::{Component, ComponentRender};
 
 pub struct InputBox {
     /// Current value of the input box
@@ -97,10 +97,6 @@ impl Component for InputBox {
         Self: Sized,
     {
         Self { ..self }
-    }
-
-    fn name(&self) -> &str {
-        "Input Box"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

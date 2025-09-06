@@ -1,6 +1,6 @@
 use super::super::section::usage::{HasUsageInfo, UsageInfo, UsageInfoLine};
 use crate::ui_management::components::{
-    Component, ComponentRender,
+    component::{Component, ComponentRender},
     input_box::{self, InputBox},
 };
 use crate::{
@@ -65,10 +65,6 @@ impl Component for MessageInputBox {
             props: Props::from(state),
             ..self
         }
-    }
-
-    fn name(&self) -> &str {
-        "Message Input"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

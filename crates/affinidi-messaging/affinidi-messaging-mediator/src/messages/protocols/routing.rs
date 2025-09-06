@@ -648,9 +648,7 @@ pub(crate) async fn process(
             if let Some(stream_uuid) = state
                 .database
                 .streaming_is_client_live(&next_did_hash, false)
-                .await
-            {
-                if state
+                .await && state
                     .database
                     .streaming_publish_message(&next_did_hash, &stream_uuid, &data, false)
                     .await
@@ -658,7 +656,6 @@ pub(crate) async fn process(
                 {
                     debug!("Live streaming message to UUID: {}", stream_uuid);
                 }
-            }
         } else {
             store_forwarded_message(
                 state,

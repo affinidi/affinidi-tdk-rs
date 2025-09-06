@@ -10,6 +10,16 @@ tooling.
 
 ## 6th September 2025
 
+### Mediator (0.10.13)
+
+* **MAINTENANCE:** Fixing clippy warnings
+* **MAINTENANCE:** Updating dependencies to latest versions
+
+### Text-Client (0.10.9)
+
+* **MAINTENANCE:** Fixing clippy warnings
+* **MAINTENANCE:** Updating dependencies to latest versions
+
 ### SDK (0.11.3)
 
 * **MAINTENANCE:** Fixing clippy warnings

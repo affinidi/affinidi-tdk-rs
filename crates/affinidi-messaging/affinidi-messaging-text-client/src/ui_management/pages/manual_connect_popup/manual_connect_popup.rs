@@ -7,7 +7,7 @@
 use crate::{
     InputType,
     state_store::{State, actions::Action},
-    ui_management::components::{Component, ComponentRender},
+    ui_management::components::component::{Component, ComponentRender},
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
@@ -79,10 +79,6 @@ impl Component for ManualConnectPopup {
             props: Props::from(state),
             ..self
         }
-    }
-
-    fn name(&self) -> &str {
-        "Manual Connect"
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

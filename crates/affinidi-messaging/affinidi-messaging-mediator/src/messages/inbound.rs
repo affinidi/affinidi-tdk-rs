@@ -1,5 +1,3 @@
-use std::time::SystemTime;
-
 use crate::{
     SharedData,
     database::session::Session,
@@ -13,6 +11,7 @@ use affinidi_messaging_sdk::messages::{
 };
 use http::StatusCode;
 use sha256::digest;
+use std::time::SystemTime;
 use tracing::{Instrument, debug, span};
 
 use super::{ProcessMessageResponse, WrapperType};
@@ -274,12 +273,11 @@ fn check_session_signing_match(
     msg_id: &str,
     sign_from: &Option<String>,
 ) -> Result<(), MediatorError> {
-    if let Some(sign_from) = sign_from {
-        if let Some(sign_did) = sign_from.split_once('#') {
-            if sign_did.0 == session.did {
-                return Ok(());
-            }
-        }
+    if let Some(sign_from) = sign_from
+        && let Some(sign_did) = sign_from.split_once('#')
+        && sign_did.0 == session.did
+    {
+        return Ok(());
     }
 
     Err(MediatorError::MediatorError(

@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{slice, time::SystemTime};
 
 use super::acls::check_permissions;
 use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
@@ -107,7 +107,7 @@ pub(crate) async fn process(
         match request {
             MediatorAccountRequest::AccountGet(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::MediatorError(
                         45,
@@ -266,7 +266,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountRemove(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::MediatorError(
                         45,
@@ -478,7 +478,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountChangeQueueLimits {did_hash, send_queue_limit, receive_queue_limit } => {
                  // Check permissions and ACLs
-                 if !check_permissions(session, &[did_hash.clone()], state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                 if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::MediatorError(
                         45,
