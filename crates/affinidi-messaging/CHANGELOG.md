@@ -8,6 +8,13 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 6th September 2025
+
+### DIDComm (0.10.9)
+
+* **MAINTENANCE:** Fixing clippy warnings
+* **MAINTENANCE:** Updating dependencies to latest versions
+
 ## 26th June 2025
 
 ### Mediator (0.10.12)

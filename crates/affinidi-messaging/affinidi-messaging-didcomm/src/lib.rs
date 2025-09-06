@@ -7,15 +7,8 @@ mod utils;
 // Allows share test vectors between unit and integration tests
 #[cfg(test)]
 pub(crate) use crate as affinidi_messaging_didcomm;
-
 #[cfg(test)]
 mod test_vectors;
-
-#[cfg(feature = "testvectors")]
-pub(crate) use crate as affinidi_messaging_didcomm;
-
-#[cfg(feature = "testvectors")]
-pub mod test_vectors;
 
 pub mod algorithms;
 pub(crate) mod document;

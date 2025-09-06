@@ -51,13 +51,13 @@ impl Message {
         if let Some(from_prior) = from_prior {
             from_prior.validate_pack(from_prior_issuer_kid)?;
 
-            if let Some(ref from) = self.from {
-                if &from_prior.sub != from {
-                    Err(err_msg(
-                        ErrorKind::Malformed,
-                        "from_prior `sub` value is not equal to message `from` value",
-                    ))?;
-                }
+            if let Some(ref from) = self.from
+                && &from_prior.sub != from
+            {
+                Err(err_msg(
+                    ErrorKind::Malformed,
+                    "from_prior `sub` value is not equal to message `from` value",
+                ))?;
             }
         }
 

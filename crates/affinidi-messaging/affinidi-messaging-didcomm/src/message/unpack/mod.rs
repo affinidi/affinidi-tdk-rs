@@ -78,7 +78,6 @@ impl Message {
         T: SecretsResolver,
     {
         let mut anoncrypted: Option<ParsedEnvelope>;
-        let mut forwarded_msg: String;
 
         let mut parsed_jwe = if let Some(parsed) = &envelope.parsed_envelope {
             parsed.clone()
@@ -113,8 +112,7 @@ impl Message {
                 )
                 .await?;
 
-                if forwarded_msg_opt.is_some() {
-                    forwarded_msg = forwarded_msg_opt.unwrap();
+                if let Some(forwarded_msg) = forwarded_msg_opt {
                     envelope.metadata.re_wrapped_in_forward = true;
 
                     parsed_jwe = Envelope::from_str(&forwarded_msg)?
@@ -246,18 +244,18 @@ impl Message {
             _ => return Ok(None),
         };
 
-        if let Some(forward_msg) = try_parse_forward(&plaintext) {
-            if has_key_agreement_secret(&forward_msg.next, did_resolver, secrets_resolver).await? {
-                // TODO: Think how to avoid extra serialization of forwarded_msg here.
-                // (This serializtion is a double work because forwarded_msg will then
-                // be deserialized in _try_unpack_anoncrypt.)
-                let forwarded_msg = serde_json::to_string(&forward_msg.forwarded_msg).kind(
-                    ErrorKind::InvalidState,
-                    "Unable serialize forwarded message",
-                )?;
+        if let Some(forward_msg) = try_parse_forward(&plaintext)
+            && has_key_agreement_secret(&forward_msg.next, did_resolver, secrets_resolver).await?
+        {
+            // TODO: Think how to avoid extra serialization of forwarded_msg here.
+            // (This serializtion is a double work because forwarded_msg will then
+            // be deserialized in _try_unpack_anoncrypt.)
+            let forwarded_msg = serde_json::to_string(&forward_msg.forwarded_msg).kind(
+                ErrorKind::InvalidState,
+                "Unable serialize forwarded message",
+            )?;
 
-                return Ok(Some(forwarded_msg));
-            }
+            return Ok(Some(forwarded_msg));
         }
         Ok(None)
     }
