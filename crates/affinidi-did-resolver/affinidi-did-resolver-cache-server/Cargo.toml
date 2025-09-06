@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.5.4"
+version = "0.5.5"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -30,8 +30,8 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 ssi = { version = "0.12", features = ["secp384r1"] }
 thiserror = "2.0"
-tokio = { version = "1.45", features = ["full"] }
-toml = "0.8"
+tokio = { version = "1.47", features = ["full"] }
+toml = "0.9"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
