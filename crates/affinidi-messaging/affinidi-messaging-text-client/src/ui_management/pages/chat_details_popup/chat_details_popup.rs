@@ -80,10 +80,6 @@ impl Component for ChatDetailsPopup {
         }
     }
 
-    fn name(&self) -> &str {
-        "Chat Details"
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;

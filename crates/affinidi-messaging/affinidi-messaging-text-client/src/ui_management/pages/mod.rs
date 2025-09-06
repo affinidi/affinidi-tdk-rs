@@ -46,15 +46,6 @@ impl AppRouter {
             ActivePage::MainPage => &mut self.main_page,
         }
     }
-
-    //TIMTAM
-    /*
-    pub fn get_active_page_component(&self) -> &dyn Component {
-        match self.props.active_page {
-            ActivePage::MainPage => &self.main_page,
-        }
-    }
-    */
 }
 
 impl Component for AppRouter {
@@ -83,12 +74,6 @@ impl Component for AppRouter {
             settings_popup: self.settings_popup.move_with_state(state),
             invite_popup: self.invite_popup.move_with_state(state),
         }
-    }
-
-    // route all functions to the active page
-    fn name(&self) -> &str {
-        todo!()
-        //self.get_active_page_component().name()
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) {

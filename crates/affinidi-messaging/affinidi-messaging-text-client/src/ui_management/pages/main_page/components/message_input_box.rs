@@ -67,10 +67,6 @@ impl Component for MessageInputBox {
         }
     }
 
-    fn name(&self) -> &str {
-        "Message Input"
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;

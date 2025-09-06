@@ -84,10 +84,6 @@ impl Component for SettingsPopup {
         }
     }
 
-    fn name(&self) -> &str {
-        "Settings"
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) {
         fn _convert_input(input: &str) -> Option<String> {
             if input.is_empty() {

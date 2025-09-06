@@ -136,10 +136,6 @@ impl Component for ChatListComponent {
         }
     }
 
-    fn name(&self) -> &str {
-        "Chat List"
-    }
-
     fn handle_key_event(&mut self, _key: KeyEvent) {}
     /*fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {

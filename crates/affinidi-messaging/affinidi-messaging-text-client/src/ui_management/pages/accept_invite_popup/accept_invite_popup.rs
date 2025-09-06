@@ -68,10 +68,6 @@ impl Component for AcceptInvitePopup {
         }
     }
 
-    fn name(&self) -> &str {
-        "Accept Invite"
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) {
         fn _convert_input(input: &str) -> String {
             if input.is_empty() {

@@ -99,10 +99,6 @@ impl Component for InputBox {
         Self { ..self }
     }
 
-    fn name(&self) -> &str {
-        "Input Box"
-    }
-
     fn handle_key_event(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
