@@ -1,6 +1,6 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.10.8"
+version = "0.10.9"
 description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
   'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
@@ -33,16 +33,16 @@ sha256 = "1.6"
 ssi = { version = "0.12" }
 thiserror = "2.0"
 varint = "0.9"
-tokio = { version = "1.45", features = ["rt", "macros"] }
+tokio = { version = "1.47", features = ["rt", "macros"] }
 tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
   "valuable",
 ] }
-uuid = { version = "1.17", features = ["v4", "fast-rng"] }
+uuid = { version = "1.18", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-criterion = { version = "0.6", features = ["async_futures"] }
+criterion = { version = "0.7", features = ["async_futures"] }
 lazy_static = { version = "1.5" }
 tracing-test = "0.2"
 
