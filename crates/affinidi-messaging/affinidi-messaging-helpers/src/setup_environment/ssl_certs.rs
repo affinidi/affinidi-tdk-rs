@@ -1,10 +1,11 @@
 //! Create a local SSL Certificate Authority (CA) for use in testing and local development
 use ahash::AHashMap as HashMap;
+use rcgen::string::Ia5String;
 use rcgen::{
-    BasicConstraints, CertificateParams, CertificateRevocationListParams, CertifiedKey,
-    DistinguishedName, DnType, ExtendedKeyUsagePurpose, Ia5String, IsCa, KeyIdMethod, KeyPair,
-    KeyUsagePurpose, PKCS_ED25519, PKCS_RSA_SHA256, PKCS_RSA_SHA384, PKCS_RSA_SHA512,
-    RevocationReason, RevokedCertParams, RsaKeySize, SanType, SerialNumber, SignatureAlgorithm,
+    BasicConstraints, CertificateParams, CertificateRevocationListParams, DistinguishedName,
+    DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose,
+    PKCS_ED25519, PKCS_RSA_SHA256, PKCS_RSA_SHA384, PKCS_RSA_SHA512, RevocationReason,
+    RevokedCertParams, RsaKeySize, SanType, SerialNumber, SignatureAlgorithm,
 };
 use std::env;
 use std::fs::{self, File};
@@ -32,20 +33,26 @@ pub fn create_ssl_certs() -> Result<(), Box<dyn std::error::Error>> {
             // Issue a certificate for the key pair. For trust anchors, this will be self-signed.
             // Otherwise we dig out the issuer and issuer_key for the issuer, which should have
             // been produced in earlier iterations based on the careful ordering of roles.
-            let cert = match role {
-                Role::TrustAnchor => role.params(alg).self_signed(&key_pair)?,
+            let (params, cert) = match role {
+                Role::TrustAnchor => {
+                    let params = role.params(alg);
+                    let cert = params.self_signed(&key_pair)?;
+                    (params, cert)
+                }
                 Role::Intermediate => {
-                    let issuer: &CertifiedKey =
+                    let issuer: &(Issuer<'_, KeyPair>, rcgen::Certificate) =
                         certified_keys.get(&(Role::TrustAnchor, alg.inner)).unwrap();
-                    role.params(alg)
-                        .signed_by(&key_pair, &issuer.cert, &issuer.key_pair)?
+                    let params = role.params(alg);
+                    let cert = params.signed_by(&key_pair, &issuer.0)?;
+                    (params, cert)
                 }
                 Role::EndEntity | Role::Client => {
                     let issuer = certified_keys
                         .get(&(Role::Intermediate, alg.inner))
                         .unwrap();
-                    role.params(alg)
-                        .signed_by(&key_pair, &issuer.cert, &issuer.key_pair)?
+                    let params = role.params(alg);
+                    let cert = params.signed_by(&key_pair, &issuer.0)?;
+                    (params, cert)
                 }
             };
 
@@ -70,13 +77,21 @@ pub fn create_ssl_certs() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap(),
                     _ => panic!("unexpected role for CRL generation: {role:?}"),
                 };
-                let crl = crl_for_serial(cert.params().serial_number.clone().unwrap())
-                    .signed_by(&issuer.cert, &issuer.key_pair)?;
-                let mut crl_file = File::create(
+
+                let revoked_crl =
+                    crl_for_serial(params.serial_number.clone().unwrap()).signed_by(&issuer.0)?;
+                let mut revoked_crl_file = File::create(
                     alg.output_directory()
                         .join(format!("{}.revoked.crl.pem", role.label())),
                 )?;
-                crl_file.write_all(crl.pem().unwrap().as_bytes())?;
+                revoked_crl_file.write_all(revoked_crl.pem().unwrap().as_bytes())?;
+
+                let expired_crl = expired_crl().signed_by(&issuer.0)?;
+                let mut expired_crl_file = File::create(
+                    alg.output_directory()
+                        .join(format!("{}.expired.crl.pem", role.label())),
+                )?;
+                expired_crl_file.write_all(expired_crl.pem().unwrap().as_bytes())?;
             }
 
             // When we're issuing end entity or client certs we have a bit of extra work to do
@@ -85,11 +100,11 @@ pub fn create_ssl_certs() -> Result<(), Box<dyn std::error::Error>> {
                 let root = &certified_keys
                     .get(&(Role::TrustAnchor, alg.inner))
                     .unwrap()
-                    .cert;
+                    .1;
                 let intermediate = &certified_keys
                     .get(&(Role::Intermediate, alg.inner))
                     .unwrap()
-                    .cert;
+                    .1;
 
                 // Write the PEM chain and full chain files for the end entity and client certs.
                 // Chain files include the intermediate and root certs, while full chain files include
@@ -107,9 +122,16 @@ pub fn create_ssl_certs() -> Result<(), Box<dyn std::error::Error>> {
                         chain_file.write_all(cert.pem().as_bytes())?;
                     }
                 }
+
+                // Write the PEM public key for the end entity and client.
+                let mut raw_public_key_file = File::create(
+                    alg.output_directory()
+                        .join(format!("{}.spki.pem", role.label())),
+                )?;
+                raw_public_key_file.write_all(key_pair.public_key_pem().as_bytes())?;
             }
 
-            certified_keys.insert((role, alg.inner), CertifiedKey { cert, key_pair });
+            certified_keys.insert((role, alg.inner), (Issuer::new(params, key_pair), cert));
         }
     }
 
@@ -129,6 +151,18 @@ fn crl_for_serial(serial_number: SerialNumber) -> CertificateRevocationListParam
             reason_code: Some(RevocationReason::KeyCompromise),
             invalidity_date: None,
         }],
+        key_identifier_method: KeyIdMethod::Sha256,
+    }
+}
+
+fn expired_crl() -> CertificateRevocationListParams {
+    let now = OffsetDateTime::now_utc();
+    CertificateRevocationListParams {
+        this_update: now - Duration::from_secs(60),
+        next_update: now,
+        crl_number: SerialNumber::from(1234),
+        issuing_distribution_point: None,
+        revoked_certs: vec![],
         key_identifier_method: KeyIdMethod::Sha256,
     }
 }

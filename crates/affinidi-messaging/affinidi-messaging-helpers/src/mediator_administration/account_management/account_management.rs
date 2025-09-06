@@ -421,7 +421,7 @@ pub(crate) async fn select_did(
         let selection = Select::with_theme(theme)
             .with_prompt("Select an action?")
             .default(0)
-            .items(&[
+            .items([
                 "Scan existing DIDs on Mediator?",
                 "Manually enter DID or DID Hash?",
                 "Back",
