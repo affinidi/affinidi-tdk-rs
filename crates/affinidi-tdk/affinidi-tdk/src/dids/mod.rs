@@ -4,8 +4,6 @@
  * Various helper functions for working with DIDs.
  */
 
-use std::fmt::Display;
-
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::errors::Result;
 use did_peer::{
@@ -13,6 +11,7 @@ use did_peer::{
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
 use ssi::{JWK, dids::DIDKey, verification_methods::ssi_core::OneOrMany};
+use std::fmt::Display;
 
 /// Supported DID Methods
 pub enum DIDMethod {
