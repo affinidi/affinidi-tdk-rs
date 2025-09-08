@@ -382,7 +382,7 @@ impl Secret {
             };
 
             let jwk = json!({
-                "crv": "Ed25519",
+                "crv": "X25519",
                 "d": secret,
                 "kty": "OKP",
                 "x": public

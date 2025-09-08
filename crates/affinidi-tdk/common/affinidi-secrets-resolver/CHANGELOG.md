@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+## 8th September 2025 (0.1.14)
+
+* **FIX:** X25519 Secrets had type set to Ed25519
+
 ## 2nd September 2025 (0.1.13)
 
 * **FEATURE:** Ability to convert a ED25519 Secret to a X25519 Secret added
