@@ -9,7 +9,6 @@ use multibase::Base;
 use serde::{Deserialize, Serialize};
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
-use ssi::security::MultibaseBuf;
 use thiserror::Error;
 use tracing::debug;
 
@@ -128,8 +127,7 @@ impl DataIntegrityProof {
         );
 
         // Step 7: Encode using base58btc
-        proof_options.proof_value =
-            Some(MultibaseBuf::encode(Base::Base58Btc, &signed).to_string());
+        proof_options.proof_value = Some(multibase::encode(Base::Base58Btc, &signed).to_string());
 
         Ok(proof_options)
     }

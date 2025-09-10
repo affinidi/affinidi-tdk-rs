@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
-use ssi::security::MultibaseBuf;
 use tracing::debug;
 
 use crate::{
@@ -37,9 +36,9 @@ where
     };
 
     let proof_value = if let Some(proof_value) = &proof.proof_value {
-        MultibaseBuf::new(proof_value.to_string())
-            .decode()
+        multibase::decode(proof_value)
             .map_err(|e| DataIntegrityError::InputDataError(format!("Invalid proof value: {e}")))?
+            .1
     } else {
         return Err(DataIntegrityError::InputDataError(
             "proofValue is missing in the proof".to_string(),
@@ -126,7 +125,7 @@ where
         .verify(
             secret.as_slice(),
             hash_data.as_slice(),
-            proof_value.1.as_slice(),
+            proof_value.as_slice(),
         )
         .map_err(|e| {
             DataIntegrityError::VerificationError(format!("Signature verification failed: {e}"))
