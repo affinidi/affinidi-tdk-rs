@@ -1,8 +1,9 @@
 # Affinidi Secrets Manager
 
-## 10th September 2025 (0.1.15)
+## 10th September 2025 (0.1.16)
 
 * **IMPROVEMENT:** Removing SSI crate as a dependency
+* **IMPROVEMENT:** Added ability to create ED25519 and X25519 keys directly
 
 ## 8th September 2025 (0.1.14)
 

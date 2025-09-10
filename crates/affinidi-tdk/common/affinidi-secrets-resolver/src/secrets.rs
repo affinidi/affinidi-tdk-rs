@@ -60,15 +60,15 @@ pub struct Secret {
 
     /// Performance cheat to hold private key material in a single field
     #[serde(skip)]
-    private_bytes: Vec<u8>,
+    pub(crate) private_bytes: Vec<u8>,
 
     /// Performance cheat to hold public key material in a single field
     #[serde(skip)]
-    public_bytes: Vec<u8>,
+    pub(crate) public_bytes: Vec<u8>,
 
     /// What crypto type is this secret
     #[serde(skip)]
-    key_type: KeyType,
+    pub(crate) key_type: KeyType,
 }
 
 /// Converts the inner Secret Shadow to a public Shadow Struct
