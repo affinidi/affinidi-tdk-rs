@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+## 10th September 2025 (0.1.15)
+
+* **IMPROVEMENT:** Removing SSI crate as a dependency
+
 ## 8th September 2025 (0.1.14)
 
 * **FIX:** X25519 Secrets had type set to Ed25519

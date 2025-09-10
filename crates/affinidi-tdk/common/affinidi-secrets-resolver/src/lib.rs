@@ -11,10 +11,9 @@
  *   - ThreadedSecretsResolver
  */
 
-use std::{cell::RefCell, time::Duration};
-
 use ahash::AHashMap;
 use secrets::Secret;
+use std::{cell::RefCell, time::Duration};
 use task::{SecretTaskCommand, SecretsTask};
 use tokio::{
     sync::{
@@ -26,6 +25,7 @@ use tokio::{
 use tracing::{debug, warn};
 
 pub mod errors;
+pub mod jwk;
 pub mod secrets;
 pub mod task;
 
