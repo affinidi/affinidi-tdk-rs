@@ -97,7 +97,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14c2a2b62d45b003b6a3afb2a5cec29aab99d01271b5756a358d05a2f1be9a40"
 dependencies = [
- "affinidi-secrets-resolver 0.1.14",
+ "affinidi-secrets-resolver 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono",
  "ed25519-dalek",
  "multibase 0.9.1",
@@ -422,9 +422,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.1.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fab20acd2d015cf9313b42e2d66bd8d01a1c7d6111c81fdabc0fb9cb53eabfb9"
+version = "0.1.15"
 dependencies = [
  "ahash 0.8.12",
  "askar-crypto",
@@ -435,15 +433,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "ssi",
+ "ssi-multicodec",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
 name = "affinidi-secrets-resolver"
 version = "0.1.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09b22f7eba2654e0c199270562620ef4c4a25e2b45aac9583aedd1911f285eed"
 dependencies = [
  "ahash 0.8.12",
  "askar-crypto",
@@ -2667,7 +2668,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef2f789de3a1cf2fd2e3d92a34dfdf1e2e8f1b86eab64eaf30221b36fe3ec537"
 dependencies = [
  "affinidi-data-integrity 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "affinidi-secrets-resolver 0.1.14",
+ "affinidi-secrets-resolver 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "ahash 0.8.12",
  "base58",
  "chrono",
