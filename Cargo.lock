@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
