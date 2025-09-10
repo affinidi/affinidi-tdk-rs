@@ -4,13 +4,20 @@
  * Various helper functions for working with DIDs.
  */
 
-use affinidi_secrets_resolver::secrets::Secret;
-use affinidi_tdk_common::errors::Result;
+use affinidi_secrets_resolver::{
+    jwk::{ECParams, JWK, OctectParams, Params},
+    secrets::Secret,
+};
+use affinidi_tdk_common::errors::{Result, TDKError};
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi::{JWK, dids::DIDKey, verification_methods::ssi_core::OneOrMany};
+use ssi::{
+    JWK as SSI_JWK, dids::DIDKey, jwk::Params as SSI_Params,
+    verification_methods::ssi_core::OneOrMany,
+};
 use std::fmt::Display;
 
 /// Supported DID Methods
@@ -69,18 +76,74 @@ impl TryFrom<&str> for KeyType {
 pub struct DID;
 
 impl DID {
+    // Converts the SSI Library JWK to the Affinidi Secrets JWK
+    // This helps with reducing the dependency on the SSI library everywhere
+    fn convert(jwk: SSI_JWK) -> Result<JWK> {
+        let params = match jwk.params {
+            SSI_Params::EC(params) => {
+                let Some(curve) = &params.curve else {
+                    return Err(TDKError::Secrets(
+                        "Missing curve parameter in EC JWK".to_string(),
+                    ));
+                };
+
+                Params::EC(ECParams {
+                    curve: curve.to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(
+                        &params
+                            .x_coordinate
+                            .as_ref()
+                            .ok_or_else(|| TDKError::Secrets("Missing x_coordinate".to_string()))?
+                            .0,
+                    ),
+                    y: BASE64_URL_SAFE_NO_PAD.encode(
+                        &params
+                            .y_coordinate
+                            .as_ref()
+                            .ok_or_else(|| TDKError::Secrets("Missing y_coordinate".to_string()))?
+                            .0,
+                    ),
+                    d: BASE64_URL_SAFE_NO_PAD.encode(
+                        &params
+                            .ecc_private_key
+                            .as_ref()
+                            .ok_or_else(|| TDKError::Secrets("Missing private bytes".to_string()))?
+                            .0,
+                    ),
+                })
+            }
+            SSI_Params::OKP(params) => Params::OKP(OctectParams {
+                curve: params.curve.clone(),
+                x: BASE64_URL_SAFE_NO_PAD.encode(&params.public_key.0),
+                d: BASE64_URL_SAFE_NO_PAD.encode(
+                    &params
+                        .private_key
+                        .as_ref()
+                        .ok_or_else(|| TDKError::Secrets("Missing private bytes!".to_string()))?
+                        .0,
+                ),
+            }),
+            _ => return Err(TDKError::Secrets("Invalid JWK Key Type".to_string())),
+        };
+
+        Ok(JWK {
+            key_id: jwk.key_id,
+            params,
+        })
+    }
+
     /// Generate a new DID:key
     /// Returns the DID and the associated secret
     pub fn generate_did_key(key_type: KeyType) -> Result<(String, Secret)> {
         let jwk = match key_type {
-            KeyType::P256 => JWK::generate_p256(),
-            KeyType::P384 => JWK::generate_p384(),
-            KeyType::Ed25519 => JWK::generate_ed25519().unwrap(),
-            KeyType::Secp256k1 => JWK::generate_secp256k1(),
+            KeyType::P256 => SSI_JWK::generate_p256(),
+            KeyType::P384 => SSI_JWK::generate_p384(),
+            KeyType::Ed25519 => SSI_JWK::generate_ed25519().unwrap(),
+            KeyType::Secp256k1 => SSI_JWK::generate_secp256k1(),
         };
 
         let did = DIDKey::generate(&jwk).unwrap();
-        let mut secret = Secret::from_jwk(&jwk)?;
+        let mut secret = Secret::from_jwk(&DID::convert(jwk)?)?;
         secret.id = [&did, "#", &did[8..]].concat();
 
         Ok((did.to_string(), secret))

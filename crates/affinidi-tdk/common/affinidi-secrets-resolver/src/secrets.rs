@@ -2,7 +2,10 @@
 Handles Secrets - mainly used for internal representation and for saving to files (should always be encrypted)
 
 */
-use crate::errors::{Result, SecretsResolverError};
+use crate::{
+    errors::{Result, SecretsResolverError},
+    jwk::{JWK, Params},
+};
 use askar_crypto::{
     alg::ed25519::Ed25519KeyPair,
     repr::{KeySecretBytes, ToPublicBytes, ToSecretBytes},
@@ -13,6 +16,11 @@ use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use ssi_multicodec::{
+    ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
+    P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+};
+/*
 use ssi::{
     JWK,
     jwk::{Base64urlUInt, Params},
@@ -21,6 +29,7 @@ use ssi::{
         P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
+*/
 use tracing::warn;
 
 /// A Shadow inner struct that helps with deserializing
@@ -87,46 +96,36 @@ impl TryFrom<SecretShadow> for Secret {
 
 impl Secret {
     /// Helper function to get raw bytes
-    fn convert_to_raw(input: Option<Base64urlUInt>) -> Result<Vec<u8>> {
-        if let Some(a) = input {
-            Ok(a.0)
-        } else {
-            Err(SecretsResolverError::KeyError(
-                "Failed to convert key to raw bytes".into(),
-            ))
-        }
+    fn convert_to_raw(input: &str) -> Result<Vec<u8>> {
+        BASE64_URL_SAFE_NO_PAD
+            .decode(input)
+            .map_err(|e| SecretsResolverError::KeyError(format!("Failed to decode base64url: {e}")))
     }
 
     /// Converts a JWK to a Secret
     pub fn from_jwk(jwk: &JWK) -> Result<Self> {
         match &jwk.params {
             Params::EC(params) => {
-                if let Some(curve) = &params.curve {
-                    let mut x = Secret::convert_to_raw(params.x_coordinate.clone())?;
-                    let mut y = Secret::convert_to_raw(params.y_coordinate.clone())?;
+                let mut x = Secret::convert_to_raw(&params.x)?;
+                let mut y = Secret::convert_to_raw(&params.y)?;
 
-                    x.append(&mut y);
-                    Ok(Secret {
-                        id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
-                        type_: SecretType::JsonWebKey2020,
-                        secret_material: SecretMaterial::JWK {
-                            private_key_jwk: json!({
-                                "crv": curve,
-                                "d":  params.ecc_private_key,
-                                "kty": "EC",
-                                "x": params.x_coordinate,
-                                "y": params.y_coordinate
-                            }),
-                        },
-                        private_bytes: Secret::convert_to_raw(params.ecc_private_key.clone())?,
-                        public_bytes: x,
-                        key_type: KeyType::try_from(curve.as_str())?,
-                    })
-                } else {
-                    Err(SecretsResolverError::KeyError(
-                        "EC Curve not defined".into(),
-                    ))
-                }
+                x.append(&mut y);
+                Ok(Secret {
+                    id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
+                    type_: SecretType::JsonWebKey2020,
+                    secret_material: SecretMaterial::JWK {
+                        private_key_jwk: json!({
+                            "crv": params.curve,
+                            "d":  params.d,
+                            "kty": "EC",
+                            "x": params.x,
+                            "y": params.y
+                        }),
+                    },
+                    private_bytes: Secret::convert_to_raw(&params.d)?,
+                    public_bytes: x,
+                    key_type: KeyType::try_from(params.curve.as_str())?,
+                })
             }
             Params::OKP(params) => Ok(Secret {
                 id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
@@ -134,19 +133,15 @@ impl Secret {
                 secret_material: SecretMaterial::JWK {
                     private_key_jwk: json!({
                         "crv": params.curve,
-                        "d":  params.private_key,
+                        "d":  params.d,
                         "kty": "OKP",
-                        "x": params.public_key
+                        "x": params.x
                     }),
                 },
-                private_bytes: Secret::convert_to_raw(params.private_key.clone())?,
-                public_bytes: Secret::convert_to_raw(Some(params.public_key.clone()))?,
+                private_bytes: Secret::convert_to_raw(&params.d)?,
+                public_bytes: Secret::convert_to_raw(&params.x)?,
                 key_type: KeyType::try_from(params.curve.as_str())?,
             }),
-            _ => Err(SecretsResolverError::KeyError(format!(
-                "Unsupported key type: {:?}",
-                jwk.params
-            ))),
         }
     }
 
