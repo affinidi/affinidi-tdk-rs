@@ -1,5 +1,11 @@
 # Affinidi TDK Changelog
 
+## 10th September 2025 (Release 0.1.14)
+
+* **MAINTENANCE:** As part of removing the SSI library from `affinidi-secrets-resolver`,
+added JWK conversion between SSI and Affinidi JWK Structs
+* **MAINTENANCE:** Crate dependencies updated
+
 ## 29th May 2025 (Release 0.1.12)
 
 * **MAINTENANCE:** Crate dependencies updated
