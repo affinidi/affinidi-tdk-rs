@@ -1,5 +1,10 @@
 # Affinidi Data Integrity Changelog
 
+## 10th September 2025 Release 0.2.1
+
+* **IMPROVEMENT:** Removed SSI crate to lessen upstream dependencies
+* **MAINTENANCE:** Updating crate dependencies
+
 ## 8th July 2025 Release 0.2.0
 
 * **BREAKING:** API Changed to use generics that implement Serialize/Deserialize
