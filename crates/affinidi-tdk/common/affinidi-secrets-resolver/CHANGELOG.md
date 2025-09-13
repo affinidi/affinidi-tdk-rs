@@ -1,8 +1,9 @@
 # Affinidi Secrets Manager
 
-## 13th September 2025 (0.1.17)
+## 13th September 2025 (0.1.18)
 
 * **IMPROVEMENT:** Crate can now be compiled to a WASM compatible library
+* **FIX:** Incorrect encoding on multikey public_keys for P-256, P384 and secp256k1
 
 ## 10th September 2025 (0.1.16)
 
