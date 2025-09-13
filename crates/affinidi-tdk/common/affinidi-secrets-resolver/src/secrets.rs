@@ -318,7 +318,7 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = to_x25519(&self.private_bytes)?;
+            let x25519_secret = to_x25519(&self.private_bytes);
 
             let x25519_sk = StaticSecret::from(x25519_secret);
             let x25519_pk = PublicKey::from(&x25519_sk);
@@ -397,9 +397,8 @@ pub enum SecretMaterial {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::Secret;
+    use serde_json::json;
 
     #[test]
     fn check_hash() {

@@ -1,7 +1,4 @@
-use crate::{
-    errors::SecretsResolverError,
-    secrets::{KeyType, Secret, SecretMaterial, SecretType},
-};
+use crate::secrets::{KeyType, Secret, SecretMaterial, SecretType};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::SigningKey;
 use rand::{RngCore, rngs::OsRng};
@@ -41,7 +38,7 @@ impl Secret {
 }
 
 /// Converts an ed25519 secret to a x25519 secret
-pub(crate) fn to_x25519(secret: &Vec<u8>) -> Result<[u8; 32], SecretsResolverError> {
+pub(crate) fn to_x25519(secret: &Vec<u8>) -> [u8; 32] {
     let mut bytes = Sha512::digest(secret);
 
     bytes[0] &= 0xF8;
@@ -51,7 +48,7 @@ pub(crate) fn to_x25519(secret: &Vec<u8>) -> Result<[u8; 32], SecretsResolverErr
     let mut a: [u8; 32] = [0; 32]; // Initialize withg zeros
 
     a.copy_from_slice(&bytes[0..32]);
-    Ok(a)
+    a
 }
 
 #[cfg(test)]
@@ -69,9 +66,6 @@ mod tests {
 
     #[test]
     fn check_ed25519_to_x25519_key_conversion() {
-        let result = to_x25519(&ED25519_SK.to_vec())
-            .expect("Couldn't convert ED25519 secret key to x25519 secret");
-
-        assert_eq!(result, CURVE25519_SK);
+        assert_eq!(to_x25519(&ED25519_SK.to_vec()), CURVE25519_SK);
     }
 }
