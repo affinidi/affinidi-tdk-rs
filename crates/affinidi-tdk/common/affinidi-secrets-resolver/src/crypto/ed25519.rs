@@ -50,7 +50,7 @@ pub(crate) fn to_x25519(secret: &Vec<u8>) -> Result<[u8; 32], SecretsResolverErr
 
     let mut a: [u8; 32] = [0; 32]; // Initialize withg zeros
 
-    a.copy_from_slice(&bytes);
+    a.copy_from_slice(&bytes[0..32]);
     Ok(a)
 }
 
