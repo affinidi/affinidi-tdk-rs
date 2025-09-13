@@ -231,10 +231,50 @@ impl Secret {
         let encoded = match self.key_type {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
-            KeyType::P256 => MultiEncodedBuf::encode_bytes(P256_PUB, &self.public_bytes),
-            KeyType::P384 => MultiEncodedBuf::encode_bytes(P384_PUB, &self.public_bytes),
-            KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PUB, &self.public_bytes),
-            KeyType::Secp256k1 => MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &self.public_bytes),
+            KeyType::P256 => {
+                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                    0x02
+                } else {
+                    0x03
+                };
+                let mut compressed: [u8; 33] = [0; 33];
+                compressed[0] = parity;
+                for x in self.public_bytes[0..32].iter().enumerate() {
+                    compressed[x.0 + 1] = *x.1;
+                }
+                MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
+            }
+            KeyType::P384 => {
+                let parity: u8 = if self.public_bytes[95] % 2 == 0 {
+                    0x02
+                } else {
+                    0x03
+                };
+                let mut compressed: [u8; 49] = [0; 49];
+                compressed[0] = parity;
+                for x in self.public_bytes[0..48].iter().enumerate() {
+                    compressed[x.0 + 1] = *x.1;
+                }
+                MultiEncodedBuf::encode_bytes(P384_PUB, &compressed)
+            }
+            KeyType::P521 => {
+                return Err(SecretsResolverError::KeyError(
+                    "P-521 is not supported".to_string(),
+                ));
+            }
+            KeyType::Secp256k1 => {
+                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                    0x02
+                } else {
+                    0x03
+                };
+                let mut compressed: [u8; 33] = [0; 33];
+                compressed[0] = parity;
+                for x in self.public_bytes[0..32].iter().enumerate() {
+                    compressed[x.0 + 1] = *x.1;
+                }
+                MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &compressed)
+            }
             _ => {
                 return Err(SecretsResolverError::KeyError(
                     "Unsupported key type".into(),
