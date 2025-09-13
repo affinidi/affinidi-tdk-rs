@@ -3,12 +3,9 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 use crate::{
+    crypto::ed25519::to_x25519,
     errors::{Result, SecretsResolverError},
     jwk::{JWK, Params},
-};
-use askar_crypto::{
-    alg::ed25519::Ed25519KeyPair,
-    repr::{KeySecretBytes, ToPublicBytes, ToSecretBytes},
 };
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -20,17 +17,8 @@ use ssi_multicodec::{
     ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
     P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
 };
-/*
-use ssi::{
-    JWK,
-    jwk::{Base64urlUInt, Params},
-    multicodec::{
-        ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
-    },
-};
-*/
 use tracing::warn;
+use x25519_dalek::{PublicKey, StaticSecret};
 
 /// A Shadow inner struct that helps with deserializing
 /// Allows for post-processing of the JWK material
@@ -329,52 +317,14 @@ impl Secret {
                 self.key_type
             )))
         } else {
-            let x25519 = Ed25519KeyPair::from_secret_bytes(self.private_bytes.as_slice())
-                .map_err(|e| {
-                    SecretsResolverError::KeyError(format!(
-                        "Couldn't derive X25519 from ED25519 secret. Reason: {}",
-                        e
-                    ))
-                })?
-                .to_x25519_keypair();
+            // Convert to X25519 Secret bytes
+            let x25519_secret = to_x25519(&self.private_bytes)?;
 
-            let secret = match x25519.to_secret_bytes() {
-                Ok(s) => {
-                    if let Some(secret) = s.first_chunk::<32>() {
-                        BASE64_URL_SAFE_NO_PAD.encode(secret)
-                    } else {
-                        return Err(SecretsResolverError::KeyError(format!(
-                            "Couldn't get secret bytes for key ({})",
-                            self.id
-                        )));
-                    }
-                }
-                Err(e) => {
-                    return Err(SecretsResolverError::KeyError(format!(
-                        "Couldn't get X25519 secret_key bytes. Reason: {}",
-                        e
-                    )));
-                }
-            };
+            let x25519_sk = StaticSecret::from(x25519_secret);
+            let x25519_pk = PublicKey::from(&x25519_sk);
 
-            let public = match x25519.to_public_bytes() {
-                Ok(s) => {
-                    if let Some(public) = s.first_chunk::<32>() {
-                        BASE64_URL_SAFE_NO_PAD.encode(public)
-                    } else {
-                        return Err(SecretsResolverError::KeyError(format!(
-                            "Couldn't get public bytes for key ({})",
-                            self.id
-                        )));
-                    }
-                }
-                Err(e) => {
-                    return Err(SecretsResolverError::KeyError(format!(
-                        "Couldn't get X25519 public_key bytes. Reason: {}",
-                        e
-                    )));
-                }
-            };
+            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_secret);
+            let public = BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes());
 
             let jwk = json!({
                 "crv": "X25519",

@@ -75,7 +75,7 @@ dependencies = [
 name = "affinidi-data-integrity"
 version = "0.2.1"
 dependencies = [
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "chrono",
  "clap",
  "ed25519-dalek",
@@ -96,7 +96,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44ad26ac55172999da5beb5ecaab47c45e46c6afd2003dc447b3e4eed4efcd06"
 dependencies = [
- "affinidi-secrets-resolver 0.1.15",
+ "affinidi-secrets-resolver 0.1.16",
  "chrono",
  "ed25519-dalek",
  "multibase 0.9.1",
@@ -114,7 +114,7 @@ version = "0.1.11"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "base64 0.22.1",
  "chrono",
  "reqwest 0.12.23",
@@ -194,7 +194,7 @@ dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-messaging-didcomm",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "affinidi-tdk-common",
  "base64 0.22.1",
  "chrono",
@@ -216,7 +216,7 @@ name = "affinidi-messaging-didcomm"
 version = "0.10.9"
 dependencies = [
  "affinidi-did-resolver-cache-sdk",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "ahash 0.8.12",
  "anyhow",
  "askar-crypto",
@@ -278,7 +278,7 @@ dependencies = [
  "affinidi-messaging-mediator-common",
  "affinidi-messaging-mediator-processors",
  "affinidi-messaging-sdk",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "ahash 0.8.12",
  "async-convert",
  "aws-config",
@@ -420,29 +420,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.1.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09b22f7eba2654e0c199270562620ef4c4a25e2b45aac9583aedd1911f285eed"
-dependencies = [
- "ahash 0.8.12",
- "askar-crypto",
- "base58",
- "base64 0.22.1",
- "multibase 0.9.1",
- "multihash 0.19.3",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "ssi-multicodec",
- "thiserror 2.0.16",
- "tokio",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "affinidi-secrets-resolver"
 version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "170b90e02e84db8f994b5a08fcebb30a60d98ec10a55f65843406dc2f329d35e"
 dependencies = [
  "ahash 0.8.12",
  "askar-crypto",
@@ -463,6 +443,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "affinidi-secrets-resolver"
+version = "0.1.17"
+dependencies = [
+ "ahash 0.8.12",
+ "base58",
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "getrandom 0.2.16",
+ "multibase 0.9.1",
+ "multihash 0.19.3",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ssi-multicodec",
+ "thiserror 2.0.16",
+ "tokio",
+ "tracing",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "affinidi-tdk"
 version = "0.1.14"
 dependencies = [
@@ -471,7 +474,7 @@ dependencies = [
  "affinidi-meeting-place",
  "affinidi-messaging-didcomm",
  "affinidi-messaging-sdk",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "affinidi-tdk-common",
  "base64 0.22.1",
  "clap",
@@ -490,7 +493,7 @@ version = "0.1.12"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-resolver-cache-sdk",
- "affinidi-secrets-resolver 0.1.16",
+ "affinidi-secrets-resolver 0.1.17",
  "ahash 0.8.12",
  "base64 0.22.1",
  "did-peer",
@@ -861,9 +864,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-secretsmanager"
-version = "1.87.0"
+version = "1.88.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0558e5c1e322da38bdb9ba9aa5cbb0b7a18c9893faf8a8aae88c27dbe1f6221b"
+checksum = "1656cc8753202f255a1bcc6e06f9e768f30968684022fd0dd2f8912cad00fcef"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -883,9 +886,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssm"
-version = "1.92.0"
+version = "1.93.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6a840b1af3168bf2bb1656ec8cfd394283be4ab08ee0fe7d292410711aa7af2"
+checksum = "bb7185a8daf4ca44266e82870e4681afcb5bd7cf2d289666f9240f21300a3468"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -905,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.83.0"
+version = "1.84.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "643cd43af212d2a1c4dedff6f044d7e1961e5d9e7cfe773d70f31d9842413886"
+checksum = "357a841807f6b52cb26123878b3326921e2a25faca412fabdd32bd35b7edd5d3"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -927,9 +930,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.84.0"
+version = "1.85.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20ec4a95bd48e0db7a424356a161f8d87bd6a4f0af37204775f0da03d9e39fc3"
+checksum = "67e05f33b6c9026fecfe9b3b6740f34d41bc6ff641a6a32dabaab60209245b75"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -949,9 +952,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.85.0"
+version = "1.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "410309ad0df4606bc721aff0d89c3407682845453247213a0ccc5ff8801ee107"
+checksum = "e7d835f123f307cafffca7b9027c14979f1d403b417d8541d67cf252e8a21e35"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -1083,9 +1086,9 @@ dependencies = [
 
 [[package]]
 name = "aws-smithy-runtime"
-version = "1.9.1"
+version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3946acbe1ead1301ba6862e712c7903ca9bb230bdf1fbd1b5ac54158ef2ab1f"
+checksum = "4fa63ad37685ceb7762fa4d73d06f1d5493feb88e3f27259b9ed277f4c01b185"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-http",
@@ -1648,9 +1651,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.36"
+version = "1.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5252b3d2648e5eedbc1a6f501e3c795e07025c1e93bbf8bbdd6eef7f447a6d54"
+checksum = "65193589c6404eb80b450d618eaf9a2cafaaafd57ecce47370519ef674a7bd44"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -2663,17 +2666,17 @@ version = "0.1.8"
 
 [[package]]
 name = "didwebvh-rs"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef2f789de3a1cf2fd2e3d92a34dfdf1e2e8f1b86eab64eaf30221b36fe3ec537"
+checksum = "a400c7607b1b03d5a57cf56bc6dcc7bb1e4914ce33605b2679f71860ad811e56"
 dependencies = [
  "affinidi-data-integrity 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "affinidi-secrets-resolver 0.1.15",
+ "affinidi-secrets-resolver 0.1.16",
  "ahash 0.8.12",
  "base58",
  "chrono",
- "iref",
  "multihash 0.19.3",
+ "regex",
  "reqwest 0.12.23",
  "serde",
  "serde_json",
@@ -3674,9 +3677,9 @@ dependencies = [
 
 [[package]]
 name = "iana-time-zone"
-version = "0.1.63"
+version = "0.1.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0c919e5debc312ad217002b8048a17b7d83f80703865bbfcfebb0458b0b27d8"
+checksum = "33e57f83510bb73707521ebaffa789ec8caf86f9657cad665b092b581d40e9fb"
 dependencies = [
  "android_system_properties",
  "core-foundation-sys",
@@ -3684,7 +3687,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.0",
 ]
 
 [[package]]
@@ -5798,9 +5801,9 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
-version = "0.14.3"
+version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0068c5b3cab1d4e271e0bb6539c87563c43411cad90b057b15c79958fbeb41f7"
+checksum = "4c83367ba62b3f1dbd0f086ede4e5ebfb4713fb234dbbc5807772a31245ff46d"
 dependencies = [
  "aws-lc-rs",
  "pem",
@@ -6141,7 +6144,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.4",
+ "rustls-webpki 0.103.5",
  "subtle",
  "zeroize",
 ]
@@ -6212,7 +6215,7 @@ dependencies = [
  "rustls 0.23.31",
  "rustls-native-certs 0.8.1",
  "rustls-platform-verifier-android",
- "rustls-webpki 0.103.4",
+ "rustls-webpki 0.103.5",
  "security-framework 3.4.0",
  "security-framework-sys",
  "webpki-root-certs",
@@ -6237,9 +6240,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.4"
+version = "0.103.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a17884ae0c1b773f1ccd2bd4a8c72f16da897310a98b0e84bf349ad5ead92fc"
+checksum = "b5a37813727b78798e53c2bec3f5e8fe12a6d6f8389bf9ca7802add4c9905ad8"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -8918,6 +8921,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-core"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57fe7168f7de578d2d8a05b07fd61870d2e73b4020e9f49aa00da8471723497c"
+dependencies = [
+ "windows-implement 0.60.0",
+ "windows-interface 0.59.1",
+ "windows-link 0.2.0",
+ "windows-result 0.4.0",
+ "windows-strings 0.5.0",
+]
+
+[[package]]
 name = "windows-future"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9024,6 +9040,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows-result"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7084dcc306f89883455a206237404d3eaf961e5bd7e0f312f7c91f57eb44167f"
+dependencies = [
+ "windows-link 0.2.0",
+]
+
+[[package]]
 name = "windows-strings"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9040,6 +9065,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-strings"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7218c655a553b0bed4426cf54b20d7ba363ef543b52d515b3e48d7fd55318dda"
+dependencies = [
+ "windows-link 0.2.0",
 ]
 
 [[package]]
@@ -9393,6 +9427,7 @@ checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
 dependencies = [
  "curve25519-dalek",
  "rand_core 0.6.4",
+ "serde",
  "zeroize",
 ]
 

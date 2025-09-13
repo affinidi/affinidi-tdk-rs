@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+## 13th September 2025 (0.1.17)
+
+* **IMPROVEMENT:** Crate can now be compiled to a WASM compatible library
+
 ## 10th September 2025 (0.1.16)
 
 * **IMPROVEMENT:** Removing SSI crate as a dependency
