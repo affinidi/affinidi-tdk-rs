@@ -8,6 +8,13 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## September 2025
+
+### Mediator (0.10.14)
+
+* **FIX:** Improved handling of SSL configuration
+  * Can now comment out SSL certificate and key file locations
+
 ## 6th September 2025
 
 ### Mediator (0.10.13)

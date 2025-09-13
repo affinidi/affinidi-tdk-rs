@@ -163,8 +163,8 @@ pub async fn start() {
         // TODO: Build a proper TLS Config
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let ssl_config = RustlsConfig::from_pem_file(
-            config.security.ssl_certificate_file,
-            config.security.ssl_key_file,
+            config.security.ssl_certificate_file.unwrap_or_default(),
+            config.security.ssl_key_file.unwrap_or_default(),
         )
         .await
         .expect("bad certificate/key");
