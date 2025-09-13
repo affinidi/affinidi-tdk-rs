@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-secrets-resolver"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.1.16"
+version = "0.1.17"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -14,23 +14,21 @@ rust-version.workspace = true
 
 [dependencies]
 ahash = "0.8"
-askar-crypto = "0.3.6"
+# askar-crypto = "0.3.6"
 base58 = "0.2"
 base64 = "0.22"
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 multibase = "0.9"
 multihash = "0.19"
-rand = "0.8"                                                  # Version conflict because of ed25519-dalek
+rand = "0.8" # Version conflict because of ed25519-dalek (2.2.0)
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha2 = "0.10"
-# ssi = { version = "0.12" }
 tokio = { version = "1.47", features = ["macros", "rt", "sync", "time"] }
 tracing = { version = "0.1", features = [
   "max_level_debug",
   "release_max_level_info",
 ] }
-zeroize = "1.8"
 ssi-multicodec = { version = "0.2", features = [
   "ed25519",
   "k256",
@@ -38,3 +36,9 @@ ssi-multicodec = { version = "0.2", features = [
   "p384",
 ] }
 thiserror = "2.0"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+zeroize = "1.8"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# This can be updated to 0.3 when other dependencies are updated to getrandom 0.3 (mainly ed25519-dalek crate)
+getrandom = { version = "0.2", features = ["js"] }
