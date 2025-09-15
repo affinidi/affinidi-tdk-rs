@@ -1,14 +1,12 @@
+use did_method_key::DIDKey;
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi::{
-    JWK,
-    dids::{DID, DIDResolver},
-    jwk::Params,
-    multicodec::MultiEncoded,
-    verification_methods::ssi_core::OneOrMany,
-};
+use ssi_core::OneOrMany;
+use ssi_dids_core::{DID, DIDResolver};
+use ssi_jwk::{JWK, Params};
+use ssi_multicodec::MultiEncoded;
 
 #[tokio::main]
 async fn main() {
@@ -66,12 +64,12 @@ async fn main() {
     }
     println!();
 
-    let key = ssi::dids::DIDKey;
+    let key = DIDKey;
 
     // Create the did:key DID's for each key above
-    let e_did_key = ssi::dids::DIDKey::generate(&e_ed25519_key).unwrap();
-    let v_did_key = ssi::dids::DIDKey::generate(&v_ed25519_key).unwrap();
-    let v2_did_key = ssi::dids::DIDKey::generate(&v_secp256k1_key).unwrap();
+    let e_did_key = DIDKey::generate(&e_ed25519_key).unwrap();
+    let v_did_key = DIDKey::generate(&v_ed25519_key).unwrap();
+    let v2_did_key = DIDKey::generate(&v_secp256k1_key).unwrap();
 
     // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
     let keys = vec![
@@ -150,6 +148,4 @@ async fn main() {
     let b = MultiEncoded::new(&a.1).unwrap();
     let jwk = JWK::from_multicodec(b).unwrap();
     println!("{jwk}",);
-
-    //let jwk = JWK::from
 }
