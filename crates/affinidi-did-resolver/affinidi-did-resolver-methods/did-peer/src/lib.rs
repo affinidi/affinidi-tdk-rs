@@ -18,27 +18,24 @@
 //! ```
 //!
 use base64::prelude::*;
+use did_method_key::{DIDKey, VerificationMethodType};
 use iref::UriBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use service::convert_service;
-use ssi::{
-    OneOrMany,
-    dids::{
-        DID, DIDBuf, DIDKey, DIDMethod, DIDMethodResolver, DIDURL, DIDURLBuf, DIDURLReferenceBuf,
-        Document, RelativeDIDURLBuf,
-        document::{
-            self, DIDVerificationMethod, Resource, Service, VerificationRelationships,
-            representation::{self, MediaType},
-            service::Endpoint,
-            verification_method,
-        },
-        key::VerificationMethodType,
-        resolution::{self, Content, Error, Options, Output, Parameters},
+use ssi_core::OneOrMany;
+use ssi_dids_core::{
+    DID, DIDBuf, DIDMethod, DIDMethodResolver, DIDResolver, DIDURL, DIDURLBuf, DIDURLReferenceBuf,
+    Document, RelativeDIDURLBuf,
+    document::{
+        self, DIDVerificationMethod, Resource, Service, VerificationRelationships,
+        representation::{self, MediaType},
+        service::Endpoint,
+        verification_method,
     },
-    jwk::Params,
-    prelude::*,
+    resolution::{self, Content, Error, Options, Output, Parameters},
 };
+use ssi_jwk::{JWK, Params};
 use std::{collections::BTreeMap, fmt};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -657,7 +654,7 @@ impl DIDPeer {
                     },
                     None => return Err(DIDPeerError::UnsupportedKeyType),
                 };
-                let did = if let Ok(output) = ssi::dids::DIDKey::generate(&jwk) {
+                let did = if let Ok(output) = DIDKey::generate(&jwk) {
                     output.to_string()
                 } else {
                     return Err(DIDPeerError::InternalError(
@@ -823,15 +820,14 @@ impl DIDPeer {
 
 #[cfg(test)]
 mod test {
+    use did_method_key::DIDKey;
+    use ssi_core::OneOrMany;
+    use ssi_dids_core::{DID, DIDBuf, DIDResolver, document::DIDVerificationMethod};
+    use ssi_jwk::JWK;
+
     use crate::{
         DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService,
         PeerServiceEndPoint, PeerServiceEndPointLong, PeerServiceEndPointLongMap,
-    };
-
-    use ssi::{
-        JWK,
-        dids::{DID, DIDBuf, DIDResolver, document::DIDVerificationMethod},
-        verification_methods::ssi_core::OneOrMany,
     };
 
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
@@ -1143,8 +1139,8 @@ mod test {
             None => JWK::generate_p384(),
         };
         //  Create the did:key DID's for each key above
-        let e_did_key = ssi::dids::DIDKey::generate(&encryption_key).unwrap();
-        let v_did_key = ssi::dids::DIDKey::generate(&verification_key).unwrap();
+        let e_did_key = DIDKey::generate(&encryption_key).unwrap();
+        let v_did_key = DIDKey::generate(&verification_key).unwrap();
 
         // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
         let keys = vec![

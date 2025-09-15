@@ -4,7 +4,7 @@
 
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use iref::UriBuf;
-use ssi::dids::document::Service;
+use ssi_dids_core::document::Service;
 
 use crate::{DIDPeerError, DIDPeerService};
 
@@ -48,10 +48,8 @@ pub(crate) fn convert_service(
 mod test {
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
     use iref::UriBuf;
-    use ssi::{
-        dids::document::{Service, service::Endpoint},
-        verification_methods::ssi_core::OneOrMany,
-    };
+    use ssi_core::OneOrMany;
+    use ssi_dids_core::document::{Service, service::Endpoint};
 
     #[test]
     fn service_single() {

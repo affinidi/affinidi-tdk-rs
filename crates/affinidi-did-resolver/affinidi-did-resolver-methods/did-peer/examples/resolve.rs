@@ -1,7 +1,6 @@
-use std::env;
-
 use did_peer::DIDPeer;
-use ssi::dids::{DID, DIDResolver};
+use ssi_dids_core::{DID, DIDResolver};
+use std::env;
 
 #[tokio::main]
 async fn main() {

@@ -24,7 +24,6 @@ use networking::{
     WSRequest,
     network::{NetworkTask, WSCommands},
 };
-use ssi::dids::Document;
 #[cfg(feature = "network")]
 use std::sync::Arc;
 use std::{fmt, time::Duration};

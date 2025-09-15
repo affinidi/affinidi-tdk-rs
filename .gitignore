@@ -2,3 +2,4 @@
 **/.vscode
 /target
 environments.json
+Cargo.lock
