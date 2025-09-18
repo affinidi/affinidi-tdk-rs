@@ -17,5 +17,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 ahash = "0.8"
-ssi = { version = "0.12", features = ["secp384r1"] }
+# ssi = { version = "0.12", features = ["secp384r1"] }
+ssi = { path = "https://github.com/stormer78/ssi", features = ["secp384r1"] }
 thiserror = "2.0"

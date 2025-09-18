@@ -28,7 +28,8 @@ rand = "0.9"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-ssi = { version = "0.12", features = ["secp384r1"] }
+# ssi = { version = "0.12", features = ["secp384r1"] }
+ssi = { path = "https://github.com/stormer78/ssi", features = ["secp384r1"] }
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
 toml = "0.9"
