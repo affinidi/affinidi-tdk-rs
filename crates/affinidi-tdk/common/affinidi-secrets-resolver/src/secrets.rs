@@ -6,6 +6,10 @@ use crate::{
     crypto::ed25519::to_x25519,
     errors::{Result, SecretsResolverError},
     jwk::{JWK, Params},
+    multicodec::{
+        ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
+        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+    },
 };
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -13,10 +17,6 @@ use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use ssi_multicodec::{
-    ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-    P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
-};
 use tracing::warn;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -168,20 +168,28 @@ impl Secret {
             SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
         })?;
 
-        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode public key: {e}"))
-        })?;
-        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
-        })?;
+        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice())?;
+        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice())?;
 
         let jwk = match (public_bytes.codec(), private_bytes.codec()) {
             (ED25519_PUB, ED25519_PRIV) => {
                 json!({"crv": "Ed25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
             }
+            (X25519_PUB, X25519_PRIV) => {
+                json!({"crv": "X25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
+            }
             (P256_PUB, P256_PRIV) => {
                 if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
                     json!({"crv": "P-256", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
+                } else {
+                    return Err(SecretsResolverError::KeyError(
+                        "Failed to split public key".into(),
+                    ));
+                }
+            }
+            (SECP256K1_PUB, SECP256K1_PRIV) => {
+                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
+                    json!({"crv": "secp256k1", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
                 } else {
                     return Err(SecretsResolverError::KeyError(
                         "Failed to split public key".into(),

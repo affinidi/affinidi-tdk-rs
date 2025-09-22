@@ -27,6 +27,7 @@ use tracing::{debug, warn};
 pub mod crypto;
 pub mod errors;
 pub mod jwk;
+pub mod multicodec;
 pub mod secrets;
 pub mod task;
 
