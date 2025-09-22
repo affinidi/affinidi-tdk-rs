@@ -2,11 +2,12 @@
  * DID Service specific methods for Peer DID
  */
 
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use iref::UriBuf;
-use ssi_dids_core::document::Service;
+use std::str::FromStr;
 
 use crate::{DIDPeerError, DIDPeerService};
+use affinidi_did_common::service::Service;
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use url::Url;
 
 pub(crate) fn convert_service(
     did: &str,
@@ -36,9 +37,12 @@ pub(crate) fn convert_service(
     };
 
     let mut service: Service = DIDPeerService::convert(did, service)?;
-    if service_idx > 0 && service.id.as_str() == "did:peer:#service" {
+    if let Some(id) = &service.id
+        && service_idx > 0
+        && id.as_str() == "did:peer:#service"
+    {
         service.id =
-            UriBuf::new([did, "#service-", &service_idx.to_string()].concat().into()).unwrap();
+            Some(Url::from_str(&[did, "#service-", &service_idx.to_string()].concat()).unwrap());
     }
 
     Ok(service)
@@ -46,10 +50,11 @@ pub(crate) fn convert_service(
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
+    use affinidi_did_common::service::{Endpoint, Service};
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-    use iref::UriBuf;
-    use ssi_core::OneOrMany;
-    use ssi_dids_core::document::{Service, service::Endpoint};
+    use url::Url;
 
     #[test]
     fn service_single() {
@@ -60,13 +65,17 @@ mod test {
 
         let service =
             super::convert_service("did:peer:", &encoded, 0).expect("Failed to convert service");
-        assert_eq!(service.id.as_str(), "did:peer:#service");
-        assert_eq!(
-            service.service_endpoint,
-            Some(OneOrMany::One(Endpoint::Uri(
-                UriBuf::new("http://test.com/test".as_bytes().to_vec()).unwrap()
-            )))
+        assert!(
+            service
+                .id
+                .is_some_and(|s| s.as_str() == "did:peer:#service")
         );
+
+        if let Endpoint::Url(url) = service.service_endpoint {
+            assert_eq!(url.as_str(), "http://test.com/test");
+        } else {
+            panic!("Expected service endpoint to be a URL");
+        }
     }
 
     #[test]
@@ -79,12 +88,10 @@ mod test {
 
         let service =
             super::convert_service("did:peer:", &encoded, 0).expect("Failed to convert service");
-        assert_eq!(service.id.as_str(), "did:peer:#test");
+        assert!(service.id.is_some_and(|id| id.as_str() == "did:peer:#test"));
         assert_eq!(
             service.service_endpoint,
-            Some(OneOrMany::One(Endpoint::Uri(
-                UriBuf::new("http://test.com/test".as_bytes().to_vec()).unwrap()
-            )))
+            Endpoint::Url(Url::from_str("http://test.com/test").unwrap())
         );
     }
 
@@ -97,7 +104,11 @@ mod test {
 
         let service =
             super::convert_service("did:peer:", &encoded, 1).expect("Failed to convert service");
-        assert_eq!(service.id.as_str(), "did:peer:#service-1");
+        assert!(
+            service
+                .id
+                .is_some_and(|id| id.as_str() == "did:peer:#service-1")
+        );
     }
 
     #[test]
@@ -126,7 +137,12 @@ mod test {
 
         let service =
             super::convert_service("did:peer:", &encoded, 0).expect("Failed to convert service");
-        assert_eq!(service.id.as_str(), "did:peer:#service");
+        assert!(
+            service
+                .id
+                .as_ref()
+                .is_some_and(|id| id.as_str() == "did:peer:#service")
+        );
         assert_eq!(service, compare);
     }
 }

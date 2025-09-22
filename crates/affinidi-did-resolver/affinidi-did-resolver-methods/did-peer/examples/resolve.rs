@@ -1,5 +1,5 @@
 use did_peer::DIDPeer;
-use ssi_dids_core::{DID, DIDResolver};
+use ssi_dids_core::resolution::Options;
 use std::env;
 
 #[tokio::main]
@@ -15,8 +15,8 @@ async fn main() {
     // Resolve the did:peer DID to a Document
     let peer = DIDPeer;
 
-    let output = match peer.resolve(DID::new::<String>(&args[1]).unwrap()).await {
-        Ok(res) => res,
+    let document = match peer.resolve(&args[1], Options::default()).await {
+        Ok(document) => document,
         Err(e) => {
             println!("Error: {e:?}");
             return;
@@ -25,7 +25,6 @@ async fn main() {
 
     println!(
         "DID Document:\n{}",
-        serde_json::to_string_pretty(&output.document).unwrap()
+        serde_json::to_string_pretty(&document).unwrap()
     );
-    println!("Metadata: {:?}", output.metadata);
 }

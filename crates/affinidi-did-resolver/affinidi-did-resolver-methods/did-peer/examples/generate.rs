@@ -3,8 +3,7 @@ use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi_core::OneOrMany;
-use ssi_dids_core::{DID, DIDResolver};
+use ssi_dids_core::{DID, DIDResolver, resolution::Options};
 use ssi_jwk::{JWK, Params};
 use ssi_multicodec::MultiEncoded;
 
@@ -93,13 +92,13 @@ async fn main() {
     // Create a service definition
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
             PeerServiceEndPointLongMap {
                 uri: "https://localhost:7037".into(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             },
-        ))),
+        )),
         id: None,
     }];
 
@@ -114,7 +113,7 @@ async fn main() {
     // Resolve the did:peer DID to a Document
     let peer = DIDPeer;
 
-    let output = match peer.resolve(DID::new::<String>(&did_peer).unwrap()).await {
+    let document = match peer.resolve(&did_peer, Options::default()).await {
         Ok(res) => res,
         Err(e) => {
             println!("Error: {e:?}");
@@ -124,13 +123,12 @@ async fn main() {
 
     println!(
         "DID Document:\n{}",
-        serde_json::to_string_pretty(&output.document).unwrap()
+        serde_json::to_string_pretty(&document).unwrap()
     );
-    println!("Metadata: {:?}", output.metadata);
 
     println!();
     println!("Expand keys");
-    let expanded = DIDPeer::expand_keys(&output.document).await;
+    let expanded = DIDPeer::expand_keys(&document).await;
     println!(
         "DID Document:\n{}",
         serde_json::to_string_pretty(&expanded.unwrap()).unwrap()

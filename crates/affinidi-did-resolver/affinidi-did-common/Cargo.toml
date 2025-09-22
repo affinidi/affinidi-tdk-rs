@@ -1,22 +1,22 @@
 [package]
-name = "did-example"
-version = "0.5.4"
-description = "Implementation of did:example in Rust"
-repository.workspace = true
+name = "affinidi-did-common"
+version = "0.1.0"
+description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 publish.workspace = true
 license.workspace = true
+repository.workspace = true
 readme = "README.md"
 rust-version.workspace = true
 
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
-affinidi-did-common.workspace = true
-ahash = "0.8"
+# Affinidi Crates
+
+# External Crates
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0"
+tracing = "0.1"
+url = "2.5"
