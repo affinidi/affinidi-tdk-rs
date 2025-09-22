@@ -1,7 +1,10 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
+use affinidi_did_common::Document;
 use did_peer::DIDPeer;
-use didwebvh_rs::resolve::DIDWebVH;
-use ssi::dids::{DID, DIDEthr, DIDJWK, DIDKey, DIDPKH, DIDResolver, DIDWeb, Document};
+use didwebvh_rs::{DIDWebVHState, resolve::DIDWebVH};
+use ssi::dids::{
+    DID, DIDEthr, DIDJWK, DIDKey, DIDMethodResolver, DIDPKH, DIDResolver, DIDWeb, resolution,
+};
 use tracing::error;
 
 impl DIDCacheClient {
@@ -17,8 +20,17 @@ impl DIDCacheClient {
             "ethr" => {
                 let method = DIDEthr;
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => Ok(res.document.into_document()),
+                match method
+                    .resolve_method_representation(
+                        DID::new::<str>(did).unwrap(),
+                        resolution::Options::default(),
+                    )
+                    .await
+                {
+                    Ok(res) => {
+                        let doc_string = String::from_utf8(res.document)?;
+                        Ok(serde_json::from_str(&doc_string)?)
+                    }
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
@@ -28,8 +40,14 @@ impl DIDCacheClient {
             "jwk" => {
                 let method = DIDJWK;
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => Ok(res.document.into_document()),
+                match method
+                    .resolve_method_representation(
+                        DID::new::<str>(did).unwrap(),
+                        resolution::Options::default(),
+                    )
+                    .await
+                {
+                    Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
@@ -53,10 +71,12 @@ impl DIDCacheClient {
 
                             let mut doc = res.document.into_document();
                             doc.verification_relationships.key_agreement.push(key_id);
+                            let doc_value = serde_json::to_value(doc)?;
 
-                            Ok(doc)
+                            Ok(serde_json::from_value(doc_value)?)
                         } else {
-                            Ok(res.document.into_document())
+                            let doc_value = serde_json::to_value(res.document.into_document())?;
+                            Ok(serde_json::from_value(doc_value)?)
                         }
                     }
                     Err(e) => {
@@ -105,17 +125,18 @@ impl DIDCacheClient {
                 }
             }
             "webvh" => {
-                let method = DIDWebVH;
+                let mut method = DIDWebVHState::default();
 
                 // due to how webvh can handle more complex URLs, we need to pass the raw URL
                 // all url related checks are handled in the webvh method
-                unsafe {
-                    match method.resolve(DID::new_unchecked(did.as_bytes())).await {
-                        Ok(res) => Ok(res.document.into_document()),
-                        Err(e) => {
-                            error!("Error: {:?}", e);
-                            Err(DIDCacheError::DIDError(e.to_string()))
-                        }
+                match method.resolve(did, None).await {
+                    Ok((log_entry, meta)) => {
+                        // TODO: Add non SSI resolver method here
+                        todo!("Add back in get_did_document call here!");
+                    }
+                    Err(e) => {
+                        error!("Error: {:?}", e);
+                        Err(DIDCacheError::DIDError(e.to_string()))
                     }
                 }
             }
