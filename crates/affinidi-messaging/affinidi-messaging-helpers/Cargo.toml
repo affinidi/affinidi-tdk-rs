@@ -49,11 +49,7 @@ ssi = { version = "0.12" }
 time = "0.3"
 tokio = { version = "1.47", features = ["full"] }
 toml = "0.9"
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",
