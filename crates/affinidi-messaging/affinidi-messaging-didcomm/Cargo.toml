@@ -34,11 +34,7 @@ ssi = { version = "0.12" }
 thiserror = "2.0"
 varint = "0.9"
 tokio = { version = "1.47", features = ["rt", "macros"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
