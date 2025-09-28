@@ -1,13 +1,10 @@
+use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::server::start;
+use affinidi_secrets_resolver::secrets::Secret;
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
-};
-use ssi::{
-    JWK,
-    dids::{DIDBuf, Document},
-    verification_methods::ssi_core::OneOrMany,
 };
 use tokio::time::{Duration, sleep};
 
@@ -77,13 +74,13 @@ fn _create_and_validate_did_peer() -> String {
     let (e_did_key, v_did_key, keys) = _get_keys(DIDPeerKeyType::Secp256k1, true);
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
             PeerServiceEndPointLongMap {
                 uri: "https://localhost:7037".into(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             },
-        ))),
+        )),
         id: None,
     }];
 
@@ -110,20 +107,40 @@ fn _validate_did_peer(did_peer: &str, e_did_key: &str, v_did_key: &str) {
 fn _get_keys(
     key_type: DIDPeerKeyType,
     with_pub_key: bool,
-) -> (DIDBuf, DIDBuf, Vec<DIDPeerCreateKeys>) {
+) -> (String, String, Vec<DIDPeerCreateKeys>) {
     let encryption_key = match key_type {
-        DIDPeerKeyType::Ed25519 => JWK::generate_ed25519().unwrap(),
-        DIDPeerKeyType::P256 => JWK::generate_p256(),
-        DIDPeerKeyType::Secp256k1 => JWK::generate_secp256k1(),
+        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None),
+        DIDPeerKeyType::P256 => {
+            Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
+        }
+        DIDPeerKeyType::Secp256k1 => {
+            Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret")
+        }
     };
     let verification_key = match key_type {
-        DIDPeerKeyType::Ed25519 => JWK::generate_ed25519().unwrap(),
-        DIDPeerKeyType::P256 => JWK::generate_p256(),
-        DIDPeerKeyType::Secp256k1 => JWK::generate_secp256k1(),
+        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None),
+        DIDPeerKeyType::P256 => {
+            Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
+        }
+        DIDPeerKeyType::Secp256k1 => {
+            Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret")
+        }
     };
     //  Create the did:key DID's for each key above
-    let e_did_key = ssi::dids::DIDKey::generate(&encryption_key).unwrap();
-    let v_did_key = ssi::dids::DIDKey::generate(&verification_key).unwrap();
+    let e_did_key = [
+        "did:key:",
+        &encryption_key
+            .get_public_keymultibase()
+            .expect("encryption multibase public-key"),
+    ]
+    .concat();
+    let v_did_key = [
+        "did:key:",
+        &verification_key
+            .get_public_keymultibase()
+            .expect("verification multibase public-key"),
+    ]
+    .concat();
 
     // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
     let keys = vec![

@@ -5,16 +5,14 @@ use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
 use clap::Parser;
+use did_method_key::DIDKey;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};
 use number_prefix::NumberPrefix;
 use rand::Rng;
 use rayon::prelude::*;
-use ssi::prelude::DIDResolver;
-use ssi::{
-    JWK,
-    dids::{DID, DIDKey},
-};
+use ssi_dids_core::{DID, DIDResolver};
+use ssi_jwk::JWK;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;

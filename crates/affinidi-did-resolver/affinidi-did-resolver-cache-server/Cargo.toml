@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 # Affinidi Crates
 affinidi-did-resolver-cache-sdk = { workspace = true, features = ["network"] }
+affinidi-did-common.workspace = true
 did-peer.workspace = true
 
 # External Crates
@@ -28,11 +29,12 @@ rand = "0.9"
 regex = "1.11"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-# ssi = { version = "0.12", features = ["secp384r1"] }
-ssi = { git = "https://github.com/stormer78/ssi", features = ["secp384r1"] }
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
 toml = "0.9"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+affinidi-secrets-resolver.workspace = true

@@ -1,9 +1,15 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use affinidi_did_common::Document;
+use affinidi_did_key::DIDKey;
+use did_ethr::DIDEthr;
+use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
-use didwebvh_rs::{DIDWebVHState, resolve::DIDWebVH};
-use ssi::dids::{
-    DID, DIDEthr, DIDJWK, DIDKey, DIDMethodResolver, DIDPKH, DIDResolver, DIDWeb, resolution,
+use did_pkh::DIDPKH;
+use did_web::DIDWeb;
+use didwebvh_rs::DIDWebVHState;
+use ssi_dids_core::{
+    DID, DIDMethodResolver, DIDResolver,
+    resolution::{self, Options},
 };
 use tracing::error;
 
@@ -54,45 +60,21 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "key" => {
-                let method = DIDKey;
-
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => {
-                        // SSI Library isn't populating keyAgreement, manually add it if it's empty
-                        if res
-                            .document
-                            .verification_relationships
-                            .key_agreement
-                            .is_empty()
-                        {
-                            let key_id =
-                                res.document.verification_relationships.authentication[0].clone();
-
-                            let mut doc = res.document.into_document();
-                            doc.verification_relationships.key_agreement.push(key_id);
-                            let doc_value = serde_json::to_value(doc)?;
-
-                            Ok(serde_json::from_value(doc_value)?)
-                        } else {
-                            let doc_value = serde_json::to_value(res.document.into_document())?;
-                            Ok(serde_json::from_value(doc_value)?)
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
+            "key" => match DIDKey::resolve(did) {
+                Ok(doc) => Ok(doc),
+                Err(e) => {
+                    error!("Error: {:?}", e);
+                    Err(DIDCacheError::DIDError(e.to_string()))
                 }
-            }
+            },
             "peer" => {
                 let method = DIDPeer;
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
+                match method.resolve(did, Options::default()).await {
                     Ok(res) => {
                         // DID Peer will resolve to MultiKey, which confuses key matching
                         // Expand the keys to raw keys
-                        DIDPeer::expand_keys(&res.document.into_document())
+                        DIDPeer::expand_keys(&res)
                             .await
                             .map_err(|e| DIDCacheError::DIDError(e.to_string()))
                     }
@@ -106,7 +88,10 @@ impl DIDCacheClient {
                 let method = DIDPKH;
 
                 match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => Ok(res.document.into_document()),
+                    Ok(res) => {
+                        let doc_value = serde_json::to_value(res.document.into_document())?;
+                        Ok(serde_json::from_value(doc_value)?)
+                    }
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
@@ -117,7 +102,10 @@ impl DIDCacheClient {
                 let method = DIDWeb;
 
                 match method.resolve(DID::new::<str>(did).unwrap()).await {
-                    Ok(res) => Ok(res.document.into_document()),
+                    Ok(res) => {
+                        let doc_value = serde_json::to_value(res.document.into_document())?;
+                        Ok(serde_json::from_value(doc_value)?)
+                    }
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
@@ -150,6 +138,10 @@ impl DIDCacheClient {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use url::Url;
+
     use crate::{DIDCacheClient, config};
 
     const DID_ETHR: &str = "did:ethr:0x1:0xb9c5714089478a327f09197987f16f9e5d936e8a";
@@ -165,12 +157,11 @@ mod tests {
 
         let parts: Vec<&str> = DID_ETHR.split(':').collect();
         let did_document = client.local_resolve(DID_ETHR, &parts).await.unwrap();
-        let verification_relationships = did_document.verification_relationships;
 
-        assert_eq!(did_document.id, DID_ETHR);
+        assert_eq!(did_document.id, Url::from_str(DID_ETHR).unwrap());
 
-        assert_eq!(verification_relationships.authentication.len(), 2);
-        assert_eq!(verification_relationships.assertion_method.len(), 2);
+        assert_eq!(did_document.authentication.len(), 2);
+        assert_eq!(did_document.assertion_method.len(), 2);
 
         assert_eq!(did_document.verification_method.len(), 2,);
     }
@@ -182,19 +173,22 @@ mod tests {
 
         let parts: Vec<&str> = DID_JWK.split(':').collect();
         let did_document = client.local_resolve(DID_JWK, &parts).await.unwrap();
-        let verification_relationships = did_document.verification_relationships;
 
-        assert_eq!(did_document.id, DID_JWK);
+        assert_eq!(did_document.id.as_str(), DID_JWK);
 
-        assert_eq!(verification_relationships.authentication.len(), 1);
-        assert_eq!(verification_relationships.assertion_method.len(), 1);
-        assert_eq!(verification_relationships.key_agreement.len(), 1);
-        assert_eq!(verification_relationships.capability_invocation.len(), 1);
-        assert_eq!(verification_relationships.capability_delegation.len(), 1);
+        assert_eq!(did_document.authentication.len(), 1);
+        assert_eq!(did_document.assertion_method.len(), 1);
+        assert_eq!(did_document.key_agreement.len(), 1);
+        assert_eq!(did_document.capability_invocation.len(), 1);
+        assert_eq!(did_document.capability_delegation.len(), 1);
 
         assert_eq!(did_document.verification_method.len(), 1);
         assert_eq!(
-            did_document.verification_method.first().unwrap().properties["publicKeyMultibase"],
+            did_document
+                .verification_method
+                .first()
+                .unwrap()
+                .property_set["publicKeyMultibase"],
             "zDnaepnC2eBkx4oZkNLGDnVK8ofKzoGk1Yui8fzC6FLoV1F1e"
         );
     }
@@ -206,16 +200,19 @@ mod tests {
 
         let parts: Vec<&str> = DID_KEY.split(':').collect();
         let did_document = client.local_resolve(DID_KEY, &parts).await.unwrap();
-        let verification_relationships = did_document.verification_relationships;
 
-        assert_eq!(did_document.id, DID_KEY);
+        assert_eq!(did_document.id.as_str(), DID_KEY);
 
-        assert_eq!(verification_relationships.authentication.len(), 1);
-        assert_eq!(verification_relationships.assertion_method.len(), 1);
+        assert_eq!(did_document.authentication.len(), 1);
+        assert_eq!(did_document.assertion_method.len(), 1);
 
         assert_eq!(did_document.verification_method.len(), 1);
         assert_eq!(
-            did_document.verification_method.first().unwrap().properties["publicKeyMultibase"],
+            did_document
+                .verification_method
+                .first()
+                .unwrap()
+                .property_set["publicKeyMultibase"],
             parts.last().unwrap().to_string()
         );
     }
@@ -226,19 +223,19 @@ mod tests {
 
         let parts: Vec<&str> = DID_PEER.split(':').collect();
         let did_document = client.local_resolve(DID_PEER, &parts).await.unwrap();
-        let verification_relationships = did_document.verification_relationships;
         let verification_method = did_document.verification_method;
         let service = did_document.service;
 
-        assert_eq!(did_document.id, DID_PEER);
+        assert_eq!(did_document.id.as_str(), DID_PEER);
 
-        assert_eq!(verification_relationships.authentication.len(), 1);
-        assert_eq!(verification_relationships.assertion_method.len(), 1);
-        assert_eq!(verification_relationships.key_agreement.len(), 1);
+        assert_eq!(did_document.authentication.len(), 1);
+        assert_eq!(did_document.assertion_method.len(), 1);
+        assert_eq!(did_document.key_agreement.len(), 1);
 
         assert_eq!(verification_method.len(), 2);
-        let first_public_key_jwk = &verification_method.first().unwrap().properties["publicKeyJwk"];
-        let last_public_key_jwk = &verification_method.last().unwrap().properties["publicKeyJwk"];
+        let first_public_key_jwk =
+            &verification_method.first().unwrap().property_set["publicKeyJwk"];
+        let last_public_key_jwk = &verification_method.last().unwrap().property_set["publicKeyJwk"];
         assert_eq!(first_public_key_jwk["crv"], "Ed25519");
         assert_eq!(first_public_key_jwk["kty"], "OKP");
         assert_eq!(
@@ -257,7 +254,14 @@ mod tests {
         );
 
         assert_eq!(service.len(), 1);
-        assert_eq!(service.first().unwrap().id, [DID_PEER, "#service"].concat());
+        assert!(
+            service
+                .first()
+                .unwrap()
+                .id
+                .as_ref()
+                .is_some_and(|u| u.as_str() == [DID_PEER, "#service"].concat())
+        );
     }
 
     #[tokio::test]
@@ -267,15 +271,14 @@ mod tests {
         let parts: Vec<&str> = DID_PKH.split(':').collect();
 
         let did_document = client.local_resolve(DID_PKH, &parts).await.unwrap();
-        let verification_relationships = did_document.verification_relationships;
         let verification_method = did_document.verification_method;
-        let vm_properties_first = verification_method.first().unwrap().properties.clone();
-        let vm_properties_last = verification_method.last().unwrap().properties.clone();
+        let vm_properties_first = verification_method.first().unwrap().property_set.clone();
+        let vm_properties_last = verification_method.last().unwrap().property_set.clone();
 
-        assert_eq!(did_document.id, DID_PKH);
+        assert_eq!(did_document.id.as_str(), DID_PKH);
 
-        assert_eq!(verification_relationships.authentication.len(), 2);
-        assert_eq!(verification_relationships.assertion_method.len(), 2);
+        assert_eq!(did_document.authentication.len(), 2);
+        assert_eq!(did_document.assertion_method.len(), 2);
 
         assert_eq!(verification_method.len(), 2);
         assert_eq!(

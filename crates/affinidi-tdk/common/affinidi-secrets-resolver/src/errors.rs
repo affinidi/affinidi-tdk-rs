@@ -20,6 +20,9 @@ pub enum SecretsResolverError {
 
     #[error("Unexpected Codec: {0}")]
     UnexpectedCodec(String),
+
+    #[error("Unsupported Key Type: {0}")]
+    UnsupportedKeyType(String),
 }
 
 pub type Result<T> = std::result::Result<T, SecretsResolverError>;

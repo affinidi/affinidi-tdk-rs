@@ -2,6 +2,9 @@
 Handles Secrets - mainly used for internal representation and for saving to files (should always be encrypted)
 
 */
+
+use std::fmt;
+
 use crate::{
     crypto::ed25519::to_x25519,
     errors::{Result, SecretsResolverError},
@@ -240,7 +243,7 @@ impl Secret {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
             KeyType::P256 => {
-                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -253,7 +256,7 @@ impl Secret {
                 MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
             }
             KeyType::P384 => {
-                let parity: u8 = if self.public_bytes[95] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[95].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -271,7 +274,7 @@ impl Secret {
                 ));
             }
             KeyType::Secp256k1 => {
-                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -425,6 +428,19 @@ impl TryFrom<&str> for KeyType {
             _ => Err(SecretsResolverError::KeyError(format!(
                 "Unknown key type: {value}",
             ))),
+        }
+    }
+}
+impl fmt::Display for KeyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KeyType::Ed25519 => write!(f, "Ed25519"),
+            KeyType::X25519 => write!(f, "X25519"),
+            KeyType::P256 => write!(f, "P256"),
+            KeyType::P384 => write!(f, "P384"),
+            KeyType::P521 => write!(f, "P521"),
+            KeyType::Secp256k1 => write!(f, "Secp256k1"),
+            KeyType::Unknown => write!(f, "Unknown"),
         }
     }
 }

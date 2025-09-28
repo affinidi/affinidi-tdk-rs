@@ -1,6 +1,13 @@
 //! Extends the SSI Crate Document with new methods and functions
 
-use crate::{Document, verification_method::VerificationMethod};
+use std::str::FromStr;
+
+use url::Url;
+
+use crate::{
+    Document,
+    verification_method::{VerificationMethod, VerificationRelationship},
+};
 
 pub trait DocumentExt {
     /// Does this DID contain authentication verification_method with the given id?
@@ -11,7 +18,7 @@ pub trait DocumentExt {
 
     /// find_key_agreement or return all
     /// Returns fully defined Vec of key_agreement id's
-    fn find_key_agreement(&self, id: Option<&str>) -> Vec<String>;
+    fn find_key_agreement<'a>(&'a self, id: Option<&'a str>) -> Vec<&'a str>;
 
     /// Returns a DID Verification Method if found by ID
     fn get_verification_method(&self, id: &str) -> Option<&VerificationMethod>;
@@ -19,150 +26,50 @@ pub trait DocumentExt {
 
 impl DocumentExt for Document {
     fn contains_authentication(&self, id: &str) -> bool {
-        // TODO: replace with new defintions from ssi
-        todo!("Not implementeded");
-        /*
-                let id = if let Ok(id) = DIDURL::new(id.as_bytes()) {
-                    id
-                } else {
-                    return false;
-                };
+        let id = if let Ok(id) = Url::from_str(id) {
+            id
+        } else {
+            return false;
+        };
 
-                self.verification_relationships.contains(
-                    &self.id,
-                    id,
-                    ProofPurposes {
-                        assertion_method: false,
-                        authentication: true,
-                        key_agreement: false,
-                        capability_delegation: false,
-                        capability_invocation: false,
-                    },
-                )
-        */
+        self.authentication.iter().any(|vm| match vm {
+            VerificationRelationship::Reference(url) => url,
+            VerificationRelationship::VerificationMethod(map) => &map.id,
+        }
+         == &id)
     }
 
     fn contains_key_agreement(&self, id: &str) -> bool {
-        // TODO: replace with new defintions from ssi
-        todo!("Not implementeded");
-        /*
-                let id = if let Ok(id) = DIDURL::new(id.as_bytes()) {
-                    id
-                } else {
-                    return false;
-                };
+        let id = if let Ok(id) = Url::from_str(id) {
+            id
+        } else {
+            return false;
+        };
 
-                self.verification_relationships.contains(
-                    &self.id,
-                    id,
-                    ProofPurposes {
-                        assertion_method: false,
-                        authentication: false,
-                        key_agreement: true,
-                        capability_delegation: false,
-                        capability_invocation: false,
-                    },
-                )
-        */
+        self.key_agreement.iter().any(|vm| match vm {
+            VerificationRelationship::Reference(url) => url,
+            VerificationRelationship::VerificationMethod(map) => &map.id,
+        }
+         == &id)
     }
 
-    fn find_key_agreement(&self, id: Option<&str>) -> Vec<String> {
-        // TODO: replace with new defintions from ssi
-        todo!("Not implementeded");
-        /*
-                if let Some(id) = id {
-                    // Does this id exist in key_agreements?
-                    if self.contains_key_agreement(id) {
-                        vec![id.to_string()]
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    let did = self.id.as_did();
-                    self.verification_relationships
-                        .key_agreement
-                        .iter()
-                        .map(|ka| ka.id().resolve(did).to_string())
-                        .collect()
-                }
-        */
+    /// Finds a specific key_id or returns all key_agreement ID's
+    fn find_key_agreement<'a>(&'a self, kid: Option<&'a str>) -> Vec<&'a str> {
+        if let Some(kid) = kid {
+            // Does this kid exist in key_agreements?
+            if self.contains_key_agreement(kid) {
+                vec![kid]
+            } else {
+                vec![]
+            }
+        } else {
+            self.key_agreement.iter().map(|ka| ka.get_id()).collect()
+        }
     }
 
     fn get_verification_method(&self, id: &str) -> Option<&VerificationMethod> {
-        // TODO: replace with new defintions from ssi
-        todo!("Not implementeded");
-        /*
-                let id_url = match DIDURL::new(id.as_bytes()) {
-                    Ok(id) => id,
-                    Err(_) => {
-                        warn!("Invalid DID URL: {}", id);
-                        return None;
-                    }
-                };
-
-                if let Some(resource) = self.find_resource(id_url) {
-                    match resource {
-                        ResourceRef::VerificationMethod(method) => Some(method),
-                        _ => {
-                            warn!("Resource is not a verification method: {}", id);
-                            None
-                        }
-                    }
-                } else {
-                    warn!("Resource not found: {}", id);
-                    None
-                }
-        */
+        self.verification_method
+            .iter()
+            .find(|vm| vm.id.as_str() == id)
     }
 }
-
-/*
-#[cfg(test)]
-mod tests {
-    use crate::{DIDCacheClient, config};
-
-    use super::*;
-
-    const TEST_DID: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
-
-    async fn basic_local_client() -> DIDCacheClient {
-        let config = config::DIDCacheConfigBuilder::default().build();
-        DIDCacheClient::new(config).await.unwrap()
-    }
-
-    #[tokio::test]
-    async fn key_agreement_id_exists() {
-        let client = basic_local_client().await;
-
-        // Resolve a DID which automatically adds it to the cache
-        let response = client.resolve(TEST_DID).await.unwrap();
-        assert!(
-            response
-                .doc
-                .contains_key_agreement(&[TEST_DID, "#key-2"].concat())
-        );
-    }
-
-    #[tokio::test]
-    async fn key_agreement_id_missing() {
-        let client = basic_local_client().await;
-
-        // Resolve a DID which automatically adds it to the cache
-        let response = client.resolve(TEST_DID).await.unwrap();
-        assert!(
-            !response
-                .doc
-                .contains_key_agreement(&[TEST_DID, "#key-3"].concat())
-        );
-    }
-
-    #[tokio::test]
-    async fn invalid_key_agreement() {
-        let client = basic_local_client().await;
-
-        // Resolve a DID which automatically adds it to the cache
-        let response = client.resolve(TEST_DID).await.unwrap();
-        assert!(!response.doc.contains_key_agreement("BAD_DID:TEST#FAIL"));
-    }
-}
-*/

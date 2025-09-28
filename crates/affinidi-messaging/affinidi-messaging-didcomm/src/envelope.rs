@@ -15,7 +15,6 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use serde::Deserialize;
 use sha256::digest;
-use ssi::dids::Document;
 use std::str::FromStr;
 
 /// High level wrapper so we can serialize and deserialize the envelope types

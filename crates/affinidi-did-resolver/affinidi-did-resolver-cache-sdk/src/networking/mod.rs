@@ -4,10 +4,10 @@
 //! network_cache: Helps with managing requests/responses that are in transit (out of order responses etc.).
 //!
 
+use affinidi_did_common::Document;
 use network::WSCommands;
 use rand::{Rng, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
-use ssi::dids::Document;
 use tokio::{select, sync::oneshot};
 use tracing::{Instrument, Level, debug, span, warn};
 

@@ -11,7 +11,7 @@ use crate::{
     DIDCacheClient, WSRequest, config::DIDCacheConfig, errors::DIDCacheError,
     networking::utils::connect,
 };
-use ssi::dids::Document;
+use affinidi_did_common::Document;
 use std::{pin::Pin, time::Duration};
 use tokio::{
     io::{AsyncRead, AsyncWrite, BufReader},

@@ -36,3 +36,13 @@ pub enum VerificationRelationship {
     /// Embedded Verification Method
     VerificationMethod(Box<VerificationMethod>),
 }
+
+impl VerificationRelationship {
+    /// Returns the id of the verification-method
+    pub fn get_id(&self) -> &str {
+        match self {
+            VerificationRelationship::Reference(url) => url.as_str(),
+            VerificationRelationship::VerificationMethod(map) => map.id.as_str(),
+        }
+    }
+}

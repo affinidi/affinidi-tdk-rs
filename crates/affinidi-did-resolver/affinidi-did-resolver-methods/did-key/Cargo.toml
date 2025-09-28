@@ -1,0 +1,24 @@
+[package]
+name = "affinidi-did-key"
+version = "0.1.0"
+description = "Implementation of did:key"
+repository.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+
+[dependencies]
+affinidi-secrets-resolver.workspace = true
+affinidi-did-common.workspace = true
+
+base58 = "0.2"
+serde_json = "1.0"
+thiserror = "2.0"
+url = "2.5"
+
+[dev-dependencies]
