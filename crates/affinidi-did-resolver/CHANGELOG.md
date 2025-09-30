@@ -13,9 +13,14 @@
 
 - Initial release of did:key method resolver and generator
 
-## affinidi-did-example (0.5.5)
+## did-example (0.5.5)
 
 - **MAINTENANCE:** Updating dependencies
+
+## did-peer (0.7.0)
+
+- **FIX:** Removing SSI crate dependency
+- **BREAKING:** SSI crate support removed
 
 ### 14th August 2025
 
