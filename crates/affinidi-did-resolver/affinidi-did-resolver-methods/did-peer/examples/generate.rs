@@ -1,75 +1,59 @@
-use did_method_key::DIDKey;
+use affinidi_did_common::one_or_many::OneOrMany;
+use affinidi_did_key::DIDKey;
+use affinidi_secrets_resolver::{
+    jwk::Params,
+    secrets::{KeyType, SecretMaterial},
+};
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
 };
-use ssi_core::OneOrMany;
-use ssi_dids_core::{DID, DIDResolver};
-use ssi_jwk::{JWK, Params};
-use ssi_multicodec::MultiEncoded;
 
 #[tokio::main]
 async fn main() {
     // Generate keys for encryption and verification
-    let e_ed25519_key = JWK::generate_ed25519().unwrap();
-    let v_ed25519_key = JWK::generate_ed25519().unwrap();
-    let v_secp256k1_key = JWK::generate_secp256k1();
+    let (e_did_key, e_ed25519_key) = DIDKey::generate(KeyType::Ed25519).unwrap();
+    let (v_did_key, v_ed25519_key) = DIDKey::generate(KeyType::Ed25519).unwrap();
+    let (v2_did_key, v_secp256k1_key) = DIDKey::generate(KeyType::Secp256k1).unwrap();
 
     // Print the private keys in case you want to save them for later
     println!("Private keys:");
-    if let Params::OKP(map) = e_ed25519_key.clone().params {
+    if let SecretMaterial::JWK(jwk) = &e_ed25519_key.secret_material
+        && let Params::OKP(params) = &jwk.params
+    {
         println!(
             "E: private-key (d): {} {}",
-            map.curve,
-            String::from(map.private_key.clone().unwrap())
+            params.curve,
+            params.d.clone().unwrap_or_default()
         );
-        println!(
-            "E: public-key (x): {} {}",
-            map.curve,
-            String::from(map.public_key.clone())
-        );
+        println!("E: public-key (x): {} {}", params.curve, params.x);
     }
     println!();
 
-    if let Params::OKP(map) = v_ed25519_key.clone().params {
+    if let SecretMaterial::JWK(jwk) = &v_ed25519_key.secret_material
+        && let Params::OKP(params) = &jwk.params
+    {
         println!(
             "V: private-key (d): {} {}",
-            map.curve,
-            String::from(map.private_key.clone().unwrap())
+            params.curve,
+            params.d.clone().unwrap_or_default()
         );
-        println!(
-            "V: public-key (x): {} {}",
-            map.curve,
-            String::from(map.public_key.clone())
-        );
+        println!("V: public-key (x): {} {}", params.curve, params.x);
     }
     println!();
 
-    if let Params::EC(map) = v_secp256k1_key.clone().params {
+    if let SecretMaterial::JWK(jwk) = &v_secp256k1_key.secret_material
+        && let Params::EC(params) = &jwk.params
+    {
         println!(
             "V2: private-key: {} {}",
-            map.curve.clone().unwrap(),
-            String::from(map.ecc_private_key.clone().unwrap())
+            params.curve,
+            params.d.clone().unwrap_or_default()
         );
-        println!(
-            "V2: public-key (x): {} {}",
-            map.curve.clone().unwrap(),
-            String::from(map.x_coordinate.clone().unwrap())
-        );
-        println!(
-            "V2: public-key (y): {} {}",
-            map.curve.clone().unwrap(),
-            String::from(map.y_coordinate.clone().unwrap())
-        );
+        println!("V2: public-key (x): {} {}", params.curve, params.x);
+        println!("V2: public-key (y): {} {}", params.curve, params.y);
     }
     println!();
-
-    let key = DIDKey;
-
-    // Create the did:key DID's for each key above
-    let e_did_key = DIDKey::generate(&e_ed25519_key).unwrap();
-    let v_did_key = DIDKey::generate(&v_ed25519_key).unwrap();
-    let v2_did_key = DIDKey::generate(&v_secp256k1_key).unwrap();
 
     // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
     let keys = vec![
@@ -114,7 +98,7 @@ async fn main() {
     // Resolve the did:peer DID to a Document
     let peer = DIDPeer;
 
-    let output = match peer.resolve(DID::new::<String>(&did_peer).unwrap()).await {
+    let document = match peer.resolve(&did_peer).await {
         Ok(res) => res,
         Err(e) => {
             println!("Error: {e:?}");
@@ -124,28 +108,14 @@ async fn main() {
 
     println!(
         "DID Document:\n{}",
-        serde_json::to_string_pretty(&output.document).unwrap()
+        serde_json::to_string_pretty(&document).unwrap()
     );
-    println!("Metadata: {:?}", output.metadata);
 
     println!();
     println!("Expand keys");
-    let expanded = DIDPeer::expand_keys(&output.document).await;
+    let expanded = DIDPeer::expand_keys(&document).await;
     println!(
         "DID Document:\n{}",
         serde_json::to_string_pretty(&expanded.unwrap()).unwrap()
     );
-
-    let output = key
-        .resolve(DID::new("did:key:z6Mkp89diy1PZkbUBDTpiqZBotddb1VV7JnY8qiZMGErUbFe").unwrap())
-        .await
-        .unwrap();
-
-    println!("key :\n{:#?}", output.document);
-
-    let a = multibase::decode("z6Mkp89diy1PZkbUBDTpiqZBotddb1VV7JnY8qiZMGErUbFe").unwrap();
-    println!("{a:?}",);
-    let b = MultiEncoded::new(&a.1).unwrap();
-    let jwk = JWK::from_multicodec(b).unwrap();
-    println!("{jwk}",);
 }

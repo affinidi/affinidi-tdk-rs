@@ -1,3 +1,4 @@
+use affinidi_did_key::DIDKey;
 use affinidi_messaging_didcomm::{Attachment, Message, MessageBuilder};
 use affinidi_messaging_sdk::{
     ATM,
@@ -8,7 +9,7 @@ use affinidi_messaging_sdk::{
         mediator::acls::{AccessListModeType, MediatorACLSet},
     },
 };
-use affinidi_tdk::secrets_resolver::{SecretsResolver, secrets::Secret};
+use affinidi_tdk::secrets_resolver::{SecretsResolver, secrets::KeyType};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use image::Luma;
 use log::info;
@@ -19,7 +20,6 @@ use ratatui::{
 };
 use serde_json::json;
 use sha256::digest;
-use ssi::{JWK, dids::DIDKey, jwk::Params};
 use std::{
     fmt::{self, Debug, Formatter},
     sync::Arc,
@@ -71,30 +71,7 @@ pub async fn create_new_profile(
     alias_suffix: bool,
     state: &mut State,
 ) -> anyhow::Result<ATMProfile> {
-    let p256_key = JWK::generate_p256();
-    let did_key = DIDKey::generate(&p256_key).unwrap();
-
-    let (d, x, y) = match p256_key.clone().params {
-        Params::EC(map) => (
-            String::from(map.ecc_private_key.clone().unwrap()),
-            String::from(map.x_coordinate.clone().unwrap()),
-            String::from(map.y_coordinate.clone().unwrap()),
-        ),
-        _ => {
-            panic!("Failed to generate P256 key")
-        }
-    };
-
-    let secret = Secret::from_str(
-        &format!("{}#{}", did_key, did_key.to_string().split_at(8).1),
-        &json!({
-            "crv": "P-256",
-            "d":  d,
-            "kty": "EC",
-            "x": x,
-            "y": y
-        }),
-    )?;
+    let (did_key, p256_secret) = DIDKey::generate(KeyType::P256)?;
 
     let mut alias = if let Some(alias) = alias {
         alias
@@ -112,8 +89,11 @@ pub async fn create_new_profile(
         ));
     }
 
-    atm.get_tdk().secrets_resolver.insert(secret.clone()).await;
-    state.add_secret(secret);
+    atm.get_tdk()
+        .secrets_resolver
+        .insert(p256_secret.clone())
+        .await;
+    state.add_secret(p256_secret);
     match ATMProfile::new(
         atm,
         Some(alias),

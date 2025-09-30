@@ -6,8 +6,8 @@ use crate::{
     error::{ErrorKind, Result, ResultExt, err_msg},
     jwe::envelope::{Jwe, ProtectedHeader},
 };
+use affinidi_did_common::document::DocumentExt;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_did_resolver_cache_sdk::document::DocumentExt;
 use base64::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::debug;

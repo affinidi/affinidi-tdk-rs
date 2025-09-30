@@ -1,4 +1,12 @@
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, document::DocumentExt};
+use crate::{
+    algorithms::AnonCryptAlg,
+    document::{DIDCommVerificationMethodExt, did_or_url},
+    error::{ErrorKind, Result, ResultContext, err_msg},
+    jwe,
+    utils::crypto::{AsKnownKeyPair, KnownKeyAlg},
+};
+use affinidi_did_common::document::DocumentExt;
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use askar_crypto::{
     alg::{
         aes::{A256CbcHs512, A256Gcm, A256Kw, AesKey},
@@ -8,14 +16,6 @@ use askar_crypto::{
         x25519::X25519KeyPair,
     },
     kdf::ecdh_es::EcdhEs,
-};
-
-use crate::{
-    algorithms::AnonCryptAlg,
-    document::{DIDCommVerificationMethodExt, did_or_url},
-    error::{ErrorKind, Result, ResultContext, err_msg},
-    jwe,
-    utils::crypto::{AsKnownKeyPair, KnownKeyAlg},
 };
 
 pub(crate) async fn anoncrypt(
@@ -67,7 +67,7 @@ pub(crate) async fn anoncrypt(
             to_ddoc
                 .verification_method
                 .iter()
-                .find(|vm| vm.id == kid)
+                .find(|vm| vm.id.as_str() == kid)
                 .ok_or_else(|| {
                     // TODO: support external keys
                     err_msg(

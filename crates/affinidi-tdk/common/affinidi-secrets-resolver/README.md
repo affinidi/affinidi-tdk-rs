@@ -5,15 +5,24 @@
 [![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-secrets-resolver)
 
 **IMPORTANT:**
+
 > affinidi-secrets-manager crate is provided "as is" without any warranties or
-guarantees, and by using this framework, users agree to assume all risks
-associated with its deployment and use including implementing security, and privacy
-measures in their applications. Affinidi assumes no liability for any issues
-arising from the use or modification of the project.
+> guarantees, and by using this framework, users agree to assume all risks
+> associated with its deployment and use including implementing security, and privacy
+> measures in their applications. Affinidi assumes no liability for any issues
+> arising from the use or modification of the project.
 
 ## Overview
 
-Affinidi Secrets Manager handles everything to do with DID Secrets.
+Affinidi Secrets Manager handles everything to do with DID Secrets, including
+crypto related functions
+
+## Features
+
+- default: Includes all crypto methods
+- p256: P256 (secp256r1)
+- k256: secp256k1
+- ed25519: Ed25519 and X25519 support
 
 ## Support & Feedback
 

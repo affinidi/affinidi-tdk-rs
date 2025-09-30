@@ -2,10 +2,17 @@
 Handles Secrets - mainly used for internal representation and for saving to files (should always be encrypted)
 
 */
+
+use std::fmt;
+
 use crate::{
     crypto::ed25519::to_x25519,
     errors::{Result, SecretsResolverError},
     jwk::{JWK, Params},
+    multicodec::{
+        ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
+        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+    },
 };
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -13,10 +20,6 @@ use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use ssi_multicodec::{
-    ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-    P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
-};
 use tracing::warn;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -66,10 +69,7 @@ impl TryFrom<SecretShadow> for Secret {
 
     fn try_from(shadow: SecretShadow) -> Result<Self> {
         match shadow.secret_material {
-            SecretMaterial::JWK { private_key_jwk } => {
-                let jwk: JWK = serde_json::from_value(private_key_jwk).map_err(|e| {
-                    SecretsResolverError::KeyError(format!("Failed to parse JWK: {e}"))
-                })?;
+            SecretMaterial::JWK(jwk) => {
                 let mut secret = Secret::from_jwk(&jwk)?;
                 secret.id = shadow.id;
                 secret.type_ = shadow.type_;
@@ -101,16 +101,12 @@ impl Secret {
                 Ok(Secret {
                     id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
                     type_: SecretType::JsonWebKey2020,
-                    secret_material: SecretMaterial::JWK {
-                        private_key_jwk: json!({
-                            "crv": params.curve,
-                            "d":  params.d,
-                            "kty": "EC",
-                            "x": params.x,
-                            "y": params.y
-                        }),
-                    },
-                    private_bytes: Secret::convert_to_raw(&params.d)?,
+                    secret_material: SecretMaterial::JWK(jwk.to_owned()),
+                    private_bytes: Secret::convert_to_raw(params.d.as_ref().ok_or(
+                        SecretsResolverError::KeyError(
+                            "Must have secret key available".to_string(),
+                        ),
+                    )?)?,
                     public_bytes: x,
                     key_type: KeyType::try_from(params.curve.as_str())?,
                 })
@@ -118,15 +114,10 @@ impl Secret {
             Params::OKP(params) => Ok(Secret {
                 id: jwk.key_id.as_ref().unwrap_or(&"".to_string()).to_string(),
                 type_: SecretType::JsonWebKey2020,
-                secret_material: SecretMaterial::JWK {
-                    private_key_jwk: json!({
-                        "crv": params.curve,
-                        "d":  params.d,
-                        "kty": "OKP",
-                        "x": params.x
-                    }),
-                },
-                private_bytes: Secret::convert_to_raw(&params.d)?,
+                secret_material: SecretMaterial::JWK(jwk.to_owned()),
+                private_bytes: Secret::convert_to_raw(params.d.as_ref().ok_or(
+                    SecretsResolverError::KeyError("Must have secret key available".to_string()),
+                )?)?,
                 public_bytes: Secret::convert_to_raw(&params.x)?,
                 key_type: KeyType::try_from(params.curve.as_str())?,
             }),
@@ -168,20 +159,28 @@ impl Secret {
             SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
         })?;
 
-        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode public key: {e}"))
-        })?;
-        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
-        })?;
+        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice())?;
+        let private_bytes = MultiEncoded::new(private_bytes.1.as_slice())?;
 
         let jwk = match (public_bytes.codec(), private_bytes.codec()) {
             (ED25519_PUB, ED25519_PRIV) => {
                 json!({"crv": "Ed25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
             }
+            (X25519_PUB, X25519_PRIV) => {
+                json!({"crv": "X25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
+            }
             (P256_PUB, P256_PRIV) => {
                 if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
                     json!({"crv": "P-256", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
+                } else {
+                    return Err(SecretsResolverError::KeyError(
+                        "Failed to split public key".into(),
+                    ));
+                }
+            }
+            (SECP256K1_PUB, SECP256K1_PRIV) => {
+                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
+                    json!({"crv": "secp256k1", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
                 } else {
                     return Err(SecretsResolverError::KeyError(
                         "Failed to split public key".into(),
@@ -232,7 +231,7 @@ impl Secret {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
             KeyType::P256 => {
-                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -245,7 +244,7 @@ impl Secret {
                 MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
             }
             KeyType::P384 => {
-                let parity: u8 = if self.public_bytes[95] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[95].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -263,7 +262,7 @@ impl Secret {
                 ));
             }
             KeyType::Secp256k1 => {
-                let parity: u8 = if self.public_bytes[63] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -420,13 +419,26 @@ impl TryFrom<&str> for KeyType {
         }
     }
 }
+impl fmt::Display for KeyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KeyType::Ed25519 => write!(f, "Ed25519"),
+            KeyType::X25519 => write!(f, "X25519"),
+            KeyType::P256 => write!(f, "P-256"),
+            KeyType::P384 => write!(f, "P-384"),
+            KeyType::P521 => write!(f, "P-521"),
+            KeyType::Secp256k1 => write!(f, "secp256k1"),
+            KeyType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
 
 /// Represents secret crypto material.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum SecretMaterial {
     #[serde(rename_all = "camelCase")]
-    JWK { private_key_jwk: Value },
+    JWK(JWK),
 
     #[serde(rename_all = "camelCase")]
     Multibase { private_key_multibase: String },

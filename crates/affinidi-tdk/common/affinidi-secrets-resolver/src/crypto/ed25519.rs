@@ -1,8 +1,13 @@
-use crate::secrets::{KeyType, Secret, SecretMaterial, SecretType};
+use crate::{
+    errors::SecretsResolverError,
+    jwk::{JWK, OctectParams, Params},
+    multicodec::{ED25519_PUB, MultiEncoded, MultiEncodedBuf, X25519_PUB},
+    secrets::{KeyType, Secret, SecretMaterial, SecretType},
+};
+use base58::{FromBase58, ToBase58};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::{RngCore, rngs::OsRng};
-use serde_json::json;
 use sha2::{Digest, Sha512};
 
 impl Secret {
@@ -22,18 +27,72 @@ impl Secret {
         Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "Ed25519",
-                    "d": BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-                    "kty": "EC",
-                    "x": BASE64_URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+            secret_material: SecretMaterial::JWK(JWK {
+                key_id: None,
+                params: Params::OKP(OctectParams {
+                    curve: "Ed25519".to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
                 }),
-            },
+            }),
             private_bytes: signing_key.to_bytes().to_vec(),
             public_bytes: signing_key.verifying_key().to_bytes().to_vec(),
             key_type: KeyType::Ed25519,
         }
+    }
+
+    /// Creates a random x25519 encryption key pair
+    /// kid: Key ID, if none specified then a random value is assigned
+    pub fn generate_x25519(kid: Option<&str>) -> Result<Self, SecretsResolverError> {
+        let ed25519 = Secret::generate_ed25519(kid);
+
+        let x25519_private = to_x25519(&ed25519.private_bytes);
+        let x25519_public =
+            ed25519_public_to_x25519_public_key(&ed25519.get_public_keymultibase()?)?;
+
+        Ok(Secret {
+            id: ed25519.id,
+            type_: SecretType::JsonWebKey2020,
+            secret_material: SecretMaterial::JWK(JWK {
+                key_id: None,
+                params: Params::OKP(OctectParams {
+                    curve: "X25519".to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(&x25519_public.1),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_private)),
+                }),
+            }),
+            private_bytes: x25519_private.to_vec(),
+            public_bytes: x25519_public.1,
+            key_type: KeyType::X25519,
+        })
+    }
+
+    /// Generates a Public JWK from a multikey value
+    pub fn ed25519_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
+        let params = OctectParams {
+            curve: "Ed25519".to_string(),
+            d: None,
+            x: BASE64_URL_SAFE_NO_PAD.encode(data),
+        };
+
+        Ok(JWK {
+            key_id: None,
+            params: Params::OKP(params),
+        })
+    }
+
+    /// Generates a Public JWK from a multikey value
+    pub fn x25519_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
+        let params = OctectParams {
+            curve: "X25519".to_string(),
+            d: None,
+            x: BASE64_URL_SAFE_NO_PAD.encode(data),
+        };
+
+        Ok(JWK {
+            key_id: None,
+            params: Params::OKP(params),
+        })
     }
 }
 
@@ -49,6 +108,55 @@ pub(crate) fn to_x25519(secret: &Vec<u8>) -> [u8; 32] {
 
     a.copy_from_slice(&bytes[0..32]);
     a
+}
+
+/// Converts a ed25519 multi_encoded public key to a x25519 multi_encoded key
+/// Returns the multicodec String and the raw public bytes
+pub fn ed25519_public_to_x25519_public_key(
+    ed25519_public: &str,
+) -> Result<(String, Vec<u8>), SecretsResolverError> {
+    if !ed25519_public.starts_with('z') {
+        return Err(SecretsResolverError::Decoding(
+            "Expected multibase encoded string starting with a z prefix".to_string(),
+        ));
+    }
+
+    let decoded = ed25519_public[1..]
+        .from_base58()
+        .map_err(|_| SecretsResolverError::Decoding("Couldn't decode base58".to_string()))?;
+
+    let multicodec = MultiEncoded::new(decoded.as_slice())
+        .map_err(|_| SecretsResolverError::Decoding("Unknown multicodec value".to_string()))?;
+
+    if multicodec.codec() != ED25519_PUB {
+        return Err(SecretsResolverError::KeyError(format!(
+            "Expected ED25519 Public key, instead received {}",
+            multicodec.codec()
+        )));
+    }
+    if multicodec.data().len() != 32 {
+        return Err(SecretsResolverError::KeyError(format!(
+            "Invalid public key byte length. expected 32, instead have ({})",
+            multicodec.data().len()
+        )));
+    }
+
+    let vk = VerifyingKey::try_from(multicodec.data()).map_err(|e| {
+        SecretsResolverError::KeyError(format!("Couldn't created ED25519 Verifying Key: {}", e))
+    })?;
+
+    let x25519 = vk.to_montgomery().to_bytes();
+
+    Ok((
+        [
+            "z",
+            &MultiEncodedBuf::encode_bytes(X25519_PUB, &x25519)
+                .into_bytes()
+                .to_base58(),
+        ]
+        .concat(),
+        x25519.to_vec(),
+    ))
 }
 
 #[cfg(test)]

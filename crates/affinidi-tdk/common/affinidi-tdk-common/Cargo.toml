@@ -40,7 +40,4 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.45", features = ["full"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-] }
+tracing = "0.1"

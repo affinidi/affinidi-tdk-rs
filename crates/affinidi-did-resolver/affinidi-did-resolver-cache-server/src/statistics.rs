@@ -1,10 +1,10 @@
 //! Statistics module for the cache server.
 //! Creates a parallel task that logs cache statistics based on an interval
 use crate::errors::CacheError;
+use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::DIDMethod;
 use ahash::AHashMap as HashMap;
 use moka::future::Cache;
-use ssi::dids::Document;
 use std::{
     fmt::{self, Display, Formatter},
     sync::Arc,

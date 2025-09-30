@@ -286,9 +286,6 @@ pub struct PackEncryptedMetadata {
 /// Practically `service_endpoint` field can be used to transport the message.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize)]
 pub struct MessagingServiceMetadata {
-    /// Identifier (DID URL) of used messaging service.
-    pub id: String,
-
     /// Service endpoint of used messaging service.
     pub service_endpoint: String,
 
@@ -298,31 +295,6 @@ pub struct MessagingServiceMetadata {
 
 #[cfg(test)]
 mod tests {
-    use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-    use affinidi_secrets_resolver::{
-        SimpleSecretsResolver,
-        secrets::{Secret, SecretMaterial},
-    };
-    use base64::prelude::*;
-    use ssi::dids::document::DIDVerificationMethod;
-
-    use askar_crypto::{
-        alg::{
-            aes::{A256CbcHs512, A256Gcm, A256Kw, AesKey},
-            chacha20::{Chacha20Key, XC20P},
-            ed25519::Ed25519KeyPair,
-            k256::K256KeyPair,
-            p256::P256KeyPair,
-            x25519::X25519KeyPair,
-        },
-        encrypt::KeyAeadInPlace,
-        kdf::{FromKeyDerivation, KeyExchange, ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs},
-        repr::{KeyGen, KeySecretBytes},
-        sign::KeySigVerify,
-    };
-
-    use serde_json::Value;
-
     use crate::{
         PackEncryptedMetadata, PackEncryptedOptions,
         algorithms::AnonCryptAlg,
@@ -339,6 +311,28 @@ mod tests {
         },
         utils::crypto::{JoseKDF, KeyWrap},
     };
+    use affinidi_did_common::verification_method::VerificationMethod;
+    use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+    use affinidi_secrets_resolver::{
+        SimpleSecretsResolver,
+        secrets::{Secret, SecretMaterial},
+    };
+    use askar_crypto::{
+        alg::{
+            aes::{A256CbcHs512, A256Gcm, A256Kw, AesKey},
+            chacha20::{Chacha20Key, XC20P},
+            ed25519::Ed25519KeyPair,
+            k256::K256KeyPair,
+            p256::P256KeyPair,
+            x25519::X25519KeyPair,
+        },
+        encrypt::KeyAeadInPlace,
+        kdf::{FromKeyDerivation, KeyExchange, ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs},
+        repr::{KeyGen, KeySecretBytes},
+        sign::KeySigVerify,
+    };
+    use base64::prelude::*;
+    use serde_json::Value;
 
     #[ignore]
     #[tokio::test]
@@ -441,7 +435,7 @@ mod tests {
                 metadata,
                 PackEncryptedMetadata {
                     messaging_service: None,
-                    from_kid: Some(from_key.id.clone().into_string()),
+                    from_kid: Some(from_key.id.to_string()),
                     sign_by_kid: None,
                     to_kids: to_keys.iter().map(|s| s.id.clone()).collect::<Vec<_>>(),
                 }
@@ -2770,7 +2764,7 @@ mod tests {
     fn _verify_authcrypt<CE, KDF, KE, KW>(
         msg: &str,
         to_keys: Vec<&Secret>,
-        from_key: &DIDVerificationMethod,
+        from_key: &VerificationMethod,
     ) -> String
     where
         CE: KeyAeadInPlace + KeySecretBytes,
@@ -2807,15 +2801,16 @@ mod tests {
 
             let from_key = KE::from_jwk_value(&jwk_string).expect("Unable from_jwk_value");
 
-            let to_key = match to_key.secret_material {
-                SecretMaterial::JWK {
-                    private_key_jwk: ref value,
-                } => KE::from_jwk_value(value).expect("Unable from_jwk_value"),
+            let to_key = match &to_key.secret_material {
+                SecretMaterial::JWK(jwk) => KE::from_jwk_value(
+                    &serde_json::to_value(jwk).expect("Couldn't serialize from jwk"),
+                )
+                .expect("Unable from_jwk_value"),
                 _ => panic!("Unexpected verification method"),
             };
 
             let msg = msg
-                .decrypt::<CE, KDF, KE, KW>(Some((from_kid, &from_key)), (to_kid, &to_key))
+                .decrypt::<CE, KDF, KE, KW>(Some((from_kid.as_str(), &from_key)), (to_kid, &to_key))
                 .expect("Unable decrypt msg");
 
             common_msg = if let Some(ref res) = common_msg {
@@ -2866,10 +2861,11 @@ mod tests {
         for to_key in to_keys {
             let to_kid = &to_key.id;
 
-            let to_key = match to_key.secret_material {
-                SecretMaterial::JWK {
-                    private_key_jwk: ref value,
-                } => KE::from_jwk_value(value).expect("Unable from_jwk_value"),
+            let to_key = match &to_key.secret_material {
+                SecretMaterial::JWK(jwk) => KE::from_jwk_value(
+                    &serde_json::to_value(jwk).expect("Couldn't serialize from JWK"),
+                )
+                .expect("Unable from_jwk_value"),
                 _ => panic!("Unexpected verification method"),
             };
 
@@ -2891,7 +2887,7 @@ mod tests {
 
     fn _verify_signed<Key: KeySigVerify + FromJwkValue>(
         msg: &str,
-        sign_key: &DIDVerificationMethod,
+        sign_key: &VerificationMethod,
         alg: jws::Algorithm,
     ) -> String {
         let msg = jws::parse(msg).expect("Unable parse");

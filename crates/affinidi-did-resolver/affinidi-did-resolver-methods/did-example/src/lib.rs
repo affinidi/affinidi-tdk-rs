@@ -6,8 +6,8 @@
  * Enable using the did_example feature flag
  */
 
+use affinidi_did_common::Document;
 use ahash::AHashMap as HashMap;
-use ssi::dids::document::Document;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -23,11 +23,9 @@ pub struct DiDExampleCache {
 
 impl DiDExampleCache {
     fn from_string(document: String) -> Result<(String, Document), DidExampleError> {
-        let doc = Document::from_json(&document)
-            .map_err(|e| {
-                DidExampleError::DocumentParseError(format!("Couldn't parse Document String: {e}",))
-            })?
-            .into_document();
+        let doc: Document = serde_json::from_str(&document).map_err(|e| {
+            DidExampleError::DocumentParseError(format!("Couldn't parse Document String: {e}",))
+        })?;
 
         Ok((doc.id.to_string(), doc))
     }

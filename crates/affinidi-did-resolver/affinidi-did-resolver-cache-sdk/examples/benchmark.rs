@@ -1,20 +1,17 @@
 //! Runs a series of performance benchmarks against the DID cache.
 //! Benchmark references: (Apple M1 Max)
 //! - 1 million did:key's generated in ~4.2 seconds, consumes 2.3MiB of memory
+use affinidi_did_key::DIDKey;
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
+use affinidi_secrets_resolver::secrets::KeyType;
 use clap::Parser;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};
 use number_prefix::NumberPrefix;
 use rand::Rng;
 use rayon::prelude::*;
-use ssi::prelude::DIDResolver;
-use ssi::{
-    JWK,
-    dids::{DID, DIDKey},
-};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -142,13 +139,11 @@ async fn generate_dids(count: u32) -> Vec<String> {
     let dids: Vec<String> = (0..count)
         .into_par_iter()
         .map(|x| {
-            let key = if x % 2 == 0 {
-                JWK::generate_ed25519().unwrap()
+            if x % 2 == 0 {
+                DIDKey::generate(KeyType::Ed25519).unwrap().0
             } else {
-                JWK::generate_secp256k1()
-            };
-
-            DIDKey::generate(&key).unwrap().to_string()
+                DIDKey::generate(KeyType::Secp256k1).unwrap().0
+            }
         })
         .collect();
 
@@ -178,13 +173,8 @@ async fn resolve_dids_no_cache(dids: Arc<Vec<String>>, count: u32) -> Result<(),
 
         //let _cache = cache.clone();
         handles.push(tokio::spawn(async move {
-            let method = DIDKey;
-
-            let _ = match method
-                .resolve(DID::new::<str>(_dids.get(r).unwrap()).unwrap())
-                .await
-            {
-                Ok(res) => Some(res.document.into_document()),
+            let _ = match DIDKey::resolve(_dids.get(r).unwrap()) {
+                Ok(doc) => Some(doc),
                 Err(e) => {
                     eprintln!("Error: {e:?}");
                     None

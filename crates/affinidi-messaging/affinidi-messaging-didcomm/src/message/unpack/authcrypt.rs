@@ -1,3 +1,11 @@
+use crate::envelope::{Envelope, MetaEnvelope, ParsedEnvelope};
+use crate::{
+    UnpackOptions,
+    algorithms::AuthCryptAlg,
+    error::{ErrorKind, Result, ResultExt, err_msg},
+    jwe,
+    utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::SecretsResolver;
 use askar_crypto::{
@@ -11,15 +19,6 @@ use askar_crypto::{
 };
 use std::str::FromStr;
 use tracing::{Level, debug, event};
-
-use crate::envelope::{Envelope, MetaEnvelope, ParsedEnvelope};
-use crate::{
-    UnpackOptions,
-    algorithms::AuthCryptAlg,
-    error::{ErrorKind, Result, ResultExt, err_msg},
-    jwe,
-    utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
-};
 
 pub(crate) async fn _try_unpack_authcrypt<T>(
     jwe: &ParsedEnvelope,

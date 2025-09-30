@@ -1,6 +1,3 @@
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_secrets_resolver::SecretsResolver;
-
 use crate::{
     FromPrior,
     document::{did_or_url, is_did},
@@ -9,6 +6,8 @@ use crate::{
     message::from_prior::JWT_TYP,
     utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
 };
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_secrets_resolver::SecretsResolver;
 
 impl FromPrior {
     /// Packs a plaintext `from_prior` value into a signed JWT.
@@ -72,10 +71,9 @@ impl FromPrior {
             }
 
             let kid = did_doc
-                .verification_relationships
                 .authentication
                 .iter()
-                .find(|a| a.id().resolve(did_doc.id.as_did()).to_string() == kid)
+                .find(|a| a.get_id() == kid)
                 .ok_or_else(|| {
                     err_msg(
                         ErrorKind::DIDUrlNotFound,
@@ -83,13 +81,12 @@ impl FromPrior {
                     )
                 })?;
 
-            vec![kid.id().resolve(did_doc.id.as_did()).to_string()]
+            vec![kid.get_id().to_string()]
         } else {
             did_doc
-                .verification_relationships
                 .authentication
                 .iter()
-                .map(|s| s.id().resolve(did_doc.id.as_did()).to_string())
+                .map(|s| s.get_id().to_string())
                 .collect()
         };
 

@@ -25,9 +25,11 @@ path = "src/mediator_administration/main.rs"
 affinidi-did-resolver-cache-sdk = { workspace = true, features = [
   "did_example",
 ] }
+affinidi-did-common.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-messaging-sdk.workspace = true
 affinidi-tdk.workspace = true
+affinidi-did-key.workspace = true
 did-peer.workspace = true
 
 ahash = { version = "0.8", features = ["serde"] }
@@ -45,15 +47,10 @@ ring = { version = "0.17", features = ["std"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-ssi = { version = "0.12" }
 time = "0.3"
 tokio = { version = "1.47", features = ["full"] }
 toml = "0.9"
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

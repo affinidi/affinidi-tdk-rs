@@ -9,6 +9,7 @@ use crate::{
         store::{store_forwarded_message, store_message},
     },
 };
+use affinidi_did_common::{Document, service::Endpoint};
 use affinidi_messaging_didcomm::{AttachmentData, Message, UnpackMetadata, envelope::MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
@@ -19,7 +20,6 @@ use base64::prelude::*;
 use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
-use ssi::dids::{Document, document::service::Endpoint};
 use tracing::{Instrument, debug, span, warn};
 
 // Reads the body of an incoming forward message
@@ -737,10 +737,8 @@ fn _service_local(
         .filter(|s| s.type_.contains(&"DIDCommMessaging".to_string()))
         .any(|s| {
             // Service Type is DIDCommMessaging
-            if let Some(service_endpoint) = &s.service_endpoint {
-                service_endpoint.into_iter().any(|endpoint| {
-                    match endpoint {
-                        Endpoint::Uri(uri) => {
+                    match &s.service_endpoint {
+                        Endpoint::Url(uri) => {
                             if uri.as_str().eq(&state.config.mediator_did) {
                                 warn!("next hop is the mediator itself, but this should have been unpacked. not accepting this message");
                                 _error = Some(MediatorError::MediatorError(
@@ -767,11 +765,8 @@ fn _service_local(
                         }
                         Endpoint::Map(_) => {true}
                     }
-                })
-            } else {
-                false
-            }
-        });
+        }
+                );
 
     if let Some(e) = _error {
         Err(e)

@@ -17,27 +17,28 @@
 //! }
 //! ```
 //!
-use base64::prelude::*;
-use did_method_key::{DIDKey, VerificationMethodType};
-use iref::UriBuf;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use service::convert_service;
-use ssi_core::OneOrMany;
-use ssi_dids_core::{
-    DID, DIDBuf, DIDMethod, DIDMethodResolver, DIDResolver, DIDURL, DIDURLBuf, DIDURLReferenceBuf,
-    Document, RelativeDIDURLBuf,
-    document::{
-        self, DIDVerificationMethod, Resource, Service, VerificationRelationships,
-        representation::{self, MediaType},
-        service::Endpoint,
-        verification_method,
-    },
-    resolution::{self, Content, Error, Options, Output, Parameters},
+use affinidi_did_common::{
+    Document,
+    one_or_many::OneOrMany,
+    service::{Endpoint, Service},
+    verification_method::{VerificationMethod, VerificationRelationship},
 };
-use ssi_jwk::{JWK, Params};
-use std::{collections::BTreeMap, fmt};
+use affinidi_did_key::DIDKey;
+use affinidi_secrets_resolver::{
+    jwk::Params,
+    secrets::{KeyType, SecretMaterial},
+};
+use base64::prelude::*;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use service::convert_service;
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    str::FromStr,
+};
 use thiserror::Error;
+use url::Url;
 use wasm_bindgen::prelude::*;
 
 pub mod service;
@@ -62,6 +63,8 @@ pub enum DIDPeerError {
     JsonParsingError(String),
     #[error("Internal error: {0}")]
     InternalError(String),
+    #[error("Encoding error: {0}")]
+    EncodingError(String),
 }
 
 // Converts DIDPeerError to JsValue which is required for propagating errors to WASM
@@ -174,6 +177,7 @@ impl From<PeerServiceEndPointShort> for PeerServiceEndPointLong {
         }
     }
 }
+
 /// DID Service structure in abbreviated format
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DIDPeerService {
@@ -197,8 +201,8 @@ impl DIDPeerService {
             Ok(value) => {
                 if value.is_string() {
                     if let Some(value) = value.as_str() {
-                        if let Ok(uri) = UriBuf::new(value.as_bytes().to_vec()) {
-                            Some(OneOrMany::One(Endpoint::Uri(uri)))
+                        if let Ok(url) = Url::from_str(value) {
+                            Endpoint::Url(url)
                         } else {
                             return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
                                 "Couldn't convert ServiceEndPoint to a valid URI: {value}",
@@ -210,7 +214,7 @@ impl DIDPeerService {
                         )));
                     }
                 } else {
-                    Some(OneOrMany::One(Endpoint::Map(value)))
+                    Endpoint::Map(value)
                 }
             }
             Err(err) => {
@@ -226,7 +230,7 @@ impl DIDPeerService {
             [did, "#service"].concat()
         };
 
-        let id = match UriBuf::new(id.as_bytes().to_vec()) {
+        let id = match Url::from_str(&id) {
             Ok(uri) => uri,
             Err(e) => {
                 return Err(DIDPeerError::SyntaxErrorServiceDefinition(format!(
@@ -236,10 +240,10 @@ impl DIDPeerService {
         };
 
         Ok(Service {
-            id,
-            type_: OneOrMany::One("DIDCommMessaging".into()),
+            id: Some(id),
+            type_: vec!["DIDCommMessaging".to_string()],
             service_endpoint,
-            property_set: BTreeMap::new(),
+            property_set: HashMap::new(),
         })
     }
 }
@@ -328,52 +332,55 @@ pub struct DIDPeerCreatedKeys {
 }
 
 /// Converts a public key into a DID VerificationMethod
-fn process_key(did: &str, id: &str, public_key: &str) -> Result<DIDVerificationMethod, Error> {
-    let mut properties = BTreeMap::new();
+fn process_key(did: &str, id: &str, public_key: &str) -> VerificationMethod {
+    let mut property_set = HashMap::new();
 
-    properties.insert(
+    property_set.insert(
         "publicKeyMultibase".to_string(),
         Value::String(public_key.to_string()),
     );
 
-    Ok(DIDVerificationMethod {
-        id: DIDURLBuf::from_string(["did:peer:", did, id].concat()).unwrap(),
+    VerificationMethod {
+        id: Url::from_str(&["did:peer:", did, id].concat()).unwrap(),
         type_: "Multikey".to_string(),
-        controller: DIDBuf::from_string(["did:peer:", did].concat()).unwrap(),
-        properties,
-    })
+        controller: Url::from_str(&["did:peer:", did].concat()).unwrap(),
+        expires: None,
+        revoked: None,
+        property_set,
+    }
 }
 
-impl DIDMethodResolver for DIDPeer {
-    async fn resolve_method_representation<'a>(
-        &'a self,
-        method_specific_id: &'a str,
-        options: Options,
-    ) -> Result<Output<Vec<u8>>, Error> {
+impl DIDPeer {
+    pub async fn resolve(&self, did: &str) -> Result<Document, DIDPeerError> {
+        let Some(method_specific_id) = did.strip_prefix("did:peer:") else {
+            return Err(DIDPeerError::MethodNotSupported);
+        };
         let did = ["did:peer:", method_specific_id].concat();
 
         // If did:peer is type 0, then treat it as a did:key
         if let Some(id) = method_specific_id.strip_prefix('0') {
-            return DIDKey.resolve_method_representation(id, options).await;
+            return DIDKey::resolve(&["did:key:", id].concat()).map_err(|e| {
+                DIDPeerError::InternalError(format!(
+                    "Resolving version 0 of did:peer resulted in the following error: {e}"
+                ))
+            });
         }
 
         // Only supports method 2 for did:peer
         if !method_specific_id.starts_with('2') {
-            return Err(Error::MethodNotSupported(
-                "did:peer version 2 supported only".to_string(),
-            ));
+            return Err(DIDPeerError::MethodNotSupported);
         }
 
         let mut context = BTreeMap::new();
         context.insert("@base".to_string(), serde_json::json!(method_specific_id));
 
-        let mut verification_methods: Vec<DIDVerificationMethod> = Vec::new();
-        let mut verification_relationships: VerificationRelationships =
-            VerificationRelationships::default();
+        let mut verification_methods: Vec<VerificationMethod> = Vec::new();
 
-        //let mut key_agreements: Vec<DIDVerificationMethod> = Vec::new();
-        //let mut key_authentications: Vec<DIDVerificationMethod> = Vec::new();
-        //let mut key_assertion_methods: Vec<DIDVerificationMethod> = Vec::new();
+        let mut key_agreements: Vec<VerificationRelationship> = Vec::new();
+        let mut key_authentications: Vec<VerificationRelationship> = Vec::new();
+        let mut key_assertion_methods: Vec<VerificationRelationship> = Vec::new();
+        let mut key_capability_delegation: Vec<VerificationRelationship> = Vec::new();
+        let mut key_capability_invocation: Vec<VerificationRelationship> = Vec::new();
         let mut services: Vec<Service> = Vec::new();
 
         // Split the DID for peer on '.'s, we skip the first one
@@ -393,21 +400,12 @@ impl DIDMethodResolver for DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
-                            verification_relationships.assertion_method.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
+                            key_assertion_methods.push(VerificationRelationship::Reference(
+                                Url::from_str(&["#key-", &key_count.to_string()].concat()).unwrap(),
+                            ));
+
                             key_count += 1;
                         }
                         'D' => {
@@ -416,21 +414,13 @@ impl DIDMethodResolver for DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
-                            verification_relationships.capability_delegation.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
+                            key_capability_delegation.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
+
                             key_count += 1;
                         }
                         'E' => {
@@ -439,20 +429,13 @@ impl DIDMethodResolver for DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
-                            verification_relationships.key_agreement.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
+                            ));
+
+                            key_agreements.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
+
                             key_count += 1;
                         }
                         'I' => {
@@ -461,21 +444,13 @@ impl DIDMethodResolver for DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
-                            verification_relationships.capability_invocation.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
+                            key_capability_invocation.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
+
                             key_count += 1;
                         }
                         'V' => {
@@ -484,46 +459,29 @@ impl DIDMethodResolver for DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
-                            verification_relationships.authentication.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
-                            verification_relationships.assertion_method.push(
-                                verification_method::ValueOrReference::Reference(
-                                    DIDURLReferenceBuf::Relative(
-                                        RelativeDIDURLBuf::new(
-                                            ["#key-", &key_count.to_string()]
-                                                .concat()
-                                                .as_bytes()
-                                                .to_vec(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            );
+                            key_authentications.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
+
+                            key_assertion_methods.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
 
                             key_count += 1;
                         }
                         'S' => {
                             // Service
                             let service = convert_service(&did, part, service_idx)
-                                .map_err(|e| Error::Internal(e.to_string()))?;
+                                .map_err(|e| DIDPeerError::InternalError(e.to_string()))?;
                             services.push(service);
                             service_idx += 1;
                         }
                         other => {
-                            return Err(Error::RepresentationNotSupported(format!(
+                            return Err(DIDPeerError::EncodingError(format!(
                                 "An invalid Purpose Code ({other}) was found in the DID",
                             )));
                         }
@@ -536,48 +494,24 @@ impl DIDMethodResolver for DIDPeer {
             }
         }
 
-        let vm_type = match options.parameters.public_key_format {
-            Some(name) => VerificationMethodType::from_name(&name).ok_or_else(|| {
-                Error::Internal(format!(
-                    "verification method type `{name}` unsupported by did:peer"
-                ))
-            })?,
-            None => VerificationMethodType::Multikey,
-        };
+        let mut parameters_set = HashMap::new();
+        parameters_set.insert(
+            "@context".to_string(),
+            json!(["https://www.w3.org/ns/did/v1.1".to_string()]),
+        );
 
-        let mut doc =
-            Document::new(DIDBuf::from_string(["did:peer:", method_specific_id].concat()).unwrap());
-        doc.verification_method = verification_methods;
-        doc.verification_relationships = verification_relationships;
-        doc.service = services;
-
-        let mut json_ld_context = Vec::new();
-        if let Some(context) = vm_type.context_entry() {
-            json_ld_context.push(context)
-        }
-
-        let content_type = options.accept.unwrap_or(MediaType::JsonLd);
-
-        let represented = doc.into_representation(representation::Options::from_media_type(
-            content_type,
-            move || representation::json_ld::Options {
-                context: representation::json_ld::Context::array(
-                    representation::json_ld::DIDContext::V1,
-                    json_ld_context,
-                ),
-            },
-        ));
-
-        Ok(resolution::Output::new(
-            represented.to_bytes(),
-            document::Metadata::default(),
-            resolution::Metadata::from_content_type(Some(content_type.to_string())),
-        ))
+        Ok(Document {
+            id: Url::from_str(["did:peer:", method_specific_id].concat().as_str()).unwrap(),
+            verification_method: verification_methods,
+            assertion_method: key_assertion_methods,
+            authentication: key_authentications,
+            capability_delegation: key_capability_delegation,
+            capability_invocation: key_capability_invocation,
+            key_agreement: key_agreements,
+            service: services,
+            parameters_set,
+        })
     }
-}
-
-impl DIDMethod for DIDPeer {
-    const DID_METHOD_NAME: &'static str = "peer";
 }
 
 impl DIDPeer {
@@ -639,84 +573,71 @@ impl DIDPeer {
             let public_key = if let Some(key) = key.public_key_multibase.as_ref() {
                 key.clone()
             } else {
-                let jwk = match &key.type_ {
+                let (did, secret) = match &key.type_ {
                     Some(type_) => match type_ {
-                        DIDPeerKeyType::Ed25519 => match JWK::generate_ed25519() {
-                            Ok(k) => k,
-                            Err(e) => {
-                                return Err(DIDPeerError::InternalError(format!(
-                                    "Failed to generate ed25519 key. Reason: {e}",
-                                )));
-                            }
-                        },
-                        DIDPeerKeyType::Secp256k1 => JWK::generate_secp256k1(),
-                        DIDPeerKeyType::P256 => JWK::generate_p256(),
+                        DIDPeerKeyType::Ed25519 => {
+                            DIDKey::generate(KeyType::Ed25519).map_err(|e| {
+                                DIDPeerError::InternalError(format!(
+                                    "Couldn't create Ed25519 did:key reason: {e}"
+                                ))
+                            })?
+                        }
+                        DIDPeerKeyType::Secp256k1 => {
+                            DIDKey::generate(KeyType::Secp256k1).map_err(|e| {
+                                DIDPeerError::InternalError(format!(
+                                    "Couldn't create Secp256k1 did:key reason: {e}"
+                                ))
+                            })?
+                        }
+                        DIDPeerKeyType::P256 => DIDKey::generate(KeyType::P256).map_err(|e| {
+                            DIDPeerError::InternalError(format!(
+                                "Couldn't create P256 did:key reason: {e}"
+                            ))
+                        })?,
                     },
                     None => return Err(DIDPeerError::UnsupportedKeyType),
                 };
-                let did = if let Ok(output) = DIDKey::generate(&jwk) {
-                    output.to_string()
+
+                if let SecretMaterial::JWK(jwk) = secret.secret_material {
+                    match jwk.params {
+                        Params::OKP(map) => {
+                            let d = if let Some(d) = &map.d {
+                                d
+                            } else {
+                                return Err(DIDPeerError::KeyParsingError(
+                                    "Missing private key".to_string(),
+                                ));
+                            };
+                            private_keys.push(DIDPeerCreatedKeys {
+                                key_multibase: did[8..].to_string(),
+                                curve: map.curve.clone(),
+                                d: d.clone(),
+                                x: map.x.clone(),
+                                y: None,
+                            })
+                        }
+                        Params::EC(map) => {
+                            let d = if let Some(d) = &map.d {
+                                d
+                            } else {
+                                return Err(DIDPeerError::KeyParsingError(
+                                    "Missing private key".to_string(),
+                                ));
+                            };
+
+                            private_keys.push(DIDPeerCreatedKeys {
+                                key_multibase: did[8..].to_string(),
+                                curve: map.curve.clone(),
+                                d: String::from(d),
+                                x: map.x.clone(),
+                                y: Some(map.y.clone()),
+                            })
+                        }
+                    }
                 } else {
                     return Err(DIDPeerError::InternalError(
-                        "Couldn't create did:key".to_string(),
+                        "Expected Secret Material to be in JWK format!".to_string(),
                     ));
-                };
-
-                match jwk.params {
-                    Params::OKP(map) => {
-                        let d = if let Some(d) = &map.private_key {
-                            d
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing private key".to_string(),
-                            ));
-                        };
-                        private_keys.push(DIDPeerCreatedKeys {
-                            key_multibase: did[8..].to_string(),
-                            curve: map.curve.clone(),
-                            d: String::from(d),
-                            x: String::from(map.public_key.clone()),
-                            y: None,
-                        })
-                    }
-                    Params::EC(map) => {
-                        let curve = if let Some(curve) = &map.curve {
-                            curve
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError("Missing curve".to_string()));
-                        };
-                        let d = if let Some(d) = &map.ecc_private_key {
-                            d
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing private key".to_string(),
-                            ));
-                        };
-
-                        let x = if let Some(x) = &map.x_coordinate {
-                            x
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing public key (x)".to_string(),
-                            ));
-                        };
-                        let y = if let Some(y) = &map.y_coordinate {
-                            y
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing public key (y)".to_string(),
-                            ));
-                        };
-
-                        private_keys.push(DIDPeerCreatedKeys {
-                            key_multibase: did[8..].to_string(),
-                            curve: curve.into(),
-                            d: String::from(d),
-                            x: String::from(x),
-                            y: Some(String::from(y)),
-                        })
-                    }
-                    _ => return Err(DIDPeerError::UnsupportedKeyType),
                 }
 
                 did[8..].to_string()
@@ -753,7 +674,7 @@ impl DIDPeer {
     pub async fn expand_keys(doc: &Document) -> Result<Document, DIDPeerError> {
         let mut new_doc = doc.clone();
 
-        let mut new_vms: Vec<DIDVerificationMethod> = vec![];
+        let mut new_vms: Vec<VerificationMethod> = vec![];
         for v_method in &doc.verification_method {
             new_vms.push(Self::_convert_vm(v_method).await?);
         }
@@ -763,14 +684,13 @@ impl DIDPeer {
     }
 
     // Converts
-    async fn _convert_vm(
-        method: &DIDVerificationMethod,
-    ) -> Result<DIDVerificationMethod, DIDPeerError> {
+    async fn _convert_vm(method: &VerificationMethod) -> Result<VerificationMethod, DIDPeerError> {
         let current_controller = method.controller.clone();
         let current_id = method.id.clone();
-        let did_key = if let Some(key) = method.properties.get("publicKeyBase58") {
+
+        let did_key = if let Some(key) = method.property_set.get("publicKeyBase58") {
             ["did:key:", key.as_str().unwrap()].concat()
-        } else if let Some(key) = method.properties.get("publicKeyMultibase") {
+        } else if let Some(key) = method.property_set.get("publicKeyMultibase") {
             ["did:key:", key.as_str().unwrap()].concat()
         } else {
             return Err(DIDPeerError::KeyParsingError(
@@ -779,22 +699,8 @@ impl DIDPeer {
             ));
         };
 
-        let key_method = DIDKey;
-
-        let output = match key_method
-            .dereference_with(
-                DIDURL::new::<String>(&did_key.clone()).unwrap(),
-                Options {
-                    accept: None,
-                    parameters: Parameters {
-                        public_key_format: Some("JsonWebKey2020".to_string()),
-                        ..Default::default()
-                    },
-                },
-            )
-            .await
-        {
-            Ok(output) => output.content,
+        let document = match DIDKey::resolve(&did_key) {
+            Ok(document) => document,
             Err(e) => {
                 return Err(DIDPeerError::KeyParsingError(format!(
                     "Failed to resolve key ({did_key}). Reason: {e}",
@@ -802,28 +708,34 @@ impl DIDPeer {
             }
         };
 
-        if let Content::Resource(Resource::Document(doc)) = output
-            && let Some(vm) = doc.into_any_verification_method()
-        {
-            let mut new_vm = vm.clone();
-            new_vm.controller = current_controller;
-            new_vm.id = current_id;
-            return Ok(new_vm);
-        }
+        if let Some(vm) = document.verification_method.first() {
+            let mut properties: HashMap<String, Value> = HashMap::new();
+            for (k, v) in vm.property_set.iter() {
+                properties.insert(k.clone(), v.clone());
+            }
 
-        Err(DIDPeerError::KeyParsingError(
-            "Failed to convert verification_method. Reason: Missing verification_method"
-                .to_string(),
-        ))
+            Ok(VerificationMethod {
+                id: current_id,
+                type_: vm.type_.clone(),
+                controller: current_controller,
+                expires: None,
+                revoked: None,
+                property_set: properties,
+            })
+        } else {
+            Err(DIDPeerError::KeyParsingError(
+                "Failed to convert verification_method. Reason: Missing verification_method"
+                    .to_string(),
+            ))
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
-    use did_method_key::DIDKey;
-    use ssi_core::OneOrMany;
-    use ssi_dids_core::{DID, DIDBuf, DIDResolver, document::DIDVerificationMethod};
-    use ssi_jwk::JWK;
+    use affinidi_did_common::{one_or_many::OneOrMany, verification_method::VerificationMethod};
+    use affinidi_did_key::DIDKey;
+    use affinidi_secrets_resolver::secrets::KeyType;
 
     use crate::{
         DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService,
@@ -838,15 +750,12 @@ mod test {
     #[tokio::test]
     async fn expand_keys_throws_key_parsing_missing_pbk58_error() {
         let peer = DIDPeer;
-        let output = peer
-            .resolve(DID::new::<String>(&DID_PEER.to_string()).unwrap())
-            .await
-            .unwrap();
+        let output = peer.resolve(DID_PEER).await.unwrap();
 
-        let mut document = output.document.document().clone();
-        let mut new_vms: Vec<DIDVerificationMethod> = vec![];
+        let mut document = output.clone();
+        let mut new_vms: Vec<VerificationMethod> = vec![];
         for mut vm in document.verification_method {
-            vm.properties.remove("publicKeyMultibase");
+            vm.property_set.remove("publicKeyMultibase");
             new_vms.push(vm);
         }
 
@@ -857,17 +766,14 @@ mod test {
     #[tokio::test]
     async fn expand_keys_works() {
         let peer = DIDPeer;
-        let document = peer
-            .resolve(DID::new::<String>(&DID_PEER.to_string()).unwrap())
-            .await
-            .expect("Couldn't resolve DID");
+        let document = peer.resolve(DID_PEER).await.expect("Couldn't resolve DID");
 
-        let vm_before_expansion = document.clone().document.verification_method.clone();
-        let expanded_doc = DIDPeer::expand_keys(&document.document).await.unwrap();
+        let vm_before_expansion = document.verification_method.clone();
+        let expanded_doc = DIDPeer::expand_keys(&document).await.unwrap();
         let vms_after_expansion = expanded_doc.verification_method;
 
         for vm in vms_after_expansion.clone() {
-            assert!(vm.id.starts_with("did:peer"));
+            assert!(vm.id.as_str().starts_with("did:peer"));
         }
         assert_eq!(vm_before_expansion.len(), vms_after_expansion.len())
     }
@@ -1125,22 +1031,31 @@ mod test {
     fn _get_keys(
         key_type: Option<DIDPeerKeyType>,
         with_pub_key: bool,
-    ) -> (DIDBuf, DIDBuf, Vec<DIDPeerCreateKeys>) {
-        let encryption_key = match key_type {
-            Some(DIDPeerKeyType::Ed25519) => JWK::generate_ed25519().unwrap(),
-            Some(DIDPeerKeyType::P256) => JWK::generate_p256(),
-            Some(DIDPeerKeyType::Secp256k1) => JWK::generate_secp256k1(),
-            None => JWK::generate_p384(),
+    ) -> (String, String, Vec<DIDPeerCreateKeys>) {
+        let (e_did_key, _) = match key_type {
+            Some(DIDPeerKeyType::Ed25519) => {
+                DIDKey::generate(KeyType::Ed25519).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::P256) => {
+                DIDKey::generate(KeyType::P256).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::Secp256k1) => {
+                DIDKey::generate(KeyType::Secp256k1).expect("Failed to create did:key")
+            }
+            None => DIDKey::generate(KeyType::P384).expect("Failed to create did:key"),
         };
-        let verification_key = match key_type {
-            Some(DIDPeerKeyType::Ed25519) => JWK::generate_ed25519().unwrap(),
-            Some(DIDPeerKeyType::P256) => JWK::generate_p256(),
-            Some(DIDPeerKeyType::Secp256k1) => JWK::generate_secp256k1(),
-            None => JWK::generate_p384(),
+        let (v_did_key, _) = match key_type {
+            Some(DIDPeerKeyType::Ed25519) => {
+                DIDKey::generate(KeyType::Ed25519).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::P256) => {
+                DIDKey::generate(KeyType::P256).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::Secp256k1) => {
+                DIDKey::generate(KeyType::Secp256k1).expect("Failed to create did:key")
+            }
+            None => DIDKey::generate(KeyType::P384).expect("Failed to create did:key"),
         };
-        //  Create the did:key DID's for each key above
-        let e_did_key = DIDKey::generate(&encryption_key).unwrap();
-        let v_did_key = DIDKey::generate(&verification_key).unwrap();
 
         // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
         let keys = vec![
@@ -1299,11 +1214,8 @@ pub fn create_did_peer(input: &DidPeerCreate) -> Result<DIDPeerResult, DIDPeerEr
 pub async fn resolve_did_peer(did: &str) -> Result<String, DIDPeerError> {
     let peer = DIDPeer;
 
-    match peer
-        .resolve(DID::new::<String>(&did.to_string()).unwrap())
-        .await
-    {
-        Ok(output) => match serde_json::to_string_pretty(&output.document) {
+    match peer.resolve(did).await {
+        Ok(document) => match serde_json::to_string_pretty(&document) {
             Ok(json) => Ok(json),
             Err(e) => Err(DIDPeerError::JsonParsingError(format!(
                 "Couldn't convert DID Document to JSON. Reason: {e}",

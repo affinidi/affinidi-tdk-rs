@@ -15,6 +15,7 @@ As this crate can be used either natively or in a WASM environment, the followin
 #[cfg(all(feature = "network", target_arch = "wasm32"))]
 compile_error!("Cannot enable both features at the same time");
 
+use affinidi_did_common::Document;
 use config::DIDCacheConfig;
 use errors::DIDCacheError;
 use highway::{HighwayHash, HighwayHasher};
@@ -34,7 +35,6 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
 
 pub mod config;
-pub mod document;
 pub mod errors;
 #[cfg(feature = "network")]
 pub mod networking;

@@ -1,4 +1,6 @@
 //! Error types for the DID Cache Client SDK
+use std::string::FromUtf8Error;
+
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
@@ -22,11 +24,27 @@ pub enum DIDCacheError {
     /// A network timeout occurred.
     #[error("Network timeout")]
     NetworkTimeout,
+
+    /// String parsing error
+    #[error("Parsing error: {0}")]
+    ParsingError(String),
 }
 
 // Converts DIDCacheError to JsValue which is required for propagating errors to WASM
 impl From<DIDCacheError> for JsValue {
     fn from(err: DIDCacheError) -> JsValue {
         JsValue::from(err.to_string())
+    }
+}
+
+impl From<FromUtf8Error> for DIDCacheError {
+    fn from(err: FromUtf8Error) -> DIDCacheError {
+        DIDCacheError::ParsingError(format!("utf8: {err}"))
+    }
+}
+
+impl From<serde_json::Error> for DIDCacheError {
+    fn from(err: serde_json::Error) -> DIDCacheError {
+        DIDCacheError::ParsingError(format!("serde_json: {err}"))
     }
 }
