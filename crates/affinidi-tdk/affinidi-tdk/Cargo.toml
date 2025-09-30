@@ -38,10 +38,7 @@ rustls = { version = "0.23", default-features = false, features = [
 ] }
 serde_json = "1.0"
 tokio = { version = "1.47", features = ["full"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

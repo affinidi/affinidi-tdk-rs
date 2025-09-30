@@ -23,10 +23,7 @@ serde_json = "1.0"
 serde_json_canonicalizer = "0.3"
 sha2 = "0.10"
 thiserror = "2.0"
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-] }
+tracing = "0.1"
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }

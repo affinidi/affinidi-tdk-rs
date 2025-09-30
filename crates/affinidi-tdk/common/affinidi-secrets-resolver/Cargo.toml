@@ -29,15 +29,12 @@ multibase = "0.9"
 multihash = "0.19"
 p256 = { version = "0.13", features = ["ecdsa-core"], optional = true }
 p384 = { version = "0.13", features = ["ecdsa-core"], optional = true }
-rand = "0.8" # Version conflict because of ed25519-dalek (2.2.0)
+rand = "0.8"                                                                   # Version conflict because of ed25519-dalek (2.2.0)
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha2 = "0.10"
 tokio = { version = "1.47", features = ["macros", "rt", "sync", "time"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-] }
+tracing = "0.1"
 thiserror = "2.0"
 unsigned-varint = "0.8"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }

@@ -35,11 +35,7 @@ sha256 = "1.6"
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
