@@ -22,6 +22,13 @@
 - **FIX:** Removing SSI crate dependency
 - **BREAKING:** SSI crate support removed
 
+## affinidi-did-resolver-cache-sdk (0.6.0)
+
+- **FIX:** Removing SSI crate dependency
+- **BREAKING:** JWK DID method has been removed due to using relative uri's that
+  break
+- **BREAKING:** WebVH DID support removed for this version
+
 ### 14th August 2025
 
 ## DID webvh method (0.1.8)
