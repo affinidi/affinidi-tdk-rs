@@ -7,7 +7,6 @@ use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
 use did_web::DIDWeb;
-use didwebvh_rs::DIDWebVHState;
 use ssi_dids_core::{
     DID, DIDMethodResolver, DIDResolver,
     resolution::{self},
@@ -114,20 +113,23 @@ impl DIDCacheClient {
                 }
             }
             "webvh" => {
-                let mut method = DIDWebVHState::default();
+                /*
+                                let mut method = DIDWebVHState::default();
 
-                // due to how webvh can handle more complex URLs, we need to pass the raw URL
-                // all url related checks are handled in the webvh method
-                match method.resolve(did, None).await {
-                    Ok((_log_entry, _meta)) => {
-                        // TODO: Add non SSI resolver method here
-                        todo!("Add back in get_did_document call here!");
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
+                                // due to how webvh can handle more complex URLs, we need to pass the raw URL
+                                // all url related checks are handled in the webvh method
+                                match method.resolve(did, None).await {
+                                    Ok((_log_entry, _meta)) => {
+                                        // TODO: Add non SSI resolver method here
+                                        todo!("Add back in get_did_document call here!");
+                                    }
+                                    Err(e) => {
+                                        error!("Error: {:?}", e);
+                                        Err(DIDCacheError::DIDError(e.to_string()))
+                                    }
+                                }
+                */
+                todo!("Add back in when webvh is updated");
             }
             _ => Err(DIDCacheError::DIDError(format!(
                 "DID Method ({}) not supported",
