@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.10.13"
+version = "0.11.0"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -40,7 +40,7 @@ chrono = "0.4"
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10.0", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
