@@ -18,6 +18,10 @@ tooling.
 
 - **BREAKING:** Removed SSI Library dependency
 
+### Mediator (0.11.0)
+
+- **BREAKING:** Removed SSI Library dependency
+
 ## 6th September 2025
 
 ### Mediator (0.10.13)
