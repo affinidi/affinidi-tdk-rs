@@ -27,26 +27,15 @@ async fn main() -> Result<(), DIDCacheError> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    /*
-        println!();
-        println!(" ****************************** ");
-        println!(" *  Local Resolver Example    * ");
-        println!(" ****************************** ");
-        println!();
+    println!();
+    println!(" ****************************** ");
+    println!(" *  Local Resolver Example    * ");
+    println!(" ****************************** ");
+    println!();
 
-        // Create a new local client configuration, use default values
-        let local_config = DIDCacheConfigBuilder::default().build();
-        let local_resolver = DIDCacheClient::new(local_config).await?;
-    */
-
-    // Build config with network
-    let config = DIDCacheConfigBuilder::default()
-        .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
-        .with_cache_ttl(10)
-        .build();
-
-    // Resolve DIDs and add to cache
-    let resolver = DIDCacheClient::new(config).await.unwrap();
+    // Create a new local client configuration, use default values
+    let local_config = DIDCacheConfigBuilder::default().build();
+    let resolver = DIDCacheClient::new(local_config).await?;
 
     let response = resolver.resolve(&args.did).await?;
     println!(
