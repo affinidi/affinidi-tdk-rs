@@ -9,6 +9,8 @@ use serde::{
 use serde_json::Value;
 use url::Url;
 
+use crate::Document;
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Service {
@@ -63,6 +65,20 @@ where
     deserializer.deserialize_any(StringOrVecVisitor)
 }
 
+impl Document {
+    /// Returns a refernce to the first service with the given id, if it exists
+    /// id: the fragment text after the `#` in the full service id URL
+    pub fn find_service(&self, id: &str) -> Option<&Service> {
+        self.service.iter().find(|s| {
+            if let Some(sid) = &s.id {
+                sid.as_str().ends_with(&["#", id].concat())
+            } else {
+                false
+            }
+        })
+    }
+}
+
 /// Service Endpoint definitions
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -73,4 +89,20 @@ pub enum Endpoint {
 
     /// Can be either a Map or a Set of Strings/Maps
     Map(Value),
+}
+
+impl Endpoint {
+    /// Returns the URI String for a service Endpoint, if available
+    pub fn get_uri(&self) -> Option<String> {
+        match self {
+            Endpoint::Url(uri) => Some(uri.to_string()),
+            Endpoint::Map(map) => {
+                if let Some(uri) = map.get("uri") {
+                    uri.as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }

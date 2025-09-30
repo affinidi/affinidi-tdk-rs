@@ -1,5 +1,4 @@
 use did_peer::DIDPeer;
-use ssi_dids_core::resolution::Options;
 use std::env;
 
 #[tokio::main]
@@ -15,7 +14,7 @@ async fn main() {
     // Resolve the did:peer DID to a Document
     let peer = DIDPeer;
 
-    let document = match peer.resolve(&args[1], Options::default()).await {
+    let document = match peer.resolve(&args[1]).await {
         Ok(document) => document,
         Err(e) => {
             println!("Error: {e:?}");

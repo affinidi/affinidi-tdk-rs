@@ -14,12 +14,13 @@ use crate::{
         websocket::{WebSocketCommands, WebSocketTransport},
     },
 };
+use affinidi_did_common::{
+    Document,
+    service::{Endpoint, Service},
+};
 use affinidi_tdk_common::profiles::TDKProfile;
 use ahash::AHashMap as HashMap;
-use ssi::dids::{
-    Document,
-    document::{Service, service::Endpoint},
-};
+use serde_json::Value;
 use std::{
     sync::{
         Arc,
@@ -235,36 +236,51 @@ impl Mediator {
     /// Helper function to find the endpoint for the Mediator
     /// protocol allows you to specify the URI scheme (http, ws, etc)
     fn _find_endpoint(service: &Service, protocol: &str) -> Option<String> {
-        if service.type_.contains(&"DIDCommMessaging".to_string())
-            && let Some(endpoint) = &service.service_endpoint
-        {
-            for endpoint in endpoint.into_iter() {
-                match endpoint {
-                    Endpoint::Map(map) => {
-                        if let Some(accept) = map.get("accept") {
-                            let accept: Vec<String> =
-                                match serde_json::from_value(accept.to_owned()) {
-                                    Ok(accept) => accept,
-                                    Err(_) => continue,
-                                };
+        fn check(value: &Value, protocol: &str) -> Option<String> {
+            if let Some(accept) = value.get("accept") {
+                let accept: Vec<String> = match serde_json::from_value(accept.to_owned()) {
+                    Ok(accept) => accept,
+                    Err(_) => return None,
+                };
 
-                            if accept.contains(&"didcomm/v2".to_string())
-                                && let Some(uri) = map.get("uri")
-                                && let Some(uri) = uri.as_str()
-                                && uri.starts_with(protocol)
-                            {
-                                return Some(uri.to_string());
-                            }
-                        }
-                    }
-                    _ => {
-                        // Ignore URI}
-                    }
+                if accept.contains(&"didcomm/v2".to_string())
+                    && let Some(uri) = value.get("uri")
+                    && let Some(uri) = uri.as_str()
+                    && uri.starts_with(protocol)
+                {
+                    Some(uri.to_string())
+                } else {
+                    None
                 }
+            } else {
+                None
             }
         }
 
-        None
+        if service.type_.contains(&"DIDCommMessaging".to_string()) {
+            match &service.service_endpoint {
+                Endpoint::Map(map) => {
+                    if map.is_array() {
+                        map.as_array().and_then(|arr| {
+                            for item in arr {
+                                if let Some(uri) = check(item, protocol) {
+                                    return Some(uri);
+                                }
+                            }
+                            None
+                        })
+                    } else {
+                        check(map, protocol)
+                    }
+                }
+                _ => {
+                    // Ignore URI
+                    None
+                }
+            }
+        } else {
+            None
+        }
     }
 
     /// Finds the REST endpoint for the Mediator if it exists

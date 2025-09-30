@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 affinidi-secrets-resolver.workspace = true
 
 base64 = "0.22"
@@ -22,8 +23,6 @@ chrono = "0.4"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-# ssi = { version = "0.12" }
-ssi = { git = "https://github.com/stormer78/ssi" }
 thiserror = "2.0"
 tokio = { version = "1.47", features = ["full"] }
 tracing = { version = "0.1", features = [

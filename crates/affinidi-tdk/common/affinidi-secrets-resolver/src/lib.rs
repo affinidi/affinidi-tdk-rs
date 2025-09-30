@@ -114,8 +114,13 @@ impl SecretsResolver for SimpleSecretsResolver {
     async fn find_secrets(&self, secret_ids: &[String]) -> Vec<String> {
         secret_ids
             .iter()
-            .filter(|sid| self.known_secrets.borrow().contains_key(sid.as_str()))
-            .cloned()
+            .filter_map(|sid| {
+                if self.known_secrets.borrow().contains_key(sid) {
+                    Some(sid.to_string())
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 

@@ -19,20 +19,19 @@
 //!
 use affinidi_did_common::{
     Document,
+    one_or_many::OneOrMany,
     service::{Endpoint, Service},
     verification_method::{VerificationMethod, VerificationRelationship},
 };
-use base64::prelude::*;
-use did_method_key::{DIDKey, VerificationMethodType};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use service::convert_service;
-use ssi_dids_core::{
-    DIDMethod, DIDMethodResolver, DIDResolver, DIDURL,
-    document::Resource,
-    resolution::{Content, Error, Options, Parameters},
+use affinidi_did_key::DIDKey;
+use affinidi_secrets_resolver::{
+    jwk::Params,
+    secrets::{KeyType, SecretMaterial},
 };
-use ssi_jwk::{JWK, Params};
+use base64::prelude::*;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use service::convert_service;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt,
@@ -64,6 +63,8 @@ pub enum DIDPeerError {
     JsonParsingError(String),
     #[error("Internal error: {0}")]
     InternalError(String),
+    #[error("Encoding error: {0}")]
+    EncodingError(String),
 }
 
 // Converts DIDPeerError to JsValue which is required for propagating errors to WASM
@@ -91,13 +92,24 @@ impl PeerServiceEndPoint {
             PeerServiceEndPoint::Short(short) => short.clone(),
             PeerServiceEndPoint::Long(long) => match long {
                 PeerServiceEndPointLong::URI(uri) => PeerServiceEndPointShort::URI(uri.to_string()),
-                PeerServiceEndPointLong::Map(map) => {
-                    PeerServiceEndPointShort::Map(PeerServiceEndPointShortMap {
-                        uri: map.uri.to_string(),
-                        a: map.accept.clone(),
-                        r: map.routing_keys.clone(),
-                    })
-                }
+                PeerServiceEndPointLong::Map(map) => match map {
+                    OneOrMany::One(single) => {
+                        PeerServiceEndPointShort::Map(OneOrMany::One(PeerServiceEndPointShortMap {
+                            uri: single.uri.to_string(),
+                            a: single.accept.clone(),
+                            r: single.routing_keys.clone(),
+                        }))
+                    }
+                    OneOrMany::Many(many) => PeerServiceEndPointShort::Map(OneOrMany::Many(
+                        many.iter()
+                            .map(|m| PeerServiceEndPointShortMap {
+                                uri: m.uri.to_string(),
+                                a: m.accept.clone(),
+                                r: m.routing_keys.clone(),
+                            })
+                            .collect(),
+                    )),
+                },
             },
         }
     }
@@ -115,7 +127,7 @@ impl PeerServiceEndPoint {
 #[serde(untagged)]
 pub enum PeerServiceEndPointShort {
     URI(String),
-    Map(PeerServiceEndPointShortMap),
+    Map(OneOrMany<PeerServiceEndPointShortMap>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,7 +142,7 @@ pub struct PeerServiceEndPointShortMap {
 #[serde(untagged)]
 pub enum PeerServiceEndPointLong {
     URI(String),
-    Map(PeerServiceEndPointLongMap),
+    Map(OneOrMany<PeerServiceEndPointLongMap>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,13 +156,24 @@ impl From<PeerServiceEndPointShort> for PeerServiceEndPointLong {
     fn from(service: PeerServiceEndPointShort) -> Self {
         match service {
             PeerServiceEndPointShort::URI(uri) => PeerServiceEndPointLong::URI(uri),
-            PeerServiceEndPointShort::Map(map) => {
-                PeerServiceEndPointLong::Map(PeerServiceEndPointLongMap {
-                    uri: map.uri.clone(),
-                    accept: map.a.clone(),
-                    routing_keys: map.r.clone(),
-                })
-            }
+            PeerServiceEndPointShort::Map(map) => match map {
+                OneOrMany::One(single) => {
+                    PeerServiceEndPointLong::Map(OneOrMany::One(PeerServiceEndPointLongMap {
+                        uri: single.uri,
+                        accept: single.a,
+                        routing_keys: single.r,
+                    }))
+                }
+                OneOrMany::Many(many) => PeerServiceEndPointLong::Map(OneOrMany::Many(
+                    many.iter()
+                        .map(|m| PeerServiceEndPointLongMap {
+                            uri: m.uri.clone(),
+                            accept: m.a.clone(),
+                            routing_keys: m.r.clone(),
+                        })
+                        .collect(),
+                )),
+            },
         }
     }
 }
@@ -309,7 +332,7 @@ pub struct DIDPeerCreatedKeys {
 }
 
 /// Converts a public key into a DID VerificationMethod
-fn process_key(did: &str, id: &str, public_key: &str) -> Result<VerificationMethod, Error> {
+fn process_key(did: &str, id: &str, public_key: &str) -> VerificationMethod {
     let mut property_set = HashMap::new();
 
     property_set.insert(
@@ -317,39 +340,35 @@ fn process_key(did: &str, id: &str, public_key: &str) -> Result<VerificationMeth
         Value::String(public_key.to_string()),
     );
 
-    Ok(VerificationMethod {
+    VerificationMethod {
         id: Url::from_str(&["did:peer:", did, id].concat()).unwrap(),
         type_: "Multikey".to_string(),
         controller: Url::from_str(&["did:peer:", did].concat()).unwrap(),
         expires: None,
         revoked: None,
         property_set,
-    })
+    }
 }
 
 impl DIDPeer {
-    pub async fn resolve(&self, did: &str, options: Options) -> Result<Document, Error> {
+    pub async fn resolve(&self, did: &str) -> Result<Document, DIDPeerError> {
         let Some(method_specific_id) = did.strip_prefix("did:peer:") else {
-            return Err(Error::InvalidMethodSpecificId(
-                "expected did:peer:".to_string(),
-            ));
+            return Err(DIDPeerError::MethodNotSupported);
         };
         let did = ["did:peer:", method_specific_id].concat();
 
         // If did:peer is type 0, then treat it as a did:key
         if let Some(id) = method_specific_id.strip_prefix('0') {
-            let response = DIDKey.resolve_method_representation(id, options).await?;
-            return serde_json::from_str(
-                &String::from_utf8(response.document).map_err(|_| Error::NoRepresentation)?,
-            )
-            .map_err(|e| Error::Internal(format!("serialization error: {e}")));
+            return DIDKey::resolve(&["did:key:", id].concat()).map_err(|e| {
+                DIDPeerError::InternalError(format!(
+                    "Resolving version 0 of did:peer resulted in the following error: {e}"
+                ))
+            });
         }
 
         // Only supports method 2 for did:peer
         if !method_specific_id.starts_with('2') {
-            return Err(Error::MethodNotSupported(
-                "did:peer version 2 supported only".to_string(),
-            ));
+            return Err(DIDPeerError::MethodNotSupported);
         }
 
         let mut context = BTreeMap::new();
@@ -381,7 +400,7 @@ impl DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
                             key_assertion_methods.push(VerificationRelationship::Reference(
                                 Url::from_str(&["#key-", &key_count.to_string()].concat()).unwrap(),
@@ -395,7 +414,7 @@ impl DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
                             key_capability_delegation.push(VerificationRelationship::Reference(
                                 Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
@@ -410,7 +429,7 @@ impl DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
                             key_agreements.push(VerificationRelationship::Reference(
                                 Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
@@ -425,7 +444,7 @@ impl DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
                             key_capability_invocation.push(VerificationRelationship::Reference(
                                 Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
@@ -440,9 +459,14 @@ impl DIDPeer {
                                 method_specific_id,
                                 &["#key-", &key_count.to_string()].concat(),
                                 &part[1..],
-                            )?);
+                            ));
 
                             key_authentications.push(VerificationRelationship::Reference(
+                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
+                                    .unwrap(),
+                            ));
+
+                            key_assertion_methods.push(VerificationRelationship::Reference(
                                 Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
                                     .unwrap(),
                             ));
@@ -452,12 +476,12 @@ impl DIDPeer {
                         'S' => {
                             // Service
                             let service = convert_service(&did, part, service_idx)
-                                .map_err(|e| Error::Internal(e.to_string()))?;
+                                .map_err(|e| DIDPeerError::InternalError(e.to_string()))?;
                             services.push(service);
                             service_idx += 1;
                         }
                         other => {
-                            return Err(Error::RepresentationNotSupported(format!(
+                            return Err(DIDPeerError::EncodingError(format!(
                                 "An invalid Purpose Code ({other}) was found in the DID",
                             )));
                         }
@@ -470,18 +494,14 @@ impl DIDPeer {
             }
         }
 
-        match options.parameters.public_key_format {
-            Some(name) => VerificationMethodType::from_name(&name).ok_or_else(|| {
-                Error::Internal(format!(
-                    "verification method type `{name}` unsupported by did:peer"
-                ))
-            })?,
-            None => VerificationMethodType::Multikey,
-        };
+        let mut parameters_set = HashMap::new();
+        parameters_set.insert(
+            "@context".to_string(),
+            json!(["https://www.w3.org/ns/did/v1.1".to_string()]),
+        );
 
         Ok(Document {
             id: Url::from_str(["did:peer:", method_specific_id].concat().as_str()).unwrap(),
-            context: vec!["https://www.w3.org/ns/did/v1.1".to_string()],
             verification_method: verification_methods,
             assertion_method: key_assertion_methods,
             authentication: key_authentications,
@@ -489,12 +509,9 @@ impl DIDPeer {
             capability_invocation: key_capability_invocation,
             key_agreement: key_agreements,
             service: services,
+            parameters_set,
         })
     }
-}
-
-impl DIDMethod for DIDPeer {
-    const DID_METHOD_NAME: &'static str = "peer";
 }
 
 impl DIDPeer {
@@ -556,84 +573,71 @@ impl DIDPeer {
             let public_key = if let Some(key) = key.public_key_multibase.as_ref() {
                 key.clone()
             } else {
-                let jwk = match &key.type_ {
+                let (did, secret) = match &key.type_ {
                     Some(type_) => match type_ {
-                        DIDPeerKeyType::Ed25519 => match JWK::generate_ed25519() {
-                            Ok(k) => k,
-                            Err(e) => {
-                                return Err(DIDPeerError::InternalError(format!(
-                                    "Failed to generate ed25519 key. Reason: {e}",
-                                )));
-                            }
-                        },
-                        DIDPeerKeyType::Secp256k1 => JWK::generate_secp256k1(),
-                        DIDPeerKeyType::P256 => JWK::generate_p256(),
+                        DIDPeerKeyType::Ed25519 => {
+                            DIDKey::generate(KeyType::Ed25519).map_err(|e| {
+                                DIDPeerError::InternalError(format!(
+                                    "Couldn't create Ed25519 did:key reason: {e}"
+                                ))
+                            })?
+                        }
+                        DIDPeerKeyType::Secp256k1 => {
+                            DIDKey::generate(KeyType::Secp256k1).map_err(|e| {
+                                DIDPeerError::InternalError(format!(
+                                    "Couldn't create Secp256k1 did:key reason: {e}"
+                                ))
+                            })?
+                        }
+                        DIDPeerKeyType::P256 => DIDKey::generate(KeyType::P256).map_err(|e| {
+                            DIDPeerError::InternalError(format!(
+                                "Couldn't create P256 did:key reason: {e}"
+                            ))
+                        })?,
                     },
                     None => return Err(DIDPeerError::UnsupportedKeyType),
                 };
-                let did = if let Ok(output) = DIDKey::generate(&jwk) {
-                    output.to_string()
+
+                if let SecretMaterial::JWK(jwk) = secret.secret_material {
+                    match jwk.params {
+                        Params::OKP(map) => {
+                            let d = if let Some(d) = &map.d {
+                                d
+                            } else {
+                                return Err(DIDPeerError::KeyParsingError(
+                                    "Missing private key".to_string(),
+                                ));
+                            };
+                            private_keys.push(DIDPeerCreatedKeys {
+                                key_multibase: did[8..].to_string(),
+                                curve: map.curve.clone(),
+                                d: d.clone(),
+                                x: map.x.clone(),
+                                y: None,
+                            })
+                        }
+                        Params::EC(map) => {
+                            let d = if let Some(d) = &map.d {
+                                d
+                            } else {
+                                return Err(DIDPeerError::KeyParsingError(
+                                    "Missing private key".to_string(),
+                                ));
+                            };
+
+                            private_keys.push(DIDPeerCreatedKeys {
+                                key_multibase: did[8..].to_string(),
+                                curve: map.curve.clone(),
+                                d: String::from(d),
+                                x: map.x.clone(),
+                                y: Some(map.y.clone()),
+                            })
+                        }
+                    }
                 } else {
                     return Err(DIDPeerError::InternalError(
-                        "Couldn't create did:key".to_string(),
+                        "Expected Secret Material to be in JWK format!".to_string(),
                     ));
-                };
-
-                match jwk.params {
-                    Params::OKP(map) => {
-                        let d = if let Some(d) = &map.private_key {
-                            d
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing private key".to_string(),
-                            ));
-                        };
-                        private_keys.push(DIDPeerCreatedKeys {
-                            key_multibase: did[8..].to_string(),
-                            curve: map.curve.clone(),
-                            d: String::from(d),
-                            x: String::from(map.public_key.clone()),
-                            y: None,
-                        })
-                    }
-                    Params::EC(map) => {
-                        let curve = if let Some(curve) = &map.curve {
-                            curve
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError("Missing curve".to_string()));
-                        };
-                        let d = if let Some(d) = &map.ecc_private_key {
-                            d
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing private key".to_string(),
-                            ));
-                        };
-
-                        let x = if let Some(x) = &map.x_coordinate {
-                            x
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing public key (x)".to_string(),
-                            ));
-                        };
-                        let y = if let Some(y) = &map.y_coordinate {
-                            y
-                        } else {
-                            return Err(DIDPeerError::KeyParsingError(
-                                "Missing public key (y)".to_string(),
-                            ));
-                        };
-
-                        private_keys.push(DIDPeerCreatedKeys {
-                            key_multibase: did[8..].to_string(),
-                            curve: curve.into(),
-                            d: String::from(d),
-                            x: String::from(x),
-                            y: Some(String::from(y)),
-                        })
-                    }
-                    _ => return Err(DIDPeerError::UnsupportedKeyType),
                 }
 
                 did[8..].to_string()
@@ -695,22 +699,8 @@ impl DIDPeer {
             ));
         };
 
-        let key_method = DIDKey;
-
-        let output = match key_method
-            .dereference_with(
-                DIDURL::new::<String>(&did_key.clone()).unwrap(),
-                Options {
-                    accept: None,
-                    parameters: Parameters {
-                        public_key_format: Some("JsonWebKey2020".to_string()),
-                        ..Default::default()
-                    },
-                },
-            )
-            .await
-        {
-            Ok(output) => output.content,
+        let document = match DIDKey::resolve(&did_key) {
+            Ok(document) => document,
             Err(e) => {
                 return Err(DIDPeerError::KeyParsingError(format!(
                     "Failed to resolve key ({did_key}). Reason: {e}",
@@ -718,17 +708,15 @@ impl DIDPeer {
             }
         };
 
-        if let Content::Resource(Resource::Document(doc)) = output
-            && let Some(vm) = doc.into_any_verification_method()
-        {
+        if let Some(vm) = document.verification_method.first() {
             let mut properties: HashMap<String, Value> = HashMap::new();
-            for (k, v) in vm.properties.iter() {
+            for (k, v) in vm.property_set.iter() {
                 properties.insert(k.clone(), v.clone());
             }
 
             Ok(VerificationMethod {
                 id: current_id,
-                type_: vm.type_,
+                type_: vm.type_.clone(),
                 controller: current_controller,
                 expires: None,
                 revoked: None,
@@ -745,10 +733,9 @@ impl DIDPeer {
 
 #[cfg(test)]
 mod test {
-    use affinidi_did_common::verification_method::VerificationMethod;
-    use did_method_key::DIDKey;
-    use ssi_dids_core::{DIDBuf, resolution::Options};
-    use ssi_jwk::JWK;
+    use affinidi_did_common::{one_or_many::OneOrMany, verification_method::VerificationMethod};
+    use affinidi_did_key::DIDKey;
+    use affinidi_secrets_resolver::secrets::KeyType;
 
     use crate::{
         DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService,
@@ -763,7 +750,7 @@ mod test {
     #[tokio::test]
     async fn expand_keys_throws_key_parsing_missing_pbk58_error() {
         let peer = DIDPeer;
-        let output = peer.resolve(DID_PEER, Options::default()).await.unwrap();
+        let output = peer.resolve(DID_PEER).await.unwrap();
 
         let mut document = output.clone();
         let mut new_vms: Vec<VerificationMethod> = vec![];
@@ -779,10 +766,7 @@ mod test {
     #[tokio::test]
     async fn expand_keys_works() {
         let peer = DIDPeer;
-        let document = peer
-            .resolve(DID_PEER, Options::default())
-            .await
-            .expect("Couldn't resolve DID");
+        let document = peer.resolve(DID_PEER).await.expect("Couldn't resolve DID");
 
         let vm_before_expansion = document.verification_method.clone();
         let expanded_doc = DIDPeer::expand_keys(&document).await.unwrap();
@@ -813,11 +797,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -858,11 +842,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -878,11 +862,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -906,11 +890,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -934,11 +918,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -963,11 +947,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -993,11 +977,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1022,11 +1006,11 @@ mod test {
         let services = vec![DIDPeerService {
             _type: "dm".into(),
             service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                PeerServiceEndPointLongMap {
+                OneOrMany::One(PeerServiceEndPointLongMap {
                     uri: "https://localhost:7037".into(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
-                },
+                }),
             )),
             id: None,
         }];
@@ -1047,22 +1031,31 @@ mod test {
     fn _get_keys(
         key_type: Option<DIDPeerKeyType>,
         with_pub_key: bool,
-    ) -> (DIDBuf, DIDBuf, Vec<DIDPeerCreateKeys>) {
-        let encryption_key = match key_type {
-            Some(DIDPeerKeyType::Ed25519) => JWK::generate_ed25519().unwrap(),
-            Some(DIDPeerKeyType::P256) => JWK::generate_p256(),
-            Some(DIDPeerKeyType::Secp256k1) => JWK::generate_secp256k1(),
-            None => JWK::generate_p384(),
+    ) -> (String, String, Vec<DIDPeerCreateKeys>) {
+        let (e_did_key, _) = match key_type {
+            Some(DIDPeerKeyType::Ed25519) => {
+                DIDKey::generate(KeyType::Ed25519).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::P256) => {
+                DIDKey::generate(KeyType::P256).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::Secp256k1) => {
+                DIDKey::generate(KeyType::Secp256k1).expect("Failed to create did:key")
+            }
+            None => DIDKey::generate(KeyType::P384).expect("Failed to create did:key"),
         };
-        let verification_key = match key_type {
-            Some(DIDPeerKeyType::Ed25519) => JWK::generate_ed25519().unwrap(),
-            Some(DIDPeerKeyType::P256) => JWK::generate_p256(),
-            Some(DIDPeerKeyType::Secp256k1) => JWK::generate_secp256k1(),
-            None => JWK::generate_p384(),
+        let (v_did_key, _) = match key_type {
+            Some(DIDPeerKeyType::Ed25519) => {
+                DIDKey::generate(KeyType::Ed25519).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::P256) => {
+                DIDKey::generate(KeyType::P256).expect("Failed to create did:key")
+            }
+            Some(DIDPeerKeyType::Secp256k1) => {
+                DIDKey::generate(KeyType::Secp256k1).expect("Failed to create did:key")
+            }
+            None => DIDKey::generate(KeyType::P384).expect("Failed to create did:key"),
         };
-        //  Create the did:key DID's for each key above
-        let e_did_key = DIDKey::generate(&encryption_key).unwrap();
-        let v_did_key = DIDKey::generate(&verification_key).unwrap();
 
         // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
         let keys = vec![
@@ -1137,11 +1130,11 @@ impl From<DIDService> for DIDPeerService {
         DIDPeerService {
             _type: service._type.unwrap_or("DIDCommMessaging".into()),
             service_end_point: PeerServiceEndPoint::Short(PeerServiceEndPointShort::Map(
-                PeerServiceEndPointShortMap {
+                OneOrMany::One(PeerServiceEndPointShortMap {
                     uri: service.uri,
                     a: service.accept,
                     r: service.routing_keys,
-                },
+                }),
             )),
             id: service.id,
         }
@@ -1221,7 +1214,7 @@ pub fn create_did_peer(input: &DidPeerCreate) -> Result<DIDPeerResult, DIDPeerEr
 pub async fn resolve_did_peer(did: &str) -> Result<String, DIDPeerError> {
     let peer = DIDPeer;
 
-    match peer.resolve(did, Options::default()).await {
+    match peer.resolve(did).await {
         Ok(document) => match serde_json::to_string_pretty(&document) {
             Ok(json) => Ok(json),
             Err(e) => Err(DIDPeerError::JsonParsingError(format!(

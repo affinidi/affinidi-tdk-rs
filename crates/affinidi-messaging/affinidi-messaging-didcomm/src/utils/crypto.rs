@@ -1,3 +1,4 @@
+use affinidi_secrets_resolver::jwk::JWK;
 use askar_crypto::{
     alg::{
         aes::{A128Kw, A256Kw, AesKey},
@@ -11,7 +12,6 @@ use askar_crypto::{
     kdf::{FromKeyDerivation, KeyExchange, ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs},
     repr::{KeySecretBytes, ToSecretBytes},
 };
-use ssi::JWK;
 
 use crate::error::{Error, ErrorKind, Result, err_msg};
 

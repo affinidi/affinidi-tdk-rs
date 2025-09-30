@@ -2,7 +2,10 @@
 *   DID Document Definition
 */
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 use crate::{
@@ -11,6 +14,7 @@ use crate::{
 };
 
 pub mod document;
+pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
 
@@ -23,10 +27,6 @@ pub struct Document {
     /// DID Subject Identifier
     /// <https://www.w3.org/TR/cid-1.0/#subjects>
     pub id: Url,
-
-    #[serde(rename = "@context")]
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub context: Vec<String>,
 
     /// https://www.w3.org/TR/cid-1.0/#verification-methods
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -55,6 +55,10 @@ pub struct Document {
     /// Set of Services
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub service: Vec<Service>,
+
+    /// Other parameters that may be in a DID Document
+    #[serde(flatten)]
+    pub parameters_set: HashMap<String, Value>,
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ You can use this SDK in either local (resolving occurs locally) or in network
 
 - did:key
 - did:ethr
-- did:jwk
+- did:jwk (disabled as SSI library is using local references)
 - did:pkh
 - did:peer
 - did:web
@@ -21,11 +21,11 @@ You can use this SDK in either local (resolving occurs locally) or in network
 - did:example
   - NOTE: This is enabled using Rust feature `did:example`
   - NOTE: did:example must be manually loaded into the resolver as the DID DOC is
-  NOT deterministic!
+    NOT deterministic!
 
 ## Prerequisites
 
-Rust version 1.85
+Rust version 1.88
 
 NOTE: For network mode, you will need access to a running a DID Universal Resolver
 Cache!

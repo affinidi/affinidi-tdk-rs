@@ -1,5 +1,6 @@
 use crate::{
     errors::SecretsResolverError,
+    jwk::{JWK, OctectParams, Params},
     multicodec::{ED25519_PUB, MultiEncoded, MultiEncodedBuf, X25519_PUB},
     secrets::{KeyType, Secret, SecretMaterial, SecretType},
 };
@@ -7,7 +8,6 @@ use base58::{FromBase58, ToBase58};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::{RngCore, rngs::OsRng};
-use serde_json::json;
 use sha2::{Digest, Sha512};
 
 impl Secret {
@@ -27,14 +27,14 @@ impl Secret {
         Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "Ed25519",
-                    "d": BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-                    "kty": "EC",
-                    "x": BASE64_URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+            secret_material: SecretMaterial::JWK(JWK {
+                key_id: None,
+                params: Params::OKP(OctectParams {
+                    curve: "Ed25519".to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
                 }),
-            },
+            }),
             private_bytes: signing_key.to_bytes().to_vec(),
             public_bytes: signing_key.verifying_key().to_bytes().to_vec(),
             key_type: KeyType::Ed25519,
@@ -53,17 +53,45 @@ impl Secret {
         Ok(Secret {
             id: ed25519.id,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "X25519",
-                    "d": BASE64_URL_SAFE_NO_PAD.encode(x25519_private),
-                    "kty": "EC",
-                    "x": BASE64_URL_SAFE_NO_PAD.encode(&x25519_public.1),
+            secret_material: SecretMaterial::JWK(JWK {
+                key_id: None,
+                params: Params::OKP(OctectParams {
+                    curve: "X25519".to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(&x25519_public.1),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_private)),
                 }),
-            },
+            }),
             private_bytes: x25519_private.to_vec(),
             public_bytes: x25519_public.1,
             key_type: KeyType::X25519,
+        })
+    }
+
+    /// Generates a Public JWK from a multikey value
+    pub fn ed25519_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
+        let params = OctectParams {
+            curve: "Ed25519".to_string(),
+            d: None,
+            x: BASE64_URL_SAFE_NO_PAD.encode(data),
+        };
+
+        Ok(JWK {
+            key_id: None,
+            params: Params::OKP(params),
+        })
+    }
+
+    /// Generates a Public JWK from a multikey value
+    pub fn x25519_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
+        let params = OctectParams {
+            curve: "X25519".to_string(),
+            d: None,
+            x: BASE64_URL_SAFE_NO_PAD.encode(data),
+        };
+
+        Ok(JWK {
+            key_id: None,
+            params: Params::OKP(params),
         })
     }
 }

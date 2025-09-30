@@ -72,15 +72,6 @@ pub struct MessagePickupDeliveryRequest {
 pub struct MessagePickupMessagesReceived {
     pub message_id_list: Vec<String>,
 }
-/// Handles the return from a message delivery request
-/// returns
-/// - StatusReply : No messages available
-/// - MessageDelivery : A DIDComm message containing messages
-#[derive(Serialize, Deserialize)]
-enum DeliveryRequestResponse {
-    StatusReply(MessagePickupStatusReply),
-    MessageDelivery(String),
-}
 
 impl MessagePickup {
     /// Sends a Message Pickup 3.0 `Status Request` message

@@ -11,7 +11,7 @@ use affinidi_secrets_resolver::{
     multicodec::{ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB},
 };
 use base58::FromBase58;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use url::Url;
 
@@ -134,12 +134,17 @@ impl DIDKey {
 
         let vm_relationship = VerificationRelationship::Reference(vm_id.clone());
 
-        Ok(Document {
-            id: Url::parse(did).map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
-            context: vec![
+        let mut parameters_set = HashMap::new();
+        parameters_set.insert(
+            "@context".to_string(),
+            json!([
                 "https://www.w3.org/ns/did/v1".to_string(),
                 "https://w3id.org/security/multikey/v1".to_string(),
-            ],
+            ]),
+        );
+
+        Ok(Document {
+            id: Url::parse(did).map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
             verification_method: vms,
             authentication: vec![vm_relationship.clone()],
             assertion_method: vec![vm_relationship.clone()],
@@ -147,6 +152,7 @@ impl DIDKey {
             capability_invocation: vec![vm_relationship.clone()],
             capability_delegation: vec![vm_relationship.clone()],
             service: vec![],
+            parameters_set,
         })
     }
 }

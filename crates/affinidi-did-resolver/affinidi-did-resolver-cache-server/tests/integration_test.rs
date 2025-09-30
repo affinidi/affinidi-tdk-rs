@@ -1,4 +1,4 @@
-use affinidi_did_common::Document;
+use affinidi_did_common::{Document, one_or_many::OneOrMany};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::server::start;
 use affinidi_secrets_resolver::secrets::Secret;
@@ -9,7 +9,6 @@ use did_peer::{
 use tokio::time::{Duration, sleep};
 
 const DID_ETHR: &str = "did:ethr:0x1:0xb9c5714089478a327f09197987f16f9e5d936e8a";
-const DID_JWK: &str = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9";
 const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
 const DID_PKH: &str =
     "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
@@ -29,7 +28,7 @@ async fn test_cache_server() {
 
     // Resolve DIDs and add to cache
     let client = DIDCacheClient::new(config).await.unwrap();
-    let dids: Vec<&str> = vec![&did_peer, DID_ETHR, DID_JWK, DID_KEY, DID_PKH];
+    let dids: Vec<&str> = vec![&did_peer, DID_ETHR, DID_KEY, DID_PKH];
     let mut did_docs_vec: Vec<Document> = vec![];
     for did in dids.clone() {
         let res = client.resolve(did).await.unwrap();
@@ -74,13 +73,13 @@ fn _create_and_validate_did_peer() -> String {
     let (e_did_key, v_did_key, keys) = _get_keys(DIDPeerKeyType::Secp256k1, true);
     let services = vec![DIDPeerService {
         _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
+        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
             PeerServiceEndPointLongMap {
                 uri: "https://localhost:7037".into(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             },
-        )),
+        ))),
         id: None,
     }];
 

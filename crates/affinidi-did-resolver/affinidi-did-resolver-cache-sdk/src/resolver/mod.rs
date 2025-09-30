@@ -2,6 +2,7 @@ use crate::{DIDCacheClient, errors::DIDCacheError};
 use affinidi_did_common::Document;
 use affinidi_did_key::DIDKey;
 use did_ethr::DIDEthr;
+#[cfg(feature = "did-jwk")]
 use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
@@ -9,7 +10,7 @@ use did_web::DIDWeb;
 use didwebvh_rs::DIDWebVHState;
 use ssi_dids_core::{
     DID, DIDMethodResolver, DIDResolver,
-    resolution::{self, Options},
+    resolution::{self},
 };
 use tracing::error;
 
@@ -28,27 +29,27 @@ impl DIDCacheClient {
 
                 match method
                     .resolve_method_representation(
-                        DID::new::<str>(did).unwrap(),
+                        parts[parts.len() - 1],
                         resolution::Options::default(),
                     )
                     .await
                 {
-                    Ok(res) => {
-                        let doc_string = String::from_utf8(res.document)?;
-                        Ok(serde_json::from_str(&doc_string)?)
-                    }
+                    Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
                     }
                 }
             }
+            #[cfg(feature = "did-jwk")]
             "jwk" => {
+                // This method isn't working as the VM references are relatative and not valid
+                // URL's
                 let method = DIDJWK;
 
                 match method
                     .resolve_method_representation(
-                        DID::new::<str>(did).unwrap(),
+                        parts[parts.len() - 1],
                         resolution::Options::default(),
                     )
                     .await
@@ -70,7 +71,7 @@ impl DIDCacheClient {
             "peer" => {
                 let method = DIDPeer;
 
-                match method.resolve(did, Options::default()).await {
+                match method.resolve(did).await {
                     Ok(res) => {
                         // DID Peer will resolve to MultiKey, which confuses key matching
                         // Expand the keys to raw keys
@@ -144,8 +145,10 @@ mod tests {
 
     use crate::{DIDCacheClient, config};
 
-    const DID_ETHR: &str = "did:ethr:0x1:0xb9c5714089478a327f09197987f16f9e5d936e8a";
+    const DID_ETHR: &str = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a";
+    #[cfg(feature = "did-jwk")]
     const DID_JWK: &str = "did:jwk:eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6ImFjYklRaXVNczNpOF91c3pFakoydHBUdFJNNEVVM3l6OTFQSDZDZEgyVjAiLCJ5IjoiX0tjeUxqOXZXTXB0bm1LdG00NkdxRHo4d2Y3NEk1TEtncmwyR3pIM25TRSJ9";
+    // ED25519
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
     const DID_PKH: &str = "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
@@ -166,6 +169,7 @@ mod tests {
         assert_eq!(did_document.verification_method.len(), 2,);
     }
 
+    #[cfg(feature = "did-jwk")]
     #[tokio::test]
     async fn local_resolve_jwk() {
         let config = config::DIDCacheConfigBuilder::default().build();
@@ -205,17 +209,11 @@ mod tests {
 
         assert_eq!(did_document.authentication.len(), 1);
         assert_eq!(did_document.assertion_method.len(), 1);
+        assert_eq!(did_document.key_agreement.len(), 1);
 
-        assert_eq!(did_document.verification_method.len(), 1);
-        assert_eq!(
-            did_document
-                .verification_method
-                .first()
-                .unwrap()
-                .property_set["publicKeyMultibase"],
-            parts.last().unwrap().to_string()
-        );
+        assert_eq!(did_document.verification_method.len(), 2);
     }
+
     #[tokio::test]
     async fn local_resolve_peer() {
         let config = config::DIDCacheConfigBuilder::default().build();

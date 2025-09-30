@@ -17,14 +17,13 @@ affinidi-did-authentication.workspace = true
 affinidi-tdk-common.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 
 base64 = "0.22"
 chrono = "0.4"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-# ssi = "0.12"
-ssi = { git = "https://github.com/stormer78/ssi" }
 thiserror = "2.0"
 tracing = "0.1"
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }

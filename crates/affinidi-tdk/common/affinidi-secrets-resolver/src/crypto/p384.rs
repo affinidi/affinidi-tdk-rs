@@ -1,11 +1,14 @@
 use crate::{
     errors::SecretsResolverError,
+    jwk::{ECParams, JWK, Params},
     secrets::{KeyType, Secret, SecretMaterial, SecretType},
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use p384::ecdsa::{SigningKey, VerifyingKey};
+use p384::{
+    EncodedPoint,
+    ecdsa::{SigningKey, VerifyingKey},
+};
 use rand::{RngCore, rngs::OsRng};
-use serde_json::json;
 
 impl Secret {
     /// Creates a p384 key pair
@@ -35,25 +38,61 @@ impl Secret {
         Ok(Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK {
-                private_key_jwk: json!({
-                    "crv": "P384",
-                    "d": BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes()),
-                    "kty": "EC",
-                    "x": BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).x().unwrap()),
-                    "y": BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).y().unwrap()),
+            secret_material: SecretMaterial::JWK(JWK {
+                key_id: None,
+                params: Params::EC(ECParams {
+                    curve: "P384".to_string(),
+                    x: BASE64_URL_SAFE_NO_PAD
+                        .encode(verifying_key.to_encoded_point(false).x().unwrap()),
+                    y: BASE64_URL_SAFE_NO_PAD
+                        .encode(verifying_key.to_encoded_point(false).y().unwrap()),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
                 }),
-            },
+            }),
             private_bytes: signing_key.to_bytes().to_vec(),
             public_bytes: verifying_key.to_encoded_point(false).to_bytes().to_vec(),
             key_type: KeyType::P384,
+        })
+    }
+
+    /// Generates a Public JWK from a multikey value
+    pub fn p384_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
+        let ep = EncodedPoint::from_bytes(data).map_err(|e| {
+            SecretsResolverError::KeyError(format!("P384 public key isn't valid: {e}"))
+        })?;
+
+        let params = ECParams {
+            curve: "P-384".to_string(),
+            d: None,
+            x: BASE64_URL_SAFE_NO_PAD.encode(
+                ep.x()
+                    .ok_or_else(|| {
+                        SecretsResolverError::KeyError("Couldn't get X coordinate".to_string())
+                    })?
+                    .as_slice(),
+            ),
+            y: BASE64_URL_SAFE_NO_PAD.encode(
+                ep.y()
+                    .ok_or_else(|| {
+                        SecretsResolverError::KeyError("Couldn't get Y coordinate".to_string())
+                    })?
+                    .as_slice(),
+            ),
+        };
+
+        Ok(JWK {
+            key_id: None,
+            params: Params::EC(params),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::secrets::{Secret, SecretMaterial};
+    use crate::{
+        jwk::Params,
+        secrets::{Secret, SecretMaterial},
+    };
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
     #[test]
@@ -74,13 +113,16 @@ mod tests {
         let p384_secret =
             Secret::generate_p384(None, Some(&secret_bytes)).expect("Couldbn't create P384 secret");
 
-        if let SecretMaterial::JWK {
-            private_key_jwk: jwk,
-        } = p384_secret.secret_material
+        if let SecretMaterial::JWK(jwk) = p384_secret.secret_material
+            && let Params::EC(params) = jwk.params
         {
-            assert_eq!(jwk.get("d").unwrap().as_str().unwrap(), d);
-            assert_eq!(jwk.get("x").unwrap().as_str().unwrap(), x);
-            assert_eq!(jwk.get("y").unwrap().as_str().unwrap(), y);
+            if let Some(params_d) = &params.d {
+                assert_eq!(params_d, d);
+            } else {
+                panic!("No private key material for P384 secret")
+            }
+            assert_eq!(params.x, x);
+            assert_eq!(params.y, y);
         } else {
             panic!("No secret JWK");
         }

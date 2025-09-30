@@ -17,6 +17,7 @@ rust-version.workspace = true
 # Affinidi Crates
 affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

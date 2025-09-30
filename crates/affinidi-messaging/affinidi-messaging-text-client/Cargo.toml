@@ -19,6 +19,7 @@ affinidi-messaging-sdk.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
 did-peer.workspace = true
+affinidi-did-key.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
@@ -38,8 +39,6 @@ reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-# ssi = { version = "0.12" }
-ssi = { git = "https://github.com/stormer78/ssi" }
 textwrap = "0.16"
 tokio = { version = "1.47", features = ["full"] }
 tokio-stream = "0.1"
