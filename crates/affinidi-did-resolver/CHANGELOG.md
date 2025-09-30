@@ -9,6 +9,18 @@
 - First initial release of the affinidi DID common crate
   - replaces the SSI crate dependency for common DID structure and methods
 
+## affinidi-did-key (0.1.0)
+
+- Initial release of did:key method resolver and generator
+
+## affinidi-did-example (0.5.5)
+
+- **MAINTENANCE:** Updating dependencies
+
+### 14th August 2025
+
+## DID webvh method (0.1.8)
+
 ### Crate donated to [Decentralized Identity Foundation](https://identity.foundation/)
 
 ## DID Resolver Cache SDK (0.5.6)
