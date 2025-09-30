@@ -119,7 +119,7 @@ impl DIDCacheClient {
                 // due to how webvh can handle more complex URLs, we need to pass the raw URL
                 // all url related checks are handled in the webvh method
                 match method.resolve(did, None).await {
-                    Ok((log_entry, meta)) => {
+                    Ok((_log_entry, _meta)) => {
                         // TODO: Add non SSI resolver method here
                         todo!("Add back in get_did_document call here!");
                     }
