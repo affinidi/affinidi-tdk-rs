@@ -231,24 +231,19 @@ mod tests {
         assert_eq!(did_document.key_agreement.len(), 1);
 
         assert_eq!(verification_method.len(), 2);
-        let first_public_key_jwk =
-            &verification_method.first().unwrap().property_set["publicKeyJwk"];
-        let last_public_key_jwk = &verification_method.last().unwrap().property_set["publicKeyJwk"];
-        assert_eq!(first_public_key_jwk["crv"], "Ed25519");
-        assert_eq!(first_public_key_jwk["kty"], "OKP");
+        let first_public_key =
+            &verification_method.first().unwrap().property_set["publicKeyMultibase"];
+
+        let last_public_key =
+            &verification_method.last().unwrap().property_set["publicKeyMultibase"];
+
         assert_eq!(
-            first_public_key_jwk["x"],
-            "O5KzVvRLtJzv8xzpkBjaM3mmUBNF7WE_6e9tGGIM1T8"
-        );
-        assert_eq!(last_public_key_jwk["crv"], "secp256k1");
-        assert_eq!(last_public_key_jwk["kty"], "EC");
-        assert_eq!(
-            last_public_key_jwk["x"],
-            "K4_AlZahXcLOtqnvH45WAMUi97aqQLVs51erkqXP88w"
+            first_public_key.as_str().expect("Not a string"),
+            "z6LSpuPPxLmp8C6ATvUcWrNox1qr6W8XWzXQ6MDTvC2p3pQN"
         );
         assert_eq!(
-            last_public_key_jwk["y"],
-            "QhrSDu7yD1ZKkHBRiuzQkiNppajd1q56Z1s_5Hi8dkA"
+            last_public_key.as_str().expect("Not a string"),
+            "zQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s"
         );
 
         assert_eq!(service.len(), 1);
