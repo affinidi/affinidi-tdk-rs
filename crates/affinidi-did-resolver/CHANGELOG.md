@@ -24,6 +24,10 @@
 
 ## affinidi-did-resolver-cache-sdk (0.6.0)
 
+- **BREAKING:** Removing SSI crate dependency
+
+## affinidi-did-resolver-cache-server (0.6.0)
+
 - **FIX:** Removing SSI crate dependency
 - **BREAKING:** JWK DID method has been removed due to using relative uri's that
   break
