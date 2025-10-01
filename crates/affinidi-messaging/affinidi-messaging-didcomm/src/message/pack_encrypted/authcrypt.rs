@@ -99,30 +99,6 @@ where
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    /*
-     let from_keys = from_kids
-        .into_iter()
-        .map(|kid| {
-            from_ddoc
-                .verification_method
-                .iter()
-                .find(|vm| {
-                    println!("vm.id: {}", vm.id);
-                    vm.id == kid
-                })
-                .ok_or_else(|| {
-                    // TODO: support external keys
-                    err_msg(
-                        ErrorKind::Malformed,
-                        format!(
-                            "No verification material found for sender key agreement {}",
-                            kid
-                        ),
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    */
 
     // Initial list of recipient keys is all key_agreements of recipient did doc
     // or filtered to keep only provided key

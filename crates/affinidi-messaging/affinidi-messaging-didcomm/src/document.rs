@@ -53,8 +53,8 @@ impl DIDCommVerificationMethodExt for VerificationMethod {
 
                 match JWK::from_multikey(key) {
                     Ok(jwk) => Some(jwk),
-                    Err(_) => {
-                        warn!("Failed to parse JWK from multicodec ({})", key);
+                    Err(e) => {
+                        warn!("Failed to parse JWK from multicodec ({key}): {e}");
                         None
                     }
                 }

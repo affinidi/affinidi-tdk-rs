@@ -5,8 +5,9 @@ use crate::{
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use p384::{
-    EncodedPoint,
+    AffinePoint, EncodedPoint,
     ecdsa::{SigningKey, VerifyingKey},
+    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
 };
 use rand::{RngCore, rngs::OsRng};
 
@@ -61,6 +62,17 @@ impl Secret {
             SecretsResolverError::KeyError(format!("P384 public key isn't valid: {e}"))
         })?;
 
+        // Convert to AffinePoint to validate the point is on the curve
+        let ap: AffinePoint = if let Some(ap) = AffinePoint::from_encoded_point(&ep).into() {
+            ap
+        } else {
+            return Err(SecretsResolverError::KeyError(
+                "Couldn't convert P-384 EncodedPoint to AffinePoint".to_string(),
+            ));
+        };
+
+        // Decompress the AffinePoint back to EncodedPoint to get x and y coordinates
+        let ep = ap.to_encoded_point(false);
         let params = ECParams {
             curve: "P-384".to_string(),
             d: None,
@@ -129,5 +141,33 @@ mod tests {
 
         assert_eq!(p384_secret.private_bytes, secret_bytes);
         assert_eq!(p384_secret.public_bytes, public_bytes);
+    }
+
+    #[test]
+    fn check_public_jwk() {
+        let bytes: [u8; 49] = [
+            3, 148, 137, 211, 198, 95, 31, 140, 178, 169, 253, 64, 171, 196, 141, 22, 14, 73, 90,
+            134, 47, 187, 251, 254, 137, 110, 216, 135, 142, 36, 111, 50, 248, 94, 118, 18, 149,
+            116, 112, 95, 139, 97, 194, 99, 203, 127, 64, 156, 156,
+        ];
+        let a = Secret::p384_public_jwk(&bytes);
+
+        assert!(a.is_ok());
+
+        let a = a.unwrap();
+        if let Params::EC(params) = a.params {
+            assert_eq!(params.curve, "P-384");
+            assert!(params.d.is_none(),);
+            assert_eq!(
+                params.x,
+                "lInTxl8fjLKp_UCrxI0WDklahi-7-_6JbtiHjiRvMvhedhKVdHBfi2HCY8t_QJyc"
+            );
+            assert_eq!(
+                params.y,
+                "y6N1IC-2mXxHreETBW7K3mBcw0qGr3CWHCs-yl09yCQRLcyfGv7XhqAngHOu51Zv"
+            );
+        } else {
+            panic!("Expected EC Params");
+        }
     }
 }

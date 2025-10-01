@@ -332,7 +332,7 @@ pub struct DIDPeerCreatedKeys {
 }
 
 /// Converts a public key into a DID VerificationMethod
-fn process_key(did: &str, id: &str, public_key: &str) -> VerificationMethod {
+fn process_key(did: &str, kid: &str, public_key: &str) -> VerificationMethod {
     let mut property_set = HashMap::new();
 
     property_set.insert(
@@ -341,9 +341,9 @@ fn process_key(did: &str, id: &str, public_key: &str) -> VerificationMethod {
     );
 
     VerificationMethod {
-        id: Url::from_str(&["did:peer:", did, id].concat()).unwrap(),
+        id: Url::from_str(kid).unwrap(),
         type_: "Multikey".to_string(),
-        controller: Url::from_str(&["did:peer:", did].concat()).unwrap(),
+        controller: Url::from_str(did).unwrap(),
         expires: None,
         revoked: None,
         property_set,
@@ -355,7 +355,6 @@ impl DIDPeer {
         let Some(method_specific_id) = did.strip_prefix("did:peer:") else {
             return Err(DIDPeerError::MethodNotSupported);
         };
-        let did = ["did:peer:", method_specific_id].concat();
 
         // If did:peer is type 0, then treat it as a did:key
         if let Some(id) = method_specific_id.strip_prefix('0') {
@@ -386,96 +385,63 @@ impl DIDPeer {
         // Split the DID for peer on '.'s, we skip the first one
         // did:peer:2.(process from here)
         let parts: Vec<&str> = method_specific_id[2..].split('.').collect();
-        let mut key_count: u32 = 1;
+        let mut key_count: u32 = 0;
         let mut service_idx: u32 = 0;
 
         for part in parts {
+            key_count += 1;
+            let kid = [did, "#key-", &key_count.to_string()].concat();
             let ch = part.chars().next();
             match ch {
                 Some(e) => {
                     match e {
                         'A' => {
                             // Assertion Method
-                            verification_methods.push(process_key(
-                                method_specific_id,
-                                &["#key-", &key_count.to_string()].concat(),
-                                &part[1..],
-                            ));
+                            verification_methods.push(process_key(did, &kid, &part[1..]));
 
                             key_assertion_methods.push(VerificationRelationship::Reference(
-                                Url::from_str(&["#key-", &key_count.to_string()].concat()).unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
-
-                            key_count += 1;
                         }
                         'D' => {
                             // Capability Delegation
-                            verification_methods.push(process_key(
-                                method_specific_id,
-                                &["#key-", &key_count.to_string()].concat(),
-                                &part[1..],
-                            ));
+                            verification_methods.push(process_key(did, &kid, &part[1..]));
 
                             key_capability_delegation.push(VerificationRelationship::Reference(
-                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
-                                    .unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
-
-                            key_count += 1;
                         }
                         'E' => {
                             // Key Agreement (Encryption)
-                            verification_methods.push(process_key(
-                                method_specific_id,
-                                &["#key-", &key_count.to_string()].concat(),
-                                &part[1..],
-                            ));
+                            verification_methods.push(process_key(did, &kid, &part[1..]));
 
                             key_agreements.push(VerificationRelationship::Reference(
-                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
-                                    .unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
-
-                            key_count += 1;
                         }
                         'I' => {
                             // Capability Invocation
-                            verification_methods.push(process_key(
-                                method_specific_id,
-                                &["#key-", &key_count.to_string()].concat(),
-                                &part[1..],
-                            ));
+                            verification_methods.push(process_key(did, &kid, &part[1..]));
 
                             key_capability_invocation.push(VerificationRelationship::Reference(
-                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
-                                    .unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
-
-                            key_count += 1;
                         }
                         'V' => {
                             // Authentication (Verification)
-                            verification_methods.push(process_key(
-                                method_specific_id,
-                                &["#key-", &key_count.to_string()].concat(),
-                                &part[1..],
-                            ));
+                            verification_methods.push(process_key(did, &kid, &part[1..]));
 
                             key_authentications.push(VerificationRelationship::Reference(
-                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
-                                    .unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
 
                             key_assertion_methods.push(VerificationRelationship::Reference(
-                                Url::from_str(&["did:peer:#key-", &key_count.to_string()].concat())
-                                    .unwrap(),
+                                Url::from_str(&kid).unwrap(),
                             ));
-
-                            key_count += 1;
                         }
                         'S' => {
                             // Service
-                            let service = convert_service(&did, part, service_idx)
+                            let service = convert_service(did, part, service_idx)
                                 .map_err(|e| DIDPeerError::InternalError(e.to_string()))?;
                             services.push(service);
                             service_idx += 1;

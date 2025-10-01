@@ -5,8 +5,9 @@ use crate::{
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use k256::{
-    EncodedPoint,
+    AffinePoint, EncodedPoint,
     ecdsa::{SigningKey, VerifyingKey},
+    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
 };
 use rand::{RngCore, rngs::OsRng};
 
@@ -62,6 +63,18 @@ impl Secret {
         let ep = EncodedPoint::from_bytes(data).map_err(|e| {
             SecretsResolverError::KeyError(format!("secp256k1 public key isn't valid: {e}"))
         })?;
+
+        // Convert to AffinePoint to validate the point is on the curve
+        let ap: AffinePoint = if let Some(ap) = AffinePoint::from_encoded_point(&ep).into() {
+            ap
+        } else {
+            return Err(SecretsResolverError::KeyError(
+                "Couldn't convert secp256k1 EncodedPoint to AffinePoint".to_string(),
+            ));
+        };
+
+        // Decompress the AffinePoint back to EncodedPoint to get x and y coordinates
+        let ep = ap.to_encoded_point(false);
 
         let params = ECParams {
             curve: "secp256k1".to_string(),
@@ -130,5 +143,26 @@ mod tests {
 
         assert_eq!(secp256k1_secret.private_bytes, secret_bytes);
         assert_eq!(secp256k1_secret.public_bytes, public_bytes);
+    }
+
+    #[test]
+    fn check_public_jwk() {
+        let bytes: [u8; 33] = [
+            2, 83, 143, 208, 17, 61, 39, 58, 251, 55, 174, 187, 147, 60, 3, 197, 119, 164, 52, 196,
+            220, 107, 174, 114, 244, 201, 214, 48, 217, 125, 54, 168, 92,
+        ];
+        let a = Secret::secp256k1_public_jwk(&bytes);
+
+        assert!(a.is_ok());
+
+        let a = a.unwrap();
+        if let Params::EC(params) = a.params {
+            assert_eq!(params.curve, "secp256k1");
+            assert!(params.d.is_none(),);
+            assert_eq!(params.x, "U4_QET0nOvs3rruTPAPFd6Q0xNxrrnL0ydYw2X02qFw");
+            assert_eq!(params.y, "H2xAfO9HZXYAdMdDckRv0Hl73YsE5PpAh9w2z4ShKBA");
+        } else {
+            panic!("Expected EC Params");
+        }
     }
 }
