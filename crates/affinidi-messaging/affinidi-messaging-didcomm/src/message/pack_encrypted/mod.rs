@@ -100,7 +100,7 @@ impl Message {
             let (msg, PackSignedMetadata { sign_by_kid }) = self
                 .pack_signed(sign_by, did_resolver, secrets_resolver)
                 .await
-                .context("Unable to produce sign envelope")?;
+                .context("Unable to produce signed envelope")?;
 
             (msg, Some(sign_by_kid))
         } else {

@@ -136,7 +136,6 @@ impl JWK {
 
 #[cfg(test)]
 mod tests {
-
     use crate::jwk::{ECParams, JWK, OctectParams, Params};
 
     #[test]
@@ -181,5 +180,25 @@ mod tests {
                 d: Some("kQrTUKhBU-6bHbCdiY0dIfg3knd5U2-1FlLGGHSbF6U".to_string())
             })
         );
+    }
+
+    #[test]
+    fn check_from_multikey() {
+        // secp256k1
+        assert!(JWK::from_multikey("zQ3shT2ynSjzY5XoTxhWHvYVZ6GiLWhBVincVekcEpZDRCBHV").is_ok());
+
+        // p256
+        assert!(JWK::from_multikey("zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169").is_ok());
+
+        // p384
+        assert!(
+            JWK::from_multikey(
+                "z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9"
+            )
+            .is_ok()
+        );
+
+        // Ed25519
+        assert!(JWK::from_multikey("z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp").is_ok());
     }
 }

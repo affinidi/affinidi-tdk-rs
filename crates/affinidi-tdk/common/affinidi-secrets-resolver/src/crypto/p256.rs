@@ -5,8 +5,9 @@ use crate::{
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use p256::{
-    EncodedPoint,
+    AffinePoint, EncodedPoint,
     ecdsa::{SigningKey, VerifyingKey},
+    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
 };
 use rand::{RngCore, rngs::OsRng};
 
@@ -60,6 +61,18 @@ impl Secret {
         let ep = EncodedPoint::from_bytes(data).map_err(|e| {
             SecretsResolverError::KeyError(format!("P256 public key isn't valid: {e}"))
         })?;
+
+        // Convert to AffinePoint to validate the point is on the curve
+        let ap: AffinePoint = if let Some(ap) = AffinePoint::from_encoded_point(&ep).into() {
+            ap
+        } else {
+            return Err(SecretsResolverError::KeyError(
+                "Couldn't convert P-256 EncodedPoint to AffinePoint".to_string(),
+            ));
+        };
+
+        // Decompress the AffinePoint back to EncodedPoint to get x and y coordinates
+        let ep = ap.to_encoded_point(false);
 
         let params = ECParams {
             curve: "P-256".to_string(),
@@ -128,5 +141,26 @@ mod tests {
 
         assert_eq!(p256_secret.private_bytes, secret_bytes);
         assert_eq!(p256_secret.public_bytes, public_bytes);
+    }
+
+    #[test]
+    fn check_public_jwk() {
+        let bytes: [u8; 33] = [
+            3, 127, 35, 88, 48, 221, 61, 239, 167, 34, 239, 26, 162, 73, 214, 160, 221, 187, 164,
+            249, 144, 176, 129, 117, 56, 147, 63, 87, 54, 64, 101, 53, 66,
+        ];
+        let a = Secret::p256_public_jwk(&bytes);
+
+        assert!(a.is_ok());
+
+        let a = a.unwrap();
+        if let Params::EC(params) = a.params {
+            assert_eq!(params.curve, "P-256");
+            assert!(params.d.is_none(),);
+            assert_eq!(params.x, "fyNYMN0976ci7xqiSdag3buk-ZCwgXU4kz9XNkBlNUI");
+            assert_eq!(params.y, "hW2ojTNfH7Jbi8--CJUo3OCbH3y5n91g-IMA9MLMbTU");
+        } else {
+            panic!("Expected EC Params");
+        }
     }
 }

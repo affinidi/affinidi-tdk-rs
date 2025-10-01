@@ -8,6 +8,11 @@
 
 - **FIX:** Adding WebVH DID method back in
 
+## did-peer (0.7.1)
+
+- **FIX:** Key ID's were not correctly implied
+  - ID's used to identify keys are `full_did#key-n`
+
 ### 30th September 2025
 
 ## DID Common (0.1.0)

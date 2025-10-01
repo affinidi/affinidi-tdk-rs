@@ -1,10 +1,11 @@
 # Affinidi Secrets Manager
 
-## 1st October 2025 (0.2.1)
+## 1st October 2025 (0.2.1, 0.2.2)
 
 - **FIX:** Secret struct deserialization was not correct
   - Added a unit test to check deserialization of Secret
   - serde now correctly names the SecretMaterial fields
+- **FIX:** JWK conversions from bytes were not correct for Ecliptic Curves
 
 ## 30th September 2025 (0.2.0)
 
