@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 1st October 2025
+
+## affinidi-did-resolver-cache-sdk (0.6.1)
+
+- **FIX:** Adding WebVH DID method back in
+
 ### 30th September 2025
 
 ## DID Common (0.1.0)
