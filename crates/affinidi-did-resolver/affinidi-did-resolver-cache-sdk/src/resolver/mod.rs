@@ -7,6 +7,7 @@ use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
 use did_web::DIDWeb;
+use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
 use ssi_dids_core::{
     DID, DIDMethodResolver, DIDResolver,
     resolution::{self},
@@ -113,23 +114,17 @@ impl DIDCacheClient {
                 }
             }
             "webvh" => {
-                /*
-                                let mut method = DIDWebVHState::default();
+                let mut method = DIDWebVHState::default();
 
-                                // due to how webvh can handle more complex URLs, we need to pass the raw URL
-                                // all url related checks are handled in the webvh method
-                                match method.resolve(did, None).await {
-                                    Ok((_log_entry, _meta)) => {
-                                        // TODO: Add non SSI resolver method here
-                                        todo!("Add back in get_did_document call here!");
-                                    }
-                                    Err(e) => {
-                                        error!("Error: {:?}", e);
-                                        Err(DIDCacheError::DIDError(e.to_string()))
-                                    }
-                                }
-                */
-                todo!("Add back in when webvh is updated");
+                match method.resolve(did, None).await {
+                    Ok((log_entry, _)) => {
+                        Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
+                    }
+                    Err(e) => {
+                        error!("Error: {:?}", e);
+                        Err(DIDCacheError::DIDError(e.to_string()))
+                    }
+                }
             }
             _ => Err(DIDCacheError::DIDError(format!(
                 "DID Method ({}) not supported",
@@ -154,6 +149,7 @@ mod tests {
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
     const DID_PKH: &str = "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
+    const DID_WEBVH: &str = "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs";
 
     #[tokio::test]
     async fn local_resolve_ethr() {
@@ -289,5 +285,16 @@ mod tests {
             parts[2..parts.len()].join(":")
         );
         assert!(vm_properties_last["publicKeyJwk"].is_object(),);
+    }
+
+    #[tokio::test]
+    async fn local_resolve_webvh() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+        let parts: Vec<&str> = DID_WEBVH.split(':').collect();
+
+        let did_document = client.local_resolve(DID_WEBVH, &parts).await.unwrap();
+
+        assert_eq!(did_document.id.as_str(), DID_WEBVH);
     }
 }
