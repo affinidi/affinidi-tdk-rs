@@ -435,9 +435,9 @@ impl fmt::Display for KeyType {
 
 /// Represents secret crypto material.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
+//#[serde(untagged)]
 pub enum SecretMaterial {
-    #[serde(rename_all = "camelCase")]
+    #[serde(rename = "privateKeyJwk", rename_all = "camelCase")]
     JWK(JWK),
 
     #[serde(rename_all = "camelCase")]
@@ -495,5 +495,24 @@ mod tests {
             .expect("Couldn't convert ed25519 to x25519");
 
         assert_eq!(x25519.private_bytes.as_slice(), x25519_sk_bytes);
+    }
+
+    #[test]
+    fn check_secret_deserialize() {
+        let txt = r#"{
+        "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-2",
+        "type": "JsonWebKey2020",
+        "privateKeyJwk": {
+            "crv": "secp256k1",
+            "d": "Cs5xn7WCkUWEua5vGxjP9_wBzIzMtEwjQ4KWKHHQR14",
+            "kty": "EC",
+            "x": "Lk1FY8MmyLjBswU4KbLoBQ_1THZJBMx2n6aIBXt1uXo",
+            "y": "tEv7EQHj4g4njOfrsjjDJBPKOI9RGWWMS8NYClo2cqo"
+        }
+    }"#;
+
+        let secret = serde_json::from_str::<Secret>(txt);
+
+        assert!(secret.is_ok());
     }
 }

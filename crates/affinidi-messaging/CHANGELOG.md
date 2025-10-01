@@ -8,6 +8,14 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 1st October 2025
+
+### Mediator (0.11.1)
+
+- **FIX:** When SSL certificate and key file config is absent, would cause a crash
+  even though SSL was disabled.
+  - SSL config is now optional
+
 ## 30th September 2025
 
 ### DIDComm Library (0.11.0)
