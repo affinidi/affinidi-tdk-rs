@@ -1,9 +1,16 @@
 # Affinidi Secrets Manager
 
+## 1st October 2025 (0.2.1)
+
+- **FIX:** Secret struct deserialization was not correct
+  - Added a unit test to check deserialization of Secret
+  - serde now correctly names the SecretMaterial fields
+
 ## 30th September 2025 (0.2.0)
 
 - **IMPROVEMENT:** SSI Crate dependency removed from this library
-- **IMPROVEMENT:** Crypto methods added directly to this library for easier 3rd party usage
+- **IMPROVEMENT:** Crypto methods added directly to this library for easier 3rd
+  party usage
 
 ## 13th September 2025 (0.1.18)
 

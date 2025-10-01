@@ -56,8 +56,8 @@ pub struct SecurityConfigRaw {
     pub local_direct_delivery_allow_anon: String,
     pub mediator_secrets: String,
     pub use_ssl: String,
-    pub ssl_certificate_file: String,
-    pub ssl_key_file: String,
+    pub ssl_certificate_file: Option<String>,
+    pub ssl_key_file: Option<String>,
     pub jwt_authorization_secret: String,
     pub jwt_access_expiry: String,
     pub jwt_refresh_expiry: String,
@@ -77,9 +77,9 @@ pub struct SecurityConfig {
     #[serde(skip_serializing)]
     pub mediator_secrets: Arc<ThreadedSecretsResolver>,
     pub use_ssl: bool,
-    pub ssl_certificate_file: String,
+    pub ssl_certificate_file: Option<String>,
     #[serde(skip_serializing)]
-    pub ssl_key_file: String,
+    pub ssl_key_file: Option<String>,
     #[serde(skip_serializing)]
     pub jwt_encoding_key: EncodingKey,
     #[serde(skip_serializing)]
@@ -135,8 +135,8 @@ impl SecurityConfig {
             local_direct_delivery_allow_anon: false,
             mediator_secrets: secrets_resolver,
             use_ssl: true,
-            ssl_certificate_file: "".into(),
-            ssl_key_file: "".into(),
+            ssl_certificate_file: None,
+            ssl_key_file: None,
             jwt_encoding_key: EncodingKey::from_ed_der(&[0; 32]),
             jwt_decoding_key: DecodingKey::from_ed_der(&[0; 32]),
             jwt_access_expiry: 900,
