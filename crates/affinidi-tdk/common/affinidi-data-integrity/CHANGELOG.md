@@ -1,5 +1,9 @@
 # Affinidi Data Integrity Changelog
 
+## 3rd October 2025 Release 0.2.3
+
+- **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
+
 ## 30th September 2025 Release 0.2.2
 
 - **MAINTENANCE:** Updating crate dependencies
