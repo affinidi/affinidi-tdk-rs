@@ -9,14 +9,19 @@ use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use rand::{RngCore, rngs::OsRng};
 use sha2::{Digest, Sha512};
+use x25519_dalek::{PublicKey, StaticSecret};
 
 impl Secret {
     /// Creates a random ed25519 signing key pair
     /// kid: Key ID, if none specified then a random value is assigned
-    pub fn generate_ed25519(kid: Option<&str>) -> Self {
+    pub fn generate_ed25519(kid: Option<&str>, seed: Option<&[u8; 32]>) -> Self {
         let mut csprng = OsRng;
 
-        let signing_key: SigningKey = SigningKey::generate(&mut csprng);
+        let signing_key = if let Some(seed) = seed {
+            SigningKey::from_bytes(seed)
+        } else {
+            SigningKey::generate(&mut csprng)
+        };
 
         let kid = if let Some(kid) = kid {
             kid.to_string()
@@ -43,26 +48,33 @@ impl Secret {
 
     /// Creates a random x25519 encryption key pair
     /// kid: Key ID, if none specified then a random value is assigned
-    pub fn generate_x25519(kid: Option<&str>) -> Result<Self, SecretsResolverError> {
-        let ed25519 = Secret::generate_ed25519(kid);
+    /// seed: Optional seed the x25519 key is derived from
+    pub fn generate_x25519(
+        kid: Option<&str>,
+        seed: Option<&[u8; 32]>,
+    ) -> Result<Self, SecretsResolverError> {
+        let seed = if let Some(seed) = seed {
+            *seed
+        } else {
+            to_x25519(&Secret::generate_ed25519(kid, None).private_bytes)
+        };
 
-        let x25519_private = to_x25519(&ed25519.private_bytes);
-        let x25519_public =
-            ed25519_public_to_x25519_public_key(&ed25519.get_public_keymultibase()?)?;
+        let x25519 = StaticSecret::from(seed);
+        let x25519_public: PublicKey = PublicKey::from(&x25519);
 
         Ok(Secret {
-            id: ed25519.id,
+            id: kid.unwrap_or("x25519").to_string(),
             type_: SecretType::JsonWebKey2020,
             secret_material: SecretMaterial::JWK(JWK {
                 key_id: None,
                 params: Params::OKP(OctectParams {
                     curve: "X25519".to_string(),
-                    x: BASE64_URL_SAFE_NO_PAD.encode(&x25519_public.1),
-                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_private)),
+                    x: BASE64_URL_SAFE_NO_PAD.encode(x25519_public.as_bytes()),
+                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519.as_bytes())),
                 }),
             }),
-            private_bytes: x25519_private.to_vec(),
-            public_bytes: x25519_public.1,
+            private_bytes: x25519.as_bytes().to_vec(),
+            public_bytes: x25519_public.as_bytes().to_vec(),
             key_type: KeyType::X25519,
         })
     }
@@ -104,7 +116,7 @@ pub(crate) fn to_x25519(secret: &Vec<u8>) -> [u8; 32] {
     bytes[31] |= 0x80;
     bytes[31] &= 0x7F;
 
-    let mut a: [u8; 32] = [0; 32]; // Initialize withg zeros
+    let mut a: [u8; 32] = [0; 32]; // Initialize with zeros
 
     a.copy_from_slice(&bytes[0..32]);
     a
@@ -161,7 +173,9 @@ pub fn ed25519_public_to_x25519_public_key(
 
 #[cfg(test)]
 mod tests {
-    use crate::crypto::ed25519::to_x25519;
+    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    use crate::{crypto::ed25519::to_x25519, secrets::Secret};
 
     const ED25519_SK: [u8; 32] = [
         202, 104, 239, 81, 53, 110, 80, 252, 198, 23, 155, 162, 215, 98, 223, 173, 227, 188, 110,
@@ -175,5 +189,43 @@ mod tests {
     #[test]
     fn check_ed25519_to_x25519_key_conversion() {
         assert_eq!(to_x25519(&ED25519_SK.to_vec()), CURVE25519_SK);
+    }
+
+    #[test]
+    fn check_x25519_from_seed() {
+        let bytes = BASE64_URL_SAFE_NO_PAD
+            .decode("_wYeKm00KWi8H861TsQLVkbAwWOVe0-T9n5Pa80VwTs")
+            .unwrap();
+
+        let mut a: [u8; 32] = [0; 32];
+        a.copy_from_slice(&bytes[0..32]);
+
+        let x25519 = Secret::generate_x25519(None, Some(&a)).unwrap();
+
+        assert_eq!(
+            x25519.get_public_bytes(),
+            BASE64_URL_SAFE_NO_PAD
+                .decode("ozI6dU2afJs4eyCXxs1FB-rNbn5UgPSHKHRNLRUlLnU")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn check_ed25519_from_seed() {
+        let bytes = BASE64_URL_SAFE_NO_PAD
+            .decode("X20biMbNG8QUQDnBv4RrZzkS3Civfc2zWHcDkeUeS9g")
+            .unwrap();
+
+        let mut a: [u8; 32] = [0; 32];
+        a.copy_from_slice(&bytes[0..32]);
+
+        let ed25519 = Secret::generate_ed25519(None, Some(&a));
+
+        assert_eq!(
+            ed25519.get_public_bytes(),
+            BASE64_URL_SAFE_NO_PAD
+                .decode("yb2ttOBWPH2qO-oTrFGs8mgw3cu0nCfjnPt-q9dag7E")
+                .unwrap()
+        );
     }
 }
