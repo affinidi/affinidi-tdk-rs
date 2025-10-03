@@ -1,5 +1,13 @@
 # Affinidi Secrets Manager
 
+## 3rd October 2025 (0.3.0)
+
+- **FEATURE:** `Secret::generate_ed25519()` now allows for creation from optional
+  seed
+- **FEATURE:** `Secret::generate_x25519()` now allows for creation from optional
+  seed
+- **NOTE:** The above changes causes a breaking API change
+
 ## 1st October 2025 (0.2.1, 0.2.2)
 
 - **FIX:** Secret struct deserialization was not correct

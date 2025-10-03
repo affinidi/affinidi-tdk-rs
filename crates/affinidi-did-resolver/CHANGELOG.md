@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+### 3rd October 2025
+
+## affinidi-did-resolver-cache-server (0.6.1)
+
+- **MAINTENANCE:** Compatible with latest `affinidi-secrets-resolver`
+
+## did-key (0.1.1)
+
+- **MAINTENANCE:** Compatible with latest `affinidi-secrets-resolver`
+
 ### 1st October 2025
 
 ## affinidi-did-resolver-cache-sdk (0.6.1)

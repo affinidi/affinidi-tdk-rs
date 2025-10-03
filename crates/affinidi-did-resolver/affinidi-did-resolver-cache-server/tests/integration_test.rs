@@ -108,7 +108,7 @@ fn _get_keys(
     with_pub_key: bool,
 ) -> (String, String, Vec<DIDPeerCreateKeys>) {
     let encryption_key = match key_type {
-        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None),
+        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None, None),
         DIDPeerKeyType::P256 => {
             Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
         }
@@ -117,7 +117,7 @@ fn _get_keys(
         }
     };
     let verification_key = match key_type {
-        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None),
+        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None, None),
         DIDPeerKeyType::P256 => {
             Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
         }
