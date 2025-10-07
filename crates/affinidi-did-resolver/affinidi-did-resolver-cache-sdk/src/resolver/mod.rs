@@ -1,6 +1,7 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use affinidi_did_common::Document;
 use affinidi_did_key::DIDKey;
+use did_cheqd::DIDCheqd;
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
 use did_jwk::DIDJWK;
@@ -126,6 +127,14 @@ impl DIDCacheClient {
                     }
                 }
             }
+            "cheqd" => match DIDCheqd::resolve(did).await {
+                Ok(Some(doc)) => Ok(doc),
+                Ok(None) => Err(DIDCacheError::DIDError("DID not found".to_string())),
+                Err(e) => {
+                    error!("Error: {:?}", e);
+                    Err(DIDCacheError::DIDError(e.to_string()))
+                }
+            },
             _ => Err(DIDCacheError::DIDError(format!(
                 "DID Method ({}) not supported",
                 parts[1]
@@ -150,6 +159,7 @@ mod tests {
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
     const DID_PKH: &str = "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
     const DID_WEBVH: &str = "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs";
+    const DID_CHEQD: &str = "did:cheqd:testnet:cad53e1d-71e0-48d2-9352-39cc3d0fac99";
 
     #[tokio::test]
     async fn local_resolve_ethr() {
@@ -296,5 +306,20 @@ mod tests {
         let did_document = client.local_resolve(DID_WEBVH, &parts).await.unwrap();
 
         assert_eq!(did_document.id.as_str(), DID_WEBVH);
+    }
+
+    #[tokio::test]
+    async fn local_resolve_cheqd() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        let did_document = client.resolve(DID_CHEQD).await.unwrap();
+
+        assert_eq!(did_document.did.as_str(), DID_CHEQD);
+
+        assert_eq!(did_document.doc.authentication.len(), 1);
+        assert_eq!(did_document.doc.assertion_method.len(), 1);
+
+        assert_eq!(did_document.doc.verification_method.len(), 1);
     }
 }

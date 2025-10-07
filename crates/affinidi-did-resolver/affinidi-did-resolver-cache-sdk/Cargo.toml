@@ -35,6 +35,7 @@ did-jwk = ["dep:did-jwk"]
 affinidi-did-common.workspace = true
 did-peer.workspace = true
 did-example = { workspace = true, optional = true }
+did-cheqd = { workspace = true }
 affinidi-did-key.workspace = true
 
 # External Crates
