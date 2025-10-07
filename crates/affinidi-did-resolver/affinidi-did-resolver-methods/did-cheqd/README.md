@@ -1,5 +1,7 @@
-# did-example Rust implementation
+# did-cheqd Rust implementation
 
-An easy way to create and read example DID's that do not need to be deterministic.
+This crate contains a resolver for DIDs of the did:cheqd method. The implementation resolves DIDs via gRPC network requests to the configured nodes. Default nodes for cheqd's mainnet & testnet can be used, or custom nodes can be opt-in by supplying a different gRPC URL configuration.
 
-Example DID Documents need to be manually added to the resolver to work as the Document cannot be automaticallyr esolved.
+The implementations in this crate are largely inspired from cheqd's own typescript sdk.
+
+This crate uses openwallet-foundation's [did-cheqd](https://github.com/openwallet-foundation/vcx/tree/main/did_core/did_methods/did_cheqd) crate which uses gRPC types and clients generated using tonic.
