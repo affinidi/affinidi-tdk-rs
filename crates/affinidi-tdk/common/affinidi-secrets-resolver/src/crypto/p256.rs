@@ -59,7 +59,7 @@ impl Secret {
     /// Generates a Public JWK from a multikey value
     pub fn p256_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
         let ep = EncodedPoint::from_bytes(data).map_err(|e| {
-            SecretsResolverError::KeyError(format!("P256 public key isn't valid: {e}"))
+            SecretsResolverError::KeyError(format!("P-256 public key isn't valid: {e}"))
         })?;
 
         // Convert to AffinePoint to validate the point is on the curve
@@ -103,7 +103,7 @@ impl Secret {
 #[cfg(test)]
 mod tests {
     use crate::{
-        jwk::Params,
+        jwk::{JWK, Params},
         secrets::{Secret, SecretMaterial},
     };
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -162,5 +162,11 @@ mod tests {
         } else {
             panic!("Expected EC Params");
         }
+    }
+
+    #[test]
+    fn check_p256_public_multi_encoded() {
+        assert!(JWK::from_multikey("zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169").is_ok());
+        assert!(JWK::from_multikey("zDnaerx9CtbPJ1q36T5Ln5wYt3MQYeGRG5ehnPAmxcf5mDZpv").is_ok());
     }
 }

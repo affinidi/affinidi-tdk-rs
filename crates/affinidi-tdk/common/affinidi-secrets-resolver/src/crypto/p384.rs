@@ -102,7 +102,7 @@ impl Secret {
 #[cfg(test)]
 mod tests {
     use crate::{
-        jwk::Params,
+        jwk::{JWK, Params},
         secrets::{Secret, SecretMaterial},
     };
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -169,5 +169,21 @@ mod tests {
         } else {
             panic!("Expected EC Params");
         }
+    }
+
+    #[test]
+    fn check_p384_public_multi_encoded() {
+        assert!(
+            JWK::from_multikey(
+                "z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9"
+            )
+            .is_ok()
+        );
+        assert!(
+            JWK::from_multikey(
+                "z82LkvCwHNreneWpsgPEbV3gu1C6NFJEBg4srfJ5gdxEsMGRJUz2sG9FE42shbn2xkZJh54"
+            )
+            .is_ok()
+        );
     }
 }
