@@ -11,14 +11,15 @@ You can use this SDK in either local (resolving occurs locally) or in network
 
 ## Supported DID Methods
 
-- did:key
-- did:ethr
+- did:key (default)
+- did:ethr (default)
 - did:jwk (disabled as SSI library is using local references)
-- did:pkh
-- did:peer
-- did:web
-- did:webvh
-- did:example
+- did:pkh (default)
+- did:peer (default)
+- did:web (default)
+- did:webvh (did-methods)
+- did:cheqd (did-methods)
+- did:example (did-example)
   - NOTE: This is enabled using Rust feature `did:example`
   - NOTE: did:example must be manually loaded into the resolver as the DID DOC is
     NOT deterministic!
@@ -29,6 +30,18 @@ Rust version 1.88
 
 NOTE: For network mode, you will need access to a running a DID Universal Resolver
 Cache!
+
+## Feature Flags
+
+- `default`: `local` and `did-methods` enabled
+  - Disable default using the `--no-default-features` flag
+- `local`: Does nothing reserved for future use
+- `network`: Enable network for the resolver to use a network-cache service
+- `did-methods`: Includes `did-webvh` and `did-cheqd` alongside the default methods
+- `did-webvh`: WebVH DID Method support
+- `did-cheqd`: Cheqd's Blockchain based DID Method support
+- `did-example`: Example DID Method which allows for easy testing of DID Documents
+- `did-jwk`: Currently Broken due to local references
 
 ## Local Mode
 

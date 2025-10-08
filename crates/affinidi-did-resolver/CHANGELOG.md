@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+### 8th October 2025
+
+## affinidi-did-key (0.1.2)
+
+- **FIX:** Generating a DID was placing the wrong key ID in the generated secret
+  - Correct did:key key id's are now properly used
+
+## did-cheqd (0.1.0)
+
+- Initial release of Cheqd DID method support
+
+## affinidi-did-resolver-cache-sdk (0.6.2)
+
+- **IMPROVEMENT:** `did-cheqd` and `did-webvh` moved behind feature flags, helps with managing complex dependencies as needed
+- **CHORE:** Improved README documentation and feature flags
+
 ### 3rd October 2025
 
 ## affinidi-did-resolver-cache-server (0.6.1)

@@ -231,27 +231,27 @@ impl Secret {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
             KeyType::P256 => {
-                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
+                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
                 };
                 let mut compressed: [u8; 33] = [0; 33];
                 compressed[0] = parity;
-                for x in self.public_bytes[0..32].iter().enumerate() {
+                for x in self.public_bytes[1..33].iter().enumerate() {
                     compressed[x.0 + 1] = *x.1;
                 }
                 MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
             }
             KeyType::P384 => {
-                let parity: u8 = if self.public_bytes[95].is_multiple_of(2) {
+                let parity: u8 = if self.public_bytes[96].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
                 };
                 let mut compressed: [u8; 49] = [0; 49];
                 compressed[0] = parity;
-                for x in self.public_bytes[0..48].iter().enumerate() {
+                for x in self.public_bytes[1..49].iter().enumerate() {
                     compressed[x.0 + 1] = *x.1;
                 }
                 MultiEncodedBuf::encode_bytes(P384_PUB, &compressed)

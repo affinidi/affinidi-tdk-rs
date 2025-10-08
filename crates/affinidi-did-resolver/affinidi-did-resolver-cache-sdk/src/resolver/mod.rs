@@ -1,6 +1,7 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use affinidi_did_common::Document;
 use affinidi_did_key::DIDKey;
+#[cfg(feature = "did-cheqd")]
 use did_cheqd::DIDCheqd;
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
@@ -8,6 +9,7 @@ use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
 use did_web::DIDWeb;
+#[cfg(feature = "did-webvh")]
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
 use ssi_dids_core::{
     DID, DIDMethodResolver, DIDResolver,
@@ -115,26 +117,42 @@ impl DIDCacheClient {
                 }
             }
             "webvh" => {
-                let mut method = DIDWebVHState::default();
+                #[cfg(feature = "did-webvh")]
+                {
+                    let mut method = DIDWebVHState::default();
 
-                match method.resolve(did, None).await {
-                    Ok((log_entry, _)) => {
-                        Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
+                    match method.resolve(did, None).await {
+                        Ok((log_entry, _)) => {
+                            Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
+                        }
+                        Err(e) => {
+                            error!("Error: {:?}", e);
+                            Err(DIDCacheError::DIDError(e.to_string()))
+                        }
                     }
+                }
+
+                #[cfg(not(feature = "did-webvh"))]
+                Err(DIDCacheError::UnsupportedMethod(
+                    "did:cheqd is not enabled".to_string(),
+                ))
+            }
+            "cheqd" => {
+                #[cfg(feature = "did-cheqd")]
+                match DIDCheqd::resolve(did).await {
+                    Ok(Some(doc)) => Ok(doc),
+                    Ok(None) => Err(DIDCacheError::DIDError("DID not found".to_string())),
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
                     }
                 }
+
+                #[cfg(not(feature = "did-cheqd"))]
+                Err(DIDCacheError::UnsupportedMethod(
+                    "did:cheqd is not enabled".to_string(),
+                ))
             }
-            "cheqd" => match DIDCheqd::resolve(did).await {
-                Ok(Some(doc)) => Ok(doc),
-                Ok(None) => Err(DIDCacheError::DIDError("DID not found".to_string())),
-                Err(e) => {
-                    error!("Error: {:?}", e);
-                    Err(DIDCacheError::DIDError(e.to_string()))
-                }
-            },
             _ => Err(DIDCacheError::DIDError(format!(
                 "DID Method ({}) not supported",
                 parts[1]
@@ -145,11 +163,9 @@ impl DIDCacheClient {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use url::Url;
-
     use crate::{DIDCacheClient, config};
+    use std::str::FromStr;
+    use url::Url;
 
     const DID_ETHR: &str = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a";
     #[cfg(feature = "did-jwk")]
@@ -158,7 +174,9 @@ mod tests {
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
     const DID_PEER: &str = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s.SeyJ0IjoiRElEQ29tbU1lc3NhZ2luZyIsInMiOnsidXJpIjoiaHR0cHM6Ly8xMjcuMC4wLjE6NzAzNyIsImEiOlsiZGlkY29tbS92MiJdLCJyIjpbXX19";
     const DID_PKH: &str = "did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:CKg5d12Jhpej1JqtmxLJgaFqqeYjxgPqToJ4LBdvG9Ev";
+    #[cfg(feature = "did-webvh")]
     const DID_WEBVH: &str = "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs";
+    #[cfg(feature = "did-cheqd")]
     const DID_CHEQD: &str = "did:cheqd:testnet:cad53e1d-71e0-48d2-9352-39cc3d0fac99";
 
     #[tokio::test]
@@ -297,6 +315,7 @@ mod tests {
         assert!(vm_properties_last["publicKeyJwk"].is_object(),);
     }
 
+    #[cfg(feature = "did-webvh")]
     #[tokio::test]
     async fn local_resolve_webvh() {
         let config = config::DIDCacheConfigBuilder::default().build();
@@ -308,6 +327,7 @@ mod tests {
         assert_eq!(did_document.id.as_str(), DID_WEBVH);
     }
 
+    #[cfg(feature = "did-cheqd")]
     #[tokio::test]
     async fn local_resolve_cheqd() {
         let config = config::DIDCacheConfigBuilder::default().build();
