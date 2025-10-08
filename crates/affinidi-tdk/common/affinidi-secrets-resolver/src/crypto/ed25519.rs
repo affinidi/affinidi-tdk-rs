@@ -154,7 +154,7 @@ pub fn ed25519_public_to_x25519_public_key(
     }
 
     let vk = VerifyingKey::try_from(multicodec.data()).map_err(|e| {
-        SecretsResolverError::KeyError(format!("Couldn't created ED25519 Verifying Key: {}", e))
+        SecretsResolverError::KeyError(format!("Couldn't created ED25519 Verifying Key: {e}"))
     })?;
 
     let x25519 = vk.to_montgomery().to_bytes();

@@ -1,12 +1,5 @@
-/*!
- * This module is a simple example of a DID resolver that uses a cache to store DID documents.
- *
- * Should only be used for local testing and development
- *
- * Enable using the did_example feature flag
- */
-
-use std::collections::HashMap;
+/*! Cheqd Blockchain DID Resolver
+*/
 
 use affinidi_did_common::service::{Endpoint, Service};
 use affinidi_did_common::verification_method::VerificationRelationship;
@@ -14,6 +7,7 @@ use affinidi_did_common::{Document, verification_method::VerificationMethod};
 use did_cheqd::resolution::resolver::{DidCheqdResolver, DidCheqdResolverConfiguration};
 use did_resolver::did_doc::schema::verification_method::{PublicKeyField, VerificationMethodKind};
 use did_resolver::did_parser_nom::{Did, DidUrl};
+use std::collections::HashMap;
 use thiserror::Error;
 use url::Url;
 
@@ -190,13 +184,7 @@ impl DIDCheqd {
     pub async fn resolve_resource(did_url: &str) -> Result<Option<Vec<u8>>, DIDCheqdError> {
         // Initialize resolver
         let resolver = DidCheqdResolver::new(DidCheqdResolverConfiguration::default());
-        let did_url = match DidUrl::try_from(Did::try_from(did_url).unwrap()) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("Failed to parse DID Url: {:?}", e);
-                return Ok(None);
-            }
-        };
+        let did_url = DidUrl::from(Did::try_from(did_url).unwrap());
 
         // If not found in cache, attempt to resolve using did_cheqd crate
         match resolver.resolve_resource(&did_url).await {
