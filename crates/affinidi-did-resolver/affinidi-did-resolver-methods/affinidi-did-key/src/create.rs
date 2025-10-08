@@ -33,3 +33,30 @@ impl DIDKey {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use affinidi_secrets_resolver::{jwk::JWK, secrets::KeyType};
+
+    use crate::DIDKey;
+
+    #[test]
+    fn check_generate() {
+        let (did, secret) =
+            DIDKey::generate(KeyType::P256).expect("COuldn't generate P256 DID Key");
+
+        assert_eq!(
+            [
+                &did,
+                "#",
+                &secret
+                    .get_public_keymultibase()
+                    .expect("Couldn't get multibase key")
+            ]
+            .concat(),
+            secret.id
+        );
+
+        assert!(JWK::from_multikey(did.trim_start_matches("did:key:")).is_ok());
+    }
+}
