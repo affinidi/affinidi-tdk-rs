@@ -8,6 +8,12 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 8th October 2025
+
+### DIDComm Library (0.11.2)
+
+- **CHORE:** Updated key error messages to be more descriptive and helpful
+
 ## 1st October 2025
 
 ### Mediator (0.11.1)

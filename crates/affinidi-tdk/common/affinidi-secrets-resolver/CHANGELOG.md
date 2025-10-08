@@ -1,5 +1,15 @@
 # Affinidi Secrets Manager
 
+## 8th October 2025 (0.3.1)
+
+- **FIX:** P-256 and P-384 Public point compression was off by a byte causing decrypt
+  failures.
+  - No loss of security as it hard failed to decrypt
+- **FIX:** Incorrect Curve String in JWK representation of public-keys for P-256
+  and P-384
+  - Changed `P256` to `P-256` and `P384` to `P-384`
+- **CHORE:** Additional Unit Tests added (50.77% Coverage)
+
 ## 3rd October 2025 (0.3.0)
 
 - **FEATURE:** `Secret::generate_ed25519()` now allows for creation from optional
