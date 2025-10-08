@@ -16,10 +16,11 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-did_cheqd = { git = "https://github.com/openwallet-foundation/vcx.git", package = "did_cheqd" }
-did_resolver = { git = "https://github.com/openwallet-foundation/vcx.git", package = "did_resolver" }
+did_cheqd = { version = "0.1.0", git = "https://github.com/openwallet-foundation/vcx.git", package = "did_cheqd" }
+did_resolver = { version = "0.1.0", git = "https://github.com/openwallet-foundation/vcx.git", package = "did_resolver" }
 affinidi-did-common.workspace = true
 ahash = "0.8"
 serde_json = "1.0"
 thiserror = "2.0"
 url = "2.5"
+
