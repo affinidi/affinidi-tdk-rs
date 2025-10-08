@@ -27,7 +27,8 @@ network = [
   "dep:rustls",
   "dep:rustls-platform-verifier",
 ]
-did-methods = ["did-cheqd", "did-webvh"]
+did-methods = ["did-webvh"]
+#did-methods = ["did-cheqd", "did-webvh"]
 did_example = ["dep:did-example"]
 did-jwk = ["dep:did-jwk"]
 did-cheqd = ["dep:did-cheqd"]
