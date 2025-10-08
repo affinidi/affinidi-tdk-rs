@@ -18,7 +18,7 @@ You can use this SDK in either local (resolving occurs locally) or in network
 - did:peer (default)
 - did:web (default)
 - did:webvh (did-methods)
-- did:cheqd (did-methods)
+- did:cheqd (Not ready for production yet)
 - did:example (did-example)
   - NOTE: This is enabled using Rust feature `did:example`
   - NOTE: did:example must be manually loaded into the resolver as the DID DOC is
@@ -37,9 +37,10 @@ Cache!
   - Disable default using the `--no-default-features` flag
 - `local`: Does nothing reserved for future use
 - `network`: Enable network for the resolver to use a network-cache service
-- `did-methods`: Includes `did-webvh` and `did-cheqd` alongside the default methods
+- `did-methods`: Includes `did-webvh` alongside the default methods
 - `did-webvh`: WebVH DID Method support
-- `did-cheqd`: Cheqd's Blockchain based DID Method support
+- `did-cheqd`: Cheqd's Blockchain based DID Method support (Part of OWF VCX git
+  repo - only works locally for now)
 - `did-example`: Example DID Method which allows for easy testing of DID Documents
 - `did-jwk`: Currently Broken due to local references
 
