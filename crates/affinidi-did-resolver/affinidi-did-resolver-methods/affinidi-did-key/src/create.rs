@@ -7,7 +7,7 @@ use crate::{DIDKey, errors::Error};
 
 impl DIDKey {
     pub fn generate<'a>(key_type: KeyType) -> Result<(String, Secret), Error<'a>> {
-        let secret = match key_type {
+        let mut secret = match key_type {
             KeyType::Ed25519 => Secret::generate_ed25519(None, None),
             KeyType::X25519 => Secret::generate_x25519(None, None)?,
             KeyType::P256 => Secret::generate_p256(None, None)?,
@@ -20,6 +20,13 @@ impl DIDKey {
             }
         };
 
+        secret.id = [
+            "did:key:",
+            &secret.get_public_keymultibase()?,
+            "#",
+            &secret.get_public_keymultibase()?,
+        ]
+        .concat();
         Ok((
             ["did:key:", &secret.get_public_keymultibase()?].concat(),
             secret,

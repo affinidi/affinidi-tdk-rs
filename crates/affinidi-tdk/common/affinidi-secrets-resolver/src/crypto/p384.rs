@@ -42,7 +42,7 @@ impl Secret {
             secret_material: SecretMaterial::JWK(JWK {
                 key_id: None,
                 params: Params::EC(ECParams {
-                    curve: "P384".to_string(),
+                    curve: "P-384".to_string(),
                     x: BASE64_URL_SAFE_NO_PAD
                         .encode(verifying_key.to_encoded_point(false).x().unwrap()),
                     y: BASE64_URL_SAFE_NO_PAD

@@ -125,7 +125,7 @@ impl AsKnownKeyPair for VerificationMethod {
                         .map(KnownKeyPair::K256),
                     _ => Err(err_msg(
                         ErrorKind::Unsupported,
-                        "Unsupported key type or curve",
+                        format!("Unsupported key type or curve ({})", ec.curve),
                     )),
                 }
             }
@@ -140,7 +140,7 @@ impl AsKnownKeyPair for VerificationMethod {
                         .map(KnownKeyPair::X25519),
                     _ => Err(err_msg(
                         ErrorKind::Unsupported,
-                        "Unsupported key type or curve",
+                        format!("Unsupported key type or curve ({})", okp.curve),
                     )),
                 }
             }
@@ -203,7 +203,10 @@ impl AsKnownKeyPairSecret for Secret {
                     .map(KnownKeyPair::X25519),
                 _ => Err(err_msg(
                     ErrorKind::Unsupported,
-                    "Unsupported key type or curve",
+                    format!(
+                        "Unsupported key type or curve key_type({})",
+                        jwk.get_key_type()
+                    ),
                 )),
             },
 
