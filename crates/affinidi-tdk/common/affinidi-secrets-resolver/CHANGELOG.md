@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 9th October 2025 (0.3.2)
+
+- **FIX:** secp256k1 Public point compression was off by a byte causing decrypt
+  failures.
+  - No loss of security as it hard failed to decrypt
+
 ## 8th October 2025 (0.3.1)
 
 - **FIX:** P-256 and P-384 Public point compression was off by a byte causing decrypt

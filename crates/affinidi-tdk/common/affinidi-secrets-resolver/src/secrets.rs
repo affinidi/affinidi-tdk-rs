@@ -262,14 +262,14 @@ impl Secret {
                 ));
             }
             KeyType::Secp256k1 => {
-                let parity: u8 = if self.public_bytes[63].is_multiple_of(2) {
+                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
                 };
                 let mut compressed: [u8; 33] = [0; 33];
                 compressed[0] = parity;
-                for x in self.public_bytes[0..32].iter().enumerate() {
+                for x in self.public_bytes[1..33].iter().enumerate() {
                     compressed[x.0 + 1] = *x.1;
                 }
                 MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &compressed)
