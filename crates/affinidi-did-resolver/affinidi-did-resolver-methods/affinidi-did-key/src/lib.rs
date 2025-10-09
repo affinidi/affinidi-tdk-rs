@@ -123,14 +123,18 @@ impl DIDKey {
             Value::String(identifier.to_string()),
         );
 
-        vms.push(VerificationMethod {
-            id: vm_id.clone(),
-            type_: "Multikey".to_string(),
-            controller: Url::parse(did).map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
-            expires: None,
-            revoked: None,
-            property_set,
-        });
+        vms.insert(
+            0,
+            VerificationMethod {
+                id: vm_id.clone(),
+                type_: "Multikey".to_string(),
+                controller: Url::parse(did)
+                    .map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
+                expires: None,
+                revoked: None,
+                property_set,
+            },
+        );
 
         let vm_relationship = VerificationRelationship::Reference(vm_id.clone());
 

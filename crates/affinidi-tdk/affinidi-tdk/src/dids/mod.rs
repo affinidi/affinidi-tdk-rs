@@ -4,10 +4,12 @@
  * Various helper functions for working with DIDs.
  */
 
+#[cfg(feature = "did-peer")]
 use affinidi_did_common::one_or_many::OneOrMany;
 use affinidi_did_key::DIDKey;
 use affinidi_secrets_resolver::secrets::{KeyType as SecretsKeyType, Secret};
 use affinidi_tdk_common::errors::{Result, TDKError};
+#[cfg(feature = "did-peer")]
 use did_peer::{
     DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
     PeerServiceEndPointLong, PeerServiceEndPointLongMap,
@@ -47,7 +49,7 @@ impl Display for KeyType {
         match self {
             KeyType::P256 => write!(f, "P-256"),
             KeyType::P384 => write!(f, "P-384"),
-            KeyType::Ed25519 => write!(f, "ED25519"),
+            KeyType::Ed25519 => write!(f, "Ed25519"),
             KeyType::Secp256k1 => write!(f, "secp256k1"),
         }
     }
@@ -87,6 +89,7 @@ impl DID {
         }
     }
 
+    #[cfg(feature = "did-peer")]
     /// Generate a new DID:peer
     pub fn generate_did_peer(
         keys: Vec<(DIDPeerKeys, KeyType)>,
