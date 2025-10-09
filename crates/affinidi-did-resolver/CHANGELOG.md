@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### 9th October 2025
+
+## did-peer (0.7.3)
+
+- **FIX:** secp256k1 keys were incorrectly using `Secp256k1` in some situations
+  instead of `secp256k1`
+
 ### 8th October 2025
 
 ## affinidi-did-key (0.1.2)
@@ -15,7 +22,8 @@
 
 ## affinidi-did-resolver-cache-sdk (0.6.2)
 
-- **IMPROVEMENT:** `did-cheqd` and `did-webvh` moved behind feature flags, helps with managing complex dependencies as needed
+- **IMPROVEMENT:** `did-cheqd` and `did-webvh` moved behind feature flags, helps
+  with managing complex dependencies as needed
 - **CHORE:** Improved README documentation and feature flags
 
 ### 3rd October 2025

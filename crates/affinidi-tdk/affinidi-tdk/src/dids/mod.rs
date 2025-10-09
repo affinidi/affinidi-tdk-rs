@@ -48,7 +48,7 @@ impl Display for KeyType {
             KeyType::P256 => write!(f, "P-256"),
             KeyType::P384 => write!(f, "P-384"),
             KeyType::Ed25519 => write!(f, "ED25519"),
-            KeyType::Secp256k1 => write!(f, "Secp256k1"),
+            KeyType::Secp256k1 => write!(f, "secp256k1"),
         }
     }
 }

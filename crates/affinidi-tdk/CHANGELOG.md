@@ -1,5 +1,10 @@
 # Affinidi TDK Changelog
 
+## 9th October 2025 (Release 0.2.2)
+
+- **FIX:** Crypto handling improved for Elliptic Curves
+  - Key algo names incorrectly capitalized
+
 ## 30th September 2025 (Release 0.2.0)
 
 - **IMPROVEMENT:** Removed SSI crate dependencies
