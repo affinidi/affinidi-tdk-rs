@@ -9,6 +9,11 @@
 - **FIX:** secp256k1 keys were incorrectly using `Secp256k1` in some situations
   instead of `secp256k1`
 
+## affinidi-did-key (0.1.3)
+
+- **FIX:** Swapped order of keys when Ed25519 Crypto alg is being used
+  - Was placing the X25519 derived key before Ed25519 which confused some implementations
+
 ### 8th October 2025
 
 ## affinidi-did-key (0.1.2)

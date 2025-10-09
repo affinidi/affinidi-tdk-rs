@@ -1,9 +1,10 @@
 # Affinidi TDK Changelog
 
-## 9th October 2025 (Release 0.2.2)
+## 9th October 2025 (Release 0.2.2, 0.2.3)
 
 - **FIX:** Crypto handling improved for Elliptic Curves
   - Key algo names incorrectly capitalized
+  * Ed25519 swapped from `ED25519` to `Ed25519`
 
 ## 30th September 2025 (Release 0.2.0)
 

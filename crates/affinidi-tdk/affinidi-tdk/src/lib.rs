@@ -7,6 +7,7 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
+#[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{
@@ -27,6 +28,8 @@ pub use affinidi_messaging_didcomm as didcomm;
 pub use affinidi_messaging_sdk as messaging;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
+#[cfg(feature = "did-peer")]
+pub use did_peer;
 
 /// TDK instance that can be used to interact with Affinidi services
 #[derive(Clone)]

@@ -8,6 +8,12 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 9th October 2025
+
+### DIDComm Library (0.11.3)
+
+- **CHORE:** Updating logging messages to be easier to understand key errors
+
 ## 8th October 2025
 
 ### DIDComm Library (0.11.2)
