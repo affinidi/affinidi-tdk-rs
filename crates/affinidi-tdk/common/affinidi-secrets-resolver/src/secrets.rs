@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tracing::warn;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// A Shadow inner struct that helps with deserializing
 /// Allows for post-processing of the JWK material
@@ -35,7 +36,7 @@ struct SecretShadow {
 }
 
 /// Public Structure that manages everything to do with Keys and Secrets
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 #[serde(try_from = "SecretShadow")]
 pub struct Secret {
     /// A key ID identifying a secret (private key).
@@ -378,7 +379,7 @@ impl Secret {
 }
 
 /// Must have the same semantics as type ('type' field) of the corresponding method in DID Doc containing a public key.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]
 pub enum SecretType {
     JsonWebKey2020,
     X25519KeyAgreementKey2019,
@@ -390,7 +391,7 @@ pub enum SecretType {
 }
 
 /// Known Crypto types
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Zeroize)]
 pub enum KeyType {
     Ed25519,
     X25519,
@@ -434,8 +435,7 @@ impl fmt::Display for KeyType {
 }
 
 /// Represents secret crypto material.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-//#[serde(untagged)]
+#[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]
 pub enum SecretMaterial {
     #[serde(rename = "privateKeyJwk", rename_all = "camelCase")]
     JWK(JWK),
