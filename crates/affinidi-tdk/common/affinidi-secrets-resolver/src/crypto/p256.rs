@@ -125,8 +125,8 @@ mod tests {
         let p256_secret =
             Secret::generate_p256(None, Some(&secret_bytes)).expect("Couldbn't create P256 secret");
 
-        if let SecretMaterial::JWK(jwk) = p256_secret.secret_material
-            && let Params::EC(params) = jwk.params
+        if let SecretMaterial::JWK(jwk) = &p256_secret.secret_material
+            && let Params::EC(params) = &jwk.params
         {
             if let Some(params_d) = &params.d {
                 assert_eq!(params_d, d);
@@ -154,7 +154,7 @@ mod tests {
         assert!(a.is_ok());
 
         let a = a.unwrap();
-        if let Params::EC(params) = a.params {
+        if let Params::EC(params) = &a.params {
             assert_eq!(params.curve, "P-256");
             assert!(params.d.is_none(),);
             assert_eq!(params.x, "fyNYMN0976ci7xqiSdag3buk-ZCwgXU4kz9XNkBlNUI");

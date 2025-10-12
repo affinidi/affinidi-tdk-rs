@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 12th October 2025 (0.3.3)
+
+- **IMPROVEMENT:** Implemented stronger and more consistent zeroize on drop for `Secret`
+  - This may cause breaking changes for apps where they were not using references
+    to `Secret`
+
 ## 9th October 2025 (0.3.2)
 
 - **FIX:** secp256k1 Public point compression was off by a byte causing decrypt

@@ -3,7 +3,7 @@
 */
 
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[cfg(feature = "ed25519")]
 use crate::multicodec::X25519_PUB;
@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// RFC 7517 JWK Struct
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct JWK {
     #[serde(rename = "kid")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,14 +54,14 @@ impl JWK {
 }
 
 /// JWK Key Types and associated Parameters
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Zeroize, ZeroizeOnDrop)]
 #[serde(tag = "kty")]
 pub enum Params {
     EC(ECParams),
     OKP(OctectParams),
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
 pub struct ECParams {
     // Public key co-ordinates
     #[serde(rename = "crv")]
@@ -73,15 +73,8 @@ pub struct ECParams {
     pub d: Option<String>,
 }
 
-impl Drop for ECParams {
-    fn drop(&mut self) {
-        // Zeroize private key
-        self.d.zeroize();
-    }
-}
-
 // Ensure we are cleaning up any private key data
-#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
 pub struct OctectParams {
     // Public key co-ordinates
     #[serde(rename = "crv")]
@@ -90,13 +83,6 @@ pub struct OctectParams {
 
     // Private key cordinate
     pub d: Option<String>,
-}
-
-impl Drop for OctectParams {
-    fn drop(&mut self) {
-        // Zeroize private key
-        self.d.zeroize();
-    }
 }
 
 impl JWK {

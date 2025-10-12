@@ -127,8 +127,8 @@ mod tests {
         let secp256k1_secret = Secret::generate_secp256k1(None, Some(&secret_bytes))
             .expect("Couldbn't create secp256k1 secret");
 
-        if let SecretMaterial::JWK(jwk) = secp256k1_secret.secret_material
-            && let Params::EC(params) = jwk.params
+        if let SecretMaterial::JWK(jwk) = &secp256k1_secret.secret_material
+            && let Params::EC(params) = &jwk.params
         {
             if let Some(params_d) = &params.d {
                 assert_eq!(params_d, d);
@@ -156,7 +156,7 @@ mod tests {
         assert!(a.is_ok());
 
         let a = a.unwrap();
-        if let Params::EC(params) = a.params {
+        if let Params::EC(params) = &a.params {
             assert_eq!(params.curve, "secp256k1");
             assert!(params.d.is_none(),);
             assert_eq!(params.x, "U4_QET0nOvs3rruTPAPFd6Q0xNxrrnL0ydYw2X02qFw");

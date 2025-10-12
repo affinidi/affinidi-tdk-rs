@@ -4,6 +4,11 @@
 
 ### 9th October 2025
 
+## did-peer (0.7.4)
+
+- **CHORE:** affinidi-secrets-resolver has stronger drop protection, small change
+  to use references
+
 ## did-peer (0.7.3)
 
 - **FIX:** secp256k1 keys were incorrectly using `Secp256k1` in some situations
