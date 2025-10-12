@@ -564,8 +564,8 @@ impl DIDPeer {
                     None => return Err(DIDPeerError::UnsupportedKeyType),
                 };
 
-                if let SecretMaterial::JWK(jwk) = secret.secret_material {
-                    match jwk.params {
+                if let SecretMaterial::JWK(jwk) = &secret.secret_material {
+                    match &jwk.params {
                         Params::OKP(map) => {
                             let d = if let Some(d) = &map.d {
                                 d
