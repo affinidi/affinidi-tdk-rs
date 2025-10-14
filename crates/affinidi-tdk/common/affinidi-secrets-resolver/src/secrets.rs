@@ -83,6 +83,7 @@ impl TryFrom<SecretShadow> for Secret {
     }
 }
 
+#[allow(deprecated)]
 impl Secret {
     /// Helper function to get raw bytes
     fn convert_to_raw(input: &str) -> Result<Vec<u8>> {

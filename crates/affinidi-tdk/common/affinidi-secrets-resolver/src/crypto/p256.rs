@@ -11,6 +11,7 @@ use p256::{
 };
 use rand::{RngCore, rngs::OsRng};
 
+#[allow(deprecated)]
 impl Secret {
     /// Creates a p256 key pair
     /// kid: Key ID, if none specified then a random value is assigned

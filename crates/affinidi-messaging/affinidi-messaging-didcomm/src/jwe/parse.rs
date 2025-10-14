@@ -68,6 +68,7 @@ impl Jwe {
     }
 }
 
+#[allow(deprecated)]
 impl ParsedJWE {
     /// Verifies that apv and apu filled according DID Comm specification.
     pub(crate) fn verify_didcomm(self) -> Result<Self> {
