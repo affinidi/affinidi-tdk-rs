@@ -22,7 +22,7 @@ affinidi-messaging-sdk.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-messaging-mediator-processors.workspace = true
 affinidi-messaging-mediator-common.workspace = true
-affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-resolver-cache-sdk = { workspace = true, features = ["did-cheqd"] }
 affinidi-did-common.workspace = true
 affinidi-secrets-resolver.workspace = true
 
