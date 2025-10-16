@@ -159,7 +159,7 @@ impl ParsedJWE {
                     let key_pair = vm.as_key_pair(&jwk).map_err(|e| {
                         err_msg(
                             ErrorKind::Malformed,
-                            format!("Can't convert verification method to a key pair: {}", e),
+                            format!("Can't convert verification method to a key pair: {e}",),
                         )
                     })?;
                     envelope.from_key = Some(key_pair);

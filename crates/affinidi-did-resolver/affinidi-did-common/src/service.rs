@@ -92,16 +92,47 @@ pub enum Endpoint {
 }
 
 impl Endpoint {
-    /// Returns the URI String for a service Endpoint, if available
+    /// Returns the first URI String for a service Endpoint, if available
+    /// This may not be what you always want
     pub fn get_uri(&self) -> Option<String> {
         match self {
             Endpoint::Url(uri) => Some(uri.to_string()),
-            Endpoint::Map(map) => {
-                if let Some(uri) = map.get("uri") {
-                    uri.as_str().map(|s| s.to_string())
-                } else {
-                    None
+            Endpoint::Map(map) => match map {
+                Value::Array(array) => {
+                    if let Some(first) = array.first() {
+                        first.get("uri").map(|u| u.to_string())
+                    } else {
+                        None
+                    }
                 }
+                Value::Object(obj) => obj.get("uri").map(|u| u.to_string()),
+                _ => None,
+            },
+        }
+    }
+
+    /// Returns all found URI's within a service Endpoint
+    pub fn get_uris(&self) -> Vec<String> {
+        match self {
+            Endpoint::Url(uri) => vec![uri.to_string()],
+            Endpoint::Map(map) => {
+                let mut uris = Vec::new();
+                match map {
+                    Value::Array(array) => {
+                        for sep in array {
+                            if let Some(uri) = sep.get("uri") {
+                                uris.push(uri.to_string());
+                            }
+                        }
+                    }
+                    Value::Object(obj) => {
+                        if let Some(uri) = obj.get("uri") {
+                            uris.push(uri.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+                uris
             }
         }
     }

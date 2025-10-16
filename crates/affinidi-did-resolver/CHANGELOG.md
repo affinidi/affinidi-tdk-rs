@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+### 16th October 2025
+
+## DID Common (0.1.1)
+
+- **FIX:** `Endpoint::get_uri()` wasn't handling JSON arrays/objects correctly.
+  Now corrected
+- **IMPROVEMENT:** `Endpoint::get_uris()` added so you can get all URI service
+  endpoints instead of the first
+
 ### 9th October 2025
 
 ## did-peer (0.7.4)
