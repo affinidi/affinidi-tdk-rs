@@ -1,13 +1,11 @@
 //! Extends the SSI Crate Document with new methods and functions
 
-use std::str::FromStr;
-
-use url::Url;
-
 use crate::{
     Document,
     verification_method::{VerificationMethod, VerificationRelationship},
 };
+use std::str::FromStr;
+use url::Url;
 
 pub trait DocumentExt {
     /// Does this DID contain authentication verification_method with the given id?

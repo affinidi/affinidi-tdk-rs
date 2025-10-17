@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 use url::Url;
 
 use crate::{
@@ -17,6 +18,12 @@ pub mod document;
 pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
+
+#[derive(Error, Debug)]
+pub enum DocumentError {
+    #[error("URL Error")]
+    URL(#[from] url::ParseError),
+}
 
 /// A [DID Document]
 ///
@@ -59,6 +66,34 @@ pub struct Document {
     /// Other parameters that may be in a DID Document
     #[serde(flatten)]
     pub parameters_set: HashMap<String, Value>,
+}
+
+impl Default for Document {
+    /// Creates a default example DID Document that is blank except for the id field
+    fn default() -> Self {
+        Self {
+            id: Url::parse("did:example:123456789abcdefghi").unwrap(),
+            verification_method: Vec::new(),
+            authentication: Vec::new(),
+            assertion_method: Vec::new(),
+            key_agreement: Vec::new(),
+            capability_invocation: Vec::new(),
+            capability_delegation: Vec::new(),
+            service: Vec::new(),
+            parameters_set: HashMap::new(),
+        }
+    }
+}
+
+impl Document {
+    /// Creates a new DID Document with the given identifier
+    /// Rest of the Document is blank
+    pub fn new(id: &str) -> Result<Self, DocumentError> {
+        Ok(Document {
+            id: Url::parse(id)?,
+            ..Default::default()
+        })
+    }
 }
 
 #[cfg(test)]
