@@ -1,5 +1,10 @@
 # Affinidi Secrets Manager
 
+## 21st October 2025 (0.3.4)
+
+- **FEATURE:** Ability to convert Ed25519 secret to X25519 secret is now public
+  - `ed25519_private_to_x25519_private_key()`
+
 ## 12th October 2025 (0.3.3)
 
 - **IMPROVEMENT:** Implemented stronger and more consistent zeroize on drop for `Secret`
