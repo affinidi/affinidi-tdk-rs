@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### 17th October 2025
+
+## DID Common (0.1.2)
+
+- **FEATURE:** `Document` now supports `Default` and a `Document::new(id: &str)`
+  to help with creating a DID Document from scratch
+
 ### 16th October 2025
 
 ## DID Common (0.1.1)
