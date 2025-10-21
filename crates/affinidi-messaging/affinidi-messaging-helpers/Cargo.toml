@@ -21,9 +21,8 @@ name = "mediator_administration"
 path = "src/mediator_administration/main.rs"
 
 [[bin]]
-name = "generate_did_web"
-path = "src/generate_did_web/main.rs"
-
+name = "generate_mediator_config"
+path = "src/generate_mediator_config/main.rs"
 
 [dependencies]
 # Affinidi Crates
