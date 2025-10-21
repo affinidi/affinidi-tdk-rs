@@ -1,13 +1,13 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
 use affinidi_did_common::Document;
 use affinidi_did_key::DIDKey;
-#[cfg(feature = "did-cheqd")]
-use did_cheqd::DIDCheqd;
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
 use did_jwk::DIDJWK;
 use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
+#[cfg(feature = "did-cheqd")]
+use did_resolver_cheqd::DIDCheqd;
 use did_web::DIDWeb;
 #[cfg(feature = "did-webvh")]
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
@@ -139,9 +139,14 @@ impl DIDCacheClient {
             }
             "cheqd" => {
                 #[cfg(feature = "did-cheqd")]
-                match DIDCheqd::resolve(did).await {
-                    Ok(Some(doc)) => Ok(doc),
-                    Ok(None) => Err(DIDCacheError::DIDError("DID not found".to_string())),
+                match DIDCheqd::default()
+                    .resolve(DID::new::<str>(did).unwrap())
+                    .await
+                {
+                    Ok(res) => {
+                        let doc_value = serde_json::to_value(res.document.into_document())?;
+                        Ok(serde_json::from_value(doc_value)?)
+                    }
                     Err(e) => {
                         error!("Error: {:?}", e);
                         Err(DIDCacheError::DIDError(e.to_string()))
@@ -340,6 +345,6 @@ mod tests {
         assert_eq!(did_document.doc.authentication.len(), 1);
         assert_eq!(did_document.doc.assertion_method.len(), 1);
 
-        assert_eq!(did_document.doc.verification_method.len(), 1);
+        assert_eq!(did_document.doc.verification_method.len(), 2);
     }
 }
