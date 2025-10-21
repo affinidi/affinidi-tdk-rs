@@ -20,6 +20,10 @@ path = "src/setup_environment/main.rs"
 name = "mediator_administration"
 path = "src/mediator_administration/main.rs"
 
+[[bin]]
+name = "generate_mediator_config"
+path = "src/generate_mediator_config/main.rs"
+
 [dependencies]
 # Affinidi Crates
 affinidi-did-resolver-cache-sdk = { workspace = true, features = [
