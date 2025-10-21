@@ -1,5 +1,4 @@
-//! Helps configure the various configuration options, DIDs and keys for the actors in the examples.
-//! This helps to create consistency in the examples and also to avoid code duplication.
+//! Helps to generate DIDs and secrets to setup self-hosted mediator.
 use affinidi_messaging_helpers::common::{affinidi_logo, check_path};
 use affinidi_tdk::dids::{DID, KeyType};
 use base64::prelude::*;
@@ -169,9 +168,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         None,
     )
     .unwrap();
-    let mut admin_did_secrets_string = serde_json::to_string_pretty(&admin_did_secrets)?;
+    let admin_did_secrets_string = serde_json::to_string_pretty(&admin_did_secrets)?;
     
-    // print out all info to be use for sel-hosted mediator
+    // print out all the info required to setup the self-hosted mediator
     println!(
         "{} {}",
         style("DID Value:").green(),
