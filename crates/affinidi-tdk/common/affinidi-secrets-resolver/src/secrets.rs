@@ -6,7 +6,7 @@ Handles Secrets - mainly used for internal representation and for saving to file
 use std::fmt;
 
 use crate::{
-    crypto::ed25519::to_x25519,
+    crypto::ed25519::ed25519_private_to_x25519_private_key,
     errors::{Result, SecretsResolverError},
     jwk::{JWK, Params},
     multicodec::{
@@ -358,7 +358,7 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = to_x25519(&self.private_bytes);
+            let x25519_secret = ed25519_private_to_x25519_private_key(&self.private_bytes);
 
             let x25519_sk = StaticSecret::from(x25519_secret);
             let x25519_pk = PublicKey::from(&x25519_sk);

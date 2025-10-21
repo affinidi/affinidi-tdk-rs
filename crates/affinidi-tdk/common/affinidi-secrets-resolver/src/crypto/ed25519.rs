@@ -56,7 +56,11 @@ impl Secret {
         let seed = if let Some(seed) = seed {
             *seed
         } else {
-            to_x25519(&Secret::generate_ed25519(kid, None).private_bytes)
+            let mut csprng = OsRng;
+            let mut bytes: [u8; 32] = [0; 32];
+            csprng.fill_bytes(&mut bytes);
+            bytes
+            // to_x25519(&Secret::generate_ed25519(kid, None).private_bytes)
         };
 
         let x25519 = StaticSecret::from(seed);
@@ -109,7 +113,7 @@ impl Secret {
 }
 
 /// Converts an ed25519 secret to a x25519 secret
-pub(crate) fn to_x25519(secret: &Vec<u8>) -> [u8; 32] {
+pub fn ed25519_private_to_x25519_private_key(secret: &Vec<u8>) -> [u8; 32] {
     let mut bytes = Sha512::digest(secret);
 
     bytes[0] &= 0xF8;
@@ -175,7 +179,7 @@ pub fn ed25519_public_to_x25519_public_key(
 mod tests {
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
-    use crate::{crypto::ed25519::to_x25519, secrets::Secret};
+    use crate::{crypto::ed25519::ed25519_private_to_x25519_private_key, secrets::Secret};
 
     const ED25519_SK: [u8; 32] = [
         202, 104, 239, 81, 53, 110, 80, 252, 198, 23, 155, 162, 215, 98, 223, 173, 227, 188, 110,
@@ -188,7 +192,10 @@ mod tests {
 
     #[test]
     fn check_ed25519_to_x25519_key_conversion() {
-        assert_eq!(to_x25519(&ED25519_SK.to_vec()), CURVE25519_SK);
+        assert_eq!(
+            ed25519_private_to_x25519_private_key(&ED25519_SK.to_vec()),
+            CURVE25519_SK
+        );
     }
 
     #[test]
