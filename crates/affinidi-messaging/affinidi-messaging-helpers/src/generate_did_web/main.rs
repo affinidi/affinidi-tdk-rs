@@ -140,7 +140,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let args: Args = Args::parse();
     let host = args.host.unwrap_or("localhost%3A7037".to_string());
-    let secure_connection = args.secure_connection.unwrap_or(false);
+    let secure_connection = args.secure_connection.unwrap_or(true);
     let api_prefix = args.api_prefix.unwrap_or("".to_string());
 
     println!(
