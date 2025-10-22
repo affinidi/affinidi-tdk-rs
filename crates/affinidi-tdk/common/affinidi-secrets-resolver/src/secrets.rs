@@ -358,12 +358,14 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = ed25519_private_to_x25519_private_key(&self.private_bytes);
+            let x25519_secret = ed25519_private_to_x25519_private_key(
+                self.private_bytes.first_chunk::<32>().unwrap(),
+            );
 
             let x25519_sk = StaticSecret::from(x25519_secret);
             let x25519_pk = PublicKey::from(&x25519_sk);
 
-            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_secret);
+            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes());
             let public = BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes());
 
             let jwk = json!({

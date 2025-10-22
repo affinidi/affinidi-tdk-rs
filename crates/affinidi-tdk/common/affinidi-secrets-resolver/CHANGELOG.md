@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+## 22nd October 2025 (0.3.5)
+
+- **FIX:** ed25519 --> x25519 bit swap was inverted
+
 ## 21st October 2025 (0.3.4)
 
 - **FEATURE:** Ability to convert Ed25519 secret to X25519 secret is now public
