@@ -56,11 +56,12 @@ impl Secret {
         let seed = if let Some(seed) = seed {
             *seed
         } else {
-            let mut csprng = OsRng;
-            let mut bytes: [u8; 32] = [0; 32];
-            csprng.fill_bytes(&mut bytes);
-            bytes
-            // to_x25519(&Secret::generate_ed25519(kid, None).private_bytes)
+            ed25519_private_to_x25519_private_key(
+                Secret::generate_ed25519(kid, None)
+                    .private_bytes
+                    .first_chunk::<32>()
+                    .unwrap(),
+            )
         };
 
         let x25519 = StaticSecret::from(seed);
@@ -77,8 +78,8 @@ impl Secret {
                     d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519.as_bytes())),
                 }),
             }),
-            private_bytes: x25519.as_bytes().to_vec(),
-            public_bytes: x25519_public.as_bytes().to_vec(),
+            private_bytes: x25519.to_bytes().to_vec(),
+            public_bytes: x25519_public.to_bytes().to_vec(),
             key_type: KeyType::X25519,
         })
     }
@@ -113,17 +114,17 @@ impl Secret {
 }
 
 /// Converts an ed25519 secret to a x25519 secret
-pub fn ed25519_private_to_x25519_private_key(secret: &Vec<u8>) -> [u8; 32] {
-    let mut bytes = Sha512::digest(secret);
+pub fn ed25519_private_to_x25519_private_key(secret: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha512::digest(secret);
 
-    bytes[0] &= 0xF8;
-    bytes[31] |= 0x80;
-    bytes[31] &= 0x7F;
+    h[0] &= 248;
+    h[31] &= 127;
+    h[31] |= 64;
 
-    let mut a: [u8; 32] = [0; 32]; // Initialize with zeros
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&h[..32]);
 
-    a.copy_from_slice(&bytes[0..32]);
-    a
+    result
 }
 
 /// Converts a ed25519 multi_encoded public key to a x25519 multi_encoded key
@@ -193,7 +194,7 @@ mod tests {
     #[test]
     fn check_ed25519_to_x25519_key_conversion() {
         assert_eq!(
-            ed25519_private_to_x25519_private_key(&ED25519_SK.to_vec()),
+            ed25519_private_to_x25519_private_key(&ED25519_SK),
             CURVE25519_SK
         );
     }
