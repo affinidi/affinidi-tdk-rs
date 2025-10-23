@@ -8,6 +8,13 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 23rd October 2025
+
+### Helpers (0.11.1)
+
+- **:FIX:** `setup_environment` was incorrectly setting did:peer key id's as did:key
+- **Chore:** Updated dependencies to the latest versions
+
 ## 9th October 2025
 
 ### DIDComm Library (0.11.3)
