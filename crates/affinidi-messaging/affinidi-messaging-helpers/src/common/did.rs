@@ -21,9 +21,8 @@ pub fn create_did(
     auth_service: bool,
 ) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
     // Generate keys for encryption and verification
-    let (v_did_key, v_ed25519_key) = DIDKey::generate(KeyType::Ed25519)?;
-
-    let (e_did_key, e_secp256k1_key) = DIDKey::generate(KeyType::Secp256k1)?;
+    let (v_did_key, mut v_ed25519_key) = DIDKey::generate(KeyType::Ed25519)?;
+    let (e_did_key, mut e_secp256k1_key) = DIDKey::generate(KeyType::Secp256k1)?;
 
     // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
     let keys = vec![
@@ -80,6 +79,8 @@ pub fn create_did(
     let (did_peer, _) =
         DIDPeer::create_peer_did(&keys, services).expect("Failed to create did:peer");
 
+    v_ed25519_key.id = [did_peer.as_str(), "#key-1"].concat();
+    e_secp256k1_key.id = [did_peer.as_str(), "#key-2"].concat();
     let secrets_json = vec![v_ed25519_key, e_secp256k1_key];
 
     Ok((did_peer, secrets_json))
