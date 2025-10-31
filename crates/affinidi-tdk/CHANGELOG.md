@@ -1,5 +1,11 @@
 # Affinidi TDK Changelog
 
+## 31st October 2025 (Release 0.2.5)
+
+- **MAINTENANCE:** Updated dependencies
+  - `affinidi-tdk-common` updated to 0.2.2
+- **IMPROVEMENT:** Documentation on core TDK instantiation improved
+
 ## 11th October 2025 (Release 0.2.4)
 
 - **FEATURE:** [Affinidi DID Common crate](https://crates.io/crates/affinidi-did-common)
