@@ -105,7 +105,6 @@ At this stage, you must create a Hosted Zone in AWS for the `HostBaseDomainName`
 | MediatorAdminDID | The Decentralised Identifier (DID) of the administrator for the mediator. The administrator must use the did:peer method (e.g., `did:peer:2.Vz6MkwXy...`). |
 | MediatorDID | The Decentralised Identifier (DID) for the mediator. The value is stored in the parameter store and can be updated later. The mediator DID must use the did:web method (e.g., `did:web:mediator.goodcompany.com`). |
 | MediatorDIDDoc | The corresponding DID document of the mediator DID. The value is stored in the parameter store and must be updated if the mediator DID changed. Refer to the documentation for the sample DID Document. |
-{.table .table-responsive}
 
 
 **Sample mediator DID document**
