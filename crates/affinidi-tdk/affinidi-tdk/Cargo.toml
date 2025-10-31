@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.2.4"
+version = "0.2.5"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -37,7 +37,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "tls12",
 ] }
 serde_json = "1.0"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",

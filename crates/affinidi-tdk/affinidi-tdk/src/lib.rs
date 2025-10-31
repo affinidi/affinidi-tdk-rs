@@ -55,13 +55,16 @@ pub struct TDK {
 /// Example:
 /// ```ignore
 /// use affinidi_tdk::TDK;
-/// use affinidi_tdk::config::Config;
+/// use affinidi_tdk_common::config::TDKConfig;
 ///
-/// let config = Config::builder().build();
+/// let config = TDKConfig::new().build();
 /// let mut tdk = TDK::new(config).await?;
 ///
 ///
 /// ```
+/// NOTE: If feature-flag "messaging" is enabled, then there is an option to bring a
+/// pre-configgured ATM instance to the TDK. If none is specified then ATM is automatically setup
+/// for you.
 impl TDK {
     pub async fn new(
         config: TDKConfig,
