@@ -1,5 +1,9 @@
 # Affinidi DID Authentication
 
+## 3rd November 2025 (0.2.2)
+
+- **MAINTENANCE:** Dependency updates
+
 ## 30th May 2025 (0.2.0)
 
 - **BREAKING:** Removed SSI crate dependency
