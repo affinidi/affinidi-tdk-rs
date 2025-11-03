@@ -1,5 +1,9 @@
 # Affinidi TDK Changelog
 
+## 3rd November 2025 (Release 0.2.6)
+
+- **CHORE:** `affinidi-secrets-resolver` updated to 0.4.x
+
 ## 31st October 2025 (Release 0.2.5)
 
 - **MAINTENANCE:** Updated dependencies
