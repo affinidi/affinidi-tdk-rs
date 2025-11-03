@@ -1,5 +1,9 @@
 # Affinidi Secrets Manager
 
+## 3rd November October 2025 (0.4.0)
+
+- **BREAKING:** `Secret::from_multibase()` API changed to just need a private string
+
 ## 22nd October 2025 (0.3.5)
 
 - **FIX:** ed25519 --> x25519 bit swap was inverted

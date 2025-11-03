@@ -1,5 +1,10 @@
 # Affinidi Data Integrity Changelog
 
+## 3rd November 2025 Release 0.2.4
+
+- **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
+- **CHORE:** Updated to latest dependencies
+
 ## 3rd October 2025 Release 0.2.3
 
 - **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
