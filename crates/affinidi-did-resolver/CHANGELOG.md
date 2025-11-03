@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+### 3rd November 2025
+
+## DID Common (0.1.3)
+
+- **FEATURE:** `Document` added extra methods
+  - `Document::contains_assertion_method(id)`
+  - `Document::find_authentication(id)`
+  - `Document::find_assertion_method(id)`
+- **IMPROVEMENT:** Tests added to `Document` module
+
 ### 17th October 2025
 
 ## DID Common (0.1.2)
