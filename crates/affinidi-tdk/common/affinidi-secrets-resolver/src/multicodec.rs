@@ -1,6 +1,7 @@
 //! Generic Multicodec encoding/decoding
 
 use crate::errors::SecretsResolverError;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // ****************************************************************************
 // Codec Magic Numbers
@@ -19,6 +20,7 @@ pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
 
 // multi-encoded byte array
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct MultiEncoded([u8]);
 
 impl MultiEncoded {
@@ -62,7 +64,7 @@ impl MultiEncoded {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct MultiEncodedBuf(Vec<u8>);
 
 impl MultiEncodedBuf {
@@ -86,6 +88,6 @@ impl MultiEncodedBuf {
     /// Returns the raw bytes, including the codec prefix.
     #[inline(always)]
     pub fn into_bytes(self) -> Vec<u8> {
-        self.0
+        self.0.clone()
     }
 }
