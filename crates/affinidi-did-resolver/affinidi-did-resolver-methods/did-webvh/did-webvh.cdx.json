@@ -1,0 +1,69 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.3",
+  "version": 1,
+  "serialNumber": "urn:uuid:99f3c01d-c699-417e-9ab4-f6a27101752c",
+  "metadata": {
+    "timestamp": "2025-09-16T08:22:13.151068000Z",
+    "tools": [
+      {
+        "vendor": "CycloneDX",
+        "name": "cargo-cyclonedx",
+        "version": "0.5.7"
+      }
+    ],
+    "authors": [
+      {
+        "name": "Glenn Gore",
+        "email": "glenn@affinidi.com"
+      }
+    ],
+    "component": {
+      "type": "library",
+      "bom-ref": "path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8",
+      "author": "Glenn Gore <glenn@affinidi.com>",
+      "name": "did-webvh",
+      "version": "0.1.8",
+      "description": "Implementation of the did:webvh method in Rust, uses the ssi crate",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/did-webvh@0.1.8?download_url=file://.",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://affinidi.com/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/affinidi/affinidi-tdk-rs"
+        }
+      ],
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8 bin-target-0",
+          "name": "did_webvh",
+          "version": "0.1.8",
+          "purl": "pkg:cargo/did-webvh@0.1.8?download_url=file://.#src/lib.rs"
+        }
+      ]
+    },
+    "properties": [
+      {
+        "name": "cdx:rustc:sbom:target:triple",
+        "value": "aarch64-apple-darwin"
+      }
+    ]
+  },
+  "components": [],
+  "dependencies": [
+    {
+      "ref": "path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8",
+      "dependsOn": []
+    }
+  ]
+}

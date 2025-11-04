@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.3" serialNumber="urn:uuid:b2ba7350-a325-4fd6-913c-cbd9a4396bfe" version="1">
+  <metadata>
+    <timestamp>2025-09-16T08:15:43.039694000Z</timestamp>
+    <tools>
+      <tool>
+        <vendor>CycloneDX</vendor>
+        <name>cargo-cyclonedx</name>
+        <version>0.5.7</version>
+      </tool>
+    </tools>
+    <authors>
+      <author>
+        <name>Glenn Gore</name>
+        <email>glenn@affinidi.com</email>
+      </author>
+    </authors>
+    <component type="library" bom-ref="path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8">
+      <author>Glenn Gore &lt;glenn@affinidi.com&gt;</author>
+      <name>did-webvh</name>
+      <version>0.1.8</version>
+      <description>Implementation of the did:webvh method in Rust, uses the ssi crate</description>
+      <scope>required</scope>
+      <licenses>
+        <expression>Apache-2.0</expression>
+      </licenses>
+      <purl>pkg:cargo/did-webvh@0.1.8?download_url=file://.</purl>
+      <externalReferences>
+        <reference type="website">
+          <url>https://affinidi.com/</url>
+        </reference>
+        <reference type="vcs">
+          <url>https://github.com/affinidi/affinidi-tdk-rs</url>
+        </reference>
+      </externalReferences>
+      <components>
+        <component type="library" bom-ref="path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8 bin-target-0">
+          <name>did_webvh</name>
+          <version>0.1.8</version>
+          <purl>pkg:cargo/did-webvh@0.1.8?download_url=file://.#src/lib.rs</purl>
+        </component>
+      </components>
+    </component>
+    <properties>
+      <property name="cdx:rustc:sbom:target:triple">aarch64-apple-darwin</property>
+    </properties>
+  </metadata>
+  <components />
+  <dependencies>
+    <dependency ref="path+file:///Users/rolstan/Documents/Affinidi/Work/Projects/affinidi-tdk-rs/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-webvh#0.1.8" />
+  </dependencies>
+</bom>
