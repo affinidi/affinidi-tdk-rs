@@ -13,17 +13,19 @@ etc.
 
 > **IMPORTANT:**
 > Affinidi DID Resolver is provided "as is" without any warranties or guarantees,
-and by using this framework, users agree to assume all risks associated with its
-deployment and use including implementing security, and privacy measures in their
-applications. Affinidi assumes no liability for any issues arising from the use
-or modification of the project.
+> and by using this framework, users agree to assume all risks associated with its
+> deployment and use including implementing security, and privacy measures in their
+> applications. Affinidi assumes no liability for any issues arising from the use
+> or modification of the project.
 
 ## Crate Structure
 
-- affinidi-did-resolver-cache-sdk
+- affinidi-did-common
+  - Common DID Document structure and related methods.
 
+- affinidi-did-resolver-cache-sdk
   - Developer friendly crate to instantiate either a local or network DID resolver
-  with caching.
+    with caching.
   - List of supported DID Methods is listed in the SDK README.
 
 - affinidi-did-resolver-cache-server
@@ -39,11 +41,11 @@ or modification of the project.
 ### I want to start resolving DID's
 
 1. Read the affinidi-did-resolver-cache-sdk documentation, and get started with
-the example code.
+   the example code.
 
 ### I want to run a production network server for scale and offloading DID method
 
 resolving?
 
 1. Read the affinidi-did-resolver-cache-server documentation, fire it up as a
-service where ever you like.
+   service where ever you like.

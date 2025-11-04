@@ -1,10 +1,10 @@
 [package]
 name = "affinidi-meeting-place"
-version = "0.1.11"
+version = "0.2.1"
 description = "Affinidi Meeting Place SDK. Discover and connect with others in a secure and private way."
 edition.workspace = true
 authors.workspace = true
-readme.workspace = true
+readme = "README.md"
 homepage.workspace = true
 license.workspace = true
 keywords = ["ssi", "ATM", "affinidi", "DIDComm"]
@@ -17,13 +17,13 @@ affinidi-did-authentication.workspace = true
 affinidi-tdk-common.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 
 base64 = "0.22"
 chrono = "0.4"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-ssi = "0.12"
 thiserror = "2.0"
 tracing = "0.1"
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }
@@ -36,7 +36,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

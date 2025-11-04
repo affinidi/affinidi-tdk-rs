@@ -1,8 +1,3 @@
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_did_resolver_cache_sdk::document::DocumentExt;
-use askar_crypto::alg::{ed25519::Ed25519KeyPair, k256::K256KeyPair, p256::P256KeyPair};
-use tracing::debug;
-
 use crate::document::{DIDCommVerificationMethodExt, did_or_url};
 use crate::envelope::{Envelope, MetaEnvelope, ParsedEnvelope};
 use crate::{
@@ -12,8 +7,12 @@ use crate::{
     jws,
     utils::crypto::AsKnownKeyPair,
 };
+use affinidi_did_common::document::DocumentExt;
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use askar_crypto::alg::{ed25519::Ed25519KeyPair, k256::K256KeyPair, p256::P256KeyPair};
 use base64::prelude::*;
 use std::str::FromStr;
+use tracing::debug;
 
 pub(crate) async fn _try_unpack_sign(
     msg: &ParsedEnvelope,

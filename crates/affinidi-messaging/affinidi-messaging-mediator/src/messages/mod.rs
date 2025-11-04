@@ -1,5 +1,6 @@
 use self::protocols::ping;
 use crate::{SharedData, database::session::Session};
+use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
     Message, PackEncryptedMetadata, PackEncryptedOptions, UnpackMetadata,
@@ -16,7 +17,7 @@ use protocols::{
     mediator::{accounts, acls, administration},
     message_pickup, routing,
 };
-use ssi::dids::document::service::Endpoint;
+use serde_json::Value;
 use std::time::SystemTime;
 
 pub mod error_response;
@@ -301,21 +302,31 @@ impl MessageHandler for Message {
                 format!("DID ({}) couldn't be resolved: {}", to_did, e),
             )
         })?;
+
+        fn check_loopback(endpoint: &Value, forward_locals: &HashSet<String>) -> bool {
+            let uri = if let Some(uri) = endpoint.get("uri") {
+                if let Some(uri) = uri.as_str() {
+                    uri
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            };
+            forward_locals.contains(uri)
+        }
+
         let mut forward_loopback = to_doc.doc.service.iter().any(|service| {
-            if let Some(endpoints) = &service.service_endpoint {
-                endpoints.into_iter().any(|endpoint| {
-                    let uri = match endpoint {
-                        Endpoint::Uri(uri) => uri.to_string(),
-                        Endpoint::Map(map) => {
-                            if let Some(uri) = map.get("uri") {
-                                uri.as_str().unwrap_or_default().to_string()
-                            } else {
-                                "".to_string()
-                            }
-                        }
-                    };
-                    forward_locals.contains(&uri)
-                })
+            if let Endpoint::Map(endpoints) = &service.service_endpoint {
+                if endpoints.is_array() {
+                    endpoints
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|endpoint| check_loopback(endpoint, forward_locals))
+                } else {
+                    check_loopback(endpoints, forward_locals)
+                }
             } else {
                 false
             }

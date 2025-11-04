@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.5.7"
+version = "0.6.3"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -16,7 +16,7 @@ rust-version.workspace = true
 crate-type = ["rlib", "cdylib"]
 
 [features]
-default = ["local"]
+default = ["local", "did-methods"]
 local = []
 network = [
   "dep:web-socket",
@@ -27,17 +27,26 @@ network = [
   "dep:rustls",
   "dep:rustls-platform-verifier",
 ]
+did-methods = ["did-webvh"]
+#did-methods = ["did-cheqd", "did-webvh"]
 did_example = ["dep:did-example"]
+did-jwk = ["dep:did-jwk"]
+did-cheqd = []
+# did-cheqd = ["dep:did-cheqd"]
+did-webvh = ["dep:didwebvh-rs"]
 
 [dependencies]
 # Affinidi Crates
+affinidi-did-common.workspace = true
 did-peer.workspace = true
 did-example = { workspace = true, optional = true }
+# did-cheqd = { workspace = true, optional = true }
+affinidi-did-key.workspace = true
 
 # External Crates
 ahash = "0.8"
 base64 = { version = "0.22", optional = true }
-didwebvh-rs = { version = "0.1", features = ["ssi"] }
+didwebvh-rs = { version = "0.1", optional = true }
 futures-util = "0.3"
 highway = "1.3.0"
 moka = { version = "0.12", features = ["future"] }
@@ -51,10 +60,13 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 serde-wasm-bindgen = "0.6.5"
 sha1 = { version = "0.10", optional = true }
-# ssi = { version = "0.12", features = ["secp384r1"] }
-ssi-dids = { version = "0.2", features = ["secp384r1"] }
+did-ethr = "0.3.2"
+did-jwk = { version = "0.2.1", optional = true }
+did-pkh = "0.3.2"
+did-web = "0.3.4"
+ssi-dids-core = "0.1.3"
 thiserror = "2.0"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tokio-rustls = { version = "0.26", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -64,6 +76,8 @@ wasm-bindgen-futures = "0.4"
 web-socket = { version = "0.7", optional = true }
 
 [dev-dependencies]
+affinidi-secrets-resolver.workspace = true
+url = "2.5"
 clap = { version = "4.5", features = ["derive"] }
 num-format = "0.4.4"
 number_prefix = "0.4"

@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-did-authentication"
 description = "Using proof of DID ownership to authenticate to services"
-version = "0.1.11"
+version = "0.2.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 affinidi-secrets-resolver.workspace = true
 
 base64 = "0.22"
@@ -22,11 +23,7 @@ chrono = "0.4"
 reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-ssi = { version = "0.12" }
 thiserror = "2.0"
-tokio = { version = "1.47", features = ["full"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-] }
+tokio = { version = "1.48", features = ["full"] }
+tracing = "0.1"
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }

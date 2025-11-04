@@ -1,7 +1,3 @@
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, document::DocumentExt};
-use affinidi_secrets_resolver::SecretsResolver;
-use serde::Serialize;
-
 use crate::{
     Message,
     document::{did_or_url, is_did},
@@ -9,6 +5,10 @@ use crate::{
     jws::{self, Algorithm},
     utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
 };
+use affinidi_did_common::{document::DocumentExt, verification_method::VerificationRelationship};
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_secrets_resolver::SecretsResolver;
+use serde::Serialize;
 
 impl Message {
     /// Produces `DIDComm Signed Message`
@@ -74,12 +74,14 @@ impl Message {
                 ));
             }
         } else {
-            let _did = did_doc.id.as_did();
+            let _did = did_doc.id.as_str();
             did_doc
-                .verification_relationships
                 .authentication
                 .iter()
-                .map(|s| s.id().resolve(_did).to_string())
+                .map(|s| match s {
+                    VerificationRelationship::Reference(url) => url.to_string(),
+                    VerificationRelationship::VerificationMethod(vm) => vm.id.to_string(),
+                })
                 .collect()
         };
 

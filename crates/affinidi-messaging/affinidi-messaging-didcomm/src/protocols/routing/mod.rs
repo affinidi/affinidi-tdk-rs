@@ -1,14 +1,14 @@
 mod forward;
 
+use affinidi_did_common::{
+    Document,
+    service::{Endpoint, Service},
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::SecretsResolver;
 use ahash::AHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use ssi::dids::{
-    Document,
-    document::{Service, service::Endpoint},
-};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -55,84 +55,86 @@ fn check_service_type(service: &Service) -> Result<()> {
             ErrorKind::InvalidState,
             format!(
                 "Service ({}) is not type `DIDCommMessaging. Instead it is ({})",
-                service.id,
+                service
+                    .id
+                    .clone()
+                    .map(|id| id.to_string())
+                    .unwrap_or("UNKNOWN_ID".to_string()),
                 service.type_.first().unwrap_or(&"".to_string())
             ),
         ))
     }
 }
 
+fn check_service_endpoint_accept(value: &Value) -> bool {
+    if let Some(accept) = value.get("accept") {
+        let a: Vec<String> = match serde_json::from_value(accept.clone()) {
+            Ok(value) => value,
+            Err(e) => {
+                warn!("Error parsing accept field ({:?}) : {}", accept, e);
+                return false;
+            }
+        };
+
+        a.contains(&DIDCOMM_V2_PROFILE.to_string())
+    } else {
+        // If accept is not defined, then it is assumed that it accepts all profiles
+        true
+    }
+}
+
 /// Checks if a defined service meets the criteria for a DIDComm v2 service
-fn check_service(service: &Service) -> Result<Option<(String, DIDCommMessagingService)>> {
+fn check_service(service: &Service) -> Result<Option<DIDCommMessagingService>> {
     check_service_type(service)?;
 
-    if let Some(service_endpoint) = &service.service_endpoint {
+    if let Endpoint::Map(service_endpoint) = &service.service_endpoint {
         // Only accepts DIDComm Version 2 specification
         // Check that this service endpoint supports didcomm/v2
 
-        let endpoint = service_endpoint.into_iter().find(|endpoint| {
-            if let Endpoint::Map(value) = endpoint {
-                if let Some(accept) = value.get("accept") {
-                    let a: Vec<String> = match serde_json::from_value(accept.clone()) {
-                        Ok(value) => value,
-                        Err(e) => {
-                            warn!(
-                                "Error parsing accept field ({:?}) on service id({}): {}",
-                                accept, service.id, e
-                            );
-                            return false;
-                        }
-                    };
-
-                    a.contains(&DIDCOMM_V2_PROFILE.to_string())
-                } else {
-                    // If accept is not defined, then it is assumed that it accepts all profiles
-                    true
-                }
+        let endpoint = if service_endpoint.is_array() {
+            if let Some(endpoint) = service_endpoint
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|endpoint| check_service_endpoint_accept(endpoint))
+            {
+                endpoint
             } else {
-                false
+                warn!("No valid DIDComm V2 Service definition found");
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    "No valid DIDComm V2 Service definition found",
+                ));
             }
-        });
-
-        if let Some(endpoint) = endpoint {
-            let value = match endpoint {
-                Endpoint::Map(map) => map,
-                _ => {
-                    return Err(err_msg(
-                        ErrorKind::InvalidState,
-                        format!(
-                            "Service ({}) has an invalid serviceEndpoint definition",
-                            service.id
-                        ),
-                    ));
-                }
-            };
-
-            let found_service: DIDCommMessagingService = serde_json::from_value(value.clone())
-                .map_err(|_| {
-                    err_msg(
-                        ErrorKind::InvalidState,
-                        format!(
-                            "Service ({}) has an invalid serviceEndpoint definition",
-                            service.id
-                        ),
-                    )
-                })?;
-
-            Ok(Some((service.id.to_string(), found_service)))
+        } else if check_service_endpoint_accept(service_endpoint) {
+            service_endpoint
         } else {
-            Err(err_msg(
-                ErrorKind::IllegalArgument,
-                "Service with the specified ID does not accept didcomm/v2 profile",
-            ))
-        }
+            warn!("No valid DIDComm V2 Service definition found");
+            return Err(err_msg(
+                ErrorKind::InvalidState,
+                "No valid DIDComm V2 Service definition found",
+            ));
+        };
+
+        let found_service: DIDCommMessagingService = serde_json::from_value(endpoint.clone())
+            .map_err(|_| {
+                err_msg(
+                    ErrorKind::InvalidState,
+                    format!(
+                        "Service ({:#?}) has an invalid serviceEndpoint definition",
+                        service.id
+                    ),
+                )
+            })?;
+
+        Ok(Some(found_service))
     } else {
         // if there is no serviceEndpoint, then we can't proceed
 
         Err(err_msg(
             ErrorKind::InvalidState,
             format!(
-                "Service ({}) has no serviceEndpoint definitions",
+                "Service ({:#?}) has no serviceEndpoint definitions",
                 service.id
             ),
         ))
@@ -151,15 +153,25 @@ fn check_service(service: &Service) -> Result<Option<(String, DIDCommMessagingSe
 fn find_did_comm_service(
     did_doc: &Document,
     service_id: Option<&str>,
-) -> Result<Option<(String, DIDCommMessagingService)>> {
+) -> Result<Option<DIDCommMessagingService>> {
     match service_id {
         Some(service_id) => {
-            let service = did_doc.service(service_id).ok_or_else(|| {
-                err_msg(
-                    ErrorKind::InvalidState,
-                    "Service with the specified ID not found in the DID document",
-                )
-            })?;
+            let service = did_doc
+                .service
+                .iter()
+                .find(|s| {
+                    if let Some(id) = &s.id {
+                        id.as_str() == service_id
+                    } else {
+                        false
+                    }
+                })
+                .ok_or_else(|| {
+                    err_msg(
+                        ErrorKind::InvalidState,
+                        "Service with the specified ID not found in the DID document",
+                    )
+                })?;
 
             check_service(service)
         }
@@ -178,7 +190,7 @@ async fn resolve_did_comm_services_chain(
     to: &str,
     service_id: Option<&str>,
     resolver: &DIDCacheClient,
-) -> Result<Vec<(String, DIDCommMessagingService)>> {
+) -> Result<Vec<DIDCommMessagingService>> {
     let result = resolver.resolve(to).await.map_err(|e| {
         err_msg(
             ErrorKind::DIDNotResolved,
@@ -195,7 +207,7 @@ async fn resolve_did_comm_services_chain(
     let mut service = service.unwrap();
 
     let mut services = vec![service.clone()];
-    let mut service_endpoint = &service.1.uri;
+    let mut service_endpoint = &service.uri;
 
     while is_did(service_endpoint) {
         // Now alternative endpoints recursion is not supported
@@ -223,7 +235,7 @@ async fn resolve_did_comm_services_chain(
         })?;
 
         services.insert(0, service.clone());
-        service_endpoint = &service.1.uri;
+        service_endpoint = &service.uri;
     }
 
     Ok(services)
@@ -414,10 +426,10 @@ where
 
     let mut routing_keys = services_chain[1..]
         .iter()
-        .map(|service| service.1.uri.clone())
+        .map(|service| service.uri.clone())
         .collect::<Vec<_>>();
 
-    routing_keys.append(&mut services_chain.last().unwrap().1.routing_keys.clone());
+    routing_keys.append(&mut services_chain.last().unwrap().routing_keys.clone());
 
     if routing_keys.is_empty() {
         return Ok(None);
@@ -435,8 +447,7 @@ where
     .await?;
 
     let messaging_service = MessagingServiceMetadata {
-        id: services_chain.last().unwrap().0.clone(),
-        service_endpoint: services_chain.first().unwrap().1.uri.clone(),
+        service_endpoint: services_chain.first().unwrap().uri.clone(),
         routing_keys,
     };
 

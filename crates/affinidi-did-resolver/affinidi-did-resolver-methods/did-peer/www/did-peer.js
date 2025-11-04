@@ -187,7 +187,7 @@ window.createDID = function createDID() {
             case "Ed25519":
                 keyType = wasm.DIDPeerKeyType.Ed25519;
                 break;
-            case "Secp256K1":
+            case "secp256K1":
                 keyType = wasm.DIDPeerKeyType.Secp256k1;
                 break;
             case "P256":

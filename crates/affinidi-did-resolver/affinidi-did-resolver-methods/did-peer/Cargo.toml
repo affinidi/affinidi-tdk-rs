@@ -1,7 +1,7 @@
 [package]
 name = "did-peer"
-version = "0.6.5"
-description = "Implementation of the did:peer method in Rust, uses the ssi crate"
+version = "0.7.5"
+description = "Implementation of the did:peer method in Rust"
 repository.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -16,16 +16,15 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+affinidi-did-common.workspace = true
+affinidi-did-key.workspace = true
+affinidi-secrets-resolver.workspace = true
+
 base64 = "0.22"
-iref = { version = "3.2.2", features = ["serde"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
-# ssi = { version = "0.12", features = ["secp384r1"] }
-ssi-core = { version = "0.2.3" }
-ssi-dids-core = { version = "0.1.3" }
-ssi-jwk = { version = "0.3.2", features = ["secp384r1"] }
-did-method-key = { version = "0.3.1", features = ["secp384r1"] }
 thiserror = "2.0"
+url = "2.5"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 
@@ -33,7 +32,7 @@ wasm-bindgen-futures = "0.4"
 #uuid = { version = "1.16", features = ["v4", "fast-rng", "js"] }
 
 [dev-dependencies]
-ssi-multicodec = "0.2.0"
+ssi-multicodec = "0.2"
 askar-crypto = { version = "0.3", features = ["alloc"] }
-tokio = { version = "1.47", features = ["full"] }
-multibase = "0.9.1"
+tokio = { version = "1.48", features = ["full"] }
+multibase = "0.9"

@@ -1,6 +1,6 @@
 [package]
 name = "did-example"
-version = "0.5.4"
+version = "0.5.5"
 description = "Implementation of did:example in Rust"
 repository.workspace = true
 edition.workspace = true
@@ -16,6 +16,7 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+affinidi-did-common.workspace = true
 ahash = "0.8"
-ssi = { version = "0.12", features = ["secp384r1"] }
+serde_json = "1.0"
 thiserror = "2.0"

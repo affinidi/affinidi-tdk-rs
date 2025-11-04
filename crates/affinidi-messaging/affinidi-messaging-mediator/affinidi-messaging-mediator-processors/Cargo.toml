@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.10.8"
+version = "0.11.0"
 description = "Affinidi Messaging Mediator Processors"
 edition.workspace = true
 authors.workspace = true
@@ -26,11 +26,7 @@ deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 tokio = { version = "1.47", features = ["full"] }
 toml = "0.9"
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.10.9"
+version = "0.11.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -19,6 +19,7 @@ affinidi-messaging-sdk.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
 did-peer.workspace = true
+affinidi-did-key.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
@@ -38,15 +39,10 @@ reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-ssi = { version = "0.12" }
 textwrap = "0.16"
 tokio = { version = "1.47", features = ["full"] }
 tokio-stream = "0.1"
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

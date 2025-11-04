@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.10.13"
+version = "0.11.3"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -23,23 +23,24 @@ affinidi-messaging-didcomm.workspace = true
 affinidi-messaging-mediator-processors.workspace = true
 affinidi-messaging-mediator-common.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-did-common.workspace = true
 affinidi-secrets-resolver.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
-aws-sdk-secretsmanager = "1.87"
-aws-sdk-ssm = "1.92"
+aws-sdk-secretsmanager = "1.92"
+aws-sdk-ssm = "1.98"
 axum = { version = "0.8", features = ["ws"] }
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
-jsonwebtoken = "9.3"
+jsonwebtoken = { version = "10.0", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
@@ -49,7 +50,7 @@ redis = { version = "0.32", features = [
   "tls-rustls-insecure",
   "ahash",
 ] }
-regex = "1.11"
+regex = "1.12"
 ring = { version = "0.17", features = ["std"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
@@ -59,17 +60,12 @@ semver = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
-ssi = { version = "0.12" }
 subtle = "2.6"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.9"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
-tracing = { version = "0.1", features = [
-  "max_level_debug",
-  "release_max_level_info",
-  "valuable",
-] }
+tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

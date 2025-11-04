@@ -15,6 +15,7 @@ As this crate can be used either natively or in a WASM environment, the followin
 #[cfg(all(feature = "network", target_arch = "wasm32"))]
 compile_error!("Cannot enable both features at the same time");
 
+use affinidi_did_common::Document;
 use config::DIDCacheConfig;
 use errors::DIDCacheError;
 use highway::{HighwayHash, HighwayHasher};
@@ -34,7 +35,6 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
 
 pub mod config;
-pub mod document;
 pub mod errors;
 #[cfg(feature = "network")]
 pub mod networking;
@@ -51,6 +51,7 @@ pub enum DIDMethod {
     PKH,
     WEB,
     WEBVH,
+    CHEQD,
     EXAMPLE,
 }
 
@@ -65,6 +66,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::PKH => write!(f, "pkh"),
             DIDMethod::WEB => write!(f, "web"),
             DIDMethod::WEBVH => write!(f, "webvh"),
+            DIDMethod::CHEQD => write!(f, "cheqd"),
             DIDMethod::EXAMPLE => write!(f, "example"),
         }
     }
@@ -91,6 +93,7 @@ impl TryFrom<&str> for DIDMethod {
             "pkh" => Ok(DIDMethod::PKH),
             "web" => Ok(DIDMethod::WEB),
             "webvh" => Ok(DIDMethod::WEBVH),
+            "cheqd" => Ok(DIDMethod::CHEQD),
             #[cfg(feature = "did_example")]
             "example" => Ok(DIDMethod::EXAMPLE),
             _ => Err(DIDCacheError::UnsupportedMethod(value.to_string())),

@@ -6,17 +6,17 @@ use crate::{
     jwk::FromJwkValue,
     utils::crypto::{AsKnownKeyPair, AsKnownKeyPairSecret, KnownKeyAlg, KnownKeyPair},
 };
-use affinidi_secrets_resolver::secrets::{Secret, SecretMaterial, SecretType};
+use affinidi_did_common::verification_method::VerificationMethod;
+use affinidi_secrets_resolver::{
+    jwk::{JWK, Params},
+    secrets::{KeyType, Secret, SecretMaterial, SecretType},
+};
 use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, k256::K256KeyPair, p256::P256KeyPair, x25519::X25519KeyPair},
     repr::{KeyPublicBytes, KeySecretBytes},
 };
 use base64::prelude::*;
 use serde_json::{Value, json};
-use ssi::{
-    JWK, dids::document::DIDVerificationMethod, jwk::Params, multicodec::MultiEncodedBuf,
-    security::MultibaseBuf,
-};
 use std::io::Cursor;
 use tracing::warn;
 use varint::{VarintRead, VarintWrite};
@@ -41,42 +41,26 @@ pub(crate) trait DIDCommVerificationMethodExt {
     fn get_jwk(&self) -> Option<JWK>;
 }
 
-impl DIDCommVerificationMethodExt for DIDVerificationMethod {
+impl DIDCommVerificationMethodExt for VerificationMethod {
     fn get_jwk(&self) -> Option<JWK> {
         match self.type_.as_str() {
             "Multikey" => {
-                let key = if let Some(key) = self.properties.get("publicKeyMultibase") {
-                    if let Some(key) = key.as_str() {
-                        key.to_string()
-                    } else {
-                        return None;
-                    }
+                let key = if let Some(key) = self.property_set.get("publicKeyMultibase") {
+                    key.as_str()?
                 } else {
                     return None;
                 };
 
-                let decoded = if let Ok((_, decoded)) = MultibaseBuf::new(key.clone()).decode() {
-                    decoded
-                } else {
-                    return None;
-                };
-
-                let multi_encoded = if let Ok(m) = MultiEncodedBuf::new(decoded) {
-                    m
-                } else {
-                    return None;
-                };
-
-                match JWK::from_multicodec(&multi_encoded) {
+                match JWK::from_multikey(key) {
                     Ok(jwk) => Some(jwk),
-                    Err(_) => {
-                        warn!("Failed to parse JWK from multicodec ({})", key);
+                    Err(e) => {
+                        warn!("Failed to parse JWK from multicodec ({key}): {e}");
                         None
                     }
                 }
             }
             "JsonWebKey2020" => {
-                if let Some(key) = self.properties.get("publicKeyJwk") {
+                if let Some(key) = self.property_set.get("publicKeyJwk") {
                     match serde_json::from_value(key.clone()) {
                         Ok(jwk) => Some(jwk),
                         Err(_) => {
@@ -91,7 +75,7 @@ impl DIDCommVerificationMethodExt for DIDVerificationMethod {
             }
 
             "EcdsaSecp256k1VerificationKey2019" => {
-                if let Some(key) = self.properties.get("publicKeyJwk") {
+                if let Some(key) = self.property_set.get("publicKeyJwk") {
                     match serde_json::from_value(key.clone()) {
                         Ok(jwk) => Some(jwk),
                         Err(_) => {
@@ -112,10 +96,10 @@ impl DIDCommVerificationMethodExt for DIDVerificationMethod {
     }
 }
 
-impl AsKnownKeyPair for DIDVerificationMethod {
+impl AsKnownKeyPair for VerificationMethod {
     fn key_alg(&self, jwk: &JWK) -> KnownKeyAlg {
         match &jwk.params {
-            Params::EC(ec) => match ec.curve.clone().unwrap_or("".to_string()).as_str() {
+            Params::EC(ec) => match ec.curve.as_str() {
                 "P-256" => KnownKeyAlg::P256,
                 "secp256k1" => KnownKeyAlg::K256,
                 _ => KnownKeyAlg::Unsupported,
@@ -125,15 +109,14 @@ impl AsKnownKeyPair for DIDVerificationMethod {
                 "X25519" => KnownKeyAlg::X25519,
                 _ => KnownKeyAlg::Unsupported,
             },
-            _ => KnownKeyAlg::Unsupported,
         }
     }
 
     fn as_key_pair(&self, jwk: &JWK) -> Result<KnownKeyPair> {
         match &jwk.params {
             Params::EC(ec) => {
-                let jwk_value = json!({"kty": "EC", "crv": ec.curve, "x": ec.x_coordinate,"y": ec.y_coordinate});
-                match ec.curve.clone().unwrap_or("".to_string()).as_str() {
+                let jwk_value = json!({"kty": "EC", "crv": ec.curve, "x": ec.x ,"y": ec.y});
+                match ec.curve.as_str() {
                     "P-256" => P256KeyPair::from_jwk_value(&jwk_value)
                         .kind(ErrorKind::Malformed, "Unable parse jwk")
                         .map(KnownKeyPair::P256),
@@ -142,12 +125,12 @@ impl AsKnownKeyPair for DIDVerificationMethod {
                         .map(KnownKeyPair::K256),
                     _ => Err(err_msg(
                         ErrorKind::Unsupported,
-                        "Unsupported key type or curve",
+                        format!("Unsupported key type or curve ({})", ec.curve),
                     )),
                 }
             }
             Params::OKP(okp) => {
-                let jwk_value = json!({"kty": "OKP", "crv": okp.curve, "x": okp.public_key});
+                let jwk_value = json!({"kty": "OKP", "crv": okp.curve, "x": okp.x});
                 match okp.curve.as_str() {
                     "Ed25519" => Ed25519KeyPair::from_jwk_value(&jwk_value)
                         .kind(ErrorKind::Malformed, "Unable parse jwk")
@@ -157,18 +140,10 @@ impl AsKnownKeyPair for DIDVerificationMethod {
                         .map(KnownKeyPair::X25519),
                     _ => Err(err_msg(
                         ErrorKind::Unsupported,
-                        "Unsupported key type or curve",
+                        format!("Unsupported key type or curve ({})", okp.curve),
                     )),
                 }
             }
-            Params::RSA(_) => Err(err_msg(
-                ErrorKind::Unsupported,
-                "Unsupported key type or curve (RSA)",
-            )),
-            Params::Symmetric(_) => Err(err_msg(
-                ErrorKind::Unsupported,
-                "Unsupported key type or curve (Symmetric)",
-            )),
         }
     }
 }
@@ -176,16 +151,11 @@ impl AsKnownKeyPair for DIDVerificationMethod {
 impl AsKnownKeyPairSecret for Secret {
     fn key_alg(&self) -> KnownKeyAlg {
         match (&self.type_, &self.secret_material) {
-            (
-                SecretType::JsonWebKey2020,
-                SecretMaterial::JWK {
-                    private_key_jwk: value,
-                },
-            ) => match (value["kty"].as_str(), value["crv"].as_str()) {
-                (Some(kty), Some(crv)) if kty == "EC" && crv == "P-256" => KnownKeyAlg::P256,
-                (Some(kty), Some(crv)) if kty == "EC" && crv == "secp256k1" => KnownKeyAlg::K256,
-                (Some(kty), Some(crv)) if kty == "OKP" && crv == "Ed25519" => KnownKeyAlg::Ed25519,
-                (Some(kty), Some(crv)) if kty == "OKP" && crv == "X25519" => KnownKeyAlg::X25519,
+            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.get_key_type() {
+                KeyType::P256 => KnownKeyAlg::P256,
+                KeyType::Secp256k1 => KnownKeyAlg::K256,
+                KeyType::Ed25519 => KnownKeyAlg::Ed25519,
+                KeyType::X25519 => KnownKeyAlg::X25519,
                 _ => KnownKeyAlg::Unsupported,
             },
             (
@@ -218,35 +188,25 @@ impl AsKnownKeyPairSecret for Secret {
 
     fn as_key_pair(&self) -> Result<KnownKeyPair> {
         match (&self.type_, &self.secret_material) {
-            (
-                SecretType::JsonWebKey2020,
-                SecretMaterial::JWK {
-                    private_key_jwk: value,
-                },
-            ) => match (value["kty"].as_str(), value["crv"].as_str()) {
-                (Some(kty), Some(crv)) if kty == "EC" && crv == "P-256" => {
-                    P256KeyPair::from_jwk_value(value)
-                        .kind(ErrorKind::Malformed, "Unable parse jwk")
-                        .map(KnownKeyPair::P256)
-                }
-                (Some(kty), Some(crv)) if kty == "EC" && crv == "secp256k1" => {
-                    K256KeyPair::from_jwk_value(value)
-                        .kind(ErrorKind::Malformed, "Unable parse jwk")
-                        .map(KnownKeyPair::K256)
-                }
-                (Some(kty), Some(crv)) if kty == "OKP" && crv == "Ed25519" => {
-                    Ed25519KeyPair::from_jwk_value(value)
-                        .kind(ErrorKind::Malformed, "Unable parse jwk")
-                        .map(KnownKeyPair::Ed25519)
-                }
-                (Some(kty), Some(crv)) if kty == "OKP" && crv == "X25519" => {
-                    X25519KeyPair::from_jwk_value(value)
-                        .kind(ErrorKind::Malformed, "Unable parse jwk")
-                        .map(KnownKeyPair::X25519)
-                }
+            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.get_key_type() {
+                KeyType::P256 => P256KeyPair::from_jwk_value(&serde_json::to_value(jwk)?)
+                    .kind(ErrorKind::Malformed, "Unable parse jwk")
+                    .map(KnownKeyPair::P256),
+                KeyType::Secp256k1 => K256KeyPair::from_jwk_value(&serde_json::to_value(jwk)?)
+                    .kind(ErrorKind::Malformed, "Unable parse jwk")
+                    .map(KnownKeyPair::K256),
+                KeyType::Ed25519 => Ed25519KeyPair::from_jwk_value(&serde_json::to_value(jwk)?)
+                    .kind(ErrorKind::Malformed, "Unable parse jwk")
+                    .map(KnownKeyPair::Ed25519),
+                KeyType::X25519 => X25519KeyPair::from_jwk_value(&serde_json::to_value(jwk)?)
+                    .kind(ErrorKind::Malformed, "Unable parse jwk")
+                    .map(KnownKeyPair::X25519),
                 _ => Err(err_msg(
                     ErrorKind::Unsupported,
-                    "Unsupported key type or curve",
+                    format!(
+                        "Unsupported key type or curve key_type({})",
+                        jwk.get_key_type()
+                    ),
                 )),
             },
 

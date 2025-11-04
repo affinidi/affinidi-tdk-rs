@@ -12,10 +12,10 @@ use crate::{
     error::{Error, ErrorKind, Result, ToResult, err_msg},
     utils::crypto::KnownKeyPair,
 };
+use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use serde::Deserialize;
 use sha256::digest;
-use ssi::dids::Document;
 use std::str::FromStr;
 
 /// High level wrapper so we can serialize and deserialize the envelope types

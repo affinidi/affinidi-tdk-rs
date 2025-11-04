@@ -14,6 +14,7 @@
  * This needs to be refactored in the future when the services align on implementation
  */
 
+use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
 use affinidi_secrets_resolver::SecretsResolver;
@@ -23,7 +24,6 @@ use errors::{DIDAuthError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use ssi::dids::{Document, document::service::Endpoint};
 use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, error, info, span};
 use uuid::Uuid;
@@ -175,17 +175,14 @@ impl DIDAuthentication {
     /// # Returns
     /// URI of the service endpoint if it exists
     pub fn find_service_endpoint(doc: &Document) -> Option<String> {
-        if let Some(service) = doc.service("auth") {
-            if let Some(endpoint) = &service.service_endpoint {
-                if let Some(Endpoint::Uri(e)) = endpoint.first() {
-                    debug!("Found service endpoint: {:?}", endpoint);
-                    Some(e.to_string())
-                } else {
-                    None
-                }
+        if let Some(service) = doc.service.iter().find(|s| {
+            if let Some(id) = &s.id {
+                id.as_str().ends_with("#auth")
             } else {
-                None
+                false
             }
+        }) {
+            service.service_endpoint.get_uri()
         } else {
             None
         }

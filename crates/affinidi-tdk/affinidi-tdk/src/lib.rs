@@ -7,6 +7,7 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
+#[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use affinidi_tdk_common::{
@@ -22,9 +23,17 @@ pub mod secrets;
 // Re-export required crates for convenience to applications
 #[cfg(feature = "meeting-place")]
 pub use affinidi_meeting_place as meeting_place;
+
+#[cfg(feature = "messaging")]
 pub use affinidi_messaging_didcomm as didcomm;
 #[cfg(feature = "messaging")]
 pub use affinidi_messaging_sdk as messaging;
+
+#[cfg(feature = "did-peer")]
+pub use did_peer;
+
+// Always exported
+pub use affinidi_did_common as did_common;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
 
@@ -46,13 +55,16 @@ pub struct TDK {
 /// Example:
 /// ```ignore
 /// use affinidi_tdk::TDK;
-/// use affinidi_tdk::config::Config;
+/// use affinidi_tdk_common::config::TDKConfig;
 ///
-/// let config = Config::builder().build();
+/// let config = TDKConfig::new().build();
 /// let mut tdk = TDK::new(config).await?;
 ///
 ///
 /// ```
+/// NOTE: If feature-flag "messaging" is enabled, then there is an option to bring a
+/// pre-configgured ATM instance to the TDK. If none is specified then ATM is automatically setup
+/// for you.
 impl TDK {
     pub async fn new(
         config: TDKConfig,

@@ -3,12 +3,12 @@
  */
 
 use affinidi_did_authentication::AuthorizationTokens;
+use affinidi_did_common::{Document, service::Endpoint};
 use affinidi_tdk_common::{TDKSharedState, profiles::TDKProfile};
 use errors::{MeetingPlaceError, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
-use ssi::dids::{Document, document::service::Endpoint};
 use tracing::debug;
 
 pub mod errors;
@@ -123,17 +123,16 @@ where
 /// # Returns
 /// URI of the service endpoint if it exists
 pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
-    if let Some(service) = doc.service("service") {
-        if let Some(endpoint) = &service.service_endpoint {
-            let mut uris = Vec::new();
-            for endpoint in endpoint {
-                match endpoint {
-                    Endpoint::Uri(e) => {
-                        uris.push(e.to_string());
-                    }
-                    Endpoint::Map(e) => {
-                        debug!("Endpoint: {:?}", e);
-                        if let Some(uri) = e.get("uri") {
+    if let Some(service) = doc.find_service("service") {
+        let mut uris = Vec::new();
+        match &service.service_endpoint {
+            Endpoint::Url(e) => {
+                uris.push(e.to_string());
+            }
+            Endpoint::Map(map) => {
+                if let Some(array) = map.as_array() {
+                    for endpoint in array {
+                        if let Some(uri) = endpoint.get("uri") {
                             uris.push(
                                 uri.to_string()
                                     .trim_start_matches('"')
@@ -142,12 +141,17 @@ pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
                             );
                         }
                     }
+                } else if let Some(uri) = map.get("uri") {
+                    uris.push(
+                        uri.to_string()
+                            .trim_start_matches('"')
+                            .trim_end_matches('"')
+                            .to_string(),
+                    );
                 }
             }
-            uris
-        } else {
-            vec![]
         }
+        uris
     } else {
         vec![]
     }
@@ -160,14 +164,10 @@ pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
 /// # Returns
 /// URI of the service endpoint if it exists
 pub fn find_api_service_endpoint(doc: &Document) -> Option<String> {
-    if let Some(service) = doc.service("api") {
-        if let Some(endpoint) = &service.service_endpoint {
-            if let Some(Endpoint::Uri(e)) = endpoint.first() {
-                debug!("Found service endpoint: {:?}", endpoint);
-                Some(e.to_string())
-            } else {
-                None
-            }
+    if let Some(service) = doc.find_service("api") {
+        if let Endpoint::Url(e) = &service.service_endpoint {
+            debug!("Found service endpoint: {}", e);
+            Some(e.to_string())
         } else {
             None
         }

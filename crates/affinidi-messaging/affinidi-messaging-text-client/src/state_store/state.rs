@@ -9,11 +9,13 @@ use ratatui::text::Line;
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
+/*
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageBoxItem {
     Message { user_id: String, content: String },
     Notification(String),
 }
+*/
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ChatDetailsPopupState {

@@ -1,3 +1,4 @@
+use affinidi_did_common::{Document, service::Endpoint};
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient,
     config::{DIDCacheConfig, DIDCacheConfigBuilder},
@@ -26,7 +27,6 @@ use regex::{Captures, Regex};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
-use ssi::dids::{Document, document::service::Endpoint};
 use std::{
     collections::HashMap,
     env,
@@ -56,8 +56,8 @@ pub struct SecurityConfigRaw {
     pub local_direct_delivery_allow_anon: String,
     pub mediator_secrets: String,
     pub use_ssl: String,
-    pub ssl_certificate_file: String,
-    pub ssl_key_file: String,
+    pub ssl_certificate_file: Option<String>,
+    pub ssl_key_file: Option<String>,
     pub jwt_authorization_secret: String,
     pub jwt_access_expiry: String,
     pub jwt_refresh_expiry: String,
@@ -77,9 +77,9 @@ pub struct SecurityConfig {
     #[serde(skip_serializing)]
     pub mediator_secrets: Arc<ThreadedSecretsResolver>,
     pub use_ssl: bool,
-    pub ssl_certificate_file: String,
+    pub ssl_certificate_file: Option<String>,
     #[serde(skip_serializing)]
-    pub ssl_key_file: String,
+    pub ssl_key_file: Option<String>,
     #[serde(skip_serializing)]
     pub jwt_encoding_key: EncodingKey,
     #[serde(skip_serializing)]
@@ -135,8 +135,8 @@ impl SecurityConfig {
             local_direct_delivery_allow_anon: false,
             mediator_secrets: secrets_resolver,
             use_ssl: true,
-            ssl_certificate_file: "".into(),
-            ssl_key_file: "".into(),
+            ssl_certificate_file: None,
+            ssl_key_file: None,
             jwt_encoding_key: EncodingKey::from_ed_der(&[0; 32]),
             jwt_decoding_key: DecodingKey::from_ed_der(&[0; 32]),
             jwt_access_expiry: 900,
@@ -1075,14 +1075,14 @@ async fn load_forwarding_protection_blocks(
 
         // Add the service endpoints to the forwarding protection list
         for service in doc.doc.service.iter() {
-            if let Some(endpoints) = &service.service_endpoint {
-                for endpoint in endpoints {
-                    match endpoint {
-                        Endpoint::Uri(uri) => {
-                            forwarding_config.blocked_forwarding.insert(uri.to_string());
-                        }
-                        Endpoint::Map(map) => {
-                            if let Some(uri) = map.get("uri") {
+            match &service.service_endpoint {
+                Endpoint::Url(uri) => {
+                    forwarding_config.blocked_forwarding.insert(uri.to_string());
+                }
+                Endpoint::Map(map) => {
+                    if map.is_array() {
+                        for endpoint in map.as_array().unwrap() {
+                            if let Some(uri) = endpoint.get("uri") {
                                 if let Some(uri) = uri.as_str() {
                                     forwarding_config.blocked_forwarding.insert(uri.into());
                                 } else {
@@ -1091,10 +1091,21 @@ async fn load_forwarding_protection_blocks(
                             } else {
                                 eprintln!(
                                     "WARN: Service endpoint map does not contain a URI. DID ({}), Service ({:#?}), Endpoint ({:#?})",
-                                    did, service, map
+                                    did, service, endpoint
                                 );
                             }
                         }
+                    } else if let Some(uri) = map.get("uri") {
+                        if let Some(uri) = uri.as_str() {
+                            forwarding_config.blocked_forwarding.insert(uri.into());
+                        } else {
+                            eprintln!("WARN: Couldn't parse URI as a string: {:#?}", uri);
+                        }
+                    } else {
+                        eprintln!(
+                            "WARN: Service endpoint map does not contain a URI. DID ({}), Service ({:#?}), Endpoint ({:#?})",
+                            did, service, map
+                        );
                     }
                 }
             }

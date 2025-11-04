@@ -1,4 +1,12 @@
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, document::DocumentExt};
+use crate::{
+    algorithms::{AnonCryptAlg, AuthCryptAlg},
+    document::{DIDCommVerificationMethodExt, did_or_url},
+    error::{ErrorKind, Result, ResultContext, err_msg},
+    jwe,
+    utils::crypto::{AsKnownKeyPair, AsKnownKeyPairSecret, KnownKeyAlg},
+};
+use affinidi_did_common::document::DocumentExt;
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::SecretsResolver;
 use askar_crypto::{
     alg::{
@@ -9,14 +17,6 @@ use askar_crypto::{
         x25519::X25519KeyPair,
     },
     kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs},
-};
-
-use crate::{
-    algorithms::{AnonCryptAlg, AuthCryptAlg},
-    document::{DIDCommVerificationMethodExt, did_or_url},
-    error::{ErrorKind, Result, ResultContext, err_msg},
-    jwe,
-    utils::crypto::{AsKnownKeyPair, AsKnownKeyPairSecret, KnownKeyAlg},
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -60,7 +60,11 @@ where
 
     // Initial list of sender keys is all key_agreements of sender did doc
     // or filtered to keep only provided key
-    let from_kids = from_ddoc.find_key_agreement(from_kid);
+    let from_kids: Vec<String> = from_ddoc
+        .find_key_agreement(from_kid)
+        .iter()
+        .map(|ka| ka.to_string())
+        .collect();
 
     if from_kids.is_empty() {
         Err(err_msg(
@@ -95,30 +99,6 @@ where
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    /*
-     let from_keys = from_kids
-        .into_iter()
-        .map(|kid| {
-            from_ddoc
-                .verification_method
-                .iter()
-                .find(|vm| {
-                    println!("vm.id: {}", vm.id);
-                    vm.id == kid
-                })
-                .ok_or_else(|| {
-                    // TODO: support external keys
-                    err_msg(
-                        ErrorKind::Malformed,
-                        format!(
-                            "No verification material found for sender key agreement {}",
-                            kid
-                        ),
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    */
 
     // Initial list of recipient keys is all key_agreements of recipient did doc
     // or filtered to keep only provided key
@@ -146,7 +126,7 @@ where
     let to_keys = to_kids
         .into_iter()
         .map(|kid| {
-            to_ddoc.get_verification_method(&kid).ok_or_else(|| {
+            to_ddoc.get_verification_method(kid).ok_or_else(|| {
                 // TODO: support external keys
                 err_msg(
                     ErrorKind::Malformed,
@@ -193,7 +173,7 @@ where
 
     // Resolve secret for found sender key
     let from_priv_key = secrets_resolver
-        .get_secret(&from_key.id)
+        .get_secret(from_key.id.as_str())
         .await
         .ok_or_else(|| err_msg(ErrorKind::InvalidState, "Sender secret not found"))?;
 
@@ -243,7 +223,7 @@ where
                     msg,
                     jwe::Algorithm::Ecdh1puA256kw,
                     jwe::EncAlgorithm::A256cbcHs512,
-                    Some((&from_key.id, &from_priv_key.as_x25519()?)),
+                    Some((from_key.id.as_str(), &from_priv_key.as_x25519()?)),
                     &to_keys,
                 )
                 .context("Unable produce authcrypt envelope")?,
@@ -325,7 +305,7 @@ where
                     msg,
                     jwe::Algorithm::Ecdh1puA256kw,
                     jwe::EncAlgorithm::A256cbcHs512,
-                    Some((&from_key.id, &from_priv_key.as_p256()?)),
+                    Some((from_key.id.as_str(), &from_priv_key.as_p256()?)),
                     &to_keys,
                 )
                 .context("Unable produce authcrypt envelope")?,
@@ -407,7 +387,7 @@ where
                     msg,
                     jwe::Algorithm::Ecdh1puA256kw,
                     jwe::EncAlgorithm::A256cbcHs512,
-                    Some((&from_key.id, &from_priv_key.as_k256()?)),
+                    Some((from_key.id.as_str(), &from_priv_key.as_k256()?)),
                     &to_keys,
                 )
                 .context("Unable produce authcrypt envelope")?,

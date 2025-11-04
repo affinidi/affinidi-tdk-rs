@@ -7,10 +7,10 @@
 Only supports did:peer numalgo 0,2 (did:peer:0, did:peer:2)
 
 NOTE:
-  The DID Peer Spec incorrectly specifies `VerificationMethod` and `Service`
-  id's as relative URI fragments instead of absolute URI's.
+The DID Peer Spec incorrectly specifies `VerificationMethod` and `Service`
+id's as relative URI fragments instead of absolute URI's.
 
-  To address this, we prepend the full DID before the #fragment
+To address this, we prepend the full DID before the #fragment
 
 ## Build a WebAssembly package
 
@@ -35,4 +35,4 @@ Generate a random did:peer and corresponding DID document
 `cargo run --example generate`
 
 Resolve a did:peer to a DID Document
-`cargo run --example resolve <did:peer:2.*>`
+`cargo run --example resolve-peer <did:peer:2.*>`

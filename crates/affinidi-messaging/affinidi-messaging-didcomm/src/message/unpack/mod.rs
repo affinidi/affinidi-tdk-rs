@@ -1,13 +1,3 @@
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_secrets_resolver::SecretsResolver;
-use serde::{Deserialize, Serialize};
-
-use anoncrypt::_try_unpack_anoncrypt;
-use authcrypt::_try_unpack_authcrypt;
-use sign::_try_unpack_sign;
-use std::str::FromStr;
-use tracing::debug;
-
 use crate::{
     FromPrior, Message,
     algorithms::{AnonCryptAlg, AuthCryptAlg, SignAlg},
@@ -18,6 +8,15 @@ use crate::{
     message::unpack::plaintext::_try_unpack_plaintext,
     protocols::routing::try_parse_forward,
 };
+use affinidi_did_common::verification_method::VerificationRelationship;
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_secrets_resolver::SecretsResolver;
+use anoncrypt::_try_unpack_anoncrypt;
+use authcrypt::_try_unpack_authcrypt;
+use serde::{Deserialize, Serialize};
+use sign::_try_unpack_sign;
+use std::str::FromStr;
+use tracing::debug;
 
 mod anoncrypt;
 mod authcrypt;
@@ -350,7 +349,7 @@ where
 {
     let kids = match did_or_url(did_or_kid) {
         (_, Some(kid)) => {
-            vec![kid.to_owned()]
+            vec![kid.to_string()]
         }
         (did, None) => {
             let did_doc = match did_resolver.resolve(did).await {
@@ -363,19 +362,18 @@ where
                 }
             };
             did_doc
-                .verification_relationships
                 .key_agreement
                 .iter()
-                .map(|key| key.id().resolve(did_doc.id.as_did()).to_string())
+                .map(|key| match key {
+                    VerificationRelationship::Reference(url) => url.to_string(),
+                    VerificationRelationship::VerificationMethod(vm) => vm.id.to_string(),
+                })
                 .collect()
         }
     };
 
-    let kids = kids.iter().map(|k| k.to_owned()).collect::<Vec<_>>();
-
-    let secrets_ids = secrets_resolver.find_secrets(&kids);
-
-    Ok(!secrets_ids.await.is_empty())
+    let secrets_ids = secrets_resolver.find_secrets(&kids).await;
+    Ok(!secrets_ids.is_empty())
 }
 
 /*
