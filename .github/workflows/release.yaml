@@ -3,7 +3,7 @@ name: "release"
 on:
   push:
     branches:
-      - main
+      - test/rust-security-scanner
 
 jobs:
   rust-pipeline:
