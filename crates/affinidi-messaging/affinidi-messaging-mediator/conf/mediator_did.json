@@ -47,6 +47,16 @@
         "x": "hEEjK3_80e7DDzibXAX66-uKM8mZuq7EB6LLiAuJnYI",
         "y": "PaWjK4KtMK6KUSFp2_ACYPPlikLBmKXhfPSZvFN6xus"
       }
+    },
+    {
+      "id": "did:web:localhost%3A7037:mediator:v1:.well-known#key-4",
+      "type": "JsonWebKey2020",
+      "controller": "did:web:localhost%3A7037:mediator:v1:.well-known",
+      "publicKeyJwk": {
+        "crv": "X25519",
+        "kty": "OKP",
+        "x": "Ephwf5xVmhVnDj2KtIPDKcGYBG9CQR_mZKlRqETZ62U"
+      }
     }
   ],
   "authentication": [
@@ -59,7 +69,8 @@
   ],
   "keyAgreement": [
     "did:web:localhost%3A7037:mediator:v1:.well-known#key-2",
-    "did:web:localhost%3A7037:mediator:v1:.well-known#key-3"
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-3",
+    "did:web:localhost%3A7037:mediator:v1:.well-known#key-4"
   ],
   "service": [
     {

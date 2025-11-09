@@ -38,7 +38,7 @@ api_prefix = "${API_PREFIX:/mediator/v1/}"
 ### NOTE: It is strongly recommended to NOT use the same DID as the mediator! 
 ###       This causes more use cases where the secrets of the mediator itself can be exposed in administration tasks.
 ### NOTE: You can add additional Mediator admin DIDs after mediator has started by using the Affinidi Mediator admin DIDComm protocol
-admin_did = "${ADMIN_DID:did://did:peer:2.Vz6MktSFJ7AHiGaHuEtKS6to7iv89Y8gj463WzbvsFKTxqoQk.EzQ3shaxZJHSiJKxJsFHfkERv1zaZqXnTi2YwVW7CbFTcKKpFd}"
+admin_did = "${ADMIN_DID:did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3}"
 
 ### did_web_self_hosted: <DID Document Path> Path to the self-hosted DID Document
 ### Default: None
@@ -161,7 +161,7 @@ ssl_key_file = "${SSL_KEY_FILE:conf/keys/end.key}"
 ### Supported Formats:
 ### - string://<key> - Use the key as is
 ### - aws_secrets://<secret_name> - Load the key from AWS Secrets Manager
-jwt_authorization_secret = "${JWT_AUTHORIZATION_SECRET:string://MFECAQEwBQYDK2VwBCIEIPNBdTYgCHmjAL1qKvQzJQPmYS686iDd85mgJgEF3eI9gSEA-6Y7fseC-UdFmEXMv8NPKYo0ovlt7go2kezR17hmuSQ}"
+jwt_authorization_secret = "${JWT_AUTHORIZATION_SECRET:string://MFECAQEwBQYDK2VwBCIEIIsgJfWwqWvy-_EbTy1OMMY1t5fex1UGUXVDfjdd30I6gSEArzZVXBELy8m4ICDLe9mIkr7qLJMxmEpDrE8WpfdcLeA}"
 
 ### jwt_access_expiry: Expiry time in seconds for JWT access tokens
 ### Default: 900 (15 Minutes)

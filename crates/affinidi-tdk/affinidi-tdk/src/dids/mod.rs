@@ -40,6 +40,9 @@ pub enum KeyType {
     /// Ed25519 - EdDSA over the edwards25519 curve
     Ed25519,
 
+    /// X25519 - ECDH encryption
+    X25519,
+
     /// Secp256k1 - ECDSA over the secp256k1 curve
     Secp256k1,
 }
@@ -50,6 +53,7 @@ impl Display for KeyType {
             KeyType::P256 => write!(f, "P-256"),
             KeyType::P384 => write!(f, "P-384"),
             KeyType::Ed25519 => write!(f, "Ed25519"),
+            KeyType::X25519 => write!(f, "X25519"),
             KeyType::Secp256k1 => write!(f, "secp256k1"),
         }
     }
@@ -63,6 +67,7 @@ impl TryFrom<&str> for KeyType {
             "p-256" => Ok(KeyType::P256),
             "p-384" => Ok(KeyType::P384),
             "ed25519" => Ok(KeyType::Ed25519),
+            "x25519" => Ok(KeyType::X25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
             _ => Err(format!("Unsupported key type: {}", value)),
         }
@@ -83,6 +88,9 @@ impl DID {
             KeyType::Ed25519 => DIDKey::generate(SecretsKeyType::Ed25519).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Ed25519 did:key  : {}", e))
             }),
+            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519).map_err(|e| {
+                TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {}", e))
+            }),
             KeyType::Secp256k1 => DIDKey::generate(SecretsKeyType::Secp256k1).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Secp256k1 did:key  : {}", e))
             }),
@@ -90,7 +98,28 @@ impl DID {
     }
 
     #[cfg(feature = "did-peer")]
+    /// Generate a new DID:peer from provided secrets
+    pub fn generate_did_peer_from_secrets(
+        keys: &mut [(DIDPeerKeys, &mut Secret)],
+        didcomm_service_uri: Option<String>,
+    ) -> Result<String> {
+        let mut peer_keys: Vec<DIDPeerCreateKeys> = Vec::new();
+        let mut secrets: Vec<&mut Secret> = Vec::new();
+        for (key_type, secret) in keys {
+            peer_keys.push(DIDPeerCreateKeys {
+                purpose: key_type.clone(),
+                type_: None,
+                public_key_multibase: Some(secret.get_public_keymultibase()?),
+            });
+            secrets.push(secret);
+        }
+
+        Self::complete_did_peer_creation(&mut secrets, &peer_keys, didcomm_service_uri)
+    }
+
+    //#[cfg(feature = "did-peer")]
     /// Generate a new DID:peer
+    /// Generates keys for you based on the provided key types and purposes
     pub fn generate_did_peer(
         keys: Vec<(DIDPeerKeys, KeyType)>,
         didcomm_service_uri: Option<String>,
@@ -106,8 +135,24 @@ impl DID {
             });
             secrets.push(secret);
         }
+        let mut secrets_mut: Vec<&mut Secret> = Vec::new();
+        for secret in secrets.iter_mut() {
+            secrets_mut.push(secret);
+        }
 
-        let services = didcomm_service_uri.map(|service_uri| {
+        let peer =
+            Self::complete_did_peer_creation(&mut secrets_mut, &peer_keys, didcomm_service_uri)?;
+        Ok((peer, secrets))
+    }
+
+    #[cfg(feature = "did-peer")]
+    /// Helper function to complete creating a DID:peer
+    fn complete_did_peer_creation(
+        secrets: &mut [&mut Secret],
+        peer_keys: &Vec<DIDPeerCreateKeys>,
+        service_uri: Option<String>,
+    ) -> Result<String> {
+        let services = service_uri.map(|service_uri| {
             vec![DIDPeerService {
                 _type: "dm".into(),
                 service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
@@ -121,12 +166,80 @@ impl DID {
             }]
         });
 
-        let peer = DIDPeer::create_peer_did(&peer_keys, services.as_ref())?;
+        let (peer, _) = DIDPeer::create_peer_did(peer_keys, services.as_ref())?;
 
+        // Change the Secret ID's to match the created did:peer
         for (id, secret) in secrets.iter_mut().enumerate() {
-            secret.id = [&peer.0, "#key-", (id + 1).to_string().as_str()].concat();
+            secret.id = [&peer, "#key-", (id + 1).to_string().as_str()].concat();
         }
 
-        Ok((peer.0, secrets))
+        Ok(peer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "did-peer")]
+    #[test]
+    fn did_peer_from_existing_secrets() {
+        use affinidi_secrets_resolver::secrets::Secret;
+        use did_peer::DIDPeerKeys;
+
+        use crate::dids::DID;
+
+        let mut v_secret = Secret::generate_ed25519(None, None);
+        let mut e_secret =
+            Secret::generate_x25519(None, None).expect("Couldn't create X25519 Secret");
+
+        let mut keys = vec![
+            (DIDPeerKeys::Verification, &mut v_secret),
+            (DIDPeerKeys::Encryption, &mut e_secret),
+        ];
+
+        let peer =
+            DID::generate_did_peer_from_secrets(&mut keys, None).expect("Creating DID failed!");
+
+        assert_eq!(
+            peer,
+            [
+                "did:peer:2.V",
+                &keys[0].1.get_public_keymultibase().unwrap(),
+                ".E",
+                &keys[1].1.get_public_keymultibase().unwrap()
+            ]
+            .concat()
+        );
+
+        assert_eq!(keys[0].1.id, [&peer, "#key-1"].concat());
+        assert_eq!(keys[1].1.id, [&peer, "#key-2"].concat());
+    }
+
+    #[cfg(feature = "did-peer")]
+    #[test]
+    fn did_peer_create() {
+        use did_peer::DIDPeerKeys;
+
+        use crate::dids::{DID, KeyType};
+
+        let keys = vec![
+            (DIDPeerKeys::Verification, KeyType::Ed25519),
+            (DIDPeerKeys::Encryption, KeyType::X25519),
+        ];
+
+        let (peer, secrets) = DID::generate_did_peer(keys, None).expect("Creating DID failed!");
+
+        assert_eq!(
+            peer,
+            [
+                "did:peer:2.V",
+                &secrets[0].get_public_keymultibase().unwrap(),
+                ".E",
+                &secrets[1].get_public_keymultibase().unwrap()
+            ]
+            .concat()
+        );
+
+        assert_eq!(secrets[0].id, [&peer, "#key-1"].concat());
+        assert_eq!(secrets[1].id, [&peer, "#key-2"].concat());
     }
 }
