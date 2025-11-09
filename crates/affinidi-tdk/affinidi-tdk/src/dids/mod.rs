@@ -40,6 +40,9 @@ pub enum KeyType {
     /// Ed25519 - EdDSA over the edwards25519 curve
     Ed25519,
 
+    /// X25519 - ECDH encryption
+    X25519,
+
     /// Secp256k1 - ECDSA over the secp256k1 curve
     Secp256k1,
 }
@@ -50,6 +53,7 @@ impl Display for KeyType {
             KeyType::P256 => write!(f, "P-256"),
             KeyType::P384 => write!(f, "P-384"),
             KeyType::Ed25519 => write!(f, "Ed25519"),
+            KeyType::X25519 => write!(f, "X25519"),
             KeyType::Secp256k1 => write!(f, "secp256k1"),
         }
     }
@@ -63,6 +67,7 @@ impl TryFrom<&str> for KeyType {
             "p-256" => Ok(KeyType::P256),
             "p-384" => Ok(KeyType::P384),
             "ed25519" => Ok(KeyType::Ed25519),
+            "x25519" => Ok(KeyType::X25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
             _ => Err(format!("Unsupported key type: {}", value)),
         }
@@ -82,6 +87,9 @@ impl DID {
                 .map_err(|e| TDKError::DIDMethod(format!("Couldn't create P384 did:key  : {}", e))),
             KeyType::Ed25519 => DIDKey::generate(SecretsKeyType::Ed25519).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Ed25519 did:key  : {}", e))
+            }),
+            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519).map_err(|e| {
+                TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {}", e))
             }),
             KeyType::Secp256k1 => DIDKey::generate(SecretsKeyType::Secp256k1).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Secp256k1 did:key  : {}", e))
