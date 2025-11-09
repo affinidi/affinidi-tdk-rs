@@ -98,7 +98,29 @@ impl DID {
     }
 
     #[cfg(feature = "did-peer")]
+    /// Generate a new DID:peer from provided secrets
+    pub fn generate_did_peer_from_secrets(
+        /// Array of keys for Verification or Encryption and corresponding Secret
+        keys: &mut [(DIDPeerKeys, Secret)],
+        didcomm_service_uri: Option<String>,
+    ) -> Result<String> {
+        let mut peer_keys: Vec<DIDPeerCreateKeys> = Vec::new();
+        let mut secrets: Vec<Secret> = Vec::new();
+        for (key_type, secret) in keys {
+            peer_keys.push(DIDPeerCreateKeys {
+                purpose: key_type,
+                type_: None,
+                public_key_multibase: Some(secret.get_public_keymultibase()?),
+            });
+            secrets.push(secret);
+        }
+
+        Self::complete_did_peer_creation(&mut secrets, &peer_keys, didcomm_service_uri)
+    }
+
+    #[cfg(feature = "did-peer")]
     /// Generate a new DID:peer
+    /// Generates keys for you based on the provided key types and purposes
     pub fn generate_did_peer(
         keys: Vec<(DIDPeerKeys, KeyType)>,
         didcomm_service_uri: Option<String>,
@@ -115,7 +137,18 @@ impl DID {
             secrets.push(secret);
         }
 
-        let services = didcomm_service_uri.map(|service_uri| {
+        let peer = Self::complete_did_peer_creation(&mut secrets, &peer_keys, didcomm_service_uri);
+        Ok((peer, secrets))
+    }
+
+    #[cfg(feature = "did-peer")]
+    /// Helper function to complete creating a DID:peer
+    fn complete_did_peer_creation(
+        secrets: &mut [Secret],
+        peer_keys: &[DIDPeerKeys],
+        service_uri: Option<String>,
+    ) -> String {
+        let services = service_uri.map(|service_uri| {
             vec![DIDPeerService {
                 _type: "dm".into(),
                 service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
@@ -129,12 +162,13 @@ impl DID {
             }]
         });
 
-        let peer = DIDPeer::create_peer_did(&peer_keys, services.as_ref())?;
+        let (peer, _) = DIDPeer::create_peer_did(peer_keys, services.as_ref())?;
 
+        // Change the Secret ID's to match the created did:peer
         for (id, secret) in secrets.iter_mut().enumerate() {
             secret.id = [&peer.0, "#key-", (id + 1).to_string().as_str()].concat();
         }
 
-        Ok((peer.0, secrets))
+        peer
     }
 }
