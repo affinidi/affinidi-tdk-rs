@@ -26,9 +26,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".into(),
-                    format!(
-                        "redis function clean_start_streaming() failed. Reason: {err}"
-                    ),
+                    format!("redis function clean_start_streaming() failed. Reason: {err}"),
                 )
             })?;
 
@@ -48,9 +46,7 @@ impl Database {
             Err(MediatorError::DatabaseError(
                 23,
                 "NA".into(),
-                format!(
-                    "redis fn clean_start_streaming() failed. Response ({response:?})"
-                ),
+                format!("redis fn clean_start_streaming() failed. Response ({response:?})"),
             ))
         }
     }

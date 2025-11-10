@@ -309,9 +309,7 @@ pub(crate) async fn toggle_live_delivery(
                                 None,
                             )),
                             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            format!(
-                                "Couldn't send START signal to streaming task. Reason: {e}"
-                            ),
+                            format!("Couldn't send START signal to streaming task. Reason: {e}"),
                         )
                     })?;
             }
@@ -602,9 +600,7 @@ fn _parse_and_validate_delivery_request_body(
                 None,
             )),
             StatusCode::BAD_REQUEST.as_u16(),
-            format!(
-                "limit must be between 1 and 100 inclusive. Received limit({limit})"
-            ),
+            format!("limit must be between 1 and 100 inclusive. Received limit({limit})"),
         ));
     }
 
@@ -753,9 +749,7 @@ fn _validate_msg(
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!(
-                    "return_route header is incorrect. Expected (all) but received ({header})"
-                ),
+                format!("return_route header is incorrect. Expected (all) but received ({header})"),
             ));
         }
     } else {

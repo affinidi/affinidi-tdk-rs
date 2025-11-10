@@ -224,9 +224,7 @@ impl OOBDiscovery {
             .send()
             .await
             .map_err(|e| {
-                ATMError::TransportError(format!(
-                    "Could not delete OOB Invitation request: {e:?}"
-                ))
+                ATMError::TransportError(format!("Could not delete OOB Invitation request: {e:?}"))
             })?;
 
         let status = res.status();

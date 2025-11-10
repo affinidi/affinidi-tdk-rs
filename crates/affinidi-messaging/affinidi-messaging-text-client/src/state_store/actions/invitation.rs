@@ -214,9 +214,7 @@ pub async fn send_invitation_accept(
         ));
     };
 
-    info!(
-        "temp invite response profile info: {accept_temp_profile_info:?}"
-    );
+    info!("temp invite response profile info: {accept_temp_profile_info:?}");
     let accept_temp_profile_acl_flags = MediatorACLSet::from_u64(accept_temp_profile_info.acls);
     if let AccessListModeType::ExplicitAllow =
         accept_temp_profile_acl_flags.get_access_list_mode().0
@@ -233,9 +231,7 @@ pub async fn send_invitation_accept(
                     .accept_invite_popup
                     .messages
                     .push(Line::from(Span::styled(
-                        format!(
-                            "Failed to add {invite_did} to ACL of temporary profile: {e}"
-                        ),
+                        format!("Failed to add {invite_did} to ACL of temporary profile: {e}"),
                         Style::default().fg(Color::Red),
                     )));
                 state_tx.send(state.clone())?;

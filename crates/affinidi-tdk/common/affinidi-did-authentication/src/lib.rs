@@ -558,9 +558,7 @@ where
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| {
-            DIDAuthError::Authentication(format!("HTTP POST failed ({url}): {e:?}"))
-        })?;
+        .map_err(|e| DIDAuthError::Authentication(format!("HTTP POST failed ({url}): {e:?}")))?;
 
     let response_status = response.status();
     let response_body = response

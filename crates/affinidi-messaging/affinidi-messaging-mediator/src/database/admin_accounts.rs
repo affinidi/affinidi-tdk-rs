@@ -78,9 +78,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!(
-                        "error in check of admin account for ({did_hash}). Reason: {err}"
-                    ),
+                    format!("error in check of admin account for ({did_hash}). Reason: {err}"),
                 )
             })?;
 

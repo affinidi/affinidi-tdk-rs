@@ -47,9 +47,7 @@ impl ATM {
                 .send()
                 .await
                 .map_err(|e| {
-                    ATMError::TransportError(format!(
-                        "Could not send list_messages request: {e:?}"
-                    ))
+                    ATMError::TransportError(format!("Could not send list_messages request: {e:?}"))
                 })?;
 
             let status = res.status();

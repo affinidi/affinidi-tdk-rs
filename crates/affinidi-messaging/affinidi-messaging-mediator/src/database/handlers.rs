@@ -11,9 +11,7 @@ impl Database {
             MediatorError::ConfigError(
                 2,
                 "Initialization".into(),
-                format!(
-                    "Couldn't ready database functions_file ({scripts_path}). Reason: {err}"
-                ),
+                format!("Couldn't ready database functions_file ({scripts_path}). Reason: {err}"),
             )
         })?;
 

@@ -333,9 +333,7 @@ impl Database {
                 MediatorError::SessionError(
                     14,
                     old_session_id.into(),
-                    format!(
-                        "tried to retrieve session({old_session_id}). Error: {err}"
-                    ),
+                    format!("tried to retrieve session({old_session_id}). Error: {err}"),
                 )
             })?;
 

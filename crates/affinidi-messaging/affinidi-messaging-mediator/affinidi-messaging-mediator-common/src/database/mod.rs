@@ -253,9 +253,7 @@ impl DatabaseHandler {
                             None,
                         )),
                         StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        format!(
-                            "Cannot parse database version ({version}). Reason: {err}"
-                        ),
+                        format!("Cannot parse database version ({version}). Reason: {err}"),
                     ));
                 }
             };

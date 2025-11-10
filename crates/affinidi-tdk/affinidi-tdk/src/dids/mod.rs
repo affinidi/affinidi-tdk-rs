@@ -88,9 +88,8 @@ impl DID {
             KeyType::Ed25519 => DIDKey::generate(SecretsKeyType::Ed25519).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Ed25519 did:key  : {e}"))
             }),
-            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519).map_err(|e| {
-                TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {e}"))
-            }),
+            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519)
+                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {e}"))),
             KeyType::Secp256k1 => DIDKey::generate(SecretsKeyType::Secp256k1).map_err(|e| {
                 TDKError::DIDMethod(format!("Couldn't create Secp256k1 did:key  : {e}"))
             }),

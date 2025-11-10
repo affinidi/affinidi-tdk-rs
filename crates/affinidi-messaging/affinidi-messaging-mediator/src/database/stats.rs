@@ -167,9 +167,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!(
-                        "Couldn't update GLOBAL(WEBSOCKET_OPEN) stats. Reason: {err}"
-                    ),
+                    format!("Couldn't update GLOBAL(WEBSOCKET_OPEN) stats. Reason: {err}"),
                 )
             })?;
 
@@ -190,9 +188,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!(
-                        "Couldn't update GLOBAL(WEBSOCKET_CLOSE) stats. Reason: {err}"
-                    ),
+                    format!("Couldn't update GLOBAL(WEBSOCKET_CLOSE) stats. Reason: {err}"),
                 )
             })?;
 

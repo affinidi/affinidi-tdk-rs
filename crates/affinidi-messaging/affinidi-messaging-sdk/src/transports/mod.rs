@@ -266,9 +266,8 @@ impl ATM {
         }
         debug!("body =\n{}", body);
         let http_response: Value = if return_response {
-            serde_json::from_str(&body).map_err(|e| {
-                ATMError::TransportError(format!("Couldn't parse response: {e:?}"))
-            })?
+            serde_json::from_str(&body)
+                .map_err(|e| ATMError::TransportError(format!("Couldn't parse response: {e:?}")))?
         } else {
             Value::Null
         };

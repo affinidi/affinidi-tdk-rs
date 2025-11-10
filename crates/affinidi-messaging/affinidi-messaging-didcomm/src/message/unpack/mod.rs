@@ -210,9 +210,7 @@ impl Message {
                 if !skid.starts_with(from) {
                     return Err(err_msg(
                         ErrorKind::InvalidState,
-                        format!(
-                            "Message 'from' ({from}) doesn't match sign_from ({skid})"
-                        ),
+                        format!("Message 'from' ({from}) doesn't match sign_from ({skid})"),
                     ));
                 }
             } else {

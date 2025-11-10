@@ -54,9 +54,7 @@ impl DatabaseHandler {
                             None,
                         )),
                         StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                        format!(
-                            "Couldn't delete message_hash ({message_hash}). Reason: {err}"
-                        ),
+                        format!("Couldn't delete message_hash ({message_hash}). Reason: {err}"),
                     )
                 })?;
 
@@ -87,9 +85,7 @@ impl DatabaseHandler {
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!(
-                        "delete function returned not being OK. Status: {response}"
-                    ),
+                    format!("delete function returned not being OK. Status: {response}"),
                 ))
             } else {
                 info!("Successfully deleted",);

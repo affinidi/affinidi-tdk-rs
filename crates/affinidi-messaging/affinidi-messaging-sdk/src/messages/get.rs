@@ -28,9 +28,7 @@ impl ATM {
                 .await?;
 
             let body = serde_json::to_string(messages).map_err(|e| {
-                ATMError::TransportError(format!(
-                    "Could not serialize get message request: {e:?}"
-                ))
+                ATMError::TransportError(format!("Could not serialize get message request: {e:?}"))
             })?;
 
             let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
@@ -52,9 +50,7 @@ impl ATM {
                 .send()
                 .await
                 .map_err(|e| {
-                    ATMError::TransportError(format!(
-                        "Could not send get_messages request: {e:?}"
-                    ))
+                    ATMError::TransportError(format!("Could not send get_messages request: {e:?}"))
                 })?;
 
             let status = res.status();

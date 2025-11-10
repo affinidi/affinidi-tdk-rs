@@ -147,10 +147,8 @@ impl Mediator {
                     digests.push(digest(admin));
                 } else {
                     return Err(ATMError::ConfigError(
-                        format!(
-                            "Admins ({admin}) doesn't seem to be a SHA256 hash or a DID!"
-                        )
-                        .to_owned(),
+                        format!("Admins ({admin}) doesn't seem to be a SHA256 hash or a DID!")
+                            .to_owned(),
                     ));
                 }
             }

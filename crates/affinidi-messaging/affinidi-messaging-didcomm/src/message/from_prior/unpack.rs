@@ -56,9 +56,7 @@ impl FromPrior {
             Err(err) => {
                 return Err(err_msg(
                     ErrorKind::DIDNotResolved,
-                    format!(
-                        "from_prior issuer DID ({did}) couldn't be resolved. Reason: {err}"
-                    ),
+                    format!("from_prior issuer DID ({did}) couldn't be resolved. Reason: {err}"),
                 ));
             }
         };

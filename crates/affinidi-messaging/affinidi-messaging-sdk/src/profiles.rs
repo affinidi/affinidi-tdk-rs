@@ -184,9 +184,7 @@ impl ATMProfile {
             && let Some(channel) = &*mediator.ws_channel_tx.read().await
         {
             channel.send(WebSocketCommands::Stop).await.map_err(|err| {
-                ATMError::TransportError(format!(
-                    "Could not send websocket Stop command: {err:?}"
-                ))
+                ATMError::TransportError(format!("Could not send websocket Stop command: {err:?}"))
             })?;
         }
 

@@ -110,9 +110,8 @@ where
         }
     }
 
-    serde_json::from_str::<T>(&response_body).map_err(|e| {
-        MeetingPlaceError::API(format!("Couldn't deserialize API body response: {e}"))
-    })
+    serde_json::from_str::<T>(&response_body)
+        .map_err(|e| MeetingPlaceError::API(format!("Couldn't deserialize API body response: {e}")))
 }
 
 /// Find the [serviceEndpoint](https://www.w3.org/TR/did-1.0/#services) with type `DIDCommMessaging` from a DID Document

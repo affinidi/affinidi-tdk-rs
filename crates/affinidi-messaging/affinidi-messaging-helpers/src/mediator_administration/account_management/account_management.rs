@@ -233,10 +233,9 @@ pub(crate) async fn manage_account_menu(
                         println!("{}", style("Account deleted successfully").green());
                         return Ok(());
                     }
-                    Err(err) => println!(
-                        "{}",
-                        style(format!("Error deleting account: {err}")).red()
-                    ),
+                    Err(err) => {
+                        println!("{}", style(format!("Error deleting account: {err}")).red())
+                    }
                 }
             }
             4 => {

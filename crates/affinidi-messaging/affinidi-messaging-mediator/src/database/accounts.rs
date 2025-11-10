@@ -429,9 +429,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             14,
                             "NA".to_string(),
-                            format!(
-                                "changing queue_limit ({queue_name}) failed. Reason: {err}"
-                            ),
+                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
                         )
                     })?;
             }
@@ -446,9 +444,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             23,
                             "NA".to_string(),
-                            format!(
-                                "changing queue_limit ({queue_name}) failed. Reason: {err}"
-                            ),
+                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
                         )
                     })?;
             }

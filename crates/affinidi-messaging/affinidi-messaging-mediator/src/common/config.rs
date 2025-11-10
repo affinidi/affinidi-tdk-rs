@@ -222,15 +222,11 @@ impl SecurityConfigRaw {
         // Convert the default ACL Set into a GlobalACLSet
         config.global_acl_default = MediatorACLSet::from_string_ruleset(&self.global_acl_default)
             .map_err(|err| {
-            eprintln!(
-                "Couldn't parse global_acl_default config parameter. Reason: {err}"
-            );
+            eprintln!("Couldn't parse global_acl_default config parameter. Reason: {err}");
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                format!(
-                    "Couldn't parse global_acl_default config parameter. Reason: {err}"
-                ),
+                format!("Couldn't parse global_acl_default config parameter. Reason: {err}"),
             )
         })?;
 
