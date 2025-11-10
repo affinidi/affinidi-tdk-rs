@@ -410,8 +410,7 @@ impl Offer {
             &[&mp.mp_api, "/register-offer"].concat(),
             &serde_json::to_string(registration).map_err(|e| {
                 MeetingPlaceError::Serialization(format!(
-                    "Couldn't serialize register offer request: {}",
-                    e
+                    "Couldn't serialize register offer request: {e}"
                 ))
             })?,
             &tokens,
@@ -440,8 +439,7 @@ impl Offer {
         Ok(
             BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(&msg).map_err(|e| {
                 MeetingPlaceError::Serialization(format!(
-                    "Couldn't serialize DIDcomm offer message: {}",
-                    e
+                    "Couldn't serialize DIDcomm offer message: {e}"
                 ))
             })?),
         )
@@ -468,8 +466,7 @@ impl Offer {
             })
             .map_err(|e| {
                 MeetingPlaceError::Serialization(format!(
-                    "Couldn't serialize register offer request: {}",
-                    e
+                    "Couldn't serialize register offer request: {e}"
                 ))
             })?,
             &tokens,
@@ -523,8 +520,7 @@ impl Offer {
             })
             .map_err(|e| {
                 MeetingPlaceError::Serialization(format!(
-                    "Couldn't serialize register offer request: {}",
-                    e
+                    "Couldn't serialize register offer request: {e}"
                 ))
             })?,
             &tokens,

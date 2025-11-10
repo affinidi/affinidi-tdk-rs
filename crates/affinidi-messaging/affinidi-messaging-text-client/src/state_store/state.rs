@@ -49,7 +49,7 @@ impl CommonSettings {
             match did_resolver.resolve(mediator_did).await {
                 Err(e) => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("Mediator DID is invalid: {}", e),
+                    format!("Mediator DID is invalid: {e}"),
                 )),
                 _ => Ok(()),
             }

@@ -69,7 +69,7 @@ impl TryFrom<&str> for KeyType {
             "ed25519" => Ok(KeyType::Ed25519),
             "x25519" => Ok(KeyType::X25519),
             "secp256k1" => Ok(KeyType::Secp256k1),
-            _ => Err(format!("Unsupported key type: {}", value)),
+            _ => Err(format!("Unsupported key type: {value}")),
         }
     }
 }
@@ -82,17 +82,16 @@ impl DID {
     pub fn generate_did_key(key_type: KeyType) -> Result<(String, Secret)> {
         match key_type {
             KeyType::P256 => DIDKey::generate(SecretsKeyType::P256)
-                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create P256 did:key  : {}", e))),
+                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create P256 did:key  : {e}"))),
             KeyType::P384 => DIDKey::generate(SecretsKeyType::P384)
-                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create P384 did:key  : {}", e))),
+                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create P384 did:key  : {e}"))),
             KeyType::Ed25519 => DIDKey::generate(SecretsKeyType::Ed25519).map_err(|e| {
-                TDKError::DIDMethod(format!("Couldn't create Ed25519 did:key  : {}", e))
+                TDKError::DIDMethod(format!("Couldn't create Ed25519 did:key  : {e}"))
             }),
-            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519).map_err(|e| {
-                TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {}", e))
-            }),
+            KeyType::X25519 => DIDKey::generate(SecretsKeyType::X25519)
+                .map_err(|e| TDKError::DIDMethod(format!("Couldn't create X25519 did:key  : {e}"))),
             KeyType::Secp256k1 => DIDKey::generate(SecretsKeyType::Secp256k1).map_err(|e| {
-                TDKError::DIDMethod(format!("Couldn't create Secp256k1 did:key  : {}", e))
+                TDKError::DIDMethod(format!("Couldn't create Secp256k1 did:key  : {e}"))
             }),
         }
     }

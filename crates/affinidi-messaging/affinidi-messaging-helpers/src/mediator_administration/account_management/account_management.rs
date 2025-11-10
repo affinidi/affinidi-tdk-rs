@@ -179,7 +179,7 @@ pub(crate) async fn manage_account_menu(
                         account = a;
                     }
                     Err(err) => {
-                        println!("{}", style(format!("Error modifying ACLs: {}", err)).red())
+                        println!("{}", style(format!("Error modifying ACLs: {err}")).red())
                     }
                 }
             }
@@ -191,7 +191,7 @@ pub(crate) async fn manage_account_menu(
                     }
                     Err(err) => println!(
                         "{}",
-                        style(format!("Error changing account type: {}", err)).red()
+                        style(format!("Error changing account type: {err}")).red()
                     ),
                 }
             }
@@ -218,7 +218,7 @@ pub(crate) async fn manage_account_menu(
                     }
                     Err(err) => println!(
                         "{}",
-                        style(format!("Error changing account queue_limit: {}", err)).red()
+                        style(format!("Error changing account queue_limit: {err}")).red()
                     ),
                 }
             }
@@ -233,10 +233,9 @@ pub(crate) async fn manage_account_menu(
                         println!("{}", style("Account deleted successfully").green());
                         return Ok(());
                     }
-                    Err(err) => println!(
-                        "{}",
-                        style(format!("Error deleting account: {}", err)).red()
-                    ),
+                    Err(err) => {
+                        println!("{}", style(format!("Error deleting account: {err}")).red())
+                    }
                 }
             }
             4 => {
@@ -276,7 +275,7 @@ async fn _change_account_type(
     }
 
     let new_type = AccountType::from(selection as u32);
-    println!("Changing account type to: {}", new_type);
+    println!("Changing account type to: {new_type}");
 
     if new_type == account._type {
         // No change, exit gracefully
@@ -329,14 +328,14 @@ async fn _change_account_queue_limit(
         return Ok(None);
     }
 
-    println!("Changing account send queue_limit to: {}", send_input);
+    println!("Changing account send queue_limit to: {send_input}");
     let send_queue_limit: Option<i32> = if send_input.is_empty() {
         None
     } else {
         match send_input.parse::<i32>() {
             Ok(limit) => Some(limit),
             Err(e) => {
-                println!("{}", style(format!("Couldn't parse number: {}", e)).red());
+                println!("{}", style(format!("Couldn't parse number: {e}")).red());
                 return Err("Couldn't parse queue_limit".into());
             }
         }
@@ -372,14 +371,14 @@ async fn _change_account_queue_limit(
         return Ok(None);
     }
 
-    println!("Changing account receive queue_limit to: {}", receive_input);
+    println!("Changing account receive queue_limit to: {receive_input}");
     let receive_queue_limit: Option<i32> = if receive_input.is_empty() {
         None
     } else {
         match receive_input.parse::<i32>() {
             Ok(limit) => Some(limit),
             Err(e) => {
-                println!("{}", style(format!("Couldn't parse number: {}", e)).red());
+                println!("{}", style(format!("Couldn't parse number: {e}")).red());
                 return Err("Couldn't parse queue_limit".into());
             }
         }
@@ -399,8 +398,7 @@ async fn _change_account_queue_limit(
     println!(
         "{}",
         style(format!(
-            "Account queue_limits changed successfully {:#?}",
-            response
+            "Account queue_limits changed successfully {response:#?}"
         ))
         .green()
     );

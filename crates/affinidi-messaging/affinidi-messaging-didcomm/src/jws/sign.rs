@@ -33,7 +33,7 @@ pub(crate) fn sign<Key: KeySign>(
         // JWS Signing Input
         // The input to the digital signature or MAC computation.  Its value
         // is ASCII(BASE64URL(UTF8(JWS Protected Header)) || '.' || BASE64URL(JWS Payload)).
-        let sign_input = format!("{}.{}", protected, payload);
+        let sign_input = format!("{protected}.{payload}");
 
         let signature = key
             .create_signature(sign_input.as_bytes(), Some(sig_type))
@@ -92,7 +92,7 @@ pub(crate) fn sign_compact<Key: KeySign>(
         // JWS Signing Input
         // The input to the digital signature or MAC computation.  Its value
         // is ASCII(BASE64URL(UTF8(JWS Protected Header)) || '.' || BASE64URL(JWS Payload)).
-        let sign_input = format!("{}.{}", header, payload);
+        let sign_input = format!("{header}.{payload}");
 
         let signature = key
             .create_signature(sign_input.as_bytes(), Some(sig_type))
@@ -106,7 +106,7 @@ pub(crate) fn sign_compact<Key: KeySign>(
         BASE64_URL_SAFE_NO_PAD.encode(&signature)
     };
 
-    let compact_jws = format!("{}.{}.{}", header, payload, signature);
+    let compact_jws = format!("{header}.{payload}.{signature}");
 
     Ok(compact_jws)
 }

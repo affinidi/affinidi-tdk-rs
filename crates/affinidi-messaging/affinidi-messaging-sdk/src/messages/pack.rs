@@ -66,7 +66,7 @@ impl SharedState {
         .map_err(|e| {
             ATMError::DidcommError(
                 "SDK".to_string(),
-                format!("pack_encrypted() failed. Reason: {}", e),
+                format!("pack_encrypted() failed. Reason: {e}"),
             )
         })
     }
@@ -95,7 +95,7 @@ impl SharedState {
         .map_err(|e| {
             ATMError::DidcommError(
                 "SDK".to_string(),
-                format!("pack_signed() failed. Reason: {}", e),
+                format!("pack_signed() failed. Reason: {e}"),
             )
         })
     }
@@ -111,7 +111,7 @@ impl SharedState {
             .map_err(|e| {
                 ATMError::DidcommError(
                     "SDK".to_string(),
-                    format!("pack_plaintext() failed. Reason: {}", e),
+                    format!("pack_plaintext() failed. Reason: {e}"),
                 )
             })
     }

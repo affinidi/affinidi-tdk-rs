@@ -75,7 +75,7 @@ impl Vcard {
     pub fn to_base64(&self) -> Result<String> {
         Ok(
             BASE64_URL_SAFE_NO_PAD.encode(serde_json::to_string(self).map_err(|e| {
-                MeetingPlaceError::Serialization(format!("Couldn't serialize vcard: {}", e))
+                MeetingPlaceError::Serialization(format!("Couldn't serialize vcard: {e}"))
             })?),
         )
     }

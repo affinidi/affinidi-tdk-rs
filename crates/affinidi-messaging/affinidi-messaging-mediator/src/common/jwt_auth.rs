@@ -56,7 +56,7 @@ impl Display for AuthError {
             AuthError::InvalidToken => write!(f, "Invalid token"),
             AuthError::ExpiredToken => write!(f, "Expired token"),
             AuthError::InternalServerError(message) => {
-                write!(f, "Internal Server Error: {}", message)
+                write!(f, "Internal Server Error: {message}")
             }
             AuthError::Blocked => write!(f, "ACL Blocked"),
         }
@@ -97,8 +97,7 @@ where
             .map_err(|e| {
                 error!("Couldn't get SharedData state! Reason: {}", e);
                 AuthError::InternalServerError(format!(
-                    "Couldn't get SharedData state! Reason: {}",
-                    e
+                    "Couldn't get SharedData state! Reason: {e}"
                 ))
             })?;
 
@@ -153,8 +152,7 @@ where
                     session_id, e
                 );
                 AuthError::InternalServerError(format!(
-                    "Couldn't get session from database! Reason: {}",
-                    e
+                    "Couldn't get session from database! Reason: {e}"
                 ))
             })?;
 

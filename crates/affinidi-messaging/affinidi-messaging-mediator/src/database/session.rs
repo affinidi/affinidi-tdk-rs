@@ -37,7 +37,7 @@ impl TryFrom<&String> for SessionState {
                 Err(MediatorError::SessionError(
                     20,
                     "NA".into(),
-                    format!("Unknown SessionState: ({})", value),
+                    format!("Unknown SessionState: ({value})"),
                 ))
             }
         }
@@ -46,7 +46,7 @@ impl TryFrom<&String> for SessionState {
 
 impl Display for SessionState {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -165,7 +165,7 @@ impl Database {
                 MediatorError::SessionError(
                     14,
                     sid.clone(),
-                    format!("tried to create new session ({})! Error: {}", sid, err),
+                    format!("tried to create new session ({sid})! Error: {err}"),
                 )
             })?;
 
@@ -183,7 +183,7 @@ impl Database {
             deadpool_redis::redis::pipe()
                 .atomic()
                 .cmd("HGETALL")
-                .arg(format!("SESSION:{}", session_id))
+                .arg(format!("SESSION:{session_id}"))
                 .cmd("HMGET")
                 .arg(["DID:", &digest(did)].concat())
                 .arg("ROLE_TYPE")
@@ -194,7 +194,7 @@ impl Database {
                     MediatorError::SessionError(
                         14,
                         session_id.into(),
-                        format!("tried to retrieve session({}). Error: {}", session_id, err),
+                        format!("tried to retrieve session({session_id}). Error: {err}"),
                     )
                 })?;
 
@@ -307,8 +307,8 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut con = self.0.get_async_connection().await?;
 
-        let old_sid = format!("SESSION:{}", old_session_id);
-        let new_sid = format!("SESSION:{}", new_session_id);
+        let old_sid = format!("SESSION:{old_session_id}");
+        let new_sid = format!("SESSION:{new_session_id}");
 
         deadpool_redis::redis::pipe()
             .atomic()
@@ -333,10 +333,7 @@ impl Database {
                 MediatorError::SessionError(
                     14,
                     old_session_id.into(),
-                    format!(
-                        "tried to retrieve session({}). Error: {}",
-                        old_session_id, err
-                    ),
+                    format!("tried to retrieve session({old_session_id}). Error: {err}"),
                 )
             })?;
 

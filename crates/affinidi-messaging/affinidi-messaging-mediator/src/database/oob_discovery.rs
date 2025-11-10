@@ -62,7 +62,7 @@ impl Database {
                     return Err(MediatorError::InternalError(
                         19,
                         "NA".into(),
-                        format!("serializing error on Message. {}", err),
+                        format!("serializing error on Message. {err}"),
                     ));
                 }
             };
@@ -97,7 +97,7 @@ impl Database {
                     Err(MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("database store error: {}", err),
+                        format!("database store error: {err}"),
                     ))
                 }
             }
@@ -142,7 +142,7 @@ impl Database {
                     return Err(MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("database fetch error: {}", err),
+                        format!("database fetch error: {err}"),
                     ));
                 }
             };
@@ -174,7 +174,7 @@ impl Database {
                     return Err(MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("database fetch error: {}", err),
+                        format!("database fetch error: {err}"),
                     ));
                 }
             };

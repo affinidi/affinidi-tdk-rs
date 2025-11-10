@@ -87,7 +87,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => Ok(message.body),
@@ -104,8 +104,7 @@ impl Mediator {
     fn _parse_add_admins_response(&self, message: &Message) -> Result<i32, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Admin Add response could not be parsed. Reason: {}",
-                err
+                "Mediator Admin Add response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -148,11 +147,8 @@ impl Mediator {
                     digests.push(digest(admin));
                 } else {
                     return Err(ATMError::ConfigError(
-                        format!(
-                            "Admins ({}) doesn't seem to be a SHA256 hash or a DID!",
-                            admin
-                        )
-                        .to_owned(),
+                        format!("Admins ({admin}) doesn't seem to be a SHA256 hash or a DID!")
+                            .to_owned(),
                     ));
                 }
             }
@@ -186,7 +182,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => self._parse_add_admins_response(&message),
@@ -203,8 +199,7 @@ impl Mediator {
     fn _parse_strip_admins_response(&self, message: &Message) -> Result<i32, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Admin Strip response could not be parsed. Reason: {}",
-                err
+                "Mediator Admin Strip response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -277,7 +272,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -299,8 +294,7 @@ impl Mediator {
     ) -> Result<MediatorAdminList, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Admin List response could not be parsed. Reason: {}",
-                err
+                "Mediator Admin List response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -358,7 +352,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
                 match atm
                 .send_message(profile, &msg, &msg_id, true, true)

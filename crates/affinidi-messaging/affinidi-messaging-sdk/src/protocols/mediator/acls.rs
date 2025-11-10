@@ -305,8 +305,7 @@ impl MediatorACLSet {
                 }
                 _ => {
                     return Err(ATMError::ConfigError(format!(
-                        "Invalid ACL String ({})",
-                        item
+                        "Invalid ACL String ({item})"
                     )));
                 }
             }
@@ -358,7 +357,7 @@ impl MediatorACLSet {
     /// Creates an ACL Set from a hex string
     pub fn from_hex_string(hex: &str) -> Result<MediatorACLSet, ATMError> {
         let acl = u64::from_str_radix(hex, 16)
-            .map_err(|_| ATMError::ACLConfigError(format!("Invalid ACL Hex String ({})", hex)))?;
+            .map_err(|_| ATMError::ACLConfigError(format!("Invalid ACL Hex String ({hex})")))?;
         Ok(MediatorACLSet::from_u64(acl))
     }
 

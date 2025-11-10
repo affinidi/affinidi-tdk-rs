@@ -26,7 +26,7 @@ impl Database {
             let mut con = self.0.get_async_connection().await?;
 
             deadpool_redis::redis::Cmd::hset(
-                format!("DID:{}", did_hash),
+                format!("DID:{did_hash}"),
                 "ACLS",
                 acls.to_hex_string(),
             )
@@ -36,7 +36,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("set_acl failed. Reason: {}", err),
+                    format!("set_acl failed. Reason: {err}"),
                 )
             })?;
 
@@ -60,14 +60,14 @@ impl Database {
             let mut con = self.0.get_async_connection().await?;
 
             let acl: Option<String> =
-                deadpool_redis::redis::Cmd::hget(format!("DID:{}", did_hash), "ACLS")
+                deadpool_redis::redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
                     .query_async(&mut con)
                     .await
                     .map_err(|err| {
                         MediatorError::DatabaseError(
                             14,
                             "NA".to_string(),
-                            format!("get_did_acls failed. Reason: {}", err),
+                            format!("get_did_acls failed. Reason: {err}"),
                         )
                     })?;
 
@@ -109,14 +109,14 @@ impl Database {
             query.atomic();
 
             for did in dids {
-                query.add_command(Cmd::hget(format!("DID:{}", did), "ACLS"));
+                query.add_command(Cmd::hget(format!("DID:{did}"), "ACLS"));
             }
 
             let result: Vec<Value> = query.query_async(&mut con).await.map_err(|err| {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("get_did_acls failed. Reason: {}", err),
+                    format!("get_did_acls failed. Reason: {err}"),
                 )
             })?;
 
@@ -168,7 +168,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("access_list_allowed failed. Reason: {}", err),
+                        format!("access_list_allowed failed. Reason: {err}"),
                     )
                 }) {
                 Ok(result) => result,
@@ -244,7 +244,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("access_list_list failed. Reason: {}", err),
+                        format!("access_list_list failed. Reason: {err}"),
                     )
                 })?;
 
@@ -276,7 +276,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("access_list_count failed. Reason: {}", err),
+                        format!("access_list_count failed. Reason: {err}"),
                     )
                 })
         }
@@ -327,7 +327,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("access_list_add failed. Reason: {}", err),
+                    format!("access_list_add failed. Reason: {err}"),
                 )
             })?;
 
@@ -372,7 +372,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("access_list_remove failed. Reason: {}", err),
+                    format!("access_list_remove failed. Reason: {err}"),
                 )
             })
         }
@@ -399,7 +399,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("access_list_clear failed. Reason: {}", err),
+                        format!("access_list_clear failed. Reason: {err}"),
                     )
                 })
         }
@@ -439,7 +439,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("access_list_get failed. Reason: {}", err),
+                    format!("access_list_get failed. Reason: {err}"),
                 )
             })?;
 

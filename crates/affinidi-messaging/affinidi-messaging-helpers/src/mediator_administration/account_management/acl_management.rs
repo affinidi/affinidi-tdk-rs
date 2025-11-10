@@ -229,7 +229,7 @@ async fn _modify_acl_flags(
         .await
     {
         Ok(_) => println!("{}", style("ACLs updated").green()),
-        Err(e) => println!("{}", style(format!("Error updating ACLs: {}", e)).red()),
+        Err(e) => println!("{}", style(format!("Error updating ACLs: {e}")).red()),
     }
 
     Ok(new_acls)

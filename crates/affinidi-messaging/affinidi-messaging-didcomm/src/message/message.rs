@@ -97,7 +97,7 @@ impl Message {
         if self.typ != PLAINTEXT_TYP {
             Err(err_msg(
                 ErrorKind::Malformed,
-                format!("`typ` must be \"{}\"", PLAINTEXT_TYP),
+                format!("`typ` must be \"{PLAINTEXT_TYP}\""),
             ))?;
         }
         Ok(self)

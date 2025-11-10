@@ -22,7 +22,7 @@ impl Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SessionError::SessionError(message) => {
-                write!(f, "Error: {}", message)
+                write!(f, "Error: {message}")
             }
         }
     }

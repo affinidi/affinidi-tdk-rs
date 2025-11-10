@@ -21,7 +21,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     13,
                     "NA".into(),
-                    format!("Couldn't set database SCHEMA_VERSION: {}", e),
+                    format!("Couldn't set database SCHEMA_VERSION: {e}"),
                 )
             })
     }

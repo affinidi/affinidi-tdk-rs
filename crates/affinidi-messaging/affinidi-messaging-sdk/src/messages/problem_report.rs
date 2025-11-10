@@ -57,7 +57,7 @@ impl fmt::Display for ProblemReportScope {
         match *self {
             ProblemReportScope::Protocol => write!(f, "p"),
             ProblemReportScope::Message => write!(f, "m"),
-            ProblemReportScope::Other(ref s) => write!(f, "{}", s),
+            ProblemReportScope::Other(ref s) => write!(f, "{s}"),
         }
     }
 }
@@ -82,7 +82,7 @@ impl ProblemReport {
         escalate_to: Option<String>,
     ) -> Self {
         ProblemReport {
-            code: format!("{}.{}.{}", sorter, scope, descriptor),
+            code: format!("{sorter}.{scope}.{descriptor}"),
             comment,
             args,
             escalate_to,

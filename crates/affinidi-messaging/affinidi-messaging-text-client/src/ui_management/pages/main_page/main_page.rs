@@ -408,7 +408,7 @@ impl ComponentRender<()> for MainPage {
         }
         if let Some(our_name) = &self.props.our_name {
             Paragraph::new(Span::styled(
-                format!(" {} ", our_name),
+                format!(" {our_name} "),
                 Style::default().bg(Color::Green).fg(Color::Black).bold(),
             ))
             .alignment(Alignment::Right)

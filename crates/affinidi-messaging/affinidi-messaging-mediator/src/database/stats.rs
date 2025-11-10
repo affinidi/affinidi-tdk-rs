@@ -93,7 +93,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".into(),
-                    format!("Couldn't get shared METADATA from database: {}", err),
+                    format!("Couldn't get shared METADATA from database: {err}"),
                 )
             })?;
 
@@ -101,7 +101,7 @@ impl Database {
             MediatorError::DatabaseError(
                 21,
                 "NA".into(),
-                format!("Couldn't parse GLOBAL metadata from database: {}", e),
+                format!("Couldn't parse GLOBAL metadata from database: {e}"),
             )
         })?;
         debug!("Stats: {:?}", result);
@@ -146,7 +146,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!("Couldn't update GLOBAL SEND stats. Reason: {}", err),
+                    format!("Couldn't update GLOBAL SEND stats. Reason: {err}"),
                 )
             })?;
 
@@ -167,10 +167,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!(
-                        "Couldn't update GLOBAL(WEBSOCKET_OPEN) stats. Reason: {}",
-                        err
-                    ),
+                    format!("Couldn't update GLOBAL(WEBSOCKET_OPEN) stats. Reason: {err}"),
                 )
             })?;
 
@@ -191,10 +188,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!(
-                        "Couldn't update GLOBAL(WEBSOCKET_CLOSE) stats. Reason: {}",
-                        err
-                    ),
+                    format!("Couldn't update GLOBAL(WEBSOCKET_CLOSE) stats. Reason: {err}"),
                 )
             })?;
 
@@ -213,7 +207,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "INTERNAL".into(),
-                    format!("Couldn't retrieve forward_tasks length. Reason: {}", err),
+                    format!("Couldn't retrieve forward_tasks length. Reason: {err}"),
                 )
             })?;
 

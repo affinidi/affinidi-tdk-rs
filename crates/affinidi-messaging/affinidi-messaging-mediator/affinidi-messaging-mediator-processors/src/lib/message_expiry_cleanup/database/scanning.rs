@@ -34,8 +34,7 @@ impl MessageExpiryCleanupProcessor {
             .await
             .map_err(|err| {
                 ProcessorError::MessageExpiryCleanupError(format!(
-                    "timeslot_scan failed. Reason: {}",
-                    err
+                    "timeslot_scan failed. Reason: {err}"
                 ))
             })
     }
@@ -65,8 +64,7 @@ impl MessageExpiryCleanupProcessor {
                 .await
                 .map_err(|err| {
                     ProcessorError::MessageExpiryCleanupError(format!(
-                        "SPOP {} failed. Reason: {}",
-                        key, err
+                        "SPOP {key} failed. Reason: {err}"
                     ))
                 })?;
 
@@ -88,8 +86,7 @@ impl MessageExpiryCleanupProcessor {
                     .await
                     .map_err(|err| {
                         ProcessorError::MessageExpiryCleanupError(format!(
-                            "ZREM MSG_EXPIRY {} failed. Reason: {}",
-                            key, err
+                            "ZREM MSG_EXPIRY {key} failed. Reason: {err}"
                         ))
                     })?;
                 break;

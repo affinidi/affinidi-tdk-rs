@@ -177,8 +177,7 @@ where
             return Err(err_msg(
                 ErrorKind::Malformed,
                 format!(
-                    "decrypted envelope successfully, but payload contents don't match a defined DIDComm format: {}",
-                    e
+                    "decrypted envelope successfully, but payload contents don't match a defined DIDComm format: {e}"
                 ),
             ));
         }

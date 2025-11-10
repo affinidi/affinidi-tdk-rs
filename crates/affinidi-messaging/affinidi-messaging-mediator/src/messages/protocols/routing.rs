@@ -99,7 +99,7 @@ pub(crate) async fn process(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't parse forwarding message body. Reason: {}", e),
+                    format!("Couldn't parse forwarding message body. Reason: {e}"),
                 ));
             }
         };
@@ -133,7 +133,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         )
                     })?
             }
@@ -151,7 +151,7 @@ pub(crate) async fn process(
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Database transaction error: {}", e),
+                    format!("Database transaction error: {e}"),
                 ));
             }
         };
@@ -232,7 +232,7 @@ pub(crate) async fn process(
                             None,
                         )),
                         StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                        format!("Database transaction error: {}", e),
+                        format!("Database transaction error: {e}"),
                     ));
                 }
             };
@@ -488,7 +488,7 @@ pub(crate) async fn process(
                                     None,
                                 )),
                                 StatusCode::BAD_REQUEST.as_u16(),
-                                format!("Couldn't parse base64 attachment. Error: {}", e),
+                                format!("Couldn't parse base64 attachment. Error: {e}"),
                             ));
                         }
                     },
@@ -506,7 +506,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::BAD_REQUEST.as_u16(),
-                            format!("Couldn't decode base64 attachment. Error: {}", e),
+                            format!("Couldn't decode base64 attachment. Error: {e}"),
                         ));
                     }
                 }
@@ -613,7 +613,7 @@ pub(crate) async fn process(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't read DIDComm envelope: {}", e),
+                    format!("Couldn't read DIDComm envelope: {e}"),
                 ));
             }
         };

@@ -109,6 +109,7 @@ where
         let mut encrypted_keys: Vec<(&str, String)> = Vec::with_capacity(recipients.len());
 
         for (kid, key) in recipients {
+            #[allow(deprecated)]
             let kw = KDF::derive_key(
                 &epk,
                 skey,

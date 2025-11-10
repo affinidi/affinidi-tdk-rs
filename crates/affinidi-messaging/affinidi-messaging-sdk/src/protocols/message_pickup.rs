@@ -130,7 +130,7 @@ impl MessagePickup {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm
                 .send_message(profile, &msg, &msg_id, wait_for_response, false)
@@ -158,7 +158,7 @@ impl MessagePickup {
     ) -> Result<Option<MessagePickupStatusReply>, ATMError> {
         let status: MessagePickupStatusReply = serde_json::from_value(message.body.clone())
             .map_err(|err| {
-                ATMError::MsgReceiveError(format!("Error reading status response: {}", err))
+                ATMError::MsgReceiveError(format!("Error reading status response: {err}"))
             })?;
         Ok(Some(status))
     }
@@ -205,7 +205,7 @@ impl MessagePickup {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             atm.send_message(profile, &msg, &msg_id, false, false)
                 .await?;
@@ -255,8 +255,7 @@ impl MessagePickup {
                 .await
                 .map_err(|err| {
                     ATMError::TransportError(format!(
-                        "Could not send Next command to websocket: {:?}",
-                        err
+                        "Could not send Next command to websocket: {err:?}"
                     ))
                 })?;
             debug!("sent next request to websocket");
@@ -269,8 +268,7 @@ impl MessagePickup {
                     debug!("Timeout reached, no message received");
                     ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
                         ATMError::TransportError(format!(
-                            "Could not send CancelNext command to websocket: {:?}",
-                            err
+                            "Could not send CancelNext command to websocket: {err:?}"
                         ))
                     })?;
                     Ok(None)
@@ -287,8 +285,7 @@ impl MessagePickup {
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
                             Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving message: {:?}",
-                                e
+                                "Error receiving message: {e:?}"
                             )))
                         }
                     }
@@ -338,8 +335,7 @@ impl MessagePickup {
             // Send the get request to the ws_handler
             ws_channel.send(WebSocketCommands::GetMessage(msg_id.to_string(), tx)).await.map_err(|err| {
                 ATMError::TransportError(format!(
-                    "Could not send GetMessage({}) Command to websocket: {:?}", msg_id,
-                    err
+                    "Could not send GetMessage({msg_id}) Command to websocket: {err:?}"
                 ))
             })?;
             debug!("sent get request to ws_handler");
@@ -353,8 +349,7 @@ impl MessagePickup {
                     debug!("Timeout reached, no message received");
                     ws_channel.send(WebSocketCommands::CancelGetMessage(msg_id.to_string())).await.map_err(|err| {
                         ATMError::TransportError(format!(
-                            "Could not send CancelGetMessage command to websocket: {:?}",
-                            err
+                            "Could not send CancelGetMessage command to websocket: {err:?}"
                         ))
                     })?;
                     Ok(None)
@@ -371,8 +366,7 @@ impl MessagePickup {
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
                             Err(ATMError::MsgReceiveError(format!(
-                                "Error receiving message: {:?}",
-                                e
+                                "Error receiving message: {e:?}"
                             )))
                         }
                     }
@@ -440,7 +434,7 @@ impl MessagePickup {
                         &PackEncryptedOptions::default(),
                     )
                     .await
-                    .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                    .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
                 msg
             };
@@ -569,7 +563,7 @@ impl MessagePickup {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm
                 .send_message(profile, &msg, &msg_id, wait_for_response, false)
@@ -584,8 +578,7 @@ impl MessagePickup {
                 }
                 Ok(SendMessageResponse::EmptyResponse) => Ok(None),
                 Err(err) => Err(ATMError::MsgReceiveError(format!(
-                    "Invalid response from API: {}",
-                    err
+                    "Invalid response from API: {err}"
                 ))),
                 _ => Err(ATMError::MsgReceiveError(
                     "Wrong type received from API".into(),

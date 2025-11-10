@@ -11,8 +11,7 @@ use keyring::Entry;
 fn entry(service_id: &str, did: &str) -> Result<Entry, TDKError> {
     Entry::new(service_id, did).map_err(|e| {
         TDKError::Secrets(format!(
-            "Failed to generate entry for service_id: {}, did: {}. Error: {}",
-            service_id, did, e,
+            "Failed to generate entry for service_id: {service_id}, did: {did}. Error: {e}",
         ))
     })
 }
@@ -43,8 +42,7 @@ pub fn save_secrets_locally(
         )
         .map_err(|e| {
             TDKError::Secrets(format!(
-                "Failed to save secrets for service_id: {}, did: {}. Error: {}",
-                service_id, did, e,
+                "Failed to save secrets for service_id: {service_id}, did: {did}. Error: {e}",
             ))
         })?;
     Ok(())
@@ -57,8 +55,7 @@ impl TDKSharedState {
         let entry = entry(service_id, did)?;
         let secret = entry.get_secret().map_err(|e| {
             TDKError::Secrets(format!(
-                "Failed to load secrets for service_id: {}, did: {}. Error: {}",
-                service_id, did, e,
+                "Failed to load secrets for service_id: {service_id}, did: {did}. Error: {e}",
             ))
         })?;
         let secrets: Vec<Secret> = serde_json::from_slice(
@@ -66,16 +63,14 @@ impl TDKSharedState {
                 .decode(secret)
                 .map_err(|e| {
                     TDKError::Secrets(format!(
-                        "Failed to decode secrets for service_id: {}, did: {}. Error: {}",
-                        service_id, did, e,
+                        "Failed to decode secrets for service_id: {service_id}, did: {did}. Error: {e}",
                     ))
                 })?
                 .as_slice(),
         )
         .map_err(|e| {
             TDKError::Secrets(format!(
-                "Failed to parse secrets for service_id: {}, did: {}. Error: {}",
-                service_id, did, e,
+                "Failed to parse secrets for service_id: {service_id}, did: {did}. Error: {e}",
             ))
         })?;
 
