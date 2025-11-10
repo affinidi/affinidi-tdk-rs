@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", style("Generating new DID info...").yellow(),);
     let (old_did, secrets_json) = generate_secrets_and_did()?;
-    let mut well_known_did_part = if api_prefix.len() > 0 {
+    let mut well_known_did_part = if api_prefix.is_empty() {
         format!("{}{}", api_prefix, "/.well-known")
     } else {
         String::from("")
