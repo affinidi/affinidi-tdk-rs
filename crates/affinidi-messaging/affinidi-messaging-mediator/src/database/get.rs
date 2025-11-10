@@ -37,7 +37,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("Couldn't get message_id({}) from database: {}", msg_id, err),
+                        format!("Couldn't get message_id({msg_id}) from database: {err}"),
                     )
                 })?;
 
@@ -49,7 +49,7 @@ impl Database {
                     MediatorError::InternalError(
                         17,
                         did_hash.into(),
-                        format!("Couldn't convert didcomm_message to string: {}", e),
+                        format!("Couldn't convert didcomm_message to string: {e}"),
                     )
                 })?,
             };

@@ -308,7 +308,7 @@ async fn _package_problem_report(
             MediatorError::MessagePackError(
                 47,
                 session.session_id.clone(),
-                format!("Couldn't pack DIDComm message. Reason: {}", err),
+                format!("Couldn't pack DIDComm message. Reason: {err}"),
             )
         })?;
 

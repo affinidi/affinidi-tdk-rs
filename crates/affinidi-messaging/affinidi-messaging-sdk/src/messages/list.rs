@@ -48,8 +48,7 @@ impl ATM {
                 .await
                 .map_err(|e| {
                     ATMError::TransportError(format!(
-                        "Could not send list_messages request: {:?}",
-                        e
+                        "Could not send list_messages request: {e:?}"
                     ))
                 })?;
 
@@ -59,12 +58,11 @@ impl ATM {
             let body = res
                 .text()
                 .await
-                .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+                .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
             if !status.is_success() {
                 return Err(ATMError::TransportError(format!(
-                    "Status not successful. status({}), response({})",
-                    status, body
+                    "Status not successful. status({status}), response({body})"
                 )));
             }
 

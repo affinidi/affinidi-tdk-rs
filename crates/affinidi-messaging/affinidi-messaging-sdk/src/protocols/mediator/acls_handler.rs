@@ -104,8 +104,7 @@ impl Mediator {
     ) -> Result<MediatorACLGetResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator ACL get response could not be parsed. Reason: {}",
-                err
+                "Mediator ACL get response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -153,7 +152,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => self._parse_acls_get_response(&message),
@@ -213,7 +212,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => self._parse_acls_set_response(&message),
@@ -233,8 +232,7 @@ impl Mediator {
     ) -> Result<MediatorACLSetResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator ACL set response could not be parsed. Reason: {}",
-                err
+                "Mediator ACL set response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -298,7 +296,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -320,8 +318,7 @@ impl Mediator {
     ) -> Result<MediatorAccessListListResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Access List List could not be parsed. Reason: {}",
-                err
+                "Mediator Access List List could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -395,7 +392,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -417,8 +414,7 @@ impl Mediator {
     ) -> Result<MediatorAccessListAddResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Access List Add could not be parsed. Reason: {}",
-                err
+                "Mediator Access List Add could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -494,7 +490,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -513,8 +509,7 @@ impl Mediator {
     fn _parse_access_list_remove_response(&self, message: &Message) -> Result<usize, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Access List Remove could not be parsed. Reason: {}",
-                err
+                "Mediator Access List Remove could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -571,7 +566,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -590,8 +585,7 @@ impl Mediator {
     fn _parse_access_list_clear_response(&self, message: &Message) -> Result<(), ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Access List Clear could not be parsed. Reason: {}",
-                err
+                "Mediator Access List Clear could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -667,7 +661,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -689,8 +683,7 @@ impl Mediator {
     ) -> Result<MediatorAccessListGetResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Access List Get could not be parsed. Reason: {}",
-                err
+                "Mediator Access List Get could not be parsed. Reason: {err}"
             ))
         })
     }

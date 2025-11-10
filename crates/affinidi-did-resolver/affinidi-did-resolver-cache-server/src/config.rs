@@ -127,7 +127,7 @@ fn read_config_file(file_name: &str) -> Result<ConfigRaw, CacheError> {
             );
             Err(CacheError::ConfigError(
                 "NA".into(),
-                format!("Could not parse configuration settings. Reason: {:?}", err),
+                format!("Could not parse configuration settings. Reason: {err:?}"),
             ))
         }
     }

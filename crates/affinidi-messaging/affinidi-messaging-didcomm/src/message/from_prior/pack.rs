@@ -48,7 +48,7 @@ impl FromPrior {
             Err(err) => {
                 return Err(err_msg(
                     ErrorKind::DIDNotResolved,
-                    format!("from_prior issuer DIDDoc is not found. Reason: {}", err),
+                    format!("from_prior issuer DIDDoc is not found. Reason: {err}"),
                 ));
             }
         };

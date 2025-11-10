@@ -470,8 +470,7 @@ impl WebSocketTransport {
             Err(err) => {
                 warn!("WebSocket failed. Reason: {}", err);
                 return Err(ATMError::TransportError(format!(
-                    "Websocket connection failed: {}",
-                    err
+                    "Websocket connection failed: {err}"
                 )));
             }
         };

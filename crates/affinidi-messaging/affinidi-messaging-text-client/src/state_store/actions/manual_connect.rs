@@ -62,7 +62,7 @@ pub async fn manual_connect_setup(
         }
         Err(e) => {
             warn!("Failed to get profile info from mediator: {}", e);
-            return Err(anyhow!("Failed to get profile info from mediator: {}", e));
+            return Err(anyhow!("Failed to get profile info from mediator: {e}"));
         }
     };
 
@@ -81,9 +81,7 @@ pub async fn manual_connect_setup(
                     remote_did, e
                 );
                 return Err(anyhow!(
-                    "Failed to add {} to ACL of our secure profile: {}",
-                    remote_did,
-                    e
+                    "Failed to add {remote_did} to ACL of our secure profile: {e}"
                 ));
             }
         }

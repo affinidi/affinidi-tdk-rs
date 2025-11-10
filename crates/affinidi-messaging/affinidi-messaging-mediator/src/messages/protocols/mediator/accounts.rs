@@ -148,7 +148,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -195,7 +195,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -259,7 +259,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -347,7 +347,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -471,7 +471,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -562,7 +562,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }

@@ -59,7 +59,7 @@ impl Message {
             Err(e) => {
                 return Err(err_msg(
                     ErrorKind::DIDNotResolved,
-                    format!("Couldn't resolve ({}). Reason: {}", did, e),
+                    format!("Couldn't resolve ({did}). Reason: {e}"),
                 ));
             }
         };

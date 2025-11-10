@@ -74,7 +74,7 @@ impl DatabaseHandler {
                         None,
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Database config is invalid. Reason: {}", err),
+                    format!("Database config is invalid. Reason: {err}"),
                 )
             })?;
 
@@ -142,7 +142,7 @@ impl DatabaseHandler {
                     None,
                 )),
                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                format!("Can't get database connection. Reason: {}", err),
+                format!("Can't get database connection. Reason: {err}"),
             )
         })
     }
@@ -164,7 +164,7 @@ impl DatabaseHandler {
                     None,
                 )),
                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                format!("Can't open database connection for pubsub. Reason: {}", err),
+                format!("Can't open database connection for pubsub. Reason: {err}"),
             )
         })?;
 
@@ -182,7 +182,7 @@ impl DatabaseHandler {
                     None,
                 )),
                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                format!("Can't get pubsub receiver. Reason: {}", err),
+                format!("Can't get pubsub receiver. Reason: {err}"),
             )
         })
     }
@@ -191,7 +191,7 @@ impl DatabaseHandler {
     async fn check_server_version(&self) -> Result<String, MediatorError> {
         let redis_version_req: VersionReq = match VersionReq::parse(REDIS_VERSION_REQ) {
             Ok(result) => result,
-            Err(err) => panic!("Couldn't process required Redis version. Reason: {}", err),
+            Err(err) => panic!("Couldn't process required Redis version. Reason: {err}"),
         };
 
         let mut conn = self.get_async_connection().await?;
@@ -215,7 +215,7 @@ impl DatabaseHandler {
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Couldn't query database information. Reason: {}", err),
+                    format!("Couldn't query database information. Reason: {err}"),
                 ));
             }
         };
@@ -254,8 +254,7 @@ impl DatabaseHandler {
                         )),
                         StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                         format!(
-                            "Cannot parse database version ({}). Reason: {}",
-                            version, err
+                            "Cannot parse database version ({version}). Reason: {err}"
                         ),
                     ));
                 }
@@ -278,8 +277,7 @@ impl DatabaseHandler {
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     format!(
-                        "Database version {} does not match expected {}",
-                        version, redis_version_req
+                        "Database version {version} does not match expected {redis_version_req}"
                     ),
                 ))
             }

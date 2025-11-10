@@ -29,8 +29,8 @@ impl Database {
             let mut conn = self.0.get_async_connection().await?;
 
             let key = match folder {
-                Folder::Inbox => format!("RECEIVE_Q:{}", did_hash),
-                Folder::Outbox => format!("SEND_Q:{}", did_hash),
+                Folder::Inbox => format!("RECEIVE_Q:{did_hash}"),
+                Folder::Outbox => format!("SEND_Q:{did_hash}"),
             };
 
             let (start, end) = if let Some((start, end)) = range {
@@ -59,8 +59,7 @@ impl Database {
                         14,
                         did_hash.into(),
                         format!(
-                            "Couldn't get message_list({}) from database for DID_hash {}: {}",
-                            key, did_hash, err
+                            "Couldn't get message_list({key}) from database for DID_hash {did_hash}: {err}"
                         ),
                     )
                 })?;
@@ -89,8 +88,7 @@ impl Database {
                     26,
                     "NA".into(),
                     format!(
-                        "Couldn't parse message_list did({}) folder({}): {}",
-                        did, key, e
+                        "Couldn't parse message_list did({did}) folder({key}): {e}"
                     ),
                 )
             }

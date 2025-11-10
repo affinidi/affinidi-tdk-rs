@@ -87,7 +87,7 @@ impl Routing {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             Ok((id, msg))
         }

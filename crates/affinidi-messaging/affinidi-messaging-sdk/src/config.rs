@@ -109,8 +109,7 @@ impl ATMConfigBuilder {
         for cert in &self.ssl_certificates {
             let file = File::open(cert).map_err(|e| {
                 ATMError::SSLError(format!(
-                    "Couldn't open SSL certificate file ({})! Reason: {}",
-                    cert, e
+                    "Couldn't open SSL certificate file ({cert})! Reason: {e}"
                 ))
             })?;
             let mut reader = BufReader::new(file);

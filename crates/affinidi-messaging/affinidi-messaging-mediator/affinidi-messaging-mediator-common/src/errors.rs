@@ -167,7 +167,7 @@ impl IntoResponse for AppError {
                     sessionId: session_id.to_string(),
                     errorCode: error_code,
                     errorCodeStr: "BadRequest: RequestDataError".to_string(),
-                    message: format!("Bad Request: ({})", msg),
+                    message: format!("Bad Request: ({msg})"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
@@ -189,7 +189,7 @@ impl IntoResponse for AppError {
                     sessionId: session_id.to_string(),
                     errorCode: error_code,
                     errorCodeStr: "Unauthorized".to_string(),
-                    message: format!("Unauthorized access: {}", msg),
+                    message: format!("Unauthorized access: {msg}"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
@@ -200,7 +200,7 @@ impl IntoResponse for AppError {
                     sessionId: session_id.to_string(),
                     errorCode: error_code,
                     errorCodeStr: "DIDError".to_string(),
-                    message: format!("did({}) Error: {}", did, msg),
+                    message: format!("did({did}) Error: {msg}"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
@@ -244,7 +244,7 @@ impl IntoResponse for AppError {
                     sessionId: session_id.to_string(),
                     errorCode: error_code,
                     errorCodeStr: "MessageExpired".to_string(),
-                    message: format!("Message expired: expiry({}) now({})", expired, now),
+                    message: format!("Message expired: expiry({expired}) now({now})"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response
@@ -332,7 +332,7 @@ impl IntoResponse for AppError {
                     sessionId: "NO-SESSION".to_string(),
                     errorCode: error_code,
                     errorCodeStr: "ACLDenied".to_string(),
-                    message: format!("Processor ({}): {}", processor, message),
+                    message: format!("Processor ({processor}): {message}"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response

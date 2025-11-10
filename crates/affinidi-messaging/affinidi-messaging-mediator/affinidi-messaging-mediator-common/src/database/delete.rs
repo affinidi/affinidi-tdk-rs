@@ -55,8 +55,7 @@ impl DatabaseHandler {
                         )),
                         StatusCode::SERVICE_UNAVAILABLE.as_u16(),
                         format!(
-                            "Couldn't delete message_hash ({}). Reason: {}",
-                            message_hash, err
+                            "Couldn't delete message_hash ({message_hash}). Reason: {err}"
                         ),
                     )
                 })?;
@@ -64,7 +63,7 @@ impl DatabaseHandler {
             debug!(
                 "{}did_hash({}) message_id({}). database response: ({})",
                 if let Some(session_id) = session_id {
-                    format!("{}: ", session_id)
+                    format!("{session_id}: ")
                 } else {
                     "".to_string()
                 },
@@ -89,8 +88,7 @@ impl DatabaseHandler {
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
                     format!(
-                        "delete function returned not being OK. Status: {}",
-                        response
+                        "delete function returned not being OK. Status: {response}"
                     ),
                 ))
             } else {

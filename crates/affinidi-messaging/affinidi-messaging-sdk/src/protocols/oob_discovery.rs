@@ -71,7 +71,7 @@ impl OOBDiscovery {
 
         let msg = msg.finalize();
         let msg = serde_json::to_string(&msg).map_err(|e| {
-            ATMError::SDKError(format!("Could not serialize Invitation message: {:?}", e))
+            ATMError::SDKError(format!("Could not serialize Invitation message: {e:?}"))
         })?;
 
         let Some(mediator_url) = profile.get_mediator_rest_endpoint() else {
@@ -92,7 +92,7 @@ impl OOBDiscovery {
             .send()
             .await
             .map_err(|e| {
-                ATMError::TransportError(format!("Could not send OOB Invitation request: {:?}", e))
+                ATMError::TransportError(format!("Could not send OOB Invitation request: {e:?}"))
             })?;
 
         let status = res.status();
@@ -101,12 +101,11 @@ impl OOBDiscovery {
         let body = res
             .text()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
         if !status.is_success() {
             return Err(ATMError::TransportError(format!(
-                "Status not successful. status({}), response({})",
-                status, body
+                "Status not successful. status({status}), response({body})"
             )));
         }
 
@@ -137,7 +136,7 @@ impl OOBDiscovery {
             .send()
             .await
             .map_err(|e| {
-                ATMError::TransportError(format!("Could not send OOB Invitation request: {:?}", e))
+                ATMError::TransportError(format!("Could not send OOB Invitation request: {e:?}"))
             })?;
 
         let status = res.status();
@@ -146,12 +145,11 @@ impl OOBDiscovery {
         let body = res
             .text()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
         if !status.is_success() {
             return Err(ATMError::TransportError(format!(
-                "Status not successful. status({}), response({})",
-                status, body
+                "Status not successful. status({status}), response({body})"
             )));
         }
 
@@ -220,15 +218,14 @@ impl OOBDiscovery {
             .inner
             .tdk_common
             .client
-            .delete(format!("{}/oob?_oobid={}", mediator_url, oobid))
+            .delete(format!("{mediator_url}/oob?_oobid={oobid}"))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .send()
             .await
             .map_err(|e| {
                 ATMError::TransportError(format!(
-                    "Could not delete OOB Invitation request: {:?}",
-                    e
+                    "Could not delete OOB Invitation request: {e:?}"
                 ))
             })?;
 
@@ -238,12 +235,11 @@ impl OOBDiscovery {
         let body = res
             .text()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
         if !status.is_success() {
             return Err(ATMError::TransportError(format!(
-                "Status not successful. status({}), response({})",
-                status, body
+                "Status not successful. status({status}), response({body})"
             )));
         }
 

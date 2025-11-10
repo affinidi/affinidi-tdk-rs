@@ -105,7 +105,7 @@ pub async fn oob_invite_handler(
                     None,
                 )),
                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                format!("Database transaction error: {}", text),
+                format!("Database transaction error: {text}"),
             )
             .into());
         }
@@ -123,7 +123,7 @@ pub async fn oob_invite_handler(
                     None,
                 )),
                 StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                format!("Couldn't store OOB invite. Reason: {}", e),
+                format!("Couldn't store OOB invite. Reason: {e}"),
             )
             .into());
         }
@@ -201,7 +201,7 @@ pub async fn delete_oobid_handler(
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Database transaction error: {}", e),
+                    format!("Database transaction error: {e}"),
                 )
             })? {
             Some((_, oob_owner)) => oob_owner,

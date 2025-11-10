@@ -80,7 +80,7 @@ impl IntoResponse for AppError {
                     sessionId: session_id.to_string(),
                     errorCode: 8,
                     errorCodeStr: "DIDError".to_string(),
-                    message: format!("did({}) Error: {}", did, msg),
+                    message: format!("did({did}) Error: {msg}"),
                 };
                 event!(Level::WARN, "{}", response.to_string());
                 response

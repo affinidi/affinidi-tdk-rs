@@ -27,8 +27,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "redis function clean_start_streaming() failed. Reason: {}",
-                        err
+                        "redis function clean_start_streaming() failed. Reason: {err}"
                     ),
                 )
             })?;
@@ -50,8 +49,7 @@ impl Database {
                 23,
                 "NA".into(),
                 format!(
-                    "redis fn clean_start_streaming() failed. Response ({:?})",
-                    response
+                    "redis fn clean_start_streaming() failed. Response ({response:?})"
                 ),
             ))
         }
@@ -148,8 +146,7 @@ impl Database {
                     24,
                     "NA".into(),
                     format!(
-                        "publish_live_message() for did_hash({}) failed to serialize message. Reason: {}",
-                        did_hash, err
+                        "publish_live_message() for did_hash({did_hash}) failed to serialize message. Reason: {err}"
                     ),
                 ));
             }
@@ -182,8 +179,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "publish_live_message() for did_hash({}) channel(CHANNEL:{}) failed. Reason: {}",
-                        did_hash, stream_uuid, err
+                        "publish_live_message() for did_hash({did_hash}) channel(CHANNEL:{stream_uuid}) failed. Reason: {err}"
                     ),
                 ))
             }
@@ -227,8 +223,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "streaming_register_client() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
-                        did_hash, stream_uuid, err
+                        "streaming_register_client() for did_hash({did_hash}) stream_uuid(STREAMING_SESSIONS:{stream_uuid}) failed. Reason: {err}"
                     ),
                 ))
             }
@@ -270,8 +265,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "streaming_start_live() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
-                        did_hash, stream_uuid, err
+                        "streaming_start_live() for did_hash({did_hash}) stream_uuid(STREAMING_SESSIONS:{stream_uuid}) failed. Reason: {err}"
                     ),
                 ))
             }
@@ -313,8 +307,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "streaming_stop_live() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
-                        did_hash, stream_uuid, err
+                        "streaming_stop_live() for did_hash({did_hash}) stream_uuid(STREAMING_SESSIONS:{stream_uuid}) failed. Reason: {err}"
                     ),
                 ))
             }
@@ -357,8 +350,7 @@ impl Database {
                     14,
                     "NA".into(),
                     format!(
-                        "streaming_deregister_client() for did_hash({}) stream_uuid(STREAMING_SESSIONS:{}) failed. Reason: {}",
-                        did_hash, stream_uuid, err
+                        "streaming_deregister_client() for did_hash({did_hash}) stream_uuid(STREAMING_SESSIONS:{stream_uuid}) failed. Reason: {err}"
                     ),
                 ))
             }

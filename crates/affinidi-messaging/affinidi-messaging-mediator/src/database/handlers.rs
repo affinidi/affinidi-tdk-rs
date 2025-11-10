@@ -12,8 +12,7 @@ impl Database {
                 2,
                 "Initialization".into(),
                 format!(
-                    "Couldn't ready database functions_file ({}). Reason: {}",
-                    scripts_path, err
+                    "Couldn't ready database functions_file ({scripts_path}). Reason: {err}"
                 ),
             )
         })?;
@@ -43,7 +42,7 @@ impl Database {
                 Err(MediatorError::DatabaseError(
                     14,
                     "Initialization".into(),
-                    format!("Loading LUA scripts, received database error: {}", err),
+                    format!("Loading LUA scripts, received database error: {err}"),
                 ))
             }
         }

@@ -86,13 +86,13 @@ where
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| MeetingPlaceError::API(format!("HTTP POST failed ({}): {:?}", url, e)))?;
+        .map_err(|e| MeetingPlaceError::API(format!("HTTP POST failed ({url}): {e:?}")))?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| MeetingPlaceError::API(format!("Couldn't get HTTP body: {:?}", e)))?;
+        .map_err(|e| MeetingPlaceError::API(format!("Couldn't get HTTP body: {e:?}")))?;
 
     debug!(
         "status: {} response_body: {}",
@@ -105,14 +105,13 @@ where
             ));
         } else {
             return Err(MeetingPlaceError::API(format!(
-                "Failed to get authentication response. url: {}, status: {}",
-                url, response_status
+                "Failed to get authentication response. url: {url}, status: {response_status}"
             )));
         }
     }
 
     serde_json::from_str::<T>(&response_body).map_err(|e| {
-        MeetingPlaceError::API(format!("Couldn't deserialize API body response: {}", e))
+        MeetingPlaceError::API(format!("Couldn't deserialize API body response: {e}"))
     })
 }
 

@@ -92,8 +92,7 @@ where
                 err_msg(
                     ErrorKind::Malformed,
                     format!(
-                        "No verification material found for sender key agreement {}",
-                        kid
+                        "No verification material found for sender key agreement {kid}"
                     ),
                 )
             })
@@ -131,8 +130,7 @@ where
                 err_msg(
                     ErrorKind::Malformed,
                     format!(
-                        "No verification material found for recipient key agreement {}",
-                        kid
+                        "No verification material found for recipient key agreement {kid}"
                     ),
                 )
             })

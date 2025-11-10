@@ -76,8 +76,7 @@ impl TDKEnvironments {
             Ok(environment.clone())
         } else {
             Err(TDKError::Profile(format!(
-                "Couldn't find environment ({})!",
-                environment_name
+                "Couldn't find environment ({environment_name})!"
             )))
         }
     }
@@ -88,12 +87,12 @@ impl TDKEnvironments {
             Ok(exists) => {
                 if exists {
                     let file = File::open(path).map_err(|err| {
-                        TDKError::Profile(format!("Couldn't open file ({}): {}", path, err))
+                        TDKError::Profile(format!("Couldn't open file ({path}): {err}"))
                     })?;
                     let reader = BufReader::new(file);
                     let mut profiles: TDKEnvironments =
                         serde_json::from_reader(reader).map_err(|err| {
-                            TDKError::Profile(format!("Couldn't deserialize JSON: {}", err))
+                            TDKError::Profile(format!("Couldn't deserialize JSON: {err}"))
                         })?;
                     profiles.file_name = Some(path.to_string());
                     Ok(profiles)
@@ -105,8 +104,7 @@ impl TDKEnvironments {
                 }
             }
             Err(err) => Err(crate::errors::TDKError::Profile(format!(
-                "Profiles file ({}) doesn't exist: {}",
-                path, err
+                "Profiles file ({path}) doesn't exist: {err}"
             ))),
         }
     }
@@ -119,17 +117,16 @@ impl TDKEnvironments {
         };
 
         let contents = serde_json::to_string_pretty(self).map_err(|err| {
-            TDKError::Profile(format!("Couldn't serialize TDK Environments: {}", err))
+            TDKError::Profile(format!("Couldn't serialize TDK Environments: {err}"))
         })?;
 
         let mut f = File::create(file_name).map_err(|err| {
-            TDKError::Profile(format!("Couldn't create file ({}): {}", file_name, err))
+            TDKError::Profile(format!("Couldn't create file ({file_name}): {err}"))
         })?;
 
         f.write_all(contents.as_bytes()).map_err(|err| {
             TDKError::Profile(format!(
-                "Couldn't write TDK Environments to file ({}): {}",
-                file_name, err
+                "Couldn't write TDK Environments to file ({file_name}): {err}"
             ))
         })?;
         Ok(())

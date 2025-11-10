@@ -145,7 +145,7 @@ impl MessageType {
                         None,
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Feature is not implemented by the mediator: Message type ({}) is not supported to the Mediator", type_)
+                    format!("Feature is not implemented by the mediator: Message type ({type_}) is not supported to the Mediator")
                         ,
                 )),
         }
@@ -299,7 +299,7 @@ impl MessageHandler for Message {
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!("DID ({}) couldn't be resolved: {}", to_did, e),
+                format!("DID ({to_did}) couldn't be resolved: {e}"),
             )
         })?;
 
@@ -372,7 +372,7 @@ impl MessageHandler for Message {
                             None,
                         )),
                         StatusCode::BAD_REQUEST.as_u16(),
-                        format!("Couldn't pack DIDComm message: {}", e),
+                        format!("Couldn't pack DIDComm message: {e}"),
                     ));
                 }
             };

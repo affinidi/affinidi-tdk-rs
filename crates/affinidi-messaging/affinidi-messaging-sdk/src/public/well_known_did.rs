@@ -27,15 +27,14 @@ impl ATM {
                 .await
                 .map_err(|e| {
                     ATMError::TransportError(format!(
-                        "Could not send get well-known did.json request: {:?}",
-                        e
+                        "Could not send get well-known did.json request: {e:?}"
                     ))
                 })?;
 
             let status = res.status();
             debug!("API response: status({})", status);
             let body = res.text().await.map_err(|e| {
-                ATMError::TransportError(format!("Couldn't get string body: {:?}", e))
+                ATMError::TransportError(format!("Couldn't get string body: {e:?}"))
             })?;
 
             let body = serde_json::from_str::<SuccessResponse<String>>(&body)
@@ -44,8 +43,7 @@ impl ATM {
 
             if !status.is_success() {
                 return Err(ATMError::TransportError(format!(
-                    "Status not successful. status({}), response({:?})",
-                    status, body
+                    "Status not successful. status({status}), response({body:?})"
                 )));
             }
 

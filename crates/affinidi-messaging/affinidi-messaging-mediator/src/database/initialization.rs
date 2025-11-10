@@ -49,7 +49,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("Couldn't get database SCHEMA_VERSION: {}", e),
+                        format!("Couldn't get database SCHEMA_VERSION: {e}"),
                     )
                 })?;
 
@@ -59,8 +59,7 @@ impl Database {
                     17,
                     "NA".into(),
                     format!(
-                        "Couldn't parse mediator package version ({}). Reason: {}",
-                        schema_version, e
+                        "Couldn't parse mediator package version ({schema_version}). Reason: {e}"
                     ),
                 )
             })?;
@@ -69,8 +68,7 @@ impl Database {
                     17,
                     "NA".into(),
                     format!(
-                        "Couldn't parse database SCHEMA_VERSION ({}). Reason: {}",
-                        schema_version, e
+                        "Couldn't parse database SCHEMA_VERSION ({schema_version}). Reason: {e}"
                     ),
                 )
             })?;
@@ -99,8 +97,7 @@ impl Database {
                         17,
                         "NA".into(),
                         format!(
-                            "Database schema version ({}) is not supported. Please upgrade to ({})",
-                            schema_version, mediator_version
+                            "Database schema version ({schema_version}) is not supported. Please upgrade to ({mediator_version})"
                         ),
                     ));
                 }

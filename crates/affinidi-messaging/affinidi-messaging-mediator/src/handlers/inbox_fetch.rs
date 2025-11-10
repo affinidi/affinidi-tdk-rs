@@ -89,7 +89,7 @@ pub async fn inbox_fetch_handler(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("start_id isn't valid. Should match UNIX_EPOCH in milliseconds + `-(0..999)`. Received: {}", start_id),
+                    format!("start_id isn't valid. Should match UNIX_EPOCH in milliseconds + `-(0..999)`. Received: {start_id}"),
                 )
                 .into());
             }
@@ -108,7 +108,7 @@ pub async fn inbox_fetch_handler(
                 None,
             )),
             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-            format!("Database transaction error: {}", e),
+            format!("Database transaction error: {e}"),
         )})?;
 
         Ok((

@@ -107,7 +107,7 @@ fn save_environment(
     {
         Ok(name) => {
             if Confirm::with_theme(theme)
-                .with_prompt(format!("Save Environment: {}?", name))
+                .with_prompt(format!("Save Environment: {name}?"))
                 .default(true)
                 .interact()?
             {

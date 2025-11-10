@@ -50,8 +50,7 @@ impl Database {
                     14,
                     "NA".to_string(),
                     format!(
-                        "error in setup of admin account for ({}). Reason: {}",
-                        admin_did_hash, err
+                        "error in setup of admin account for ({admin_did_hash}). Reason: {err}"
                     ),
                 )
             })?;
@@ -80,8 +79,7 @@ impl Database {
                     14,
                     "NA".to_string(),
                     format!(
-                        "error in check of admin account for ({}). Reason: {}",
-                        did_hash, err
+                        "error in check of admin account for ({did_hash}). Reason: {err}"
                     ),
                 )
             })?;
@@ -178,7 +176,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("Remove failed. Reason: {}", err),
+                    format!("Remove failed. Reason: {err}"),
                 )
             })?;
             debug!("Admin accounts removed successfully: {:?}", result);
@@ -223,7 +221,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("SSCAN cursor ({}) failed. Reason: {}", cursor, err),
+                        format!("SSCAN cursor ({cursor}) failed. Reason: {err}"),
                     )
                 })?;
 
@@ -243,7 +241,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             17,
                             "NA".into(),
-                            format!("cursor could not be correctly parsed. Reason: {}", err),
+                            format!("cursor could not be correctly parsed. Reason: {err}"),
                         )
                     })?
                     .parse::<u32>()
@@ -253,7 +251,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         17,
                         "NA".to_string(),
-                        format!("admin list could not be correctly parsed. Reason: {}", err),
+                        format!("admin list could not be correctly parsed. Reason: {err}"),
                     )
                 })?;
             }
@@ -273,7 +271,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("Fetching Admin role types failed. Reason: {}", err),
+                    format!("Fetching Admin role types failed. Reason: {err}"),
                 )
             })?;
 

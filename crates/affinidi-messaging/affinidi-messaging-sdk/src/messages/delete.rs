@@ -30,8 +30,7 @@ impl ATM {
             .await
             .map_err(|e| {
                 ATMError::SDKError(format!(
-                    "Couldn't send deletion request to Deletion Handler: {}",
-                    e
+                    "Couldn't send deletion request to Deletion Handler: {e}"
                 ))
             })
     }
@@ -64,8 +63,7 @@ impl ATM {
         }
         let msg = serde_json::to_string(messages).map_err(|e| {
             ATMError::TransportError(format!(
-                "Could not serialize delete message request: {:?}",
-                e
+                "Could not serialize delete message request: {e:?}"
             ))
         })?;
 
@@ -86,7 +84,7 @@ impl ATM {
             .send()
             .await
             .map_err(|e| {
-                ATMError::TransportError(format!("Could not send delete_messages request: {:?}", e))
+                ATMError::TransportError(format!("Could not send delete_messages request: {e:?}"))
             })?;
 
         let status = res.status();
@@ -95,12 +93,11 @@ impl ATM {
         let body = res
             .text()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
         if !status.is_success() {
             return Err(ATMError::TransportError(format!(
-                "Status not successful. status({}), response({})",
-                status, body
+                "Status not successful. status({status}), response({body})"
             )));
         }
 
