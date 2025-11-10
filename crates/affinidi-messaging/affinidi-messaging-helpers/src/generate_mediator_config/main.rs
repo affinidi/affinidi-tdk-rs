@@ -2,12 +2,12 @@
 use affinidi_messaging_helpers::common::{affinidi_logo, check_path};
 use affinidi_tdk::dids::{DID, KeyType};
 use base64::prelude::*;
-use ring::signature::Ed25519KeyPair;
 use clap::Parser;
 use console::{Term, style};
 use did_peer::DIDPeerKeys;
+use ring::signature::Ed25519KeyPair;
 use serde_json::{Value, json};
-use std::{error::Error};
+use std::error::Error;
 
 /// Setups the environment for Affinidi Messaging
 #[derive(Parser, Debug)]
@@ -21,7 +21,7 @@ struct Args {
     secure_connection: Option<bool>,
 
     #[arg(long, short)]
-    api_prefix: Option<String>
+    api_prefix: Option<String>,
 }
 
 fn generate_secrets_and_did() -> Result<(String, Value), Box<dyn Error>> {
@@ -46,7 +46,13 @@ fn generate_jwt_secret() -> String {
         .encode(Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap())
 }
 
-fn build_did_doc(domain: &str, did: &str, mut secrets: Value, secure_connection: bool, api_path: String) -> Result<String, Box<dyn Error>> {
+fn build_did_doc(
+    domain: &str,
+    did: &str,
+    mut secrets: Value,
+    secure_connection: bool,
+    api_path: String,
+) -> Result<String, Box<dyn Error>> {
     // handle secrets
     if let Value::Array(ref mut items) = secrets {
         for (i, item) in items.iter_mut().enumerate() {
@@ -64,17 +70,9 @@ fn build_did_doc(domain: &str, did: &str, mut secrets: Value, secure_connection:
         }
     }
 
-    let http = if secure_connection {
-        "https"
-    } else {
-        "http"
-    };
+    let http = if secure_connection { "https" } else { "http" };
 
-    let ws = if secure_connection {
-        "wss"
-    } else {
-        "ws"
-    };
+    let ws = if secure_connection { "wss" } else { "ws" };
 
     let result = serde_json::to_string_pretty(&json!({
         "@context": [
@@ -142,10 +140,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let secure_connection = args.secure_connection.unwrap_or(true);
     let api_prefix = args.api_prefix.unwrap_or("".to_string());
 
-    println!(
-        "{}",
-        style("Generating new DID info...").yellow(),
-    );
+    println!("{}", style("Generating new DID info...").yellow(),);
     let (old_did, secrets_json) = generate_secrets_and_did()?;
     let mut well_known_did_part = if api_prefix.len() > 0 {
         format!("{}{}", api_prefix, "/.well-known")
@@ -154,7 +149,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     well_known_did_part = well_known_did_part.replace("/", ":");
     let new_did = format!("did:web:{}{}", &host, &well_known_did_part);
-    let did_doc = build_did_doc(&host, &new_did, secrets_json.clone(), secure_connection, api_prefix)?;
+    let did_doc = build_did_doc(
+        &host,
+        &new_did,
+        secrets_json.clone(),
+        secure_connection,
+        api_prefix,
+    )?;
     let mut secrets_string = serde_json::to_string_pretty(&secrets_json)?;
     let jwt_secret = generate_jwt_secret();
     secrets_string = secrets_string.replace(&old_did, &new_did);
@@ -169,28 +170,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .unwrap();
     let admin_did_secrets_string = serde_json::to_string_pretty(&admin_did_secrets)?;
-    
+
     // print out all the info required to setup the self-hosted mediator
-    println!(
-        "{} {}",
-        style("DID Value:").green(),
-        &new_did,
-    );
-    println!(
-        "{}\n{}",
-        style("DID Secrets:").green(),
-        &secrets_string,
-    );
-    println!(
-        "{}\n{}",
-        style("DID Document:").green(),
-        &did_doc,
-    );
-    println!(
-        "{}\n{}",
-        style("JWT Secret:").green(),
-        &jwt_secret,
-    );
+    println!("{} {}", style("DID Value:").green(), &new_did);
+    println!("{}\n{}", style("DID Secrets:").green(), &secrets_string);
+    println!("{}\n{}", style("DID Document:").green(), &did_doc);
+    println!("{}\n{}", style("JWT Secret:").green(), &jwt_secret);
 
     println!(
         "{}\nAdmin DID Value: {}\nAdmin DID Secret:\n{}",
