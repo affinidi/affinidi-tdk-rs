@@ -48,6 +48,7 @@ thiserror = "2.0"
 unsigned-varint = "0.8"
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
 zeroize = "1.8"
+generic-array = { version = "1", features = ["compat-0_14"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # This can be updated to 0.3 when other dependencies are updated to getrandom 0.3 (mainly ed25519-dalek crate)

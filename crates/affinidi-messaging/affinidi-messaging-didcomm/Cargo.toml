@@ -36,6 +36,7 @@ varint = "0.9"
 tokio = { version = "1.48", features = ["rt", "macros"] }
 tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }
+generic-array = { version = "1", features = ["compat-0_14"] }
 
 [dev-dependencies]
 criterion = { version = "0.7", features = ["async_futures"] }

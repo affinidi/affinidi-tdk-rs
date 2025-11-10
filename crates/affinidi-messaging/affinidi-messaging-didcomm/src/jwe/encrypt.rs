@@ -6,6 +6,7 @@ use askar_crypto::{
     repr::{KeyGen, ToSecretBytes},
 };
 use base64::prelude::*;
+use generic_array::GenericArray;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -115,7 +116,7 @@ where
                 key,
                 alg.as_str().as_bytes(),
                 skid.as_ref().map(|s| s.as_bytes()).unwrap_or(&[]),
-                apv.as_slice(),
+                GenericArray::from_0_14(apv).as_slice(),
                 tag_raw,
                 false,
             )

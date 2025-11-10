@@ -16,6 +16,7 @@ use crate::{
 };
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use generic_array::GenericArray;
 use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -292,11 +293,12 @@ impl Secret {
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // SHA_256 code = 0x12
-        let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!(
-                "Couldn't create multihash encoding for Public Key. Reason: {e}",
-            ))
-        })?;
+        let hash_encoded = Multihash::<32>::wrap(0x12, GenericArray::from_0_14(hash).as_slice())
+            .map_err(|e| {
+                SecretsResolverError::KeyError(format!(
+                    "Couldn't create multihash encoding for Public Key. Reason: {e}",
+                ))
+            })?;
         Ok(hash_encoded.to_bytes().to_base58())
     }
 

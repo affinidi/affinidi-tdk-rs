@@ -9,6 +9,7 @@ use crate::{
 use affinidi_did_common::document::DocumentExt;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use base64::prelude::*;
+use generic_array::GenericArray;
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
@@ -83,7 +84,7 @@ impl ParsedJWE {
             Sha256::digest(kids.join(".").as_bytes())
         };
 
-        if self.apv != did_comm_apv.as_slice() {
+        if self.apv != GenericArray::from_0_14(did_comm_apv).as_slice() {
             Err(err_msg(ErrorKind::Malformed, "APV mismatch"))?;
         }
 

@@ -4,6 +4,7 @@ use crate::{
     secrets::{KeyType, Secret, SecretMaterial, SecretType},
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use generic_array::GenericArray;
 use p384::{
     AffinePoint, EncodedPoint,
     ecdsa::{SigningKey, VerifyingKey},
@@ -77,18 +78,24 @@ impl Secret {
             curve: "P-384".to_string(),
             d: None,
             x: BASE64_URL_SAFE_NO_PAD.encode(
-                ep.x()
-                    .ok_or_else(|| {
-                        SecretsResolverError::KeyError("Couldn't get X coordinate".to_string())
-                    })?
-                    .as_slice(),
+                GenericArray::from_0_14(
+                    ep.x()
+                        .ok_or_else(|| {
+                            SecretsResolverError::KeyError("Couldn't get X coordinate".to_string())
+                        })?
+                        .to_owned(),
+                )
+                .as_slice(),
             ),
             y: BASE64_URL_SAFE_NO_PAD.encode(
-                ep.y()
-                    .ok_or_else(|| {
-                        SecretsResolverError::KeyError("Couldn't get Y coordinate".to_string())
-                    })?
-                    .as_slice(),
+                GenericArray::from_0_14(
+                    ep.y()
+                        .ok_or_else(|| {
+                            SecretsResolverError::KeyError("Couldn't get Y coordinate".to_string())
+                        })?
+                        .to_owned(),
+                )
+                .as_slice(),
             ),
         };
 
