@@ -80,7 +80,6 @@ pub(crate) fn parse_compact(compact_jws: &str) -> Result<ParsedCompactJWS> {
         .decode_vec(header, &mut buf)
         .kind(ErrorKind::Malformed, "Unable decode header")?;
 
-    #[allow(deprecated)]
     let parsed_header: CompactHeader =
         serde_json::from_slice(buf.as_slice()).kind(ErrorKind::Malformed, "Unable parse header")?;
 
