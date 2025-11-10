@@ -56,7 +56,6 @@ impl Secret {
         })
     }
 
-    #[allow(deprecated)]
     /// Generates a Public JWK from a multikey value
     pub fn p256_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
         let ep = EncodedPoint::from_bytes(data).map_err(|e| {
@@ -78,6 +77,7 @@ impl Secret {
         let params = ECParams {
             curve: "P-256".to_string(),
             d: None,
+            #[allow(deprecated)]
             x: BASE64_URL_SAFE_NO_PAD.encode(
                 ep.x()
                     .ok_or_else(|| {
@@ -85,6 +85,7 @@ impl Secret {
                     })?
                     .as_slice(),
             ),
+            #[allow(deprecated)]
             y: BASE64_URL_SAFE_NO_PAD.encode(
                 ep.y()
                     .ok_or_else(|| {

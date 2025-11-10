@@ -292,6 +292,7 @@ impl Secret {
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // SHA_256 code = 0x12
+        #[allow(deprecated)]
         let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!(
                 "Couldn't create multihash encoding for Public Key. Reason: {e}",

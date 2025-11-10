@@ -79,6 +79,7 @@ impl Secret {
         let params = ECParams {
             curve: "secp256k1".to_string(),
             d: None,
+            #[allow(deprecated)]
             x: BASE64_URL_SAFE_NO_PAD.encode(
                 ep.x()
                     .ok_or_else(|| {
@@ -86,6 +87,7 @@ impl Secret {
                     })?
                     .as_slice(),
             ),
+            #[allow(deprecated)]
             y: BASE64_URL_SAFE_NO_PAD.encode(
                 ep.y()
                     .ok_or_else(|| {
