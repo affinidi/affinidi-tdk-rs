@@ -56,6 +56,7 @@ impl Secret {
         })
     }
 
+    #[allow(deprecated)]
     /// Generates a Public JWK from a multikey value
     pub fn p256_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
         let ep = EncodedPoint::from_bytes(data).map_err(|e| {
