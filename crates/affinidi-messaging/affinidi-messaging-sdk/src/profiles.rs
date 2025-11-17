@@ -478,7 +478,13 @@ impl ATM {
         Ok(())
     }
 
+    /// Returns all active profiles within ATM
     pub fn get_profiles(&self) -> Arc<RwLock<Profiles>> {
         self.inner.profiles.clone()
+    }
+
+    /// Returns a specific profile for a given DID
+    pub async fn find_profile(&self, did: &str) -> Option<Arc<ATMProfile>> {
+        self.inner.profiles.read().await.find_by_did(did)
     }
 }

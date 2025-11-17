@@ -8,6 +8,14 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 17th November 2025
+
+### SDK (0.12.1)
+
+- **FEATURE:** `atm.find_profile(did)` added to help streamline finding a profile
+  that has been added to ATM
+- **CHORE:**: Dependencies updated
+
 ## 23rd October 2025
 
 ### Helpers (0.11.1)
