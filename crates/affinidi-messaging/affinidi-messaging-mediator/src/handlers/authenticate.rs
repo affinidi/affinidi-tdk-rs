@@ -268,7 +268,7 @@ pub async fn authentication_response(
                 .into());
             }
         };
-
+        // We will need changes here to accommodate CWE
         // Unpack the message
         let (msg, _) = match Message::unpack(
             &mut envelope,

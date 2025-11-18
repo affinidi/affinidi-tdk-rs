@@ -34,10 +34,15 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
+#[async_trait::async_trait]
+pub trait AuthenticatorCacheInner: Send + Sync {
+    async fn handle_channel(&self, cmd: Option<AuthenticationCommand>) -> bool;
+    fn channel_rx(&mut self) -> &mut mpsc::Receiver<AuthenticationCommand>;
+}
 /// Top-level Authentication Cache struct
 #[derive(Clone)]
 pub struct AuthenticationCache {
-    inner: Arc<Mutex<AuthenticationCacheInner>>,
+    inner: Arc<Mutex<dyn AuthenticatorCacheInner>>,
     tx: mpsc::Sender<AuthenticationCommand>,
 }
 
@@ -172,7 +177,7 @@ impl AuthenticationCache {
 
         loop {
             tokio::select! {
-                msg = inner.channel_rx.recv() => {
+                msg = inner.channel_rx().recv() => {
                     if inner.handle_channel(msg).await {
                         break;
                     }
@@ -290,7 +295,12 @@ impl AuthenticationCache {
     }
 }
 
-impl AuthenticationCacheInner {
+#[async_trait::async_trait]
+impl AuthenticatorCacheInner for AuthenticationCacheInner {
+    fn channel_rx(&mut self) -> &mut mpsc::Receiver<AuthenticationCommand> {
+        &mut self.channel_rx
+    }
+
     async fn handle_channel(&self, cmd: Option<AuthenticationCommand>) -> bool {
         let mut exit_flag = false;
         match cmd {

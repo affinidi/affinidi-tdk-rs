@@ -255,6 +255,36 @@ impl DIDAuthentication {
         }
     }
 
+    async fn pack_cwe(message: Message) -> String {
+        let cwe_endpoint = "https://apse1.dev.api.affinidi.io/cwe/v2/wallets/fc09f1f7ae9a2528685a59e119df7b87/messages/authcrypt";
+        let pst = "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6ImJiOWI4NzRkLWFjMjgtNDM0My04MWMxLWU4ZjNmZDg2M2RlNiJ9.eyJjbGllbnRfaWQiOiIwMjM1YzBkOC0zYTNhLTQ1NzQtYjU3YS0xODYzYmUwMzk1M2IiLCJzY3AiOlsiZWxlbWVudHNfYXBpIiwic2VydmljZS4qIl0sInN1YiI6ImFyaTppYW06OmRhY2FhNTExLWM2NjgtNDhmZi05NmRmLWIwMDQwYzA3ZjQ1NTp1c2VyL2ZjMDhiZTZjLTAwNDEtNGJiNS04MTIzLWI4ZGM5NmUwNDRiZi9jbGllbnQvMDIzNWMwZDgtM2EzYS00NTc0LWI1N2EtMTg2M2JlMDM5NTNiIiwiYXVkIjoiZWxlbWVudHNfYXBpIiwiaXNzIjoiaHR0cHM6Ly9hcHNlMS5kZXYuYXBpLmFmZmluaWRpLmlvL2lhbSIsImlhdCI6MTc2MzM4MDgxMywiZXhwIjoxNzYzMzg0NDEzLCJqdGkiOiIxZTNkY2MxZS1hMDJiLTQ0ZTgtODUwZS1hNjYxOTNiNjlmZTIifQ.8g29sdUiBl-tQaKkBESPY-nhVW7IAFtwb4kgHTgtw601pX8YQ6G7GQo7EYRu6OXJw77Nv2RcT_r-D0Z-RwbWZA";
+        let msg_obj = serde_json::to_value(&message).unwrap();
+        let body = json!({
+            "plainTextMessage": msg_obj,
+            "signatureScheme": "ecdsa_secp256k1_sha256"
+        });
+        let cl = reqwest::Client::new();
+        let res = cl
+            .post(cwe_endpoint)
+            .bearer_auth(pst)
+            .body(body.to_string())
+            .send()
+            .await
+            .unwrap();
+        if !res.status().is_success() {
+            panic!("Error signing message: {:?}", res.text().await.unwrap());
+        }
+        let signed_msg = res
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+            .get("authcryptedMessage")
+            .unwrap()
+            .clone();
+
+        serde_json::to_string(&signed_msg).unwrap()
+    }
+
     async fn _authenticate<S>(
         &mut self,
         profile_did: &str,
@@ -323,17 +353,18 @@ impl DIDAuthentication {
                 "Auth response message:\n{}",
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
+            let auth_msg = Self::pack_cwe(auth_response).await;
 
-            let (auth_msg, _) = auth_response
-                .pack_encrypted(
-                    endpoint_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    did_resolver,
-                    secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
-                .await?;
+            // let (auth_msg, _) = auth_response
+            //     .pack_encrypted(
+            //         endpoint_did,
+            //         Some(profile_did),
+            //         Some(profile_did),
+            //         did_resolver,
+            //         secrets_resolver,
+            //         &PackEncryptedOptions::default(),
+            //     )
+            //     .await?;
 
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
 

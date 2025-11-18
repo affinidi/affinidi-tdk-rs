@@ -56,7 +56,7 @@ where
     envelope.to_kids_found = secrets_resolver
         .find_secrets(&envelope.metadata.encrypted_to_kids)
         .await;
-
+    // Currently investigating fails here as secrets resolver does not contain the keys
     if envelope.to_kids_found.is_empty() {
         Err(err_msg(
             ErrorKind::SecretNotFound,
