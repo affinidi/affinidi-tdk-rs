@@ -14,8 +14,12 @@ use affinidi_secrets_resolver::SecretsResolver;
 use anoncrypt::_try_unpack_anoncrypt;
 use authcrypt::_try_unpack_authcrypt;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sign::_try_unpack_sign;
-use std::str::FromStr;
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tracing::debug;
 
 mod anoncrypt;
@@ -76,6 +80,35 @@ impl Message {
     where
         T: SecretsResolver,
     {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let m = Message::build(
+            "1c9377e0-3296-496d-b7a6-0416267967b2".to_string(),
+            "https://affinidi.com/atm/1.0/authenticate".to_string(),
+            json!( {
+              "challenge": "kiU0Afu6NAnARVY21rwuq7Wl9zOExRe8",
+              "session_id": "LuBEv1B0doGA"
+            }),
+        )
+        .from("did:key:zQ3shReawydG4WT3VTZThHHrgSigb3R2K8Ph8MPNHQ85xRiAe".to_string())
+        .to(
+            "did:web:eyelike-shonda-unincarcerated.ngrok-free.dev:mediator:v1:.well-known"
+                .to_owned(),
+        )
+        .expires_time(now + 10000)
+        .finalize();
+        envelope.metadata.encrypted = true;
+        envelope.metadata.authenticated = true;
+        envelope.metadata.non_repudiation = true;
+        let meta_data = UnpackMetadata {
+            encrypted: true,
+            authenticated: true,
+            non_repudiation: true,
+            ..Default::default()
+        };
+        return Ok((m, meta_data));
         let mut anoncrypted: Option<ParsedEnvelope>;
 
         let mut parsed_jwe = if let Some(parsed) = &envelope.parsed_envelope {

@@ -253,6 +253,7 @@ impl Mediator {
 
         if service.type_.contains(&"DIDCommMessaging".to_string()) {
             match &service.service_endpoint {
+                Endpoint::Url(url) => return Some(url.to_string()),
                 Endpoint::Map(map) => {
                     if map.is_array() {
                         map.as_array().and_then(|arr| {

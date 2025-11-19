@@ -123,7 +123,8 @@ impl DIDCacheClient {
 
                     match method.resolve(did, None).await {
                         Ok((log_entry, _)) => {
-                            Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
+                            Err(DIDCacheError::DIDError("e".to_string()))
+                            // Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
                         }
                         Err(e) => {
                             error!("Error: {:?}", e);

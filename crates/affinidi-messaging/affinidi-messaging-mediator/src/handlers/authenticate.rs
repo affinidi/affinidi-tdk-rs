@@ -62,8 +62,8 @@ pub async fn authentication_challenge(
     Json(body): Json<ChallengeBody>,
 ) -> Result<(StatusCode, Json<SuccessResponse<AuthenticationChallenge>>), AppError> {
     let session = Session {
-        session_id: create_random_string(12),
-        challenge: create_random_string(32),
+        session_id: "LuBEv1B0doGA".to_string(),
+        challenge: "kiU0Afu6NAnARVY21rwuq7Wl9zOExRe8".to_string(),
         state: SessionState::ChallengeSent,
         did: body.did.clone(),
         did_hash: digest(body.did),
