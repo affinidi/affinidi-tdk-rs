@@ -18,7 +18,7 @@ You can use this SDK in either local (resolving occurs locally) or in network
 - did:peer (default)
 - did:web (default)
 - did:webvh (did-methods)
-- did:cheqd (Not ready for production yet)
+- did:cheqd (did-methods)
 - did:example (did-example)
   - NOTE: This is enabled using Rust feature `did:example`
   - NOTE: did:example must be manually loaded into the resolver as the DID DOC is
