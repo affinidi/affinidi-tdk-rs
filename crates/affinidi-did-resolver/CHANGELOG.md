@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+### 22nd November 2025
+
+## affinidi-did-resolver-cache-sdk (0.6.4)
+
+- **FEATURE:** `did:cheqd` implemented and working. Thank you to [Cheqd](https://cheqd.io/)
+  for contributing a Rust implementation of their DID method
+
 ### 3rd November 2025
 
 ## DID Common (0.1.3)

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.6.3"
+version = "0.6.4"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -27,12 +27,10 @@ network = [
   "dep:rustls",
   "dep:rustls-platform-verifier",
 ]
-#did-methods = ["did-webvh"]
 did-methods = ["did-cheqd", "did-webvh"]
 did_example = ["dep:did-example"]
 did-jwk = ["dep:did-jwk"]
 did-cheqd = ["dep:did-resolver-cheqd"]
-# did-cheqd = ["dep:did-cheqd"]
 did-webvh = ["dep:didwebvh-rs"]
 
 [dependencies]
