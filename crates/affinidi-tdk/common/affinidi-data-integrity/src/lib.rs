@@ -169,9 +169,8 @@ mod tests {
 
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
         let pri_key = "z42tmXtqqQBLmEEwn8tfi1bA2ghBx9cBo6wo8a44kVJEiqyA";
-        let secret =
-            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
-                .expect("Couldn't create test key data");
+        let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
+            .expect("Couldn't create test key data");
 
         assert!(DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None).is_err());
     }
@@ -182,9 +181,8 @@ mod tests {
 
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
         let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
-        let secret =
-            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
-                .expect("Couldn't create test key data");
+        let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
+            .expect("Couldn't create test key data");
 
         let context = vec![
             "context1".to_string(),

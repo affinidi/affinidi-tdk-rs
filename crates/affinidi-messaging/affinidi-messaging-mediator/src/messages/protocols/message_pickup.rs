@@ -139,7 +139,7 @@ async fn generate_status_reply(
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Database transaction error: {}", e),
+                    format!("Database transaction error: {e}"),
                 )
             })?;
 
@@ -272,7 +272,7 @@ pub(crate) async fn toggle_live_delivery(
                             None,
                         )),
                         StatusCode::BAD_REQUEST.as_u16(),
-                        format!("Couldn't parse live_delivery body. Reason: {}", e),
+                        format!("Couldn't parse live_delivery body. Reason: {e}"),
                     ));
                 }
             };
@@ -309,10 +309,7 @@ pub(crate) async fn toggle_live_delivery(
                                 None,
                             )),
                             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            format!(
-                                "Couldn't send START signal to streaming task. Reason: {}",
-                                e
-                            ),
+                            format!("Couldn't send START signal to streaming task. Reason: {e}"),
                         )
                     })?;
             }
@@ -340,7 +337,7 @@ pub(crate) async fn toggle_live_delivery(
                                 None,
                             )),
                             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            format!("Couldn't send STOP signal to streaming task. Reason: {}", e),
+                            format!("Couldn't send STOP signal to streaming task. Reason: {e}"),
                         )
                     })?;
             }
@@ -537,7 +534,7 @@ fn _parse_message_received_body(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't parse messages-received body. Reason: {}", e),
+                    format!("Couldn't parse messages-received body. Reason: {e}"),
                 ));
             }
         };
@@ -566,7 +563,7 @@ fn _parse_and_validate_delivery_request_body(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't parse delivery-request body. Reason: {}", e),
+                    format!("Couldn't parse delivery-request body. Reason: {e}"),
                 ));
             }
         };
@@ -603,10 +600,7 @@ fn _parse_and_validate_delivery_request_body(
                 None,
             )),
             StatusCode::BAD_REQUEST.as_u16(),
-            format!(
-                "limit must be between 1 and 100 inclusive. Received limit({})",
-                limit
-            ),
+            format!("limit must be between 1 and 100 inclusive. Received limit({limit})"),
         ));
     }
 
@@ -755,10 +749,7 @@ fn _validate_msg(
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!(
-                    "return_route header is incorrect. Expected (all) but received ({})",
-                    header
-                ),
+                format!("return_route header is incorrect. Expected (all) but received ({header})"),
             ));
         }
     } else {

@@ -39,7 +39,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".into(),
-                        format!("Couldn't fetch_messages() from database: {}", err),
+                        format!("Couldn't fetch_messages() from database: {err}"),
                     )
                 })?;
 
@@ -51,7 +51,7 @@ impl Database {
                         warn!("Error parsing redis value: ({:?}). Reason: {:?}", item, e);
                         messages
                             .get_errors
-                            .push((format!("{:?}", item), e.to_string()));
+                            .push((format!("{item:?}"), e.to_string()));
                         continue;
                     }
                 };

@@ -112,7 +112,7 @@ impl StreamingTask {
         async move {
             let mut pubsub = database.0.get_pubsub_connection().await?;
 
-            let channel = format!("CHANNEL:{}", uuid);
+            let channel = format!("CHANNEL:{uuid}");
             pubsub.subscribe(channel.clone()).await.map_err(|err| {
                 error!("Error subscribing to channel: {}", err);
 
@@ -129,7 +129,7 @@ impl StreamingTask {
                         None,
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Can't subscribe to channel: {}", err),
+                    format!("Can't subscribe to channel: {err}"),
                 )
             })?;
 

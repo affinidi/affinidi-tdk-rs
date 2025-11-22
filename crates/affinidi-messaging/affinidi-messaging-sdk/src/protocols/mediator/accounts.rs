@@ -221,7 +221,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             // send the message
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
@@ -239,8 +239,7 @@ impl Mediator {
     fn _parse_account_get_response(&self, message: &Message) -> Result<Option<Account>, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account Get response could not be parsed. Reason: {}",
-                err
+                "Mediator Account Get response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -298,7 +297,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => self._parse_account_add_response(&message),
@@ -315,8 +314,7 @@ impl Mediator {
     fn _parse_account_add_response(&self, message: &Message) -> Result<Account, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account Add response could not be parsed. Reason: {}",
-                err
+                "Mediator Account Add response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -368,7 +366,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -387,8 +385,7 @@ impl Mediator {
     fn _parse_account_remove_response(&self, message: &Message) -> Result<bool, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account Remove response could not be parsed. Reason: {}",
-                err
+                "Mediator Account Remove response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -448,7 +445,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
                 match atm
                 .send_message(profile, &msg, &msg_id, true, true)
@@ -471,8 +468,7 @@ impl Mediator {
     ) -> Result<MediatorAccountList, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account List response could not be parsed. Reason: {}",
-                err
+                "Mediator Account List response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -529,7 +525,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -548,8 +544,7 @@ impl Mediator {
     fn _parse_account_change_type_response(&self, message: &Message) -> Result<bool, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account Change Type response could not be parsed. Reason: {}",
-                err
+                "Mediator Account Change Type response could not be parsed. Reason: {err}"
             ))
         })
     }
@@ -616,7 +611,7 @@ impl Mediator {
                     &PackEncryptedOptions::default(),
                 )
                 .await
-                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {}", e)))?;
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
             match atm.send_message(profile, &msg, &msg_id, true, true).await? {
                 SendMessageResponse::Message(message) => {
@@ -638,8 +633,7 @@ impl Mediator {
     ) -> Result<AccountChangeQueueLimitsResponse, ATMError> {
         serde_json::from_value(message.body.clone()).map_err(|err| {
             ATMError::MsgReceiveError(format!(
-                "Mediator Account Change Queue Limit response could not be parsed. Reason: {}",
-                err
+                "Mediator Account Change Queue Limit response could not be parsed. Reason: {err}"
             ))
         })
     }

@@ -40,8 +40,7 @@ async fn main() -> Result<(), ProcessorError> {
             error!("Error opening database: {}", err);
             error!("Exiting...");
             return Err(ProcessorError::MessageExpiryCleanupError(format!(
-                "Error opening database. Reason: {}",
-                err
+                "Error opening database. Reason: {err}"
             )));
         }
     };

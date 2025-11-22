@@ -141,8 +141,7 @@ impl ATMProfile {
                         .await
                         .map_err(|err| {
                             ATMError::TransportError(format!(
-                                "Could not send websocket EnableInboundChannel command: {:?}",
-                                err
+                                "Could not send websocket EnableInboundChannel command: {err:?}"
                             ))
                         })?;
                 }
@@ -165,8 +164,7 @@ impl ATMProfile {
                         .await
                         .map_err(|err| {
                             ATMError::TransportError(format!(
-                                "Could not send websocket DisableInboundChannel command: {:?}",
-                                err
+                                "Could not send websocket DisableInboundChannel command: {err:?}"
                             ))
                         })?;
                 }
@@ -186,10 +184,7 @@ impl ATMProfile {
             && let Some(channel) = &*mediator.ws_channel_tx.read().await
         {
             channel.send(WebSocketCommands::Stop).await.map_err(|err| {
-                ATMError::TransportError(format!(
-                    "Could not send websocket Stop command: {:?}",
-                    err
-                ))
+                ATMError::TransportError(format!("Could not send websocket Stop command: {err:?}"))
             })?;
         }
 
@@ -216,8 +211,7 @@ impl Mediator {
             Ok(response) => response.doc,
             Err(err) => {
                 return Err(ATMError::DIDError(format!(
-                    "Couldn't resolve DID ({}). Reason: {}",
-                    did, err
+                    "Couldn't resolve DID ({did}). Reason: {err}"
                 )));
             }
         };
@@ -441,8 +435,7 @@ impl ATM {
                     .await
                     .map_err(|err| {
                         ATMError::TransportError(format!(
-                            "Could not send websocket NotifyConnection? command: {:?}",
-                            err
+                            "Could not send websocket NotifyConnection? command: {err:?}"
                         ))
                     })?;
             } else {
@@ -475,8 +468,7 @@ impl ATM {
                     }
                     Err(err) => {
                         return Err(ATMError::TransportError(format!(
-                            "Could not receive websocket NotifyConnection? response: {:?}",
-                            err
+                            "Could not receive websocket NotifyConnection? response: {err:?}"
                         )));
                     }
                 }
@@ -486,7 +478,13 @@ impl ATM {
         Ok(())
     }
 
+    /// Returns all active profiles within ATM
     pub fn get_profiles(&self) -> Arc<RwLock<Profiles>> {
         self.inner.profiles.clone()
+    }
+
+    /// Returns a specific profile for a given DID
+    pub async fn find_profile(&self, did: &str) -> Option<Arc<ATMProfile>> {
+        self.inner.profiles.read().await.find_by_did(did)
     }
 }

@@ -150,7 +150,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -203,7 +203,7 @@ pub(crate) async fn process(
                                     None,
                                 )),
                                 StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                                format!("Database transaction error: {}", e),
+                                format!("Database transaction error: {e}"),
                             ));
                         }
                     };
@@ -215,7 +215,7 @@ pub(crate) async fn process(
                         let mut s = String::new();
                         let mut i = 1;
                         for _ in &errors {
-                            s.push_str(&format!(" ({{{}}})", i));
+                            s.push_str(&format!(" ({{{i}}})"));
                             i += 1;
                         }
 
@@ -227,7 +227,7 @@ pub(crate) async fn process(
                                 ProblemReportSorter::Warning,
                                 ProblemReportScope::Message,
                                 "protocol.acls.change.denied".into(),
-                                format!("A non-admin account tried to change ACL Flags but self-change is not allowed:{}", s),
+                                format!("A non-admin account tried to change ACL Flags but self-change is not allowed:{s}"),
                                 errors,
                                 None,
                             )),
@@ -263,7 +263,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -320,7 +320,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -414,7 +414,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -507,7 +507,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -579,7 +579,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }
@@ -635,7 +635,7 @@ pub(crate) async fn process(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         ))
                     }
                 }

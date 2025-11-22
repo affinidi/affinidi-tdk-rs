@@ -3,3 +3,4 @@
 /target
 environments.json
 Cargo.lock
+**/environments.json*

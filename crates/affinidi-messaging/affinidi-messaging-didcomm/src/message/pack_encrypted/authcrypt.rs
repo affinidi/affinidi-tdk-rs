@@ -91,10 +91,7 @@ where
                 // TODO: support external keys
                 err_msg(
                     ErrorKind::Malformed,
-                    format!(
-                        "No verification material found for sender key agreement {}",
-                        kid
-                    ),
+                    format!("No verification material found for sender key agreement {kid}"),
                 )
             })
         })
@@ -130,10 +127,7 @@ where
                 // TODO: support external keys
                 err_msg(
                     ErrorKind::Malformed,
-                    format!(
-                        "No verification material found for recipient key agreement {}",
-                        kid
-                    ),
+                    format!("No verification material found for recipient key agreement {kid}"),
                 )
             })
         })

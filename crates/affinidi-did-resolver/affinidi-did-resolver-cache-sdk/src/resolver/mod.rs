@@ -270,7 +270,7 @@ mod tests {
 
         assert_eq!(
             first_public_key.as_str().expect("Not a string"),
-            "z6LSpuPPxLmp8C6ATvUcWrNox1qr6W8XWzXQ6MDTvC2p3pQN"
+            "z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv"
         );
         assert_eq!(
             last_public_key.as_str().expect("Not a string"),

@@ -300,7 +300,7 @@ impl DIDAuthentication {
             let step1_response = _http_post::<DidChallenges>(
                 client,
                 &[&endpoint, "/challenge"].concat(),
-                &format!("{{\"did\": \"{}\"}}", profile_did).to_string(),
+                &format!("{{\"did\": \"{profile_did}\"}}").to_string(),
             )
             .await?;
 
@@ -436,8 +436,7 @@ impl DIDAuthentication {
         {
             Ok((refresh_msg, _)) => Ok(refresh_msg),
             Err(err) => Err(DIDAuthError::Authentication(format!(
-                "Couldn't pack authentication refresh message: {:?}",
-                err
+                "Couldn't pack authentication refresh message: {err:?}"
             ))),
         }
     }
@@ -559,15 +558,13 @@ where
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| {
-            DIDAuthError::Authentication(format!("HTTP POST failed ({}): {:?}", url, e))
-        })?;
+        .map_err(|e| DIDAuthError::Authentication(format!("HTTP POST failed ({url}): {e:?}")))?;
 
     let response_status = response.status();
     let response_body = response
         .text()
         .await
-        .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {:?}", e)))?;
+        .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {e:?}")))?;
 
     debug!(
         "status: {} response body: {}",
@@ -578,14 +575,13 @@ where
             return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
         } else {
             return Err(DIDAuthError::Authentication(format!(
-                "Failed to get authentication response. url: {}, status: {}",
-                url, response_status
+                "Failed to get authentication response. url: {url}, status: {response_status}"
             )));
         }
     }
 
     serde_json::from_str::<T>(&response_body).map_err(|e| {
-        DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {}", e))
+        DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {e}"))
     })
 }
 

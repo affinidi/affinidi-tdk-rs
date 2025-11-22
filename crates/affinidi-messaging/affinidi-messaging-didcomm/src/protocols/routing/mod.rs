@@ -194,7 +194,7 @@ async fn resolve_did_comm_services_chain(
     let result = resolver.resolve(to).await.map_err(|e| {
         err_msg(
             ErrorKind::DIDNotResolved,
-            format!("Couldn't resolve DID({}). Reason: {}", to, e),
+            format!("Couldn't resolve DID({to}). Reason: {e}"),
         )
     })?;
 
@@ -222,7 +222,7 @@ async fn resolve_did_comm_services_chain(
         let resolved = resolver.resolve(service_endpoint).await.map_err(|e| {
             err_msg(
                 ErrorKind::DIDNotResolved,
-                format!("Couldn't resolve DID({}). Reason: {}", to, e),
+                format!("Couldn't resolve DID({to}). Reason: {e}"),
             )
         })?;
 

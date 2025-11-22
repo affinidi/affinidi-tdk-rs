@@ -180,7 +180,7 @@ pub async fn send_invitation_accept(
         .accept_invite_popup
         .messages
         .push(Line::from(Span::styled(
-            format!("Invitation originated from Remote DID ({}).", invite_did),
+            format!("Invitation originated from Remote DID ({invite_did})."),
             Style::default().fg(Color::LightBlue),
         )));
     state_tx.send(state.clone())?;
@@ -189,7 +189,7 @@ pub async fn send_invitation_accept(
     let accept_temp_profile = create_new_profile(
         atm,
         &mediator_did,
-        Some(format!("Ephemeral Accept {}", invite_did_suffix)),
+        Some(format!("Ephemeral Accept {invite_did_suffix}")),
         true,
         state,
     )
@@ -214,10 +214,7 @@ pub async fn send_invitation_accept(
         ));
     };
 
-    info!(
-        "temp invite response profile info: {:?}",
-        accept_temp_profile_info
-    );
+    info!("temp invite response profile info: {accept_temp_profile_info:?}");
     let accept_temp_profile_acl_flags = MediatorACLSet::from_u64(accept_temp_profile_info.acls);
     if let AccessListModeType::ExplicitAllow =
         accept_temp_profile_acl_flags.get_access_list_mode().0
@@ -234,10 +231,7 @@ pub async fn send_invitation_accept(
                     .accept_invite_popup
                     .messages
                     .push(Line::from(Span::styled(
-                        format!(
-                            "Failed to add {} to ACL of temporary profile: {}",
-                            invite_did, e
-                        ),
+                        format!("Failed to add {invite_did} to ACL of temporary profile: {e}"),
                         Style::default().fg(Color::Red),
                     )));
                 state_tx.send(state.clone())?;
@@ -247,9 +241,7 @@ pub async fn send_invitation_accept(
                     invite_did, e
                 );
                 return Err(anyhow::anyhow!(
-                    "Failed to add {} to ACL of temporary profile: {}",
-                    invite_did,
-                    e
+                    "Failed to add {invite_did} to ACL of temporary profile: {e}"
                 ));
             }
         }
@@ -306,7 +298,7 @@ pub async fn send_invitation_accept(
     let accept_secure_profile = create_new_profile(
         atm,
         &mediator_did,
-        Some(format!("Secure Accept {}", invite_did_suffix)),
+        Some(format!("Secure Accept {invite_did_suffix}")),
         true,
         state,
     )
@@ -498,7 +490,7 @@ pub async fn create_invitation(
                                 "Failed to get profile info from mediator"
                             ));
                         };
-                        info!("Profile info: {:?}", profile_info);
+                        info!("Profile info: {profile_info:?}");
 
                         let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
                         if let AccessListModeType::ExplicitAllow =
@@ -582,13 +574,13 @@ pub async fn create_invitation(
                             }
                             Err(e) => {
                                 state.invite_popup.invite_error =
-                                    Some(format!("Failed to create OOB Invite: {}", e));
+                                    Some(format!("Failed to create OOB Invite: {e}"));
                             }
                         }
                     }
                     Err(e) => {
                         state.invite_popup.invite_error =
-                            Some(format!("Failed to add profile to mediator: {}", e));
+                            Some(format!("Failed to add profile to mediator: {e}"));
                     }
                 };
             }

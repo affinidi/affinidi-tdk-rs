@@ -1,5 +1,9 @@
 # Meeting Place Changelog
 
+## 3rd November 2025 (0.2.1)
+
+- **CHORE:** Updating dependencies
+
 ## 30th September 2025 (0.2.0)
 
 - **BREAKING:** Removed SSI Library dependencies

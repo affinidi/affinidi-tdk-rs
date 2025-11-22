@@ -79,7 +79,7 @@ pub(crate) async fn list_admins(
                     AccountType::Admin => (admin._type.to_string(), 129_u8),
                     _ => ("Unknown".into(), 1_u8),
                 };
-                print!(" {}", style(format!("({})", role)).color256(color));
+                print!(" {}", style(format!("({role})")).color256(color));
                 if admin.did_hash.as_bytes() == config.our_admin_hash.as_bytes() {
                     print!(" {}", style("(our Admin account)").color256(208));
                 }
@@ -88,7 +88,7 @@ pub(crate) async fn list_admins(
             }
         }
         Err(e) => {
-            println!("{}", style(format!("Error: {}", e)).red());
+            println!("{}", style(format!("Error: {e}")).red());
         }
     }
 }
@@ -148,7 +148,7 @@ pub(crate) async fn add_admin(
                 }
             }
             Err(e) => {
-                println!("{}", style(format!("Error: {}", e)).red());
+                println!("{}", style(format!("Error: {e}")).red());
             }
         }
     }
@@ -221,17 +221,17 @@ pub(crate) async fn strip_admins(
                     Ok(result) => {
                         println!(
                             "{}",
-                            style(format!("Stripped admin rights from {} DIDs", result)).green()
+                            style(format!("Stripped admin rights from {result} DIDs")).green()
                         );
                     }
                     Err(e) => {
-                        println!("{}", style(format!("Error: {}", e)).red());
+                        println!("{}", style(format!("Error: {e}")).red());
                     }
                 }
             }
         }
         Err(e) => {
-            println!("{}", style(format!("Error: {}", e)).red());
+            println!("{}", style(format!("Error: {e}")).red());
         }
     }
 }

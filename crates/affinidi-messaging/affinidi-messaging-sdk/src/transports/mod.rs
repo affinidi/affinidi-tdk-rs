@@ -88,7 +88,7 @@ impl ATM {
                 .send(WebSocketCommands::SendMessage(message.to_owned()))
                 .await
                 .map_err(|err| {
-                    ATMError::TransportError(format!("Could not send websocket message: {:?}", err))
+                    ATMError::TransportError(format!("Could not send websocket message: {err:?}"))
                 })?;
 
             debug!(
@@ -249,7 +249,7 @@ impl ATM {
             .body(msg)
             .send()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Could not send message: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Could not send message: {e:?}")))?;
 
         let status = res.status();
         debug!("API response: status({})", status);
@@ -257,19 +257,17 @@ impl ATM {
         let body = res
             .text()
             .await
-            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+            .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
         if !status.is_success() {
             return Err(ATMError::TransportError(format!(
-                "API returned an error: status({}), body({})",
-                status, body
+                "API returned an error: status({status}), body({body})"
             )));
         }
         debug!("body =\n{}", body);
         let http_response: Value = if return_response {
-            serde_json::from_str(&body).map_err(|e| {
-                ATMError::TransportError(format!("Couldn't parse response: {:?}", e))
-            })?
+            serde_json::from_str(&body)
+                .map_err(|e| ATMError::TransportError(format!("Couldn't parse response: {e:?}")))?
         } else {
             Value::Null
         };

@@ -55,7 +55,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         session_id.into(),
-                        format!("Couldn't store message in database: {}", err),
+                        format!("Couldn't store message in database: {err}"),
                     )
                 })?;
 
@@ -100,7 +100,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         session_id.into(),
-                        format!("Couldn't get message metadata from database: {}", err),
+                        format!("Couldn't get message metadata from database: {err}"),
                     )
                 })?;
 
@@ -113,7 +113,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     22,
                     session_id.into(),
-                    format!("Couldn't parse message metadata from database: {}", err),
+                    format!("Couldn't parse message metadata from database: {err}"),
                 )
             })?;
 

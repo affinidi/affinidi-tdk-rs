@@ -174,7 +174,7 @@ async fn init() -> Result<(ColorfulTheme, ATMConfig, TDKEnvironment), Box<dyn Er
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()

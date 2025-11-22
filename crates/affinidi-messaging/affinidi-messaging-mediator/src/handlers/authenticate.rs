@@ -175,7 +175,7 @@ pub async fn authentication_response(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("authentication response couldn't be parsed: {}", e),
+                    format!("authentication response couldn't be parsed: {e}"),
                 )
                 .into());
             }
@@ -243,7 +243,7 @@ pub async fn authentication_response(
                                 None,
                             )),
                             StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                            format!("Database transaction error: {}", e),
+                            format!("Database transaction error: {e}"),
                         )
                         .into());
                     }
@@ -293,7 +293,7 @@ pub async fn authentication_response(
                         None,
                     )),
                     StatusCode::FORBIDDEN.as_u16(),
-                    format!("Message unpack failed. Reason: {}", e),
+                    format!("Message unpack failed. Reason: {e}"),
                 )
                 .into());
             }
@@ -499,7 +499,7 @@ pub async fn authentication_response(
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!("authentication response couldn't be parsed: {}", e),
+                format!("authentication response couldn't be parsed: {e}"),
             )
         })?;
 
@@ -524,7 +524,7 @@ pub async fn authentication_response(
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Database transaction error: {}", e),
+                    format!("Database transaction error: {e}"),
                 )
                 .into());
             }
@@ -621,7 +621,7 @@ pub async fn authentication_response(
                         None,
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Couldn't create JWT Refresh token. Reason: {}", err),
+                    format!("Couldn't create JWT Refresh token. Reason: {err}"),
                 )
             })?,
             refresh_expires_at: refresh_claims.exp,
@@ -646,7 +646,7 @@ pub async fn authentication_response(
                         None,
                     )),
                     StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    format!("Database transaction error: {}", e),
+                    format!("Database transaction error: {e}"),
                 )
             })?;
 
@@ -721,7 +721,7 @@ pub async fn authentication_refresh(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't read DIDComm envelope: {}", e),
+                    format!("Couldn't read DIDComm envelope: {e}"),
                 )
                 .into());
             }
@@ -751,7 +751,7 @@ pub async fn authentication_refresh(
                         None,
                     )),
                     StatusCode::FORBIDDEN.as_u16(),
-                    format!("Message unpack failed. Reason: {}", e),
+                    format!("Message unpack failed. Reason: {e}"),
                 )
                 .into());
             }
@@ -926,7 +926,7 @@ pub async fn authentication_refresh(
                         None,
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Couldn't decode JWT Refresh token. Reason: {}", err),
+                    format!("Couldn't decode JWT Refresh token. Reason: {err}"),
                 )
                 .into());
             }
@@ -952,7 +952,7 @@ pub async fn authentication_refresh(
                             None,
                         )),
                         StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                        format!("Database transaction error: {}", e),
+                        format!("Database transaction error: {e}"),
                     )
                 })?
         } else {
@@ -1096,7 +1096,7 @@ fn _create_access_token(
                 None,
             )),
             StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-            format!("Couldn't create JWT Access token. Reason: {}", err),
+            format!("Couldn't create JWT Access token. Reason: {err}"),
         )
     })?;
 

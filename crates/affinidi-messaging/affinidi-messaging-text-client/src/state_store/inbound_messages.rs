@@ -112,7 +112,7 @@ async fn _handle_connection_setup(
                         .to_string()
                 };
 
-                format!("{} {}", first, surname)
+                format!("{first} {surname}")
             } else {
                 format!(
                     "UNKNOWN {}",
@@ -159,7 +159,7 @@ async fn _handle_connection_setup(
     if state.chat_list.chats.contains_key(&new_chat_name) {
         let split_pos = our_new_did.inner.did.char_indices().nth_back(4).unwrap().0;
         let a = &our_new_did.inner.did[split_pos..];
-        new_chat_name = format!("{} {}", new_chat_name, a);
+        new_chat_name = format!("{new_chat_name} {a}");
     }
 
     // Get the current profile
@@ -333,7 +333,7 @@ async fn _handle_connection_setup(
         .chat_list
         .create_chat(
             &new_chat_name,
-            &format!("Chatting with {}", new_chat_name),
+            &format!("Chatting with {new_chat_name}"),
             &our_new_profile,
             Some(remote_secure_did.to_string()),
             None,
@@ -352,7 +352,7 @@ async fn _handle_connection_setup(
             ChatMessageType::Effect {
                 effect: ChatEffect::System,
             },
-            format!("Start of conversation with {}", new_chat_name),
+            format!("Start of conversation with {new_chat_name}"),
         ));
 
     if state.chat_list.active_chat.is_none() {
@@ -640,7 +640,7 @@ pub async fn handle_message(
                                 .to_string()
                         };
 
-                        format!("{} {}", first, surname)
+                        format!("{first} {surname}")
                     } else {
                         format!(
                             "UNKNOWN {}",
@@ -760,7 +760,7 @@ pub async fn handle_message(
             if state.chat_list.chats.contains_key(&new_chat_name) {
                 let split_pos = secure_channel_did.char_indices().nth_back(4).unwrap().0;
                 let a = &secure_channel_did[split_pos..];
-                new_chat_name = format!("{} {}", new_chat_name, a);
+                new_chat_name = format!("{new_chat_name} {a}");
             }
 
             let mut new_secure_chat =

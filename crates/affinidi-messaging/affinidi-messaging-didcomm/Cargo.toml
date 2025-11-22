@@ -1,6 +1,6 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.11.3"
+version = "0.11.4"
 description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
   'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
@@ -21,7 +21,7 @@ affinidi-did-common.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
-askar-crypto = "0.3.6"
+askar-crypto = "0.3.7"
 anyhow = '1.0'
 base64 = "0.22"
 bs58 = "0.5"
@@ -33,7 +33,7 @@ sha2 = "0.10"
 sha256 = "1.6"
 thiserror = "2.0"
 varint = "0.9"
-tokio = { version = "1.47", features = ["rt", "macros"] }
+tokio = { version = "1.48", features = ["rt", "macros"] }
 tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1.18", features = ["v4", "fast-rng"] }
 

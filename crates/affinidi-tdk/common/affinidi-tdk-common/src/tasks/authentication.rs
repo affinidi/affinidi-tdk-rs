@@ -421,7 +421,7 @@ impl AuthenticationCacheInner {
                                     "Failed to authenticate {} against {}: {}",
                                     profile_did, service_endpoint_did, e
                                 );
-                                let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(format!("JoinHandle Error on spawned Authentication task: {}", e))));
+                                let _ = tx.send(Err(DIDAuthError::AuthenticationAbort(format!("JoinHandle Error on spawned Authentication task: {e}"))));
                             }
                         }
                     }

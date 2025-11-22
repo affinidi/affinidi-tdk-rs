@@ -50,8 +50,7 @@ impl ATMError {
                 Ok(body) => body,
                 Err(err) => {
                     return ATMError::SDKError(format!(
-                        "Internal error handling error. Could not parse Problem Report message. Reason: {}",
-                        err
+                        "Internal error handling error. Could not parse Problem Report message. Reason: {err}"
                     ));
                 }
             };

@@ -44,7 +44,7 @@ pub(crate) async fn handle_inbound(
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't read DIDComm envelope: {}", e),
+                    format!("Couldn't read DIDComm envelope: {e}"),
                 ));
             }
         };
@@ -82,7 +82,7 @@ pub(crate) async fn handle_inbound(
                                     None,
                                 )),
                                 StatusCode::FORBIDDEN.as_u16(),
-                                format!("Message unpack failed. Reason: {}", e),
+                                format!("Message unpack failed. Reason: {e}"),
                             ));
                         }
                     };

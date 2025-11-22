@@ -50,7 +50,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("Add failed. Reason: {}", err),
+                    format!("Add failed. Reason: {err}"),
                 )
             })
     }
@@ -76,7 +76,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("Get failed. Reason: {}", err),
+                        format!("Get failed. Reason: {err}"),
                     )
                 })?;
 
@@ -135,7 +135,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("account_add() failed. Reason: {}", err),
+                    format!("account_add() failed. Reason: {err}"),
                 )
             })?;
             debug!("Account added successfully");
@@ -239,7 +239,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("Error removing DID ({}) Records. Reason: {}", did_hash, err),
+                        format!("Error removing DID ({did_hash}) Records. Reason: {err}"),
                     )
                 })?;
 
@@ -277,7 +277,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("SSCAN cursor ({}) failed. Reason: {}", cursor, err),
+                        format!("SSCAN cursor ({cursor}) failed. Reason: {err}"),
                     )
                 })?;
 
@@ -296,7 +296,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("did_details HGETALL failed. Reason: {}", err),
+                        format!("did_details HGETALL failed. Reason: {err}"),
                     )
                 })?;
 
@@ -307,7 +307,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("did_access_list SCARD failed. Reason: {}", err),
+                        format!("did_access_list SCARD failed. Reason: {err}"),
                     )
                 })?;
 
@@ -357,7 +357,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("account_change_type() failed. Reason: {}", err),
+                        format!("account_change_type() failed. Reason: {err}"),
                     )
                 })?;
             debug!("Account type changed successfully");
@@ -429,10 +429,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             14,
                             "NA".to_string(),
-                            format!(
-                                "changing queue_limit ({}) failed. Reason: {}",
-                                queue_name, err
-                            ),
+                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
                         )
                     })?;
             }
@@ -447,10 +444,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             23,
                             "NA".to_string(),
-                            format!(
-                                "changing queue_limit ({}) failed. Reason: {}",
-                                queue_name, err
-                            ),
+                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
                         )
                     })?;
             }

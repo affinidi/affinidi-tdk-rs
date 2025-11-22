@@ -20,7 +20,7 @@ pub trait HasUsageInfo {
 }
 
 fn key_to_span<'a>(key: &String) -> Span<'a> {
-    Span::from(format!("({})", key)).bold()
+    Span::from(format!("({key})")).bold()
 }
 
 pub fn widget_usage_to_text<'a>(usage: UsageInfo) -> Text<'a> {

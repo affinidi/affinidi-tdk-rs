@@ -160,8 +160,7 @@ impl Message {
                     return Err(err_msg(
                         ErrorKind::InvalidState,
                         format!(
-                            "Message 'from' ({}) doesn't match encrypted_from_kid ({})",
-                            from, skid
+                            "Message 'from' ({from}) doesn't match encrypted_from_kid ({skid})"
                         ),
                     ));
                 }
@@ -185,7 +184,7 @@ impl Message {
                 let Some((did, _)) = kid.split_once("#") else {
                     return Err(err_msg(
                         ErrorKind::InvalidState,
-                        format!("Invalid encrypted_to_kids ({})", kid),
+                        format!("Invalid encrypted_to_kids ({kid})"),
                     ));
                 };
 
@@ -211,10 +210,7 @@ impl Message {
                 if !skid.starts_with(from) {
                     return Err(err_msg(
                         ErrorKind::InvalidState,
-                        format!(
-                            "Message 'from' ({}) doesn't match sign_from ({})",
-                            from, skid
-                        ),
+                        format!("Message 'from' ({from}) doesn't match sign_from ({skid})"),
                     ));
                 }
             } else {
@@ -357,7 +353,7 @@ where
                 Err(e) => {
                     return Err(err_msg(
                         ErrorKind::DIDNotResolved,
-                        format!("Couldn't resolve did({}). Reason: {}", did, e),
+                        format!("Couldn't resolve did({did}). Reason: {e}"),
                     ));
                 }
             };

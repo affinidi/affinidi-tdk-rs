@@ -157,7 +157,7 @@ impl ComponentRender<()> for InvitePopup {
                         Style::default().bold(),
                     ),
                     Line::styled(
-                        format!("Using Mediator: {}", mediator_did),
+                        format!("Using Mediator: {mediator_did}"),
                         Style::default().bold().fg(Color::LightBlue),
                     ),
                     Line::default(),

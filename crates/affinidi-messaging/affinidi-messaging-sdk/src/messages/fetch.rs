@@ -85,8 +85,7 @@ impl ATM {
 
             let body = serde_json::to_string(options).map_err(|e| {
                 ATMError::TransportError(format!(
-                    "Could not serialize fetch_message() options: {:?}",
-                    e
+                    "Could not serialize fetch_message() options: {e:?}"
                 ))
             })?;
 
@@ -106,10 +105,7 @@ impl ATM {
                 .send()
                 .await
                 .map_err(|e| {
-                    ATMError::TransportError(format!(
-                        "Could not send list_messages request: {:?}",
-                        e
-                    ))
+                    ATMError::TransportError(format!("Could not send list_messages request: {e:?}"))
                 })?;
 
             let status = res.status();
@@ -118,12 +114,11 @@ impl ATM {
             let body = res
                 .text()
                 .await
-                .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))?;
+                .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))?;
 
             if !status.is_success() {
                 return Err(ATMError::TransportError(format!(
-                    "Status not successful. status({}), response({})",
-                    status, body
+                    "Status not successful. status({status}), response({body})"
                 )));
             }
 

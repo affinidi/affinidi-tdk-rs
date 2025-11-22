@@ -83,6 +83,7 @@ impl ParsedJWE {
             Sha256::digest(kids.join(".").as_bytes())
         };
 
+        #[allow(deprecated)]
         if self.apv != did_comm_apv.as_slice() {
             Err(err_msg(ErrorKind::Malformed, "APV mismatch"))?;
         }

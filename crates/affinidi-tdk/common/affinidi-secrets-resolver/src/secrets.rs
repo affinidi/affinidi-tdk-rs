@@ -11,7 +11,7 @@ use crate::{
     jwk::{JWK, Params},
     multicodec::{
         ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+        P384_PUB, P521_PRIV, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
 use base58::ToBase58;
@@ -151,68 +151,60 @@ impl Secret {
     }
 
     /// Creates a secret from a multibase encoded key
-    /// Requires a key ID, public key, and private key
-    pub fn from_multibase(key_id: &str, public: &str, private: &str) -> Result<Self> {
-        let public_bytes = multibase::decode(public).map_err(|e| {
-            SecretsResolverError::KeyError(format!("Failed to decode public key: {e}"))
-        })?;
+    /// Inputs:
+    /// private: multi-encoded private key string
+    /// specified)
+    /// kid: Optional Key ID (or random if not provided)
+    ///
+    pub fn from_multibase(private: &str, kid: Option<&str>) -> Result<Self> {
         let private_bytes = multibase::decode(private).map_err(|e| {
             SecretsResolverError::KeyError(format!("Failed to decode private key: {e}"))
         })?;
 
-        let public_bytes = MultiEncoded::new(public_bytes.1.as_slice())?;
         let private_bytes = MultiEncoded::new(private_bytes.1.as_slice())?;
 
-        let jwk = match (public_bytes.codec(), private_bytes.codec()) {
-            (ED25519_PUB, ED25519_PRIV) => {
-                json!({"crv": "Ed25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
-            }
-            (X25519_PUB, X25519_PRIV) => {
-                json!({"crv": "X25519", "kty": "OKP", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(public_bytes.data())})
-            }
-            (P256_PUB, P256_PRIV) => {
-                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
-                    json!({"crv": "P-256", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
-                } else {
+        match private_bytes.codec() {
+            ED25519_PRIV => {
+                if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
-                        "Failed to split public key".into(),
+                        "Invalid ED25519 private key length".into(),
                     ));
                 }
+                let mut pb: [u8; 32] = [0; 32];
+                pb.copy_from_slice(private_bytes.data());
+
+                let secret = Secret::generate_ed25519(kid, Some(&pb));
+                pb.zeroize();
+                Ok(secret)
             }
-            (SECP256K1_PUB, SECP256K1_PRIV) => {
-                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
-                    json!({"crv": "secp256k1", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
-                } else {
+            X25519_PRIV => {
+                if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
-                        "Failed to split public key".into(),
+                        "Invalid X25519 private key length".into(),
                     ));
                 }
+                let mut pb: [u8; 32] = [0; 32];
+                pb.copy_from_slice(private_bytes.data());
+
+                let secret = Secret::generate_x25519(kid, Some(&pb));
+                pb.zeroize();
+                secret
             }
-            (P384_PUB, P384_PRIV) => {
-                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
-                    json!({"crv": "P-384", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
-                } else {
+            P256_PRIV => {
+                if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
-                        "Failed to split public key".into(),
+                        "Invalid P256 private key length".into(),
                     ));
                 }
+
+                Secret::generate_p256(kid, Some(private_bytes.data()))
             }
-            (P521_PUB, P521_PRIV) => {
-                if let Some((x, y)) = public_bytes.data().split_at_checked(32) {
-                    json!({"crv": "P-521", "kty": "EC", "d": BASE64_URL_SAFE_NO_PAD.encode(private_bytes.data()), "x": BASE64_URL_SAFE_NO_PAD.encode(x), "y": BASE64_URL_SAFE_NO_PAD.encode(y)})
-                } else {
-                    return Err(SecretsResolverError::KeyError(
-                        "Failed to split public key".into(),
-                    ));
-                }
-            }
-            _ => {
-                return Err(SecretsResolverError::KeyError(
-                    "Unsupported key type".into(),
-                ));
-            }
-        };
-        Secret::from_str(key_id, &jwk)
+            P384_PRIV => Secret::generate_p384(kid, Some(private_bytes.data())),
+            SECP256K1_PRIV => Secret::generate_secp256k1(kid, Some(private_bytes.data())),
+            _ => Err(SecretsResolverError::KeyError(
+                "Unsupported key type in from_multibase".into(),
+            )),
+        }
     }
 
     /// Decodes a multikey to raw bytes
@@ -300,6 +292,7 @@ impl Secret {
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // SHA_256 code = 0x12
+        #[allow(deprecated)]
         let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
             SecretsResolverError::KeyError(format!(
                 "Couldn't create multihash encoding for Public Key. Reason: {e}",
@@ -358,12 +351,14 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = ed25519_private_to_x25519_private_key(&self.private_bytes);
+            let x25519_secret = ed25519_private_to_x25519_private_key(
+                self.private_bytes.first_chunk::<32>().unwrap(),
+            );
 
             let x25519_sk = StaticSecret::from(x25519_secret);
             let x25519_pk = PublicKey::from(&x25519_sk);
 
-            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_secret);
+            let secret = BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes());
             let public = BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes());
 
             let jwk = json!({
@@ -450,6 +445,7 @@ pub enum SecretMaterial {
 #[cfg(test)]
 mod tests {
     use super::Secret;
+    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
     use serde_json::json;
 
     #[test]
@@ -514,5 +510,229 @@ mod tests {
         let secret = serde_json::from_str::<Secret>(txt);
 
         assert!(secret.is_ok());
+    }
+
+    #[test]
+    fn from_multiencode_ed25519() {
+        let seed = BASE64_URL_SAFE_NO_PAD
+            .decode("oihAhqs-h9V9rq6KYEhiEWwdBDpTI7xL0EEiwC9heFg")
+            .expect("Couldn't decode ed25519 BASE64 encoding");
+
+        let public_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode("eC1vNebw6IJ8SJ4Tg9g2Q9W-Zy8xIS80byxTZXlPaHk")
+            .expect("Couldn't BASE64 decode ed25519 public bytes");
+
+        assert_eq!(seed.len(), 32);
+        let mut private_bytes: [u8; 32] = [0; 32];
+        private_bytes.copy_from_slice(seed.as_slice());
+
+        let secret = Secret::generate_ed25519(None, Some(&private_bytes));
+
+        assert_eq!(
+            secret.get_private_keymultibase().unwrap(),
+            "z3u2c8oS2oKgATvakQzVF66EAcZWJqPUzGQzWMUTKnFkv5DR"
+        );
+        assert_eq!(secret.get_public_bytes(), public_bytes.as_slice());
+        assert_eq!(secret.get_private_bytes(), private_bytes.as_slice());
+
+        let secret2 =
+            Secret::from_multibase("z3u2c8oS2oKgATvakQzVF66EAcZWJqPUzGQzWMUTKnFkv5DR", None)
+                .expect("Failed to transform ed25519 to secret");
+
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase().unwrap()
+        );
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+
+        assert_eq!(
+            secret2.get_private_keymultibase().unwrap(),
+            secret.get_private_keymultibase().unwrap()
+        );
+    }
+
+    #[test]
+    fn from_multiencode_x25519() {
+        let seed = BASE64_URL_SAFE_NO_PAD
+            .decode("eYN37ZX0ij4TYdklZax2jiRiyHYMNOzwW2bvNauAzKk")
+            .expect("Couldn't decode x25519 BASE64 encoding");
+
+        let public_bytes = BASE64_URL_SAFE_NO_PAD
+            .decode("Ephwf5xVmhVnDj2KtIPDKcGYBG9CQR_mZKlRqETZ62U")
+            .expect("Couldn't BASE64 decode x25519 public bytes");
+
+        assert_eq!(seed.len(), 32);
+        let mut private_bytes: [u8; 32] = [0; 32];
+        private_bytes.copy_from_slice(seed.as_slice());
+
+        let secret = Secret::generate_x25519(None, Some(&private_bytes))
+            .expect("x25519 generate secret failed");
+
+        assert_eq!(
+            secret.get_private_keymultibase().unwrap(),
+            "z3weexK9erGUKF41d3tJoDu2Fetx1xnsC7WhFWnjuCJXJGxp"
+        );
+        assert_eq!(secret.get_public_bytes(), public_bytes.as_slice());
+        assert_eq!(secret.get_private_bytes(), private_bytes.as_slice());
+
+        let secret2 =
+            Secret::from_multibase("z3weexK9erGUKF41d3tJoDu2Fetx1xnsC7WhFWnjuCJXJGxp", None)
+                .expect("Failed to transform x25519 to secret");
+
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase().unwrap()
+        );
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+
+        assert_eq!(
+            secret2.get_private_keymultibase().unwrap(),
+            secret.get_private_keymultibase().unwrap()
+        );
+    }
+
+    #[test]
+    fn from_multiencode_p256() {
+        let seed = BASE64_URL_SAFE_NO_PAD
+            .decode("B5ZIiXYkpEPczVbyWP85H75wrBifiRcFgtqYvI5I9AI")
+            .expect("Couldn't decode P-256 BASE64 encoding");
+
+        let pub_x = BASE64_URL_SAFE_NO_PAD
+            .decode("Iy3cHBWCRhcjohhS-iSucYMUNjH77DIQRSdn-NylcCw")
+            .expect("Couldn't BASE64 decode P-256 X public bytes");
+
+        let pub_y = BASE64_URL_SAFE_NO_PAD
+            .decode("p9MikGh-O3nbLWA-6tP4Oanch5AF3ZhRD907tQojH3k")
+            .expect("Couldn't BASE64 decode P-256 Y public bytes");
+
+        let public_bytes = [vec![4], pub_x, pub_y].concat();
+
+        assert_eq!(seed.len(), 32);
+        let mut private_bytes: [u8; 32] = [0; 32];
+        private_bytes.copy_from_slice(seed.as_slice());
+
+        let secret =
+            Secret::generate_p256(None, Some(&private_bytes)).expect("P256 secret generate failed");
+
+        assert_eq!(
+            secret.get_private_keymultibase().unwrap(),
+            "z42tiPvqM1uFz2QxbF7wTsQkfAf3hCsq1Uf9JbUMRaRiV1yb"
+        );
+        assert_eq!(secret.get_public_bytes(), public_bytes.as_slice());
+        assert_eq!(secret.get_private_bytes(), private_bytes.as_slice());
+
+        let secret2 =
+            Secret::from_multibase("z42tiPvqM1uFz2QxbF7wTsQkfAf3hCsq1Uf9JbUMRaRiV1yb", None)
+                .expect("Failed to transform P256 to secret");
+
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase().unwrap()
+        );
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+
+        assert_eq!(
+            secret2.get_private_keymultibase().unwrap(),
+            secret.get_private_keymultibase().unwrap()
+        );
+    }
+
+    #[test]
+    fn from_multiencode_p384() {
+        let seed = BASE64_URL_SAFE_NO_PAD
+            .decode("nka5zKVpVpOdCKdZZgnZ-VaSXk6V_ovYibzr2nf-mKAgct6wBdvWCXWLaNr80zY0")
+            .expect("Couldn't decode P-384 BASE64 encoding");
+
+        let pub_x = BASE64_URL_SAFE_NO_PAD
+            .decode("uitQkpTA3Vw8t_qOGrdLlbIzdzF0K9NsScgsVgmpQdQJgshCifOCUehxeazzL-Ow")
+            .expect("Couldn't BASE64 decode P-384 X public bytes");
+
+        let pub_y = BASE64_URL_SAFE_NO_PAD
+            .decode("4BIcrueQfhxfnrqToZEOujOfJOmwEsWJAdFNZ9dksIBCnWiCLBEn2HnR7ikyyPMJ")
+            .expect("Couldn't BASE64 decode P-384 Y public bytes");
+
+        let public_bytes = [vec![4], pub_x, pub_y].concat();
+
+        assert_eq!(seed.len(), 48);
+        let mut private_bytes: [u8; 48] = [0; 48];
+        private_bytes.copy_from_slice(seed.as_slice());
+
+        let secret =
+            Secret::generate_p384(None, Some(&private_bytes)).expect("P384 secret generate failed");
+
+        assert_eq!(
+            secret.get_private_keymultibase().unwrap(),
+            "z2fapqKp6mPoQCwkQzvL9Ns35Y57R4LRRfVwbXoSTQjTHdjD4MqFZnw5PueieuTWG4pN5q"
+        );
+        assert_eq!(secret.get_public_bytes(), public_bytes.as_slice());
+        assert_eq!(secret.get_private_bytes(), private_bytes.as_slice());
+
+        let secret2 = Secret::from_multibase(
+            "z2fapqKp6mPoQCwkQzvL9Ns35Y57R4LRRfVwbXoSTQjTHdjD4MqFZnw5PueieuTWG4pN5q",
+            None,
+        )
+        .expect("Failed to transform P384 to secret");
+
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase().unwrap()
+        );
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+
+        assert_eq!(
+            secret2.get_private_keymultibase().unwrap(),
+            secret.get_private_keymultibase().unwrap()
+        );
+    }
+
+    #[test]
+    fn from_multiencode_secp256k1() {
+        let seed = BASE64_URL_SAFE_NO_PAD
+            .decode("CzR8XKYmrxbeEeUKojSgXUskLmGjbLXFf4CoJd6he6A")
+            .expect("Couldn't decode secp256k1 BASE64 encoding");
+
+        let pub_x = BASE64_URL_SAFE_NO_PAD
+            .decode("jcGMDsxKBME8GmaN_-XTaAEKk2ET6ajWe_8-2RsU-is")
+            .expect("Couldn't BASE64 decode secp256k1 X public bytes");
+
+        let pub_y = BASE64_URL_SAFE_NO_PAD
+            .decode("9ECTinCwW9bA36fmUBg0_iu0oyLR-Tn54guX8exrUjM")
+            .expect("Couldn't BASE64 decode secp256k1 Y public bytes");
+
+        let public_bytes = [vec![4], pub_x, pub_y].concat();
+
+        assert_eq!(seed.len(), 32);
+        let mut private_bytes: [u8; 32] = [0; 32];
+        private_bytes.copy_from_slice(seed.as_slice());
+
+        let secret = Secret::generate_secp256k1(None, Some(&private_bytes))
+            .expect("secp256k1 secret generate failed");
+
+        assert_eq!(
+            secret.get_private_keymultibase().unwrap(),
+            "z3vLUkda21MTbdECEEyjUWEQmJ8r1CKekvRLqQbZXxfLieL7"
+        );
+        assert_eq!(secret.get_public_bytes(), public_bytes.as_slice());
+        assert_eq!(secret.get_private_bytes(), private_bytes.as_slice());
+
+        let secret2 =
+            Secret::from_multibase("z3vLUkda21MTbdECEEyjUWEQmJ8r1CKekvRLqQbZXxfLieL7", None)
+                .expect("Failed to transform secp256k1 to secret");
+
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            secret.get_public_keymultibase().unwrap()
+        );
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+
+        assert_eq!(
+            secret2.get_private_keymultibase().unwrap(),
+            secret.get_private_keymultibase().unwrap()
+        );
     }
 }

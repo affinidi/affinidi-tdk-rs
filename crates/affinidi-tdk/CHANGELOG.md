@@ -1,5 +1,24 @@
 # Affinidi TDK Changelog
 
+## 9th November 2025 (Release 0.2.7)
+
+- **FEATURE:** Added X25519 key support to `generate_did_key()`
+  - `KeyType` also now feature X25519 alongside Ed25519
+- **FEATURE:** Added ability to generate did:peer DIDs directly from TDK using
+  pre-created secrets
+  - This is useful where you already have key material and want to create a did:peer
+
+## 3rd November 2025 (Release 0.2.6)
+
+- **CHORE:** `affinidi-secrets-resolver` updated to 0.4.x
+  - `Secret::from_multibase()` API changed
+
+## 31st October 2025 (Release 0.2.5)
+
+- **MAINTENANCE:** Updated dependencies
+  - `affinidi-tdk-common` updated to 0.2.2
+- **IMPROVEMENT:** Documentation on core TDK instantiation improved
+
 ## 11th October 2025 (Release 0.2.4)
 
 - **FEATURE:** [Affinidi DID Common crate](https://crates.io/crates/affinidi-did-common)

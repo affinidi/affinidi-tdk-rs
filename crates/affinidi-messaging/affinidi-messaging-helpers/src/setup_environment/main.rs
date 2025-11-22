@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if Confirm::with_theme(&theme)
-        .with_prompt(format!("Save friends to profile: {}?", environment_name))
+        .with_prompt(format!("Save friends to profile: {environment_name}?"))
         .default(true)
         .interact()?
     {
@@ -153,7 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     println!(
         "  {}",
-        style(format!("export TDK_ENVIRONMENT={}", environment_name)).color256(208)
+        style(format!("export TDK_ENVIRONMENT={environment_name}")).color256(208)
     );
     println!();
     Ok(())
