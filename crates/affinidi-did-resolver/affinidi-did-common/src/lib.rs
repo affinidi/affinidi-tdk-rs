@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use affinidi_secrets_resolver::errors::SecretsResolverError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -23,6 +24,12 @@ pub mod verification_method;
 pub enum DocumentError {
     #[error("URL Error")]
     URL(#[from] url::ParseError),
+
+    #[error("VerificationMethod Error: {0}")]
+    VM(String),
+
+    #[error("Secrets Error: {0}")]
+    Secret(#[from] SecretsResolverError),
 }
 
 /// A [DID Document]
