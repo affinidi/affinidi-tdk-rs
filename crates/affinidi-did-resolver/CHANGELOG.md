@@ -2,16 +2,23 @@
 
 ## Changelog history
 
+### 28th November 2025
+
+#### affinidi-did-common (0.1.4)
+
+- **FEATURE:** `VerificationMethod::get_public_key_bytes()` added as a common way
+  to get public key bytes from a Verification Method
+
 ### 22nd November 2025
 
-## affinidi-did-resolver-cache-sdk (0.6.4)
+#### affinidi-did-resolver-cache-sdk (0.6.4)
 
 - **FEATURE:** `did:cheqd` implemented and working. Thank you to [Cheqd](https://cheqd.io/)
   for contributing a Rust implementation of their DID method
 
 ### 3rd November 2025
 
-## DID Common (0.1.3)
+#### DID Common (0.1.3)
 
 - **FEATURE:** `Document` added extra methods
   - `Document::contains_assertion_method(id)`
@@ -21,14 +28,14 @@
 
 ### 17th October 2025
 
-## DID Common (0.1.2)
+#### DID Common (0.1.2)
 
 - **FEATURE:** `Document` now supports `Default` and a `Document::new(id: &str)`
   to help with creating a DID Document from scratch
 
 ### 16th October 2025
 
-## DID Common (0.1.1)
+#### DID Common (0.1.1)
 
 - **FIX:** `Endpoint::get_uri()` wasn't handling JSON arrays/objects correctly.
   Now corrected
@@ -37,33 +44,33 @@
 
 ### 9th October 2025
 
-## did-peer (0.7.4)
+#### did-peer (0.7.4)
 
 - **CHORE:** affinidi-secrets-resolver has stronger drop protection, small change
   to use references
 
-## did-peer (0.7.3)
+#### did-peer (0.7.3)
 
 - **FIX:** secp256k1 keys were incorrectly using `Secp256k1` in some situations
   instead of `secp256k1`
 
-## affinidi-did-key (0.1.3)
+#### affinidi-did-key (0.1.3)
 
 - **FIX:** Swapped order of keys when Ed25519 Crypto alg is being used
   - Was placing the X25519 derived key before Ed25519 which confused some implementations
 
 ### 8th October 2025
 
-## affinidi-did-key (0.1.2)
+#### affinidi-did-key (0.1.2)
 
 - **FIX:** Generating a DID was placing the wrong key ID in the generated secret
   - Correct did:key key id's are now properly used
 
-## did-cheqd (0.1.0)
+#### did-cheqd (0.1.0)
 
 - Initial release of Cheqd DID method support
 
-## affinidi-did-resolver-cache-sdk (0.6.2)
+#### affinidi-did-resolver-cache-sdk (0.6.2)
 
 - **IMPROVEMENT:** `did-cheqd` and `did-webvh` moved behind feature flags, helps
   with managing complex dependencies as needed
@@ -71,50 +78,50 @@
 
 ### 3rd October 2025
 
-## affinidi-did-resolver-cache-server (0.6.1)
+#### affinidi-did-resolver-cache-server (0.6.1)
 
 - **MAINTENANCE:** Compatible with latest `affinidi-secrets-resolver`
 
-## did-key (0.1.1)
+#### did-key (0.1.1)
 
 - **MAINTENANCE:** Compatible with latest `affinidi-secrets-resolver`
 
 ### 1st October 2025
 
-## affinidi-did-resolver-cache-sdk (0.6.1)
+#### affinidi-did-resolver-cache-sdk (0.6.1)
 
 - **FIX:** Adding WebVH DID method back in
 
-## did-peer (0.7.1)
+#### did-peer (0.7.1)
 
 - **FIX:** Key ID's were not correctly implied
   - ID's used to identify keys are `full_did#key-n`
 
 ### 30th September 2025
 
-## DID Common (0.1.0)
+#### DID Common (0.1.0)
 
 - First initial release of the affinidi DID common crate
   - replaces the SSI crate dependency for common DID structure and methods
 
-## affinidi-did-key (0.1.0)
+#### affinidi-did-key (0.1.0)
 
 - Initial release of did:key method resolver and generator
 
-## did-example (0.5.5)
+#### did-example (0.5.5)
 
 - **MAINTENANCE:** Updating dependencies
 
-## did-peer (0.7.0)
+#### did-peer (0.7.0)
 
 - **FIX:** Removing SSI crate dependency
 - **BREAKING:** SSI crate support removed
 
-## affinidi-did-resolver-cache-sdk (0.6.0)
+#### affinidi-did-resolver-cache-sdk (0.6.0)
 
 - **BREAKING:** Removing SSI crate dependency
 
-## affinidi-did-resolver-cache-server (0.6.0)
+#### affinidi-did-resolver-cache-server (0.6.0)
 
 - **FIX:** Removing SSI crate dependency
 - **BREAKING:** JWK DID method has been removed due to using relative uri's that
@@ -123,11 +130,11 @@
 
 ### 14th August 2025
 
-## DID webvh method (0.1.8)
+#### DID webvh method (0.1.8)
 
 ### Crate donated to [Decentralized Identity Foundation](https://identity.foundation/)
 
-## DID Resolver Cache SDK (0.5.6)
+#### DID Resolver Cache SDK (0.5.6)
 
 - **MAINTENANCE:** WebVH DID crate now using the `didwebvh-rs` crate
 - **MAINTENANCE:** Crate dependencies updated
@@ -135,7 +142,7 @@
 
 ### July 2025
 
-## DID webvh method (0.1.7)
+#### DID webvh method (0.1.7)
 
 - **BREAKING CHANGE:** WebVH v1.0 spec changes parameters definition
   - empty arrays and objects replaces null values
@@ -152,19 +159,19 @@
 
 ### 14th July 2025
 
-## DID example method (0.5.4)
+#### DID example method (0.5.4)
 
 - **MAINTENANCE:** Updating crate dependencies
 - **MAINTENANCE:** Fixing rust lint warnings
 
-## DID peer method (0.6.3)
+#### DID peer method (0.6.3)
 
 - **MAINTENANCE:** Updating crate dependencies
 - **MAINTENANCE:** Fixing rust lint warnings
 
 ### 11th July 2025
 
-## DID webvh method (0.1.6)
+#### DID webvh method (0.1.6)
 
 - **MAINTENANCE:** Addressing Rust clippy warnings due to new linting rules
 - **MAINTENANCE:** Adding Documentation
@@ -179,7 +186,7 @@
 
 ### 26th June 2025
 
-## DID webvh method (0.1.5)
+#### DID webvh method (0.1.5)
 
 - **CHANGE:** `DIDWebVHState` is now the entry point to working with webvh
   LogEntries and WitnessProofs
@@ -193,7 +200,7 @@
 
 ### 19th June 2025
 
-## DID webvh method (0.1.4)
+#### DID webvh method (0.1.4)
 
 - **FEATURE:** Conversion of `LogEntry` to `GenericDocument` for signing is now
   3.4x faster
@@ -205,7 +212,7 @@
 
 ### 16th June 2025
 
-## DID webvh method (0.1.3)
+#### DID webvh method (0.1.3)
 
 - **CHANGE:** `create` example moved to `wizard`
 - **FEATURE:** `wizard` supports updating the DID and creating new LogEntry records
@@ -217,7 +224,7 @@
 
 ### 6th June 2025
 
-## DID webvh method (0.1.1)
+#### DID webvh method (0.1.1)
 
 - **FEATURE:** Validation of LogEntry in place
   - Checks Parameters across LogEntries
@@ -226,24 +233,24 @@
 
 ### 29th May 2025
 
-## DID Resolver Cache (release 0.5.4)
+#### DID Resolver Cache (release 0.5.4)
 
 - **MAINTENANCE:** Bumping crate dependencies
   - SSI crate updated to 0.12
 - **FEATURE:** Added `did:webvh` method
 
-## DID webvh method (release 0.1.0)
+#### DID webvh method (release 0.1.0)
 
 - Initial release of the `did:webvh` method
   - This is a new method for resolving DIDs using the WebVH protocol
   - The WebVH method is designed to be used with the Affinidi DID Resolver Cache
 
-## DID peer method (release 0.6.2)
+#### DID peer method (release 0.6.2)
 
 - **MAINTENANCE:** Bumping crate dependencies
   - SSI crate updated to 0.12
 
-## DID example method (release 0.5.3)
+#### DID example method (release 0.5.3)
 
 - **MAINTENANCE:** Bumping crate dependencies
   - SSI crate updated to 0.12
