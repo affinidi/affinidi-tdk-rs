@@ -1,5 +1,15 @@
 # Affinidi Data Integrity Changelog
 
+## 29th November 2025 Release 0.3.0
+
+- **BREAKING FEATURE:** `verify_data()` now requires the following changes:
+  1. DID Resolver implementing `DIDResolver` trait to be passed in
+     - This allows for greater flexibility in DID resolution strategies
+  2. function is now async due to DID resolution
+
+This change allows for determination of the proof Verification Method from the
+DID Document itself.
+
 ## 3rd November 2025 Release 0.2.4
 
 - **MAINTENANCE:** Updated to latest `affinidi-secrets-resolver`
