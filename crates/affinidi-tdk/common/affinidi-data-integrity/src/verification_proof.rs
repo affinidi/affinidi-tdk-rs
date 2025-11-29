@@ -1,13 +1,13 @@
-use affinidi_secrets_resolver::secrets::Secret;
+use crate::{
+    DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite, hashing_eddsa_jcs,
+};
+use affinidi_did_common::document::DocumentExt;
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json_canonicalizer::to_string;
 use tracing::debug;
-
-use crate::{
-    DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite, hashing_eddsa_jcs,
-};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,7 +22,8 @@ pub struct VerificationProof {
 /// Verify a signed JSON Schema document.
 /// You must strip `proof` from the document as needed
 /// Context is a copy of any context that needs to be passed in
-pub fn verify_data<S>(
+pub async fn verify_data<S>(
+    did_resolver: &DIDCacheClient,
     signed_doc: &S,
     context: Option<Vec<String>>,
     proof: &DataIntegrityProof,
@@ -106,24 +107,36 @@ where
     );
 
     // Create public key bytes from Verification Material
-    if !proof.verification_method.starts_with("did:key:") {
+    let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
+        did
+    } else {
         return Err(DataIntegrityError::InputDataError(
-            "Verification method must start with 'did:key:'".to_string(),
-        ));
-    }
-    let Some((_, public_key)) = proof.verification_method.split_once('#') else {
-        return Err(DataIntegrityError::InputDataError(
-            "Invalid verification method format".to_string(),
+            "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
         ));
     };
-    let secret = Secret::decode_multikey(public_key)
-        .map_err(|e| DataIntegrityError::InputDataError(format!("Invalid public key: {e}")))?;
+
+    let resolved = did_resolver.resolve(did).await?;
+    let public_bytes = if let Some(vm) = resolved
+        .doc
+        .get_verification_method(&proof.verification_method)
+    {
+        vm.get_public_key_bytes().map_err(|e| {
+            DataIntegrityError::InputDataError(format!(
+                "Failed to get public key bytes from verification method: {e}"
+            ))
+        })?
+    } else {
+        return Err(DataIntegrityError::InputDataError(format!(
+            "Couldn't find key-id ({}) in resolved DID Document",
+            proof.verification_method
+        )));
+    };
 
     // Verify the signature
     let crypto = CryptoSuite::EddsaJcs2022;
     crypto
         .verify(
-            secret.as_slice(),
+            public_bytes.as_slice(),
             hash_data.as_slice(),
             proof_value.as_slice(),
         )
@@ -139,14 +152,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
-
     use super::verify_data;
     use crate::{DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite};
+    use affinidi_did_resolver_cache_sdk::{
+        DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
+    };
+    use serde_json::{Value, json};
     use std::collections::HashMap;
 
-    #[test]
-    fn missing_proof_proof_value() {
+    #[tokio::test]
+    async fn missing_proof_proof_value() {
         let proof = crate::DataIntegrityProof {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -157,18 +172,23 @@ mod tests {
             context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "proofValue is missing in the proof".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(txt, "proofValue is missing in the proof".to_string());
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_proof_proof_value() {
+    #[tokio::test]
+    async fn invalid_proof_proof_value() {
         let proof = crate::DataIntegrityProof {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -179,18 +199,23 @@ mod tests {
             context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid proof value: Unknown base code: a".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(txt, "Invalid proof value: Unknown base code: a".to_string(),);
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_context() {
+    #[tokio::test]
+    async fn invalid_context() {
         let proof = crate::DataIntegrityProof {
                 type_: "Test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -207,18 +232,31 @@ mod tests {
             "https://example.com/2".to_string(),
         ];
 
-        let result = verify_data(&signed_context, Some(signed_context.clone()), &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(
+            &resolver,
+            &signed_context,
+            Some(signed_context.clone()),
+            &proof,
+        )
+        .await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Document context does not match proof context".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Document context does not match proof context".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_context_2() {
+    #[tokio::test]
+    async fn invalid_context_2() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -234,18 +272,31 @@ mod tests {
                 context: None,
             };
 
-        let result = verify_data(&signed_context, Some(signed_context.clone()), &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(
+            &resolver,
+            &signed_context,
+            Some(signed_context.clone()),
+            &proof,
+        )
+        .await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Document context does not match proof context".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Document context does not match proof context".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_context_3() {
+    #[tokio::test]
+    async fn invalid_context_3() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -267,18 +318,25 @@ mod tests {
             "https://example.com/3".to_string(),
         ];
 
-        let result = verify_data(&doc_context, Some(doc_context.clone()), &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &doc_context, Some(doc_context.clone()), &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Document context does not match proof context".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Document context does not match proof context".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn valid_context() {
+    #[tokio::test]
+    async fn valid_context() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -300,19 +358,26 @@ mod tests {
             "https://example.com/2".to_string(),
         ];
 
-        let result = verify_data(&doc_context, Some(doc_context.clone()), &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &doc_context, Some(doc_context.clone()), &proof).await;
         assert!(result.is_err());
         // Passed the context check test
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_data_integrity_proof() {
+    #[tokio::test]
+    async fn invalid_data_integrity_proof() {
         let proof = crate::DataIntegrityProof {
                 type_: "test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -323,14 +388,21 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
     #[test]
@@ -338,8 +410,8 @@ mod tests {
         // TODO: Need to add more crypto types in the future
     }
 
-    #[test]
-    fn invalid_created() {
+    #[tokio::test]
+    async fn invalid_created() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -350,18 +422,25 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid created date: input contains invalid characters".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid created date: input contains invalid characters".to_string(),
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_created_future() {
+    #[tokio::test]
+    async fn invalid_created_future() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -372,18 +451,22 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Created date is in the future".to_string(),
-            ))
-        );
+
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(txt, "Created date is in the future".to_string(),);
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_verification_method() {
+    #[tokio::test]
+    async fn invalid_verification_method() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -394,18 +477,24 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Verification method must start with 'did:key:'".to_string(),
-            ))
-        );
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_verification_method_2() {
+    #[tokio::test]
+    async fn invalid_verification_method_2() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -416,18 +505,24 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid verification method format".to_string(),
-            ))
-        );
+        match result {
+            Err(DataIntegrityError::InputDataError(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
     }
 
-    #[test]
-    fn invalid_verification_method_3() {
+    #[tokio::test]
+    async fn invalid_verification_method_3() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -438,18 +533,25 @@ mod tests {
                 context: None,
         };
 
-        let result = verify_data(&HashMap::<String, String>::new(), None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::InputDataError(
-                "Invalid public key: Key Error: Failed to multibase.decode key: Invalid base string".to_string(),
-            ))
-        );
+        match result {
+            Err(DataIntegrityError::DIDResolverError(DIDCacheError::DIDError(txt))) => {
+                assert_eq!(
+                    txt,
+                    "Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
+                        .to_string()
+                );
+            }
+            _ => panic!("Invalid return type {:#?}", result),
+        }
     }
 
-    #[test]
-    fn failed_verification() {
+    #[tokio::test]
+    async fn failed_verification() {
         let invalid_signed = r#"{
   "parameters": {
     "deactivated": true,
@@ -520,19 +622,21 @@ mod tests {
 
         let invalid_signed: Value = serde_json::from_str(invalid_signed).unwrap();
 
-        let result = verify_data(&invalid_signed, None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &invalid_signed, None, &proof).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.err(),
-            Some(DataIntegrityError::VerificationError(
-                "Signature verification failed: Verification Error: Signature verification failed"
-                    .to_string()
-            ))
-        );
+        match result {
+            Err(DataIntegrityError::VerificationError(txt)) => {
+                assert_eq!(txt, "Signature verification failed: Verification Error: Signature verification failed".to_string())
+            }
+            _ => panic!("Incorrect error returned"),
+        }
     }
 
-    #[test]
-    fn verification_ok() {
+    #[tokio::test]
+    async fn verification_ok() {
         let signed = json!({
             "versionId": "1-QmaZi3DYg2PZqoPn2KSnYH9ccHKg9axxP1ukjop87vjMrF",
             "versionTime": "2025-07-08T00:01:53Z",
@@ -588,15 +692,19 @@ mod tests {
         let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
 
         println!("input: {signed:#?}");
-        let result = verify_data(&signed, None, &proof);
+
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &signed, None, &proof).await;
         println!("result: {result:#?}");
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.verified);
     }
 
-    #[test]
-    fn verification_ok_changed_order() {
+    #[tokio::test]
+    async fn verification_ok_changed_order() {
         let signed = json!({
             "versionTime": "2025-07-08T00:01:53Z",
             "versionId": "1-QmaZi3DYg2PZqoPn2KSnYH9ccHKg9axxP1ukjop87vjMrF",
@@ -651,7 +759,10 @@ mod tests {
         }"#;
         let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
 
-        let result = verify_data(&signed, None, &proof);
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let result = verify_data(&resolver, &signed, None, &proof).await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.verified);

@@ -1,4 +1,5 @@
 use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
+use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use clap::Parser;
 use serde_json::json;
 use std::fs;
@@ -17,7 +18,8 @@ fn load_file(file: &str) -> String {
     fs::read_to_string(file).unwrap_or_else(|_| panic!("Failed to read file: {file}"))
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Cli::parse();
 
     let input = load_file(&args.file_name);
@@ -47,5 +49,10 @@ fn main() {
     println!();
     println!("Context:\n{context:#?}");
 
-    verify_data(&signed_doc, context, &proof).expect("Failed to verify data integrity proof");
+    let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+        .await
+        .unwrap();
+    verify_data(&resolver, &signed_doc, context, &proof)
+        .await
+        .expect("Failed to verify data integrity proof");
 }

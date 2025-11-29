@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", style("Generating new DID info...").yellow(),);
     let (old_did, secrets_json) = generate_secrets_and_did()?;
-    let mut well_known_did_part = if api_prefix.is_empty() {
+    let mut well_known_did_part = if api_prefix.len() > 0 {
         format!("{}{}", api_prefix, "/.well-known")
     } else {
         String::from("")
@@ -163,8 +163,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Creating new Admin account
     let (admin_did, admin_did_secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::Ed25519),
-            (DIDPeerKeys::Encryption, KeyType::Secp256k1),
+            (DIDPeerKeys::Verification, KeyType::P256), 
+            (DIDPeerKeys::Verification, KeyType::Ed25519), 
+            (DIDPeerKeys::Encryption, KeyType::Secp256k1), 
+            (DIDPeerKeys::Encryption, KeyType::P256),
+            (DIDPeerKeys::Encryption, KeyType::X25519),
         ],
         None,
     )
@@ -172,15 +175,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let admin_did_secrets_string = serde_json::to_string_pretty(&admin_did_secrets)?;
 
     // print out all the info required to setup the self-hosted mediator
-    println!("{} {}", style("DID Value:").green(), &new_did);
-    println!("{}\n{}", style("DID Secrets:").green(), &secrets_string);
+    println!();
+    println!("{}", style("Mediator DID Information").yellow());
+    println!("{}\n{}", style("DID Value:").green(), &new_did);
     println!("{}\n{}", style("DID Document:").green(), &did_doc);
+    println!("{}\n{}", style("DID Secrets:").green(), &secrets_string);
+    println!();
     println!("{}\n{}", style("JWT Secret:").green(), &jwt_secret);
-
+    println!();
+    println!("{}", style("Mediator Admin Information").yellow());
     println!(
-        "{}\nAdmin DID Value: {}\nAdmin DID Secret:\n{}",
-        style("Mediator Admin:").green(),
+        "{}:\n{}\n{}:\n{}",
+        style("Admin DID Value:").green(),
         &admin_did,
+        style("Admin DID Secret:").green(),
         &admin_did_secrets_string,
     );
 
