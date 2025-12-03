@@ -1,5 +1,15 @@
 # Affinidi Data Integrity Changelog
 
+## 3rd December 2025 Release 0.3.1
+
+- **FEATURE:** New function add `verify_data_with_public_key()` which allows for
+  validating a proof where the public bytes are already known and thus a resolution
+  of the DID verificationMethod is not required.
+  - Use `verifiy_data_with_public_key()` when you already have the public key bytes
+    available for verification
+  - Use `verify_data()` when you need to resolve the DID Document to get the
+    verificationMethod public key bytes
+
 ## 29th November 2025 Release 0.3.0
 
 - **BREAKING FEATURE:** `verify_data()` now requires the following changes:
