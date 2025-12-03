@@ -19,7 +19,8 @@ pub struct VerificationProof {
     pub verified_document: Option<Value>,
 }
 
-/// Verify a signed JSON Schema document.
+/// Verify a signed JSON Schema document which includes a DID lookup resolution step.
+/// If you already have public key bytes, call [verify_data_with_public_key] instead.
 /// You must strip `proof` from the document as needed
 /// Context is a copy of any context that needs to be passed in
 pub async fn verify_data<S>(
@@ -27,6 +28,49 @@ pub async fn verify_data<S>(
     signed_doc: &S,
     context: Option<Vec<String>>,
     proof: &DataIntegrityProof,
+) -> Result<VerificationProof, DataIntegrityError>
+where
+    S: Serialize,
+{
+    // Create public key bytes from Verification Material
+    let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
+        did
+    } else {
+        return Err(DataIntegrityError::InputDataError(
+            "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
+        ));
+    };
+
+    let resolved = did_resolver.resolve(did).await?;
+    let public_bytes = if let Some(vm) = resolved
+        .doc
+        .get_verification_method(&proof.verification_method)
+    {
+        vm.get_public_key_bytes().map_err(|e| {
+            DataIntegrityError::InputDataError(format!(
+                "Failed to get public key bytes from verification method: {e}"
+            ))
+        })?
+    } else {
+        return Err(DataIntegrityError::InputDataError(format!(
+            "Couldn't find key-id ({}) in resolved DID Document",
+            proof.verification_method
+        )));
+    };
+
+    verify_data_with_public_key(signed_doc, context, proof, public_bytes.as_slice())
+}
+
+/// Verify a signed JSON Schema document where we already have the public key bytes
+/// If you do not have public key bytes, use [verify_data] instead.
+/// You must strip `proof` from the document as needed
+/// Context is a copy of any context that needs to be passed in
+/// public_key_bytes is the raw public key bytes to use for verification
+pub fn verify_data_with_public_key<S>(
+    signed_doc: &S,
+    context: Option<Vec<String>>,
+    proof: &DataIntegrityProof,
+    public_key_bytes: &[u8],
 ) -> Result<VerificationProof, DataIntegrityError>
 where
     S: Serialize,
@@ -106,37 +150,11 @@ where
             .join("")
     );
 
-    // Create public key bytes from Verification Material
-    let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
-        did
-    } else {
-        return Err(DataIntegrityError::InputDataError(
-            "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
-        ));
-    };
-
-    let resolved = did_resolver.resolve(did).await?;
-    let public_bytes = if let Some(vm) = resolved
-        .doc
-        .get_verification_method(&proof.verification_method)
-    {
-        vm.get_public_key_bytes().map_err(|e| {
-            DataIntegrityError::InputDataError(format!(
-                "Failed to get public key bytes from verification method: {e}"
-            ))
-        })?
-    } else {
-        return Err(DataIntegrityError::InputDataError(format!(
-            "Couldn't find key-id ({}) in resolved DID Document",
-            proof.verification_method
-        )));
-    };
-
     // Verify the signature
     let crypto = CryptoSuite::EddsaJcs2022;
     crypto
         .verify(
-            public_bytes.as_slice(),
+            public_key_bytes,
             hash_data.as_slice(),
             proof_value.as_slice(),
         )
@@ -153,10 +171,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::verify_data;
-    use crate::{DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite};
+    use crate::{
+        DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite,
+        verification_proof::verify_data_with_public_key,
+    };
     use affinidi_did_resolver_cache_sdk::{
         DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
     };
+    use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -166,7 +188,7 @@ mod tests {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
             created: None,
-            verification_method: "test".to_string(),
+            verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
             proof_purpose: "test".to_string(),
             proof_value: None,
             context: None,
@@ -193,7 +215,7 @@ mod tests {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
             created: None,
-            verification_method: "test".to_string(),
+            verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
             proof_purpose: "test".to_string(),
             proof_value: Some("aaaaaaaaaa".to_string()),
             context: None,
@@ -220,7 +242,7 @@ mod tests {
                 type_: "Test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: None,
-                verification_method: "test".to_string(),
+                verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
                 proof_purpose: "test".to_string(),
                 proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
                 context: None,
@@ -306,7 +328,7 @@ mod tests {
                 type_: "Test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: None,
-                verification_method: "test".to_string(),
+                verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
                 proof_purpose: "test".to_string(),
                 proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
                 context: Some(signed_context),
@@ -346,7 +368,7 @@ mod tests {
                 type_: "Test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: None,
-                verification_method: "test".to_string(),
+                verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
                 proof_purpose: "test".to_string(),
                 proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
                 context: Some(signed_context),
@@ -398,7 +420,7 @@ mod tests {
             Err(DataIntegrityError::InputDataError(txt)) => {
                 assert_eq!(
                     txt,
-                    "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
+                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
                 );
             }
             _ => panic!("Invalid return type"),
@@ -416,7 +438,7 @@ mod tests {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: Some("not-a-date".to_string()),
-                verification_method: "test".to_string(),
+                verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
                 proof_purpose: "test".to_string(),
                 proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
                 context: None,
@@ -445,7 +467,7 @@ mod tests {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: Some("3999-01-01T00:00:00Z".to_string()),
-                verification_method: "test".to_string(),
+                verification_method: "did:key:z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm#z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm".to_string(),
                 proof_purpose: "test".to_string(),
                 proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
                 context: None,
@@ -697,6 +719,76 @@ mod tests {
             .await
             .unwrap();
         let result = verify_data(&resolver, &signed, None, &proof).await;
+        println!("result: {result:#?}");
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(result.verified);
+    }
+
+    #[test]
+    fn verification_ok_public_bytes() {
+        // Tests proof verification using derived bytes from outside the DID Resolver
+
+        let signed = json!({
+            "versionId": "1-QmaZi3DYg2PZqoPn2KSnYH9ccHKg9axxP1ukjop87vjMrF",
+            "versionTime": "2025-07-08T00:01:53Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "scid": "QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj",
+                "updateKeys": [
+                    "z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ"
+                ],
+                "portable": true,
+                "nextKeyHashes": [
+                    "zQmUakJ5ci12fkXTDaf5di3dj4khShdaQDTLCb797EiJbxc"
+                ]
+            },
+            "state": {
+                "@context": [
+                    "https://www.w3.org/ns/did/v1",
+                    "https://www.w3.org/ns/cid/v1"
+                ],
+                "assertionMethod": [
+                    "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000#key-0"
+                ],
+                "authentication": [
+                    "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000#key-0"
+                ],
+                "capabilityDelegation": [],
+                "capabilityInvocation": [],
+                "id": "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000",
+                "keyAgreement": [
+                    "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000#key-0"
+                ],
+                "service": [],
+                "verificationMethod": [
+                    {
+                        "controller": "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000",
+                        "id": "did:webvh:QmcmX6YdoH8jo8EYXr53KjnkA7voMwY8ZGMrabLQTRzzYj:localhost%3A8000#key-0",
+                        "publicKeyMultibase": "z6MkuHHrnG1L7vkJuh17qyS5Lpm74iMmp7SiENxzLHGhSP6t",
+                        "type": "Multikey"
+                    }
+                ]
+            }
+        }
+                );
+
+        let proof_raw = r#"{
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-jcs-2022",
+            "created": "2025-07-08T00:01:53Z",
+            "verificationMethod": "did:key:z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ#z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ",
+            "proofPurpose": "assertionMethod",
+            "proofValue": "z45iNVV2Zo5xfFYw2HyWxUjBP42GPfrcYruNXwW7xdYKjDHj7zgnPtv4aWvKac5WM5mCG1vMkoBZtMAM653qTrMG5"
+        }"#;
+        let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
+
+        println!("input: {signed:#?}");
+
+        let secret =
+            Secret::decode_multikey("z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ").unwrap();
+
+        let result = verify_data_with_public_key(&signed, None, &proof, secret.as_slice());
         println!("result: {result:#?}");
         assert!(result.is_ok());
         let result = result.unwrap();
