@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 3rd December 2025
+
+#### did-scid (0.1.0)
+
+- First release of the did:scid method supporting did:scid:vh:1 (WebVH and Cheqd)
+
 ### 28th November 2025
 
 #### affinidi-did-common (0.1.4)
