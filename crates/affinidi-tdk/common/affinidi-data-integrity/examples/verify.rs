@@ -1,5 +1,5 @@
-use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_data_integrity::DataIntegrityProof;
+use affinidi_tdk::{TDK, common::config::TDKConfigBuilder};
 use clap::Parser;
 use serde_json::json;
 use std::fs;
@@ -49,10 +49,10 @@ async fn main() {
     println!();
     println!("Context:\n{context:#?}");
 
-    let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+    let tdk = TDK::new(TDKConfigBuilder::new().build().unwrap(), None)
         .await
         .unwrap();
-    verify_data(&resolver, &signed_doc, context, &proof)
+    tdk.verify_data(&signed_doc, context, &proof)
         .await
         .expect("Failed to verify data integrity proof");
 }

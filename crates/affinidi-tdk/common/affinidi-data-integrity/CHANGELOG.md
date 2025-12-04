@@ -1,5 +1,12 @@
 # Affinidi Data Integrity Changelog
 
+## 4th December 2025 Release 0.4.0
+
+**WARNING:** version 0.3.1 created a cyclic dependency with
+`affinidi-did-resolver-cache-sdk` and `didwebvh-rs`!
+
+- **FIX:** `verify_data()` has been moved to the `affinidi_tdk` crate
+
 ## 3rd December 2025 Release 0.3.1
 
 - **FEATURE:** New function add `verify_data_with_public_key()` which allows for

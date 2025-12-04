@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.2.7"
+version = "0.2.8"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,10 +13,11 @@ publish.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["messaging", "meeting-place", "did-peer"]
+default = ["messaging", "meeting-place", "did-peer", "data-integrity"]
 messaging = ["dep:affinidi-messaging-sdk"]
 meeting-place = ["dep:affinidi-meeting-place"]
 did-peer = ["dep:did-peer"]
+data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 
 [dependencies]
 affinidi-did-resolver-cache-sdk.workspace = true
@@ -29,6 +30,7 @@ affinidi-secrets-resolver.workspace = true
 affinidi-meeting-place = { workspace = true, optional = true }
 did-peer = { workspace = true, optional = true }
 affinidi-did-key.workspace = true
+affinidi-data-integrity = { workspace = true, optional = true }
 
 # External Crates
 clap = { version = "4.5", features = ["derive"] }
@@ -36,6 +38,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
+serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = "1.0"
 tokio = { version = "1.48", features = ["full"] }
 tracing = "0.1"
