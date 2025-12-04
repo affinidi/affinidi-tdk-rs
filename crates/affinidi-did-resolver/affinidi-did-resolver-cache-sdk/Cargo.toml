@@ -43,7 +43,7 @@ affinidi-did-key.workspace = true
 # External Crates
 ahash = "0.8"
 base64 = { version = "0.22", optional = true }
-didwebvh-rs = { version = "0.1.10", optional = true }
+didwebvh-rs = { version = "0.1", optional = true }
 futures-util = "0.3"
 highway = "1.3.0"
 moka = { version = "0.12", features = ["future"] }
