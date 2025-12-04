@@ -2,7 +2,6 @@
 *   W3C Data Integrity Implementation
 */
 
-use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
 use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use crypto_suites::CryptoSuite;
@@ -27,8 +26,6 @@ pub enum DataIntegrityError {
     SecretsError(String),
     #[error("Verification Error: {0}")]
     VerificationError(String),
-    #[error("DID Resolver Error")]
-    DIDResolverError(#[from] DIDCacheError),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

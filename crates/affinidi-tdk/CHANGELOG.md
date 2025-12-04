@@ -1,5 +1,12 @@
 # Affinidi TDK Changelog
 
+## 4th December 2025 (Release 0.2.8)
+
+- **FEATURE:** TDK now provides a convenience method to verify DataIntegrityProofs
+  where a DID lookup is required.
+  - This has been added at the TDK level to stop a cyclic dependency between
+    `affinidi-data-integrity` crate and `didwebvh-rs` crate
+
 ## 9th November 2025 (Release 0.2.7)
 
 - **FEATURE:** Added X25519 key support to `generate_did_key()`

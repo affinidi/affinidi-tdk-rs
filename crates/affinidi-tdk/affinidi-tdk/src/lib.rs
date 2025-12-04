@@ -4,6 +4,10 @@
  * Instantiate a TDK client with the `new` function
  */
 
+#[cfg(feature = "data-integrity")]
+use affinidi_data_integrity::{
+    DataIntegrityError, DataIntegrityProof, verification_proof::VerificationProof,
+};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
 use affinidi_messaging_sdk::ATM;
@@ -15,6 +19,8 @@ use affinidi_tdk_common::{
     profiles::TDKProfile, tasks::authentication::AuthenticationCache,
 };
 use common::{config::TDKConfig, environments::TDKEnvironment};
+#[cfg(feature = "data-integrity")]
+use serde::Serialize;
 use std::sync::Arc;
 
 pub mod dids;
@@ -31,6 +37,9 @@ pub use affinidi_messaging_sdk as messaging;
 
 #[cfg(feature = "did-peer")]
 pub use did_peer;
+
+#[cfg(feature = "data-integrity")]
+pub use affinidi_data_integrity as data_integrity;
 
 // Always exported
 pub use affinidi_did_common as did_common;
@@ -168,5 +177,158 @@ impl TDK {
     /// Access shared DID resolver
     pub fn did_resolver(&self) -> &DIDCacheClient {
         &self.inner.did_resolver
+    }
+
+    /// Verify a signed JSON Schema document which includes a DID lookup resolution step.
+    /// If you already have public key bytes, call [verify_data_with_public_key] instead.
+    /// You must strip `proof` from the document as needed
+    /// Context is a copy of any context that needs to be passed in
+    #[cfg(feature = "data-integrity")]
+    pub async fn verify_data<S>(
+        &self,
+        signed_doc: &S,
+        context: Option<Vec<String>>,
+        proof: &DataIntegrityProof,
+    ) -> Result<VerificationProof>
+    where
+        S: Serialize,
+    {
+        // Create public key bytes from Verification Material
+
+        use affinidi_data_integrity::verification_proof::verify_data_with_public_key;
+        use affinidi_did_common::document::DocumentExt;
+        use affinidi_tdk_common::errors::TDKError;
+        let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
+            did
+        } else {
+            use affinidi_tdk_common::errors::TDKError;
+
+            return Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(
+                "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
+            )));
+        };
+
+        let resolved = self.inner.did_resolver.resolve(did).await?;
+        let public_bytes = if let Some(vm) = resolved
+            .doc
+            .get_verification_method(&proof.verification_method)
+        {
+            vm.get_public_key_bytes().map_err(|e| {
+                DataIntegrityError::InputDataError(format!(
+                    "Failed to get public key bytes from verification method: {e}"
+                ))
+            })?
+        } else {
+            return Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(
+                format!(
+                    "Couldn't find key-id ({}) in resolved DID Document",
+                    proof.verification_method
+                ),
+            )));
+        };
+
+        verify_data_with_public_key(signed_doc, context, proof, public_bytes.as_slice())
+            .map_err(TDKError::DataIntegrity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use affinidi_data_integrity::{DataIntegrityError, crypto_suites::CryptoSuite};
+    use affinidi_tdk_common::{config::TDKConfig, errors::TDKError};
+
+    use crate::TDK;
+
+    #[tokio::test]
+    async fn invalid_verification_method() {
+        let proof = crate::DataIntegrityProof {
+                type_: "DataIntegrityProof".to_string(),
+                cryptosuite: CryptoSuite::EddsaJcs2022,
+                created: Some("2025-01-01T00:00:00Z".to_string()),
+                verification_method: "test".to_string(),
+                proof_purpose: "test".to_string(),
+                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
+                context: None,
+        };
+
+        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
+            .await
+            .unwrap();
+        let result = tdk
+            .verify_data(&HashMap::<String, String>::new(), None, &proof)
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(txt))) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_verification_method_2() {
+        let proof = crate::DataIntegrityProof {
+                type_: "DataIntegrityProof".to_string(),
+                cryptosuite: CryptoSuite::EddsaJcs2022,
+                created: Some("2025-01-01T00:00:00Z".to_string()),
+                verification_method: "did:key:not_a_key".to_string(),
+                proof_purpose: "test".to_string(),
+                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
+                context: None,
+        };
+
+        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
+            .await
+            .unwrap();
+        let result = tdk
+            .verify_data(&HashMap::<String, String>::new(), None, &proof)
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(txt))) => {
+                assert_eq!(
+                    txt,
+                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
+                );
+            }
+            _ => panic!("Invalid return type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_verification_method_3() {
+        let proof = crate::DataIntegrityProof {
+                type_: "DataIntegrityProof".to_string(),
+                cryptosuite: CryptoSuite::EddsaJcs2022,
+                created: Some("2025-01-01T00:00:00Z".to_string()),
+                verification_method: "did:key:test#test".to_string(),
+                proof_purpose: "test".to_string(),
+                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
+                context: None,
+        };
+
+        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
+            .await
+            .unwrap();
+        let result = tdk
+            .verify_data(&HashMap::<String, String>::new(), None, &proof)
+            .await;
+        assert!(result.is_err());
+        match result {
+            Err(TDKError::DIDResolver(txt)) => {
+                assert_eq!(
+                    txt,
+                    "Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
+                        .to_string()
+                );
+            }
+            _ => panic!("Invalid return type {:#?}", result),
+        }
     }
 }

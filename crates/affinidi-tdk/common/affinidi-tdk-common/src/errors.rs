@@ -2,6 +2,7 @@
  * Common TDK Errors and handling/conversion
  */
 
+use affinidi_data_integrity::DataIntegrityError;
 use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
 use affinidi_secrets_resolver::errors::SecretsResolverError;
 use did_peer::DIDPeerError;
@@ -42,6 +43,9 @@ pub enum TDKError {
 
     #[error("DID Method Error: {0}")]
     DIDMethod(String),
+
+    #[error("Data Integrity Error")]
+    DataIntegrity(#[from] DataIntegrityError),
 }
 
 pub type Result<T> = std::result::Result<T, TDKError>;

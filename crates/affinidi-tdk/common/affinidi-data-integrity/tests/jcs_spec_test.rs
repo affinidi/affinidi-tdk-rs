@@ -1,11 +1,12 @@
-use affinidi_data_integrity::{DataIntegrityProof, verification_proof::verify_data};
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_data_integrity::{
+    DataIntegrityProof, verification_proof::verify_data_with_public_key,
+};
 use affinidi_secrets_resolver::secrets::Secret;
 use serde_json::json;
 use tracing_subscriber::filter;
 
-#[tokio::test]
-async fn eddsa_jcs_2022_reference() {
+#[test]
+fn eddsa_jcs_2022_reference() {
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -54,12 +55,9 @@ async fn eddsa_jcs_2022_reference() {
     )
     .expect("Couldn't sign Document");
 
-    let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-        .await
-        .unwrap();
-    let validated = verify_data(&resolver, &input_doc, Some(context), &proof)
-        .await
-        .expect("Couldn't validate doc");
+    let validated =
+        verify_data_with_public_key(&input_doc, Some(context), &proof, secret.get_public_bytes())
+            .expect("Couldn't validate doc");
 
     assert!(validated.verified);
 

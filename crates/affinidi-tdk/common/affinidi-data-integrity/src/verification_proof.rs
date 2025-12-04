@@ -1,8 +1,6 @@
 use crate::{
     DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite, hashing_eddsa_jcs,
 };
-use affinidi_did_common::document::DocumentExt;
-use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,50 +17,8 @@ pub struct VerificationProof {
     pub verified_document: Option<Value>,
 }
 
-/// Verify a signed JSON Schema document which includes a DID lookup resolution step.
-/// If you already have public key bytes, call [verify_data_with_public_key] instead.
-/// You must strip `proof` from the document as needed
-/// Context is a copy of any context that needs to be passed in
-pub async fn verify_data<S>(
-    did_resolver: &DIDCacheClient,
-    signed_doc: &S,
-    context: Option<Vec<String>>,
-    proof: &DataIntegrityProof,
-) -> Result<VerificationProof, DataIntegrityError>
-where
-    S: Serialize,
-{
-    // Create public key bytes from Verification Material
-    let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
-        did
-    } else {
-        return Err(DataIntegrityError::InputDataError(
-            "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
-        ));
-    };
-
-    let resolved = did_resolver.resolve(did).await?;
-    let public_bytes = if let Some(vm) = resolved
-        .doc
-        .get_verification_method(&proof.verification_method)
-    {
-        vm.get_public_key_bytes().map_err(|e| {
-            DataIntegrityError::InputDataError(format!(
-                "Failed to get public key bytes from verification method: {e}"
-            ))
-        })?
-    } else {
-        return Err(DataIntegrityError::InputDataError(format!(
-            "Couldn't find key-id ({}) in resolved DID Document",
-            proof.verification_method
-        )));
-    };
-
-    verify_data_with_public_key(signed_doc, context, proof, public_bytes.as_slice())
-}
-
 /// Verify a signed JSON Schema document where we already have the public key bytes
-/// If you do not have public key bytes, use [verify_data] instead.
+/// If you do not have public key bytes, use affinidi_tdk::verify_data instead.
 /// You must strip `proof` from the document as needed
 /// Context is a copy of any context that needs to be passed in
 /// public_key_bytes is the raw public key bytes to use for verification
@@ -170,20 +126,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::verify_data;
     use crate::{
         DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite,
         verification_proof::verify_data_with_public_key,
-    };
-    use affinidi_did_resolver_cache_sdk::{
-        DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
     };
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
-    #[tokio::test]
-    async fn missing_proof_proof_value() {
+    #[test]
+    fn missing_proof_proof_value() {
         let proof = crate::DataIntegrityProof {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -194,11 +146,15 @@ mod tests {
             context: None,
         };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
 
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
+        let result = verify_data_with_public_key(
+            &HashMap::<String, String>::new(),
+            None,
+            &proof,
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -209,8 +165,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_proof_proof_value() {
+    #[test]
+    fn invalid_proof_proof_value() {
         let proof = crate::DataIntegrityProof {
             type_: "Test".to_string(),
             cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -221,11 +177,8 @@ mod tests {
             context: None,
         };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
+        let result =
+            verify_data_with_public_key(&HashMap::<String, String>::new(), None, &proof, &[0]);
         assert!(result.is_err());
 
         match result {
@@ -236,8 +189,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_context() {
+    #[test]
+    fn invalid_context() {
         let proof = crate::DataIntegrityProof {
                 type_: "Test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -254,16 +207,14 @@ mod tests {
             "https://example.com/2".to_string(),
         ];
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(
-            &resolver,
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
             &signed_context,
             Some(signed_context.clone()),
             &proof,
-        )
-        .await;
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -277,8 +228,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_context_2() {
+    #[test]
+    fn invalid_context_2() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -294,16 +245,14 @@ mod tests {
                 context: None,
             };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(
-            &resolver,
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
             &signed_context,
             Some(signed_context.clone()),
             &proof,
-        )
-        .await;
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -317,8 +266,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_context_3() {
+    #[test]
+    fn invalid_context_3() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -340,10 +289,14 @@ mod tests {
             "https://example.com/3".to_string(),
         ];
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &doc_context, Some(doc_context.clone()), &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
+            &doc_context,
+            Some(doc_context.clone()),
+            &proof,
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -357,8 +310,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn valid_context() {
+    #[test]
+    fn valid_context() {
         let signed_context = vec![
             "https://sample.com/3".to_string(),
             "https://example.com/1".to_string(),
@@ -380,10 +333,14 @@ mod tests {
             "https://example.com/2".to_string(),
         ];
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &doc_context, Some(doc_context.clone()), &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
+            &doc_context,
+            Some(doc_context.clone()),
+            &proof,
+            secret.as_slice(),
+        );
         assert!(result.is_err());
         // Passed the context check test
 
@@ -398,8 +355,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_data_integrity_proof() {
+    #[test]
+    fn invalid_data_integrity_proof() {
         let proof = crate::DataIntegrityProof {
                 type_: "test".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -410,10 +367,8 @@ mod tests {
                 context: None,
         };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
+        let result =
+            verify_data_with_public_key(&HashMap::<String, String>::new(), None, &proof, &[0]);
         assert!(result.is_err());
 
         match result {
@@ -428,12 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_crypto_suite() {
-        // TODO: Need to add more crypto types in the future
-    }
-
-    #[tokio::test]
-    async fn invalid_created() {
+    fn invalid_created() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -444,10 +394,14 @@ mod tests {
                 context: None,
         };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
+            &HashMap::<String, String>::new(),
+            None,
+            &proof,
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -461,8 +415,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_created_future() {
+    #[test]
+    fn invalid_created_future() {
         let proof = crate::DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
@@ -473,10 +427,14 @@ mod tests {
                 context: None,
         };
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(
+            &HashMap::<String, String>::new(),
+            None,
+            &proof,
+            secret.as_slice(),
+        );
         assert!(result.is_err());
 
         match result {
@@ -487,93 +445,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn invalid_verification_method() {
-        let proof = crate::DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "test".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
-                context: None,
-        };
-
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
-        assert!(result.is_err());
-        match result {
-            Err(DataIntegrityError::InputDataError(txt)) => {
-                assert_eq!(
-                    txt,
-                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
-                );
-            }
-            _ => panic!("Invalid return type"),
-        }
-    }
-
-    #[tokio::test]
-    async fn invalid_verification_method_2() {
-        let proof = crate::DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "did:key:not_a_key".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
-                context: None,
-        };
-
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
-        assert!(result.is_err());
-        match result {
-            Err(DataIntegrityError::InputDataError(txt)) => {
-                assert_eq!(
-                    txt,
-                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
-                );
-            }
-            _ => panic!("Invalid return type"),
-        }
-    }
-
-    #[tokio::test]
-    async fn invalid_verification_method_3() {
-        let proof = crate::DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "did:key:test#test".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
-                context: None,
-        };
-
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &HashMap::<String, String>::new(), None, &proof).await;
-        assert!(result.is_err());
-        match result {
-            Err(DataIntegrityError::DIDResolverError(DIDCacheError::DIDError(txt))) => {
-                assert_eq!(
-                    txt,
-                    "Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
-                        .to_string()
-                );
-            }
-            _ => panic!("Invalid return type {:#?}", result),
-        }
-    }
-
-    #[tokio::test]
-    async fn failed_verification() {
+    #[test]
+    fn failed_verification() {
         let invalid_signed = r#"{
   "parameters": {
     "deactivated": true,
@@ -644,10 +517,9 @@ mod tests {
 
         let invalid_signed: Value = serde_json::from_str(invalid_signed).unwrap();
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &invalid_signed, None, &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(&invalid_signed, None, &proof, secret.as_slice());
         assert!(result.is_err());
         match result {
             Err(DataIntegrityError::VerificationError(txt)) => {
@@ -657,8 +529,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn verification_ok() {
+    #[test]
+    fn verification_ok() {
         let signed = json!({
             "versionId": "1-QmaZi3DYg2PZqoPn2KSnYH9ccHKg9axxP1ukjop87vjMrF",
             "versionTime": "2025-07-08T00:01:53Z",
@@ -715,10 +587,9 @@ mod tests {
 
         println!("input: {signed:#?}");
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &signed, None, &proof).await;
+        let secret =
+            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+        let result = verify_data_with_public_key(&signed, None, &proof, secret.as_slice());
         println!("result: {result:#?}");
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -795,8 +666,8 @@ mod tests {
         assert!(result.verified);
     }
 
-    #[tokio::test]
-    async fn verification_ok_changed_order() {
+    #[test]
+    fn verification_ok_changed_order() {
         let signed = json!({
             "versionTime": "2025-07-08T00:01:53Z",
             "versionId": "1-QmaZi3DYg2PZqoPn2KSnYH9ccHKg9axxP1ukjop87vjMrF",
@@ -851,10 +722,9 @@ mod tests {
         }"#;
         let proof: DataIntegrityProof = serde_json::from_str(proof_raw).unwrap();
 
-        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let result = verify_data(&resolver, &signed, None, &proof).await;
+        let secret =
+            Secret::decode_multikey("z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ").unwrap();
+        let result = verify_data_with_public_key(&signed, None, &proof, secret.as_slice());
         assert!(result.is_ok());
         let result = result.unwrap();
         assert!(result.verified);

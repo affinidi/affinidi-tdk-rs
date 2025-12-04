@@ -12,13 +12,6 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-[features]
-default = ["all-methods"]
-all-methods = ["affinidi-did-resolver-cache-sdk/did-methods"]
-# WebVH uses data-integrity to resolve VerificationMethod for Verification Proofs
-# Causing a cyclic dependency
-exclude-webvh = ["affinidi-did-resolver-cache-sdk/did-cheqd"]
-
 [dependencies]
 affinidi-did-resolver-cache-sdk = { workspace = true }
 
@@ -35,6 +28,7 @@ thiserror = "2.0"
 tracing = "0.1"
 
 [dev-dependencies]
+affinidi-tdk.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.48" }
 tracing-subscriber = { version = "0.3", features = [
