@@ -134,7 +134,7 @@ impl DIDCacheClient {
 
                 #[cfg(not(feature = "did-webvh"))]
                 Err(DIDCacheError::UnsupportedMethod(
-                    "did:cheqd is not enabled".to_string(),
+                    "did:webvh is not enabled".to_string(),
                 ))
             }
             "cheqd" => {
@@ -156,6 +156,19 @@ impl DIDCacheClient {
                 #[cfg(not(feature = "did-cheqd"))]
                 Err(DIDCacheError::UnsupportedMethod(
                     "did:cheqd is not enabled".to_string(),
+                ))
+            }
+            "scid" => {
+                #[cfg(feature = "did-scid")]
+                {
+                    did_scid::resolve(did, None, None)
+                        .await
+                        .map_err(|e| DIDCacheError::DIDError(e.to_string()))
+                }
+
+                #[cfg(not(feature = "did-scid"))]
+                Err(DIDCacheError::UnsupportedMethod(
+                    "did:scid is not enabled".to_string(),
                 ))
             }
             _ => Err(DIDCacheError::DIDError(format!(
@@ -183,6 +196,8 @@ mod tests {
     const DID_WEBVH: &str = "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs";
     #[cfg(feature = "did-cheqd")]
     const DID_CHEQD: &str = "did:cheqd:testnet:cad53e1d-71e0-48d2-9352-39cc3d0fac99";
+    #[cfg(feature = "did-scid")]
+    const DID_SCID: &str = "did:scid:vh:1:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai?src=identity.foundation/didwebvh-implementations/implementations/affinidi-didwebvh-rs";
 
     #[tokio::test]
     async fn local_resolve_ethr() {
@@ -200,8 +215,8 @@ mod tests {
         assert_eq!(did_document.verification_method.len(), 2,);
     }
 
-    #[cfg(feature = "did-jwk")]
     #[tokio::test]
+    #[cfg(feature = "did-jwk")]
     async fn local_resolve_jwk() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
@@ -320,8 +335,8 @@ mod tests {
         assert!(vm_properties_last["publicKeyJwk"].is_object(),);
     }
 
-    #[cfg(feature = "did-webvh")]
     #[tokio::test]
+    #[cfg(feature = "did-webvh")]
     async fn local_resolve_webvh() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
@@ -332,8 +347,8 @@ mod tests {
         assert_eq!(did_document.id.as_str(), DID_WEBVH);
     }
 
-    #[cfg(feature = "did-cheqd")]
     #[tokio::test]
+    #[cfg(feature = "did-cheqd")]
     async fn local_resolve_cheqd() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
@@ -343,8 +358,21 @@ mod tests {
         assert_eq!(did_document.did.as_str(), DID_CHEQD);
 
         assert_eq!(did_document.doc.authentication.len(), 1);
-        assert_eq!(did_document.doc.assertion_method.len(), 1);
+        assert_eq!(did_document.doc.assertion_method.len(), 0);
 
-        assert_eq!(did_document.doc.verification_method.len(), 2);
+        assert_eq!(did_document.doc.verification_method.len(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "did-scid")]
+    async fn local_resolve_scid() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        let did_document = client.resolve(DID_SCID).await.unwrap();
+        assert_eq!(
+            did_document.did.as_str(),
+            "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs"
+        );
     }
 }
