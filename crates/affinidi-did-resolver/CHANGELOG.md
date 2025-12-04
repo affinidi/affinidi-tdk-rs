@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 4th December 2025
+
+#### affinidi-did-resolver-cache-sdk (0.6.5)
+
+- **FEATURE:** did:scid method now supported
+
 ### 3rd December 2025
 
 #### did-scid (0.1.0)

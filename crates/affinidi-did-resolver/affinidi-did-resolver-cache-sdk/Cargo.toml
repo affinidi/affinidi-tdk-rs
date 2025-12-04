@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.6.4"
+version = "0.6.5"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -27,11 +27,12 @@ network = [
   "dep:rustls",
   "dep:rustls-platform-verifier",
 ]
-did-methods = ["did-cheqd", "did-webvh"]
+did-methods = ["did-cheqd", "did-webvh", "did-scid"]
 did_example = ["dep:did-example"]
 did-jwk = ["dep:did-jwk"]
 did-cheqd = ["dep:did-resolver-cheqd"]
 did-webvh = ["dep:didwebvh-rs"]
+did-scid = ["dep:did-scid"]
 
 [dependencies]
 # Affinidi Crates
@@ -39,6 +40,7 @@ affinidi-did-common.workspace = true
 did-peer.workspace = true
 did-example = { workspace = true, optional = true }
 affinidi-did-key.workspace = true
+did-scid = { workspace = true, optional = true }
 
 # External Crates
 ahash = "0.8"

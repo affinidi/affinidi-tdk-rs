@@ -1,4 +1,3 @@
-/*
 use affinidi_data_integrity::DataIntegrityProof;
 use affinidi_tdk::{TDK, common::config::TDKConfigBuilder};
 use clap::Parser;
@@ -57,4 +56,3 @@ async fn main() {
         .await
         .expect("Failed to verify data integrity proof");
 }
-*/
