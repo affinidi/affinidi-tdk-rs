@@ -6,7 +6,7 @@ members = [
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example",
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer",
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/affinidi-did-key",
-  # "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
+  "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
 
   "crates/affinidi-tdk/common/affinidi-secrets-resolver",
 
@@ -52,7 +52,7 @@ did-example = { version = "0.5.5", path = "crates/affinidi-did-resolver/affinidi
 did-peer = { version = "0.7.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer" }
 did-cheqd = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-cheqd" }
 affinidi-did-key = { version = "0.1.4", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/affinidi-did-key" }
-# did-scid = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
+did-scid = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
 affinidi-meeting-place = { version = "0.2.1", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-helpers = { version = "0.11.1", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
