@@ -253,9 +253,15 @@ mod tests {
                 context: None,
         };
 
-        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
-            .await
-            .unwrap();
+        let tdk = TDK::new(
+            TDKConfig::builder()
+                .with_load_environment(false)
+                .build()
+                .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let result = tdk
             .verify_data(&HashMap::<String, String>::new(), None, &proof)
             .await;
@@ -283,9 +289,15 @@ mod tests {
                 context: None,
         };
 
-        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
-            .await
-            .unwrap();
+        let tdk = TDK::new(
+            TDKConfig::builder()
+                .with_load_environment(false)
+                .build()
+                .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let result = tdk
             .verify_data(&HashMap::<String, String>::new(), None, &proof)
             .await;
@@ -313,9 +325,15 @@ mod tests {
                 context: None,
         };
 
-        let tdk = TDK::new(TDKConfig::builder().build().unwrap(), None)
-            .await
-            .unwrap();
+        let tdk = TDK::new(
+            TDKConfig::builder()
+                .with_load_environment(false)
+                .build()
+                .unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let result = tdk
             .verify_data(&HashMap::<String, String>::new(), None, &proof)
             .await;
@@ -324,7 +342,7 @@ mod tests {
             Err(TDKError::DIDResolver(txt)) => {
                 assert_eq!(
                     txt,
-                    "Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
+                    "DID error: Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
                         .to_string()
                 );
             }
