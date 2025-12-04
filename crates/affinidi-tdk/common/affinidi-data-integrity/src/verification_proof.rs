@@ -375,7 +375,7 @@ mod tests {
             Err(DataIntegrityError::InputDataError(txt)) => {
                 assert_eq!(
                     txt,
-                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
+                    "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
                 );
             }
             _ => panic!("Invalid return type"),
@@ -588,7 +588,7 @@ mod tests {
         println!("input: {signed:#?}");
 
         let secret =
-            Secret::decode_multikey("z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm").unwrap();
+            Secret::decode_multikey("z6Mko2H9Y17TDfG7KRM9aGQqLMexecCZpx8fszAUPYCb4FwZ").unwrap();
         let result = verify_data_with_public_key(&signed, None, &proof, secret.as_slice());
         println!("result: {result:#?}");
         assert!(result.is_ok());
