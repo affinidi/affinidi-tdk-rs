@@ -12,11 +12,11 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-
 [dependencies]
+affinidi-did-resolver-cache-sdk = { workspace = true }
+
 affinidi-secrets-resolver.workspace = true
 affinidi-did-common.workspace = true
-
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.2"
 multibase = "0.9"
