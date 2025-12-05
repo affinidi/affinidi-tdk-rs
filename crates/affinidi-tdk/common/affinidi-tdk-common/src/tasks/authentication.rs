@@ -37,7 +37,7 @@ use tracing::{debug, warn};
 /// Top-level Authentication Cache struct
 #[derive(Clone)]
 pub struct AuthenticationCache {
-    inner: Arc<Mutex<AuthenticationCacheInner>>,
+    pub inner: Arc<Mutex<AuthenticationCacheInner>>,
     tx: mpsc::Sender<AuthenticationCommand>,
 }
 
@@ -162,18 +162,26 @@ impl AuthenticationCache {
     pub async fn start(&self) -> JoinHandle<()> {
         let self_clone = self.clone();
         tokio::spawn(async move {
-            self_clone.run().await;
+            self_clone.run(None).await;
+        })
+    }
+
+    /// Start the Authentication Task with initial tokens
+    pub async fn start_with_tokens(&self, tokens: AuthorizationTokens) -> JoinHandle<()> {
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            self_clone.run(Some(tokens)).await;
         })
     }
 
     /// Main loop of the authentication Task
-    async fn run(self) {
+    async fn run(self, initial_tokens: Option<AuthorizationTokens>) {
         let mut inner = self.inner.lock().await;
 
         loop {
             tokio::select! {
                 msg = inner.channel_rx.recv() => {
-                    if inner.handle_channel(msg).await {
+                    if inner.handle_channel(msg, initial_tokens.clone()).await {
                         break;
                     }
                 }
@@ -291,7 +299,7 @@ impl AuthenticationCache {
 }
 
 impl AuthenticationCacheInner {
-    async fn handle_channel(&self, cmd: Option<AuthenticationCommand>) -> bool {
+    async fn handle_channel(&self, cmd: Option<AuthenticationCommand>, tokens: Option<AuthorizationTokens>) -> bool {
         let mut exit_flag = false;
         match cmd {
             Some(AuthenticationCommand::Terminate) => {
@@ -364,6 +372,15 @@ impl AuthenticationCacheInner {
                 } else {
                     DIDAuthentication::new()
                 };
+
+                match tokens {
+                    Some(t) => {
+                        auth.tokens = Some(t);
+                        auth.authenticated = true;
+                        auth.type_ = AuthenticationType::AffinidiMessaging;
+                    }
+                    None => {}
+                }
 
                 let did_resolver = self.did_resolver.clone();
                 let secrets_resolver = self.secrets_resolver.clone();
