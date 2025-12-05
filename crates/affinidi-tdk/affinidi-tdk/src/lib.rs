@@ -97,6 +97,7 @@ impl TDK {
             ThreadedSecretsResolver::new(None).await.0
         };
 
+        
         // Instantiate the authentication cache
         let (authentication, _) = AuthenticationCache::new(
             config.authentication_cache_limit as u64,
@@ -104,7 +105,15 @@ impl TDK {
             secrets_resolver.clone(),
             &client,
         );
-        authentication.start().await;
+        
+        match &config.auth_tokens {
+            Some(tokens) => {
+                authentication.start_with_tokens(tokens.clone()).await;
+            }
+            None => {
+                authentication.start().await;
+            }
+        };
 
         // Load Environment
         // Adds secrets to the secrets resolver
