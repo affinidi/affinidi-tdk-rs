@@ -1,5 +1,9 @@
 # Affinidi TDK Changelog
 
+## 8th December 2025 (Release 0.2.9)
+
+- **MAINTENANCE:** Updated to support `affinidi-messaging-sdk` 0.13.x changes
+
 ## 4th December 2025 (Release 0.2.8)
 
 - **FEATURE:** TDK now provides a convenience method to verify DataIntegrityProofs

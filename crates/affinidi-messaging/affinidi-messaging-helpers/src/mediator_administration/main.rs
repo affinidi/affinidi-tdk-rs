@@ -24,8 +24,8 @@ use dialoguer::{Select, theme::ColorfulTheme};
 use serde::Deserialize;
 use serde_json::Value;
 use sha256::digest;
-use std::env;
 use std::error::Error;
+use std::{env, sync::Arc};
 use tracing_subscriber::filter;
 use ui::administration_accounts_menu;
 
@@ -229,7 +229,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Create a new ATM Client
-    let tdk = TDKSharedState::default().await;
+    let tdk = Arc::new(TDKSharedState::default().await);
     tdk.secrets_resolver.insert_vec(&admin.secrets).await;
     let atm = ATM::new(config, tdk).await?;
     let protocols = Protocols::new();

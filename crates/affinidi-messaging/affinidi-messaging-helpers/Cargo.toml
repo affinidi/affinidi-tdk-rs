@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.11.1"
+version = "0.11.2"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -61,7 +61,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.18", features = ["v4", "fast-rng"] }
+uuid = { version = "1.19", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-tdk.workspace = true

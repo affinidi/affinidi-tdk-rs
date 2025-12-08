@@ -220,7 +220,7 @@ impl TDKConfigBuilder {
     }
 
     #[cfg(feature = "messaging")]
-    /// How many Authentication sets should we cache?
+    /// Should TDK create an ATM instance internally?
     /// Defaults: true
     /// Example:
     /// ```

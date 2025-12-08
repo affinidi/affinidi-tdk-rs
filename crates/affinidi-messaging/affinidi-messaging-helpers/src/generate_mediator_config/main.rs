@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", style("Generating new DID info...").yellow(),);
     let (old_did, secrets_json) = generate_secrets_and_did()?;
-    let mut well_known_did_part = if api_prefix.len() > 0 {
+    let mut well_known_did_part = if api_prefix.is_empty() {
         format!("{}{}", api_prefix, "/.well-known")
     } else {
         String::from("")
@@ -163,9 +163,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Creating new Admin account
     let (admin_did, admin_did_secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::P256), 
-            (DIDPeerKeys::Verification, KeyType::Ed25519), 
-            (DIDPeerKeys::Encryption, KeyType::Secp256k1), 
+            (DIDPeerKeys::Verification, KeyType::P256),
+            (DIDPeerKeys::Verification, KeyType::Ed25519),
+            (DIDPeerKeys::Encryption, KeyType::Secp256k1),
             (DIDPeerKeys::Encryption, KeyType::P256),
             (DIDPeerKeys::Encryption, KeyType::X25519),
         ],

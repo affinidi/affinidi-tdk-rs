@@ -15,6 +15,7 @@ use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
 use clap::Parser;
 use std::{
     env,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 use tokio::time::sleep;
@@ -50,7 +51,7 @@ async fn main() -> Result<(), ATMError> {
     println!("Using Environment: {}", environment_name);
 
     // Instantiate TDK
-    let tdk = TDKSharedState::default().await;
+    let tdk = Arc::new(TDKSharedState::default().await);
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
