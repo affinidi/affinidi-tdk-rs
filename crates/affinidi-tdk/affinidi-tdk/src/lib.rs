@@ -128,14 +128,14 @@ impl TDK {
         };
 
         // Create the shared state, then we can use this inside other Affinidi Crates
-        let shared_state = TDKSharedState {
+        let shared_state = Arc::new(TDKSharedState {
             config,
             did_resolver,
             secrets_resolver,
             client,
             environment,
             authentication,
-        };
+        });
 
         #[cfg(feature = "messaging")]
         // Instantiate Affinidi Messaging
@@ -151,7 +151,7 @@ impl TDK {
         };
 
         Ok(TDK {
-            inner: Arc::new(shared_state),
+            inner: shared_state,
             #[cfg(feature = "messaging")]
             atm,
             #[cfg(feature = "meeting-place")]

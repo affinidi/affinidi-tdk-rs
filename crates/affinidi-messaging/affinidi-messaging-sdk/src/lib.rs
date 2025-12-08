@@ -29,7 +29,7 @@ pub struct ATM {
 /// Private SharedState struct for the ATM to be used across tasks
 pub(crate) struct SharedState {
     pub(crate) config: ATMConfig,
-    pub(crate) tdk_common: TDKSharedState,
+    pub(crate) tdk_common: Arc<TDKSharedState>,
     pub(crate) profiles: Arc<RwLock<Profiles>>,
     pub(crate) deletion_handler_send_stream: Sender<delete_handler::DeletionHandlerCommands>, // Sends MPSC messages to the Deletion Handler
     pub(crate) deletion_handler_recv_stream:
@@ -55,7 +55,7 @@ pub(crate) struct SharedState {
 impl ATM {
     /// Creates a new instance of the SDK with a given configuration
     /// You need to add at least the DID Method for the SDK DID to work
-    pub async fn new(config: ATMConfig, tdk_common: TDKSharedState) -> Result<ATM, ATMError> {
+    pub async fn new(config: ATMConfig, tdk_common: Arc<TDKSharedState>) -> Result<ATM, ATMError> {
         // Create a new channel with a capacity of at most 32. This communicates from SDK to the deletion handler
         let (sdk_deletion_tx, deletion_sdk_rx) = mpsc::channel::<DeletionHandlerCommands>(32);
 
