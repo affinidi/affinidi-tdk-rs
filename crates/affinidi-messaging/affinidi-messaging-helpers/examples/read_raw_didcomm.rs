@@ -17,6 +17,7 @@ use console::style;
 use std::{
     fs::File,
     io::{self, BufRead, Read},
+    sync::Arc,
 };
 
 #[derive(Parser, Debug)]
@@ -31,7 +32,7 @@ struct Args {
 async fn main() -> Result<(), ATMError> {
     // Create a new ATM Client
     let config = ATMConfig::builder();
-    let tdk = TDKSharedState::default().await;
+    let tdk = Arc::new(TDKSharedState::default().await);
     let atm = ATM::new(config.build()?, tdk).await?;
 
     // Local DID Resolver

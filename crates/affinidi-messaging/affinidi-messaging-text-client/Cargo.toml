@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.11.0"
+version = "0.11.1"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -40,7 +40,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 textwrap = "0.16"
-tokio = { version = "1.47", features = ["full"] }
+tokio = { version = "1.48", features = ["full"] }
 tokio-stream = "0.1"
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
@@ -51,4 +51,4 @@ tracing-subscriber = { version = "0.3", features = [
 ] }
 tui-input = { version = "0.14", features = ["ratatui-crossterm"] }
 tui-logger = { version = "0.17", features = ["tracing-support"] }
-uuid = { version = "1.18", features = ["v4", "fast-rng"] }
+uuid = { version = "1.19", features = ["v4", "fast-rng"] }

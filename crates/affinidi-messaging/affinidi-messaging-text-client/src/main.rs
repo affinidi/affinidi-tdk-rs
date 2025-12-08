@@ -2,6 +2,7 @@ use affinidi_tdk::common::TDKSharedState;
 use log::LevelFilter;
 use state_store::StateStore;
 use std::fs::OpenOptions;
+use std::sync::Arc;
 use termination::{Interrupted, create_termination};
 use tracing::Level;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let (state_store, state_rx) = StateStore::new();
     let (ui_manager, action_rx) = UiManager::new();
 
-    let tdk = TDKSharedState::default().await;
+    let tdk = Arc::new(TDKSharedState::default().await);
     tokio::try_join!(
         state_store.main_loop(terminator, action_rx, interrupt_rx.resubscribe(), tdk),
         ui_manager.main_loop(state_rx, interrupt_rx.resubscribe()),

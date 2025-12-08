@@ -14,7 +14,7 @@ use affinidi_messaging_sdk::{
     ATM, config::ATMConfigBuilder, profiles::ATMProfile, transports::websockets::WebSocketResponses,
 };
 use affinidi_tdk::{common::TDKSharedState, secrets_resolver::SecretsResolver};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -39,7 +39,7 @@ impl StateStore {
         mut terminator: Terminator,
         mut action_rx: UnboundedReceiver<Action>,
         mut interrupt_rx: broadcast::Receiver<Interrupted>,
-        tdk: TDKSharedState,
+        tdk: Arc<TDKSharedState>,
     ) -> anyhow::Result<Interrupted> {
         // Setup the initial state
         let atm = match ATM::new(

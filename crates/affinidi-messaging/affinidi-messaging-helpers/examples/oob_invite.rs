@@ -6,7 +6,7 @@ use affinidi_messaging_sdk::{
 };
 use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
 use clap::Parser;
-use std::env;
+use std::{env, sync::Arc};
 use tracing::debug;
 use tracing_subscriber::filter;
 
@@ -47,7 +47,7 @@ async fn main() -> Result<(), ATMError> {
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
     // Instantiate TDK
-    let tdk = TDKSharedState::default().await;
+    let tdk = Arc::new(TDKSharedState::default().await);
 
     let alice = if let Some(alice) = environment.profiles.get("Alice") {
         tdk.add_profile(alice).await;

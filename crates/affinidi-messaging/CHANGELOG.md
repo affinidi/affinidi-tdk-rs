@@ -8,6 +8,18 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 8th December 2025
+
+### SDK (0.13.0)
+
+- **BREAKING-FEATURE:** `atm::new()` now takes `TDKSharedState` with an Arc wrapper
+  - This allows for easier use side by side with `affinidi-tdk`
+
+### Helpers (0.11.2), Text-Client (0.11.1)
+
+- **MAINTENANCE:** Dependencies and updated to work with `affinidi-messaging-sdk`
+  0.13.x
+
 ## 17th November 2025
 
 ### SDK (0.12.1)
