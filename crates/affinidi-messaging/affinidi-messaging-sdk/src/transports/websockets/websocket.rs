@@ -59,6 +59,12 @@ pub(crate) struct WebSocketTransport {
     /// Tracks number of next message requests from the SDK
     next_requests: HashMap<u32, oneshot::Sender<WebSocketResponses>>,
     next_requests_list: VecDeque<u32>,
+    
+    /// Task receiver for commands - stored so start_run can be called separately
+    task_rx: Option<Receiver<WebSocketCommands>>,
+    
+    /// Skip calling toggle_live_delivery during connection setup
+    skip_toggle_live_delivery: bool,
 }
 
 /// WebSocket Commands
@@ -100,30 +106,61 @@ impl WebSocketTransport {
         shared: Arc<SharedState>,
         direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
     ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
-        let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
-        let handle = tokio::spawn(async move {
-            let mut websocket = WebSocketTransport {
-                profile: profile.clone(),
-                shared: shared.clone(),
-                web_socket: None,
-                connect_delay_timer: None,
-                connect_delay: 0,
-                awaiting_pong: false,
-                inbound_cache: MessageCache {
-                    fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
-                    fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
-                    ..Default::default()
-                },
-                direct_channel,
-                next_requests: HashMap::new(),
-                next_requests_list: VecDeque::new(),
-            };
-            websocket.run(&mut task_rx).await;
-        });
+        let (websocket, task_tx) = Self::create_channel(profile, shared, direct_channel, false);
+        let handle = Self::start_run(websocket);
 
         (handle, task_tx)
     }
 
+    /// Creates a new WebSocketTransport instance and channel, but does NOT start the websocket connection
+    /// Returns only the Sender for sending commands to the task
+    /// You must call start_run() separately to actually start the websocket task
+    /// skip_toggle_live_delivery: if true, will not call toggle_live_delivery during connection setup
+    pub(crate) fn create_channel(
+        profile: Arc<ATMProfile>,
+        shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        skip_toggle_live_delivery: bool,
+    ) -> (Arc<tokio::sync::Mutex<WebSocketTransport>>, Sender<WebSocketCommands>) {
+        let (task_tx, task_rx) = mpsc::channel::<WebSocketCommands>(32);
+        
+        let websocket = WebSocketTransport {
+            profile: profile.clone(),
+            shared: shared.clone(),
+            web_socket: None,
+            connect_delay_timer: None,
+            connect_delay: 0,
+            awaiting_pong: false,
+            inbound_cache: MessageCache {
+                fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
+                fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
+                ..Default::default()
+            },
+            direct_channel,
+            next_requests: HashMap::new(),
+            next_requests_list: VecDeque::new(),
+            task_rx: Some(task_rx),
+            skip_toggle_live_delivery,
+        };
+
+        (Arc::new(tokio::sync::Mutex::new(websocket)), task_tx)
+    }
+
+    /// Starts the WebSocket task - consumes the task_rx from the struct
+    /// Returns a JoinHandle for the task
+    pub(crate) fn start_run(
+        websocket: Arc<tokio::sync::Mutex<WebSocketTransport>>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut task_rx = {
+                let mut ws = websocket.lock().await;
+                ws.task_rx.take().expect("task_rx already consumed")
+            };
+            
+            let mut ws = websocket.lock().await;
+            ws.run(&mut task_rx).await;
+        })
+    }
     /// Starts the WebSocket Connection and management to the mediator
     async fn run(&mut self, task_rx: &mut Receiver<WebSocketCommands>) {
         let _span = span!(Level::DEBUG, "websocket_run", profile = %self.profile.inner.alias);
@@ -396,25 +433,33 @@ impl WebSocketTransport {
 
         debug!("Websocket connected. Next enable live streaming");
 
-        // Enable live_streaming on this socket
-        match protocols
-            .message_pickup
-            .toggle_live_delivery(atm, &self.profile, true)
-            .await
-        {
-            Ok(_) => {
-                debug!("Live streaming enabled");
-                self.connect_delay = 0;
-                self.connect_delay_timer = None;
-                self.awaiting_pong = false;
-                Some(web_socket)
-            }
-            Err(e) => {
-                error!("Error enabling live streaming: {:?}", e);
-                let _ = web_socket.close(None).await;
-                self.connect_delay = _calculate_delay(self.connect_delay);
-                self.connect_delay_timer = None;
-                None
+        // Do toggle_live_delivery on this socket if not skipped
+        if self.skip_toggle_live_delivery {
+            debug!("Skipping toggle_live_delivery as requested");
+            self.connect_delay = 0;
+            self.connect_delay_timer = None;
+            self.awaiting_pong = false;
+            Some(web_socket)
+        } else {
+            match protocols
+                .message_pickup
+                .toggle_live_delivery(atm, &self.profile, true)
+                .await
+            {
+                Ok(_) => {
+                    debug!("Live streaming enabled");
+                    self.connect_delay = 0;
+                    self.connect_delay_timer = None;
+                    self.awaiting_pong = false;
+                    Some(web_socket)
+                }
+                Err(e) => {
+                    error!("Error enabling live streaming: {:?}", e);
+                    let _ = web_socket.close(None).await;
+                    self.connect_delay = _calculate_delay(self.connect_delay);
+                    self.connect_delay_timer = None;
+                    None
+                }
             }
         }
     }
@@ -478,5 +523,18 @@ impl WebSocketTransport {
         debug!("Completed websocket connection");
 
         Ok(web_socket)
+    }
+}
+
+impl std::fmt::Debug for WebSocketTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebSocketTransport")
+            .field("profile", &self.profile)
+            .field("web_socket", &self.web_socket.is_some())
+            .field("connect_delay", &self.connect_delay)
+            .field("awaiting_pong", &self.awaiting_pong)
+            .field("has_task_rx", &self.task_rx.is_some())
+            .field("skip_toggle_live_delivery", &self.skip_toggle_live_delivery)
+            .finish()
     }
 }
