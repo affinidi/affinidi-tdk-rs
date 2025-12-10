@@ -200,12 +200,6 @@ pub struct Mediator {
 
     /// MPSC Channel to send commands to the WebSocket connection
     pub(crate) ws_channel_tx: RwLock<Option<mpsc::Sender<WebSocketCommands>>>,
-    
-    /// WebSocket Transport instance - stored so it can be started separately
-    pub(crate) ws_transport: RwLock<Option<Arc<tokio::sync::Mutex<crate::transports::websockets::websocket::WebSocketTransport>>>>,
-    
-    /// WebSocket task handle
-    pub(crate) ws_task_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
 
     /// Unique ID that is used for anything requiring a unique transaction identifier
     pub(crate) tx_uuid: AtomicU32,
@@ -227,8 +221,6 @@ impl Mediator {
             rest_endpoint: Mediator::find_rest_endpoint(&mediator_doc),
             websocket_endpoint: Mediator::find_ws_endpoint(&mediator_doc),
             ws_channel_tx: RwLock::new(None),
-            ws_transport: RwLock::new(None),
-            ws_task_handle: RwLock::new(None),
             tx_uuid: AtomicU32::new(0),
         };
 
@@ -486,11 +478,12 @@ impl ATM {
         Ok(())
     }
 
-    /// Will create a websocket channel for the profile if one doesn't already exist, but will not start live delivery
-    /// Will return Ok() if a connection already exists, or if it successfully created new channel
+    /// Will create a websocket connection for the profile if one doesn't already exist
+    /// Will return Ok() if a connection already exists, or if it successfully started a new connection
+    /// Automatically starts live_streaming
     /// skip_toggle_live_delivery: if true, will not call toggle_live_delivery during connection setup
     /// skip_unpack_messages: if true, messages received via websocket will not be unpacked
-    pub async fn profile_create_websocket_channel(
+    pub async fn profile_start_live_streaming(
         &self,
         profile: &Arc<ATMProfile>,
         skip_toggle_live_delivery: bool,
@@ -509,65 +502,25 @@ impl ATM {
             if mediator.ws_channel_tx.read().await.is_some() {
                 // Already connected
                 debug!(
-                    "Profile ({}): WebSocket channel already exists",
+                    "Profile ({}): is already connected to the WebSocket",
                     profile.inner.alias
                 );
                 return Ok(());
             }
         }
 
-        debug!("Profile({}): creating websocket channel...", profile.inner.alias);
+        debug!("Profile({}): enabling...", profile.inner.alias);
 
-        let (websocket, ws_channel) = WebSocketTransport::create_channel(
+        let (_, ws_channel) = WebSocketTransport::start_with_options(
             profile.clone(),
             self.inner.clone(),
             self.inner.config.inbound_message_channel.clone(),
             skip_toggle_live_delivery,
             skip_unpack_messages,
-        );
-        
+        )
+        .await;
         {
-            mediator.ws_transport.write().await.replace(websocket);
             mediator.ws_channel_tx.write().await.replace(ws_channel);
-        }
-
-        debug!("Profile({}): websocket channel created", profile.inner.alias);
-
-        Ok(())
-    }
-
-    /// Will start live streaming for the profile if a websocket channel exists
-    /// Will return Ok() if live streaming started successfully
-    pub async fn profile_start_live_streaming(
-        &self,
-        profile: &Arc<ATMProfile>,
-    ) -> Result<(), ATMError> {
-        let mediator = {
-            let Some(mediator) = &*profile.inner.mediator else {
-                return Err(ATMError::ConfigError(
-                    "No Mediator is configured for this Profile".to_string(),
-                ));
-            };
-            mediator
-        };
-
-        // Check if the websocket transport exists
-        let websocket = {
-            let ws_transport_guard = mediator.ws_transport.read().await;
-            ws_transport_guard.as_ref().ok_or_else(|| {
-                ATMError::TransportError(
-                    "No WebSocket transport is configured. Call profile_create_websocket_channel first.".to_string(),
-                )
-            })?.clone()
-        };
-
-        debug!("Profile({}): starting live streaming...", profile.inner.alias);
-
-        // Start the websocket task
-        let handle = WebSocketTransport::start_run(websocket);
-        
-        {
-            mediator.ws_task_handle.write().await.replace(handle);
         }
 
         let (tx, rx) = oneshot::channel();
@@ -621,7 +574,6 @@ impl ATM {
 
         Ok(())
     }
-
 
     /// Returns all active profiles within ATM
     pub fn get_profiles(&self) -> Arc<RwLock<Profiles>> {

@@ -37,7 +37,7 @@ use tracing::{debug, warn};
 /// Top-level Authentication Cache struct
 #[derive(Clone)]
 pub struct AuthenticationCache {
-    pub inner: Arc<Mutex<AuthenticationCacheInner>>,
+    inner: Arc<Mutex<AuthenticationCacheInner>>,
     tx: mpsc::Sender<AuthenticationCommand>,
 }
 
