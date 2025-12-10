@@ -59,12 +59,15 @@ pub(crate) struct WebSocketTransport {
     /// Tracks number of next message requests from the SDK
     next_requests: HashMap<u32, oneshot::Sender<WebSocketResponses>>,
     next_requests_list: VecDeque<u32>,
-    
+
     /// Task receiver for commands - stored so start_run can be called separately
     task_rx: Option<Receiver<WebSocketCommands>>,
-    
+
     /// Skip calling toggle_live_delivery during connection setup
     skip_toggle_live_delivery: bool,
+
+    /// Skip unpacking messages - return them as packed strings instead
+    skip_unpack_messages: bool,
 }
 
 /// WebSocket Commands
@@ -106,7 +109,8 @@ impl WebSocketTransport {
         shared: Arc<SharedState>,
         direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
     ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
-        let (websocket, task_tx) = Self::create_channel(profile, shared, direct_channel, false);
+        let (websocket, task_tx) =
+            Self::create_channel(profile, shared, direct_channel, false, false);
         let handle = Self::start_run(websocket);
 
         (handle, task_tx)
@@ -116,14 +120,19 @@ impl WebSocketTransport {
     /// Returns only the Sender for sending commands to the task
     /// You must call start_run() separately to actually start the websocket task
     /// skip_toggle_live_delivery: if true, will not call toggle_live_delivery during connection setup
+    /// skip_unpack_messages: if true, will not unpack messages and return them as packed strings
     pub(crate) fn create_channel(
         profile: Arc<ATMProfile>,
         shared: Arc<SharedState>,
         direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
         skip_toggle_live_delivery: bool,
-    ) -> (Arc<tokio::sync::Mutex<WebSocketTransport>>, Sender<WebSocketCommands>) {
+        skip_unpack_messages: bool,
+    ) -> (
+        Arc<tokio::sync::Mutex<WebSocketTransport>>,
+        Sender<WebSocketCommands>,
+    ) {
         let (task_tx, task_rx) = mpsc::channel::<WebSocketCommands>(32);
-        
+
         let websocket = WebSocketTransport {
             profile: profile.clone(),
             shared: shared.clone(),
@@ -141,6 +150,7 @@ impl WebSocketTransport {
             next_requests_list: VecDeque::new(),
             task_rx: Some(task_rx),
             skip_toggle_live_delivery,
+            skip_unpack_messages,
         };
 
         (Arc::new(tokio::sync::Mutex::new(websocket)), task_tx)
@@ -363,6 +373,40 @@ impl WebSocketTransport {
 
     async fn process_inbound_didcomm_message(&mut self, atm: &ATM, message: String) {
         debug!("Received text message ({})", message);
+
+        // If skip_unpack_messages is true, send the packed message directly
+        if self.skip_unpack_messages {
+            // TODO: cached should be updated for packed messages too
+            // if let Some(sender) = self.inbound_cache.message_wanted(&message) {
+            //     debug!("Message is wanted, sending to requestor");
+            //     let _ = sender.send(WebSocketResponses::MessageReceived(
+            //         message,
+            //         Box::new(metadata),
+            //     ));
+            //     return;
+            // }
+
+            if let Some(next_request) = self.next_requests_list.pop_front() {
+                debug!("Next message found, sending to requestor packed");
+                if let Some(sender) = self.next_requests.remove(&next_request) {
+                    let _ = sender.send(WebSocketResponses::PackedMessageReceived(message));
+                    return;
+                } else {
+                    error!(
+                        "Next message requestor not found - bug in the SDK - inbound message may be lost"
+                    );
+                }
+            }
+
+            if let Some(direct_channel) = self.direct_channel.as_mut() {
+                debug!("Sending message to direct channel packed");
+                let _ = direct_channel.send(WebSocketResponses::PackedMessageReceived(message));
+            } else {
+                debug!("No direct channel, should be cached");
+            }
+            return;
+        }
+
         match atm.unpack(&message).await {
             Ok((message, metadata)) => {
                 if let Some(sender) = self.inbound_cache.message_wanted(&message) {
@@ -535,6 +579,7 @@ impl std::fmt::Debug for WebSocketTransport {
             .field("awaiting_pong", &self.awaiting_pong)
             .field("has_task_rx", &self.task_rx.is_some())
             .field("skip_toggle_live_delivery", &self.skip_toggle_live_delivery)
+            .field("skip_unpack_messages", &self.skip_unpack_messages)
             .finish()
     }
 }

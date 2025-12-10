@@ -111,6 +111,10 @@ impl StateStore {
                         Ok(WebSocketResponses::MessageReceived(message, meta)) => {
                             handle_message(&atm, &mut state, &message, &meta).await;
                         },
+                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                            // Handle packed message or ignore if not needed
+                            warn!("Packed message received but not handled");
+                        },
                         Err(e) => {
                             warn!("Failed to receive message: {}", e);
                         }

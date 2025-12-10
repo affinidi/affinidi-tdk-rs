@@ -489,10 +489,12 @@ impl ATM {
     /// Will create a websocket channel for the profile if one doesn't already exist, but will not start live delivery
     /// Will return Ok() if a connection already exists, or if it successfully created new channel
     /// skip_toggle_live_delivery: if true, will not call toggle_live_delivery during connection setup
+    /// skip_unpack_messages: if true, messages received via websocket will not be unpacked
     pub async fn profile_create_websocket_channel(
         &self,
         profile: &Arc<ATMProfile>,
         skip_toggle_live_delivery: bool,
+        skip_unpack_messages: bool,
     ) -> Result<(), ATMError> {
         let mediator = {
             let Some(mediator) = &*profile.inner.mediator else {
@@ -521,6 +523,7 @@ impl ATM {
             self.inner.clone(),
             self.inner.config.inbound_message_channel.clone(),
             skip_toggle_live_delivery,
+            skip_unpack_messages,
         );
         
         {

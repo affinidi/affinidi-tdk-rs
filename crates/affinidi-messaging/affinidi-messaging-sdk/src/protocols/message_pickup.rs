@@ -282,6 +282,11 @@ impl MessagePickup {
                             }
                             Ok(Some((msg, meta)))
                         }
+                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
+                            ))
+                        }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
                             Err(ATMError::MsgReceiveError(format!(
@@ -362,6 +367,11 @@ impl MessagePickup {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
                             Ok(Some((msg, meta)))
+                        }
+                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
+                            ))
                         }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
@@ -602,5 +612,102 @@ impl MessagePickup {
         }
         .instrument(_span)
         .await
+    }
+
+    // TODO: client need to take control over deleting messages, because autodelete is impossible for packed message
+    /// Waits for the next message to be received via websocket live delivery (packed/unpacked version)
+    /// Returns the message as a packed string without unpacking
+    /// atm         : The ATM SDK to use
+    /// profile     : The profile to use
+    /// wait        : How long to wait (in milliseconds) for a message before returning None
+    ///                 If None, will block forever until a message is received
+    /// Returns the packed message string, or None if no message was received
+    pub async fn live_stream_next_packed(
+        &self,
+        _atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+    ) -> Result<Option<String>, ATMError> {
+        let _span = span!(Level::DEBUG, "live_stream_next_packed");
+
+        async move {
+            let Some(mediator) = &*profile.inner.mediator else {
+                warn!("Mediator not set for profile {}", profile.inner.alias);
+                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // Send the next request to the profile websocket
+            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
+            };
+
+            let tx_uuid = mediator.get_tx_uuid();
+            ws_channel
+                .send(WebSocketCommands::Next(tx_uuid, tx))
+                .await
+                .map_err(|err| {
+                    ATMError::TransportError(format!(
+                        "Could not send Next command to websocket: {err:?}"
+                    ))
+                })?;
+            debug!("sent next request to websocket for packed message");
+
+            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
+            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
+
+            select! {
+                _ = sleep, if wait.is_some() => {
+                    debug!("Timeout reached, no message received");
+                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send CancelNext command to websocket: {err:?}"
+                        ))
+                    })?;
+                    Ok(None)
+                }
+                value = rx => {
+                    match value {
+                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                            // autodelete is not possible id message is not unpacked
+                            Ok(Some(packed_msg))
+                        }
+                        Ok(WebSocketResponses::MessageReceived(_, _)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received unpacked message when expecting packed message. Make sure WebSocket is configured with skip_unpack_messages=true".into()
+                            ))
+                        }
+                        Err(e) => {
+                            warn!("Error receiving message: {:?}", e);
+                            Err(ATMError::MsgReceiveError(format!(
+                                "Error receiving message: {e:?}"
+                            )))
+                        }
+                    }
+                }
+            }
+        }
+        .instrument(_span)
+        .await
+    }
+
+    /// Attempts to retrieve a specific message from the server via websocket live delivery (packed version)
+    /// Note: This method is not yet implemented as it requires changes to the message cache to support packed messages
+    /// For now, use live_stream_next_packed() to get packed messages
+    pub async fn live_stream_get_packed(
+        &self,
+        _profile: &Arc<ATMProfile>,
+        _msg_id: &str,
+        _wait: Duration,
+    ) -> Result<Option<String>, ATMError> {
+        Err(ATMError::MsgReceiveError(
+            "live_stream_get_packed is not yet implemented. The message cache currently only supports unpacked messages. Use live_stream_next_packed() instead.".into()
+        ))
     }
 }
