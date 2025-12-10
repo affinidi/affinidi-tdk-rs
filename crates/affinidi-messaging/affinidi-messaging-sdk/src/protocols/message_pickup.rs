@@ -6,7 +6,7 @@
  * Do not pass message ID's to the mediator, it cannot see inside messages that it is handling.
  *
  */
-use affinidi_messaging_didcomm::{AttachmentData, Message, PackEncryptedOptions, UnpackMetadata};
+use affinidi_messaging_didcomm::{AttachmentData, Message, PackEncryptedOptions, UnpackMetadata, envelope::MetaEnvelope};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -614,19 +614,20 @@ impl MessagePickup {
         .await
     }
 
-    // TODO: client need to take control over deleting messages, because autodelete is impossible for packed message
     /// Waits for the next message to be received via websocket live delivery (packed/unpacked version)
     /// Returns the message as a packed string without unpacking
     /// atm         : The ATM SDK to use
     /// profile     : The profile to use
     /// wait        : How long to wait (in milliseconds) for a message before returning None
     ///                 If None, will block forever until a message is received
+    /// auto_delete : If true, will delete the message after receiving it
     /// Returns the packed message string, or None if no message was received
     pub async fn live_stream_next_packed(
         &self,
-        _atm: &ATM,
+        atm: &ATM,
         profile: &Arc<ATMProfile>,
         wait: Option<Duration>,
+        auto_delete: bool,
     ) -> Result<Option<String>, ATMError> {
         let _span = span!(Level::DEBUG, "live_stream_next_packed");
 
@@ -675,7 +676,23 @@ impl MessagePickup {
                 value = rx => {
                     match value {
                         Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
-                            // autodelete is not possible id message is not unpacked
+                            // If auto_delete is true, delete the message
+                            if auto_delete {
+                                match MetaEnvelope::new(&packed_msg, &atm.get_tdk().did_resolver).await
+                                {
+                                    Ok(envelope) => {
+                                        debug!("Trying to delete message in background with hash: {}", envelope.sha256_hash);
+                                        atm.delete_message_background(profile, &envelope.sha256_hash.clone()).await?;
+                                        debug!("Deleted message in background with hash: {}", envelope.sha256_hash);
+                                    },
+                                    Err(e) => {
+                                        return Err(ATMError::DidcommError(
+                                            "Cannot convert string to MetaEnvelope".into(),
+                                            e.to_string(),
+                                        ));
+                                    }
+                                };
+                            }
                             Ok(Some(packed_msg))
                         }
                         Ok(WebSocketResponses::MessageReceived(_, _)) => {

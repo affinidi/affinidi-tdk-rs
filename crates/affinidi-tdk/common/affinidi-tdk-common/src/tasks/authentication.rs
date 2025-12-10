@@ -373,6 +373,7 @@ impl AuthenticationCacheInner {
                     DIDAuthentication::new()
                 };
 
+                // set auth tokens if provided in parameters
                 match tokens {
                     Some(t) => {
                         auth.tokens = Some(t);
