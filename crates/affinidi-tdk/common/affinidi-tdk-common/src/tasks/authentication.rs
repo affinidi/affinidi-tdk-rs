@@ -363,7 +363,8 @@ impl AuthenticationCacheInner {
                         }
                         RefreshCheck::Expired => {
                             debug!("Tokens expired");
-                            DIDAuthentication::new().with_custom_handlers(self.custom_handlers.clone())
+                            DIDAuthentication::new()
+                                .with_custom_handlers(self.custom_handlers.clone())
                         }
                     }
                 } else {

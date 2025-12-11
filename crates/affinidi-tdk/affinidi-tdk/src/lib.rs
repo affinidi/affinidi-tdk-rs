@@ -105,7 +105,7 @@ impl TDK {
             &client,
             config.custom_auth_handlers.clone(),
         );
-        
+
         authentication.start().await;
 
         // Load Environment

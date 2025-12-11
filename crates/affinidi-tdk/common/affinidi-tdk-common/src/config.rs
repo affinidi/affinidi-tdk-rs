@@ -2,7 +2,7 @@
  * TDK Configuration options
  */
 
-use affinidi_did_authentication::{AuthorizationTokens, CustomAuthHandlers};
+use affinidi_did_authentication::CustomAuthHandlers;
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfig};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 

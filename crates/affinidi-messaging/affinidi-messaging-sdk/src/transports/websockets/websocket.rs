@@ -155,8 +155,8 @@ impl WebSocketTransport {
                 direct_channel,
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
-                skip_toggle_live_delivery: skip_toggle_live_delivery,
-                skip_unpack_messages: skip_unpack_messages,
+                skip_toggle_live_delivery,
+                skip_unpack_messages,
             };
             websocket.run(&mut task_rx).await;
         });
@@ -254,7 +254,7 @@ impl WebSocketTransport {
                             Some(WebSocketCommands::Next(id, sender)) => {
                                 debug!("Next message requested");
                                 if let Some((message, metadata)) = self.inbound_cache.next() {
-                                    let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                                    let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     self.next_requests.insert(id, sender);
                                     self.next_requests_list.push_back(id);
@@ -269,7 +269,7 @@ impl WebSocketTransport {
                             Some(WebSocketCommands::GetMessage(id, sender)) => {
                                 if let Some((sender, message, metadata)) = self.inbound_cache.get_or_add_wanted(&id, sender) {
                                     debug!("Message found in cache");
-                                    let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                                    let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     debug!("Message ({}) not found in cache, added to wanted list", id);
                                 }
@@ -372,7 +372,8 @@ impl WebSocketTransport {
             if let Some(next_request) = self.next_requests_list.pop_front() {
                 debug!("Next message found, sending to requestor packed");
                 if let Some(sender) = self.next_requests.remove(&next_request) {
-                    let _ = sender.send(WebSocketResponses::PackedMessageReceived(message));
+                    let _ =
+                        sender.send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
                     return;
                 } else {
                     error!(
@@ -383,7 +384,8 @@ impl WebSocketTransport {
 
             if let Some(direct_channel) = self.direct_channel.as_mut() {
                 debug!("Sending message to direct channel packed");
-                let _ = direct_channel.send(WebSocketResponses::PackedMessageReceived(message));
+                let _ = direct_channel
+                    .send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
             } else {
                 debug!("No direct channel, should be cached");
             }
@@ -395,7 +397,7 @@ impl WebSocketTransport {
                 if let Some(sender) = self.inbound_cache.message_wanted(&message) {
                     debug!("Message is wanted, sending to requestor");
                     let _ = sender.send(WebSocketResponses::MessageReceived(
-                        message,
+                        Box::new(message),
                         Box::new(metadata),
                     ));
                     return;
@@ -404,7 +406,7 @@ impl WebSocketTransport {
                     debug!("Next message found, sending to requestor");
                     if let Some(sender) = self.next_requests.remove(&next_request) {
                         let _ = sender.send(WebSocketResponses::MessageReceived(
-                            message.clone(),
+                            Box::new(message.clone()),
                             Box::new(metadata),
                         ));
                         return;
@@ -418,7 +420,7 @@ impl WebSocketTransport {
                 if let Some(direct_channel) = self.direct_channel.as_mut() {
                     debug!("Sending message to direct channel");
                     let _ = direct_channel.send(WebSocketResponses::MessageReceived(
-                        message,
+                        Box::new(message),
                         Box::new(metadata),
                     ));
                 } else {

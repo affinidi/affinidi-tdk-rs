@@ -6,7 +6,9 @@
  * Do not pass message ID's to the mediator, it cannot see inside messages that it is handling.
  *
  */
-use affinidi_messaging_didcomm::{AttachmentData, Message, PackEncryptedOptions, UnpackMetadata, envelope::MetaEnvelope};
+use affinidi_messaging_didcomm::{
+    AttachmentData, Message, PackEncryptedOptions, UnpackMetadata, envelope::MetaEnvelope,
+};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -280,7 +282,7 @@ impl MessagePickup {
                              if auto_delete {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                            Ok(Some((msg, meta)))
+                            Ok(Some((*msg, meta)))
                         }
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             Err(ATMError::MsgReceiveError(
@@ -366,7 +368,7 @@ impl MessagePickup {
                             if auto_delete {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                            Ok(Some((msg, meta)))
+                            Ok(Some((*msg, meta)))
                         }
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             Err(ATMError::MsgReceiveError(
@@ -693,7 +695,7 @@ impl MessagePickup {
                                     }
                                 };
                             }
-                            Ok(Some(packed_msg))
+                            Ok(Some(*packed_msg))
                         }
                         Ok(WebSocketResponses::MessageReceived(_, _)) => {
                             Err(ATMError::MsgReceiveError(

@@ -10,13 +10,13 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Trait for custom authentication logic
 pub trait CustomAuthHandler: Send + Sync {
     /// Perform custom authentication
-    /// 
+    ///
     /// # Arguments
     /// * `profile_did` - The DID of the profile to authenticate
     /// * `endpoint_did` - The DID of the service endpoint to authenticate against
     /// * `did_resolver` - The DID Resolver Cache Client
     /// * `client` - The HTTP Client to use for requests
-    /// 
+    ///
     /// # Returns
     /// AuthorizationTokens if successful, Error otherwise
     fn authenticate<'a>(
@@ -31,14 +31,14 @@ pub trait CustomAuthHandler: Send + Sync {
 /// Trait for custom token refresh logic
 pub trait CustomRefreshHandler: Send + Sync {
     /// Refresh the access tokens
-    /// 
+    ///
     /// # Arguments
     /// * `profile_did` - The DID of the profile
     /// * `endpoint_did` - The DID of the service endpoint
     /// * `current_tokens` - The current tokens to refresh
     /// * `did_resolver` - The DID Resolver Cache Client
     /// * `client` - The HTTP Client to use for requests
-    /// 
+    ///
     /// # Returns
     /// Updated AuthorizationTokens if successful, Error otherwise
     fn refresh<'a>(
@@ -75,5 +75,11 @@ impl CustomAuthHandlers {
     pub fn with_refresh_handler(mut self, handler: Arc<dyn CustomRefreshHandler>) -> Self {
         self.refresh_handler = Some(handler);
         self
+    }
+}
+
+impl Default for CustomAuthHandlers {
+    fn default() -> Self {
+        Self::new()
     }
 }

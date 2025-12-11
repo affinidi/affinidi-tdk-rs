@@ -61,6 +61,7 @@ exceptions = [
   ], crate = "im" },
   { allow = [
     "MPL-2.0",
+    "CDLA-Permissive-2.0",
   ], crate = "webpki-roots" },
   { allow = [
     "CC-BY-SA-3.0",
@@ -97,6 +98,7 @@ exceptions = [
   { allow = [
     "Apache-2.0 WITH LLVM-exception",
     "Unicode-3.0",
+    "CDLA-Permissive-2.0"
   ], crate = "target-lexicon" },
   { allow = [
     "Unicode-3.0",

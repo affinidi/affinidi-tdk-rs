@@ -241,18 +241,18 @@ impl DIDAuthentication {
     {
         // Check if custom authentication handler is provided
         // If so, use it to authenticate
-        if let Some(handlers) = &self.custom_handlers {
-            if let Some(auth_handler) = &handlers.auth_handler {
-                debug!("Using custom authentication handler");
-                let tokens = auth_handler
-                    .authenticate(profile_did, endpoint_did, did_resolver, client)
-                    .await?;
-                
-                self.authenticated = true;
-                self.tokens = Some(tokens);
-                self.type_ = AuthenticationType::AffinidiMessaging;
-                return Ok(());
-            }
+        if let Some(handlers) = &self.custom_handlers
+            && let Some(auth_handler) = &handlers.auth_handler
+        {
+            debug!("Using custom authentication handler");
+            let tokens = auth_handler
+                .authenticate(profile_did, endpoint_did, did_resolver, client)
+                .await?;
+
+            self.authenticated = true;
+            self.tokens = Some(tokens);
+            self.type_ = AuthenticationType::AffinidiMessaging;
+            return Ok(());
         }
 
         // Authenticate using default logic
@@ -509,17 +509,17 @@ impl DIDAuthentication {
                 // Access token has expired, refresh it
                 // Check if custom refresh handler is provided
                 // If so, use it to refresh
-                if let Some(handlers) = &self.custom_handlers {
-                    if let Some(refresh_handler) = &handlers.refresh_handler {
-                        debug!("Using custom refresh handler");
-                        let new_tokens = refresh_handler
-                            .refresh(profile_did, endpoint_did, tokens, did_resolver, client)
-                            .await?;
-                        
-                        self.tokens = Some(new_tokens);
-                        debug!("JWT successfully refreshed using custom handler");
-                        return Ok(());
-                    }
+                if let Some(handlers) = &self.custom_handlers
+                    && let Some(refresh_handler) = &handlers.refresh_handler
+                {
+                    debug!("Using custom refresh handler");
+                    let new_tokens = refresh_handler
+                        .refresh(profile_did, endpoint_did, tokens, did_resolver, client)
+                        .await?;
+
+                    self.tokens = Some(new_tokens);
+                    debug!("JWT successfully refreshed using custom handler");
+                    return Ok(());
                 }
 
                 // Refresh using default logic
