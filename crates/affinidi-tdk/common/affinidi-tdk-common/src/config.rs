@@ -20,7 +20,6 @@ pub struct TDKConfig {
     pub environment_name: String,
     pub authentication_cache_limit: usize,
     pub use_atm: bool,
-    pub auth_tokens: Option<AuthorizationTokens>,
     pub custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
@@ -79,9 +78,6 @@ pub struct TDKConfigBuilder {
     /// NOTE: You can specify an externally configured ATM instance when instantiating TDK which will override this
     use_atm: bool,
 
-    /// Authentication tokens to be used by ATM
-    auth_tokens: Option<AuthorizationTokens>,
-
     /// Custom authentication handlers
     custom_auth_handlers: Option<CustomAuthHandlers>,
 }
@@ -98,7 +94,6 @@ impl Default for TDKConfigBuilder {
             authentication_cache_limit: 1_000,
             #[cfg(feature = "messaging")]
             use_atm: true,
-            auth_tokens: None,
             custom_auth_handlers: None,
         }
     }
@@ -124,7 +119,6 @@ impl TDKConfigBuilder {
             authentication_cache_limit: self.authentication_cache_limit,
             #[cfg(feature = "messaging")]
             use_atm: self.use_atm,
-            auth_tokens: self.auth_tokens,
             custom_auth_handlers: self.custom_auth_handlers,
         })
     }
@@ -239,28 +233,6 @@ impl TDKConfigBuilder {
     /// ```
     pub fn with_use_atm(mut self, use_atm: bool) -> Self {
         self.use_atm = use_atm;
-        self
-    }
-
-    /// Set authentication tokens
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    /// use affinidi_did_authentication::AuthorizationTokens;
-    ///
-    /// let tokens = AuthorizationTokens {
-    ///     access_token: "access".to_string(),
-    ///     access_expires_at: 1234567890,
-    ///     refresh_token: "refresh".to_string(),
-    ///     refresh_expires_at: 1234567890,
-    /// };
-    /// let tdk_config = TDKConfig::builder().with_auth_tokens(tokens).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
-    pub fn with_auth_tokens(mut self, auth_tokens: AuthorizationTokens) -> Self {
-        self.auth_tokens = Some(auth_tokens);
         self
     }
 
