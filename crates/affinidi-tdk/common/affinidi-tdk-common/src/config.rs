@@ -2,7 +2,7 @@
  * TDK Configuration options
  */
 
-use affinidi_did_authentication::AuthorizationTokens;
+use affinidi_did_authentication::{AuthorizationTokens, CustomAuthHandlers};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfig};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 
@@ -21,6 +21,7 @@ pub struct TDKConfig {
     pub authentication_cache_limit: usize,
     pub use_atm: bool,
     pub auth_tokens: Option<AuthorizationTokens>,
+    pub custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
 impl TDKConfig {
@@ -80,6 +81,9 @@ pub struct TDKConfigBuilder {
 
     /// Authentication tokens to be used by ATM
     auth_tokens: Option<AuthorizationTokens>,
+
+    /// Custom authentication handlers
+    custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
 impl Default for TDKConfigBuilder {
@@ -95,6 +99,7 @@ impl Default for TDKConfigBuilder {
             #[cfg(feature = "messaging")]
             use_atm: true,
             auth_tokens: None,
+            custom_auth_handlers: None,
         }
     }
 }
@@ -120,6 +125,7 @@ impl TDKConfigBuilder {
             #[cfg(feature = "messaging")]
             use_atm: self.use_atm,
             auth_tokens: self.auth_tokens,
+            custom_auth_handlers: self.custom_auth_handlers,
         })
     }
 
@@ -255,6 +261,25 @@ impl TDKConfigBuilder {
     /// ```
     pub fn with_auth_tokens(mut self, auth_tokens: AuthorizationTokens) -> Self {
         self.auth_tokens = Some(auth_tokens);
+        self
+    }
+
+    /// Set custom authentication handlers
+    /// Example:
+    /// ```
+    /// // use affinidi_tdk::TDK;
+    /// use affinidi_tdk_common::config::TDKConfig;
+    /// use affinidi_did_authentication::CustomAuthHandlers;
+    ///
+    /// // let handlers = CustomAuthHandlers::new()
+    /// //     .with_auth_handler(Arc::new(MyCustomAuthHandler))
+    /// //     .with_refresh_handler(Arc::new(MyCustomRefreshHandler));
+    /// // let tdk_config = TDKConfig::builder().with_custom_auth_handlers(handlers).build();
+    ///
+    /// // let tdk = TDK::new(tdk_config);
+    /// ```
+    pub fn with_custom_auth_handlers(mut self, handlers: CustomAuthHandlers) -> Self {
+        self.custom_auth_handlers = Some(handlers);
         self
     }
 }

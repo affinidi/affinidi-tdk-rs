@@ -104,6 +104,7 @@ impl TDK {
             &did_resolver,
             secrets_resolver.clone(),
             &client,
+            config.custom_auth_handlers.clone(),
         );
         
         match &config.auth_tokens {

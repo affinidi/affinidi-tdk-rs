@@ -28,7 +28,10 @@ use std::time::SystemTime;
 use tracing::{Instrument, Level, debug, error, info, span};
 use uuid::Uuid;
 
+pub mod custom_auth;
 pub mod errors;
+
+pub use custom_auth::{CustomAuthHandler, CustomAuthHandlers, CustomRefreshHandler};
 
 /// The authorization tokens received in the fourth step of the DID authentication process
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -140,7 +143,7 @@ impl AuthenticationType {
 }
 
 /// The DID Authentication struct
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DIDAuthentication {
     /// There are two different DID authentication methods that need to be supported for now
     /// Set to true if
@@ -151,6 +154,20 @@ pub struct DIDAuthentication {
 
     /// true if authenticated, false otherwise
     pub authenticated: bool,
+
+    /// Custom authentication handlers
+    pub custom_handlers: Option<CustomAuthHandlers>,
+}
+
+impl std::fmt::Debug for DIDAuthentication {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DIDAuthentication")
+            .field("type_", &self.type_)
+            .field("tokens", &self.tokens)
+            .field("authenticated", &self.authenticated)
+            .field("custom_handlers", &self.custom_handlers.is_some())
+            .finish()
+    }
 }
 
 impl Default for DIDAuthentication {
@@ -159,6 +176,7 @@ impl Default for DIDAuthentication {
             type_: AuthenticationType::Unknown,
             tokens: None,
             authenticated: false,
+            custom_handlers: None,
         }
     }
 }
@@ -166,6 +184,12 @@ impl Default for DIDAuthentication {
 impl DIDAuthentication {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set custom authentication handlers
+    pub fn with_custom_handlers(mut self, handlers: Option<CustomAuthHandlers>) -> Self {
+        self.custom_handlers = handlers;
+        self
     }
 
     /// Find the [serviceEndpoint](https://www.w3.org/TR/did-1.0/#services) with type `Authentication` from a DID Document
@@ -215,6 +239,23 @@ impl DIDAuthentication {
     where
         S: SecretsResolver,
     {
+        // Check if custom authentication handler is provided
+        // If so, use it to authenticate
+        if let Some(handlers) = &self.custom_handlers {
+            if let Some(auth_handler) = &handlers.auth_handler {
+                debug!("Using custom authentication handler");
+                let tokens = auth_handler
+                    .authenticate(profile_did, endpoint_did, did_resolver, client)
+                    .await?;
+                
+                self.authenticated = true;
+                self.tokens = Some(tokens);
+                self.type_ = AuthenticationType::AffinidiMessaging;
+                return Ok(());
+            }
+        }
+
+        // Authenticate using default logic
         let mut retry_count = 0;
         let mut timer = 1;
         loop {
@@ -466,6 +507,22 @@ impl DIDAuthentication {
             }
             RefreshCheck::Refresh => {
                 // Access token has expired, refresh it
+                // Check if custom refresh handler is provided
+                // If so, use it to refresh
+                if let Some(handlers) = &self.custom_handlers {
+                    if let Some(refresh_handler) = &handlers.refresh_handler {
+                        debug!("Using custom refresh handler");
+                        let new_tokens = refresh_handler
+                            .refresh(profile_did, endpoint_did, tokens, did_resolver, client)
+                            .await?;
+                        
+                        self.tokens = Some(new_tokens);
+                        debug!("JWT successfully refreshed using custom handler");
+                        return Ok(());
+                    }
+                }
+
+                // Refresh using default logic
                 debug!("Refreshing tokens");
                 let refresh_msg = self
                     ._create_refresh_request(

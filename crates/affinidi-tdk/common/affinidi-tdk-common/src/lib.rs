@@ -64,7 +64,7 @@ impl TDKSharedState {
         let client = create_http_client();
         let environment = TDKEnvironment::default();
         let (authentication, _) =
-            AuthenticationCache::new(1_000, &did_resolver, secrets_resolver.clone(), &client);
+            AuthenticationCache::new(1_000, &did_resolver, secrets_resolver.clone(), &client, None);
         authentication.start().await;
 
         TDKSharedState {

@@ -8,8 +8,8 @@
  */
 
 use affinidi_did_authentication::{
-    AuthenticationType, AuthorizationTokens, DIDAuthentication, RefreshCheck, errors::DIDAuthError,
-    refresh_check,
+    AuthenticationType, AuthorizationTokens, CustomAuthHandlers, DIDAuthentication, RefreshCheck,
+    errors::DIDAuthError, refresh_check,
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
@@ -48,6 +48,7 @@ pub struct AuthenticationCacheInner {
     did_resolver: DIDCacheClient,
     secrets_resolver: ThreadedSecretsResolver,
     client: Client,
+    custom_handlers: Option<CustomAuthHandlers>,
 }
 
 /// MPSC Authentication Commands
@@ -126,11 +127,13 @@ impl AuthenticationCache {
     /// * `did_resolver` - DID Resolver Cache Client
     /// * `secrets_resolver` - SecretsResolver
     /// * `client` - Reqwest Client
+    /// * `custom_handlers` - Optional custom authentication handlers
     pub fn new(
         max_capacity: u64,
         did_resolver: &DIDCacheClient,
         secrets_resolver: ThreadedSecretsResolver,
         client: &Client,
+        custom_handlers: Option<CustomAuthHandlers>,
     ) -> (Self, mpsc::Sender<AuthenticationCommand>) {
         let (tx, rx) = mpsc::channel(32);
 
@@ -151,6 +154,7 @@ impl AuthenticationCache {
                     did_resolver: did_resolver.clone(),
                     secrets_resolver,
                     client: client.clone(),
+                    custom_handlers,
                 })),
                 tx: tx.clone(),
             },
@@ -362,15 +366,16 @@ impl AuthenticationCacheInner {
                                 type_: record.type_,
                                 tokens: Some(record.tokens.clone()),
                                 authenticated: true,
+                                custom_handlers: self.custom_handlers.clone(),
                             }
                         }
                         RefreshCheck::Expired => {
                             debug!("Tokens expired");
-                            DIDAuthentication::new()
+                            DIDAuthentication::new().with_custom_handlers(self.custom_handlers.clone())
                         }
                     }
                 } else {
-                    DIDAuthentication::new()
+                    DIDAuthentication::new().with_custom_handlers(self.custom_handlers.clone())
                 };
 
                 // set auth tokens if provided in parameters
