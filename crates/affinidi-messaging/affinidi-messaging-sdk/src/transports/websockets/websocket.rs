@@ -368,16 +368,7 @@ impl WebSocketTransport {
 
         // If skip_unpack_messages is true, send the packed message directly
         if self.skip_unpack_messages {
-            // TODO: cached should be updated for packed messages too
-            // if let Some(sender) = self.inbound_cache.message_wanted(&message) {
-            //     debug!("Message is wanted, sending to requestor");
-            //     let _ = sender.send(WebSocketResponses::MessageReceived(
-            //         message,
-            //         Box::new(metadata),
-            //     ));
-            //     return;
-            // }
-
+            // for packed messages skip cache lookup
             if let Some(next_request) = self.next_requests_list.pop_front() {
                 debug!("Next message found, sending to requestor packed");
                 if let Some(sender) = self.next_requests.remove(&next_request) {

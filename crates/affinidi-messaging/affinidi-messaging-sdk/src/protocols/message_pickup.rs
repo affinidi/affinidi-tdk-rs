@@ -614,7 +614,7 @@ impl MessagePickup {
         .await
     }
 
-    /// Waits for the next message to be received via websocket live delivery (packed/unpacked version)
+    /// Waits for the next message to be received via websocket live delivery
     /// Returns the message as a packed string without unpacking
     /// atm         : The ATM SDK to use
     /// profile     : The profile to use
@@ -716,7 +716,6 @@ impl MessagePickup {
 
     /// Attempts to retrieve a specific message from the server via websocket live delivery (packed version)
     /// Note: This method is not yet implemented as it requires changes to the message cache to support packed messages
-    /// For now, use live_stream_next_packed() to get packed messages
     pub async fn live_stream_get_packed(
         &self,
         _profile: &Arc<ATMProfile>,
