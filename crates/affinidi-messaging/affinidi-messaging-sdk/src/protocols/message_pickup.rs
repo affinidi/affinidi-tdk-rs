@@ -718,7 +718,8 @@ impl MessagePickup {
 
     /// Attempts to retrieve a specific message from the server via websocket live delivery (packed version)
     /// Note: This method is not yet implemented as it requires changes to the message cache to support packed messages
-    pub async fn live_stream_get_packed(
+    #[allow(dead_code)]
+    async fn live_stream_get_packed(
         &self,
         _profile: &Arc<ATMProfile>,
         _msg_id: &str,
