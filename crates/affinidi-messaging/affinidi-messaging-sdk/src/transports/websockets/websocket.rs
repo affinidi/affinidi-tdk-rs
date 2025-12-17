@@ -59,6 +59,12 @@ pub(crate) struct WebSocketTransport {
     /// Tracks number of next message requests from the SDK
     next_requests: HashMap<u32, oneshot::Sender<WebSocketResponses>>,
     next_requests_list: VecDeque<u32>,
+
+    /// Skip calling toggle_live_delivery during connection setup
+    skip_toggle_live_delivery: bool,
+
+    /// Skip unpacking messages - return them as packed strings instead
+    skip_unpack_messages: bool,
 }
 
 /// WebSocket Commands
@@ -117,10 +123,43 @@ impl WebSocketTransport {
                 direct_channel,
                 next_requests: HashMap::new(),
                 next_requests_list: VecDeque::new(),
+                skip_toggle_live_delivery: false,
+                skip_unpack_messages: false,
             };
             websocket.run(&mut task_rx).await;
         });
+        (handle, task_tx)
+    }
 
+    pub(crate) async fn start_with_options(
+        profile: Arc<ATMProfile>,
+        shared: Arc<SharedState>,
+        direct_channel: Option<broadcast::Sender<WebSocketResponses>>,
+        skip_toggle_live_delivery: bool,
+        skip_unpack_messages: bool,
+    ) -> (JoinHandle<()>, Sender<WebSocketCommands>) {
+        let (task_tx, mut task_rx) = mpsc::channel::<WebSocketCommands>(32);
+        let handle = tokio::spawn(async move {
+            let mut websocket = WebSocketTransport {
+                profile: profile.clone(),
+                shared: shared.clone(),
+                web_socket: None,
+                connect_delay_timer: None,
+                connect_delay: 0,
+                awaiting_pong: false,
+                inbound_cache: MessageCache {
+                    fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
+                    fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
+                    ..Default::default()
+                },
+                direct_channel,
+                next_requests: HashMap::new(),
+                next_requests_list: VecDeque::new(),
+                skip_toggle_live_delivery,
+                skip_unpack_messages,
+            };
+            websocket.run(&mut task_rx).await;
+        });
         (handle, task_tx)
     }
 
@@ -215,7 +254,7 @@ impl WebSocketTransport {
                             Some(WebSocketCommands::Next(id, sender)) => {
                                 debug!("Next message requested");
                                 if let Some((message, metadata)) = self.inbound_cache.next() {
-                                    let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                                    let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     self.next_requests.insert(id, sender);
                                     self.next_requests_list.push_back(id);
@@ -230,7 +269,7 @@ impl WebSocketTransport {
                             Some(WebSocketCommands::GetMessage(id, sender)) => {
                                 if let Some((sender, message, metadata)) = self.inbound_cache.get_or_add_wanted(&id, sender) {
                                     debug!("Message found in cache");
-                                    let _ = sender.send(WebSocketResponses::MessageReceived(message, Box::new(metadata)));
+                                    let _ = sender.send(WebSocketResponses::MessageReceived(Box::new(message), Box::new(metadata)));
                                 } else {
                                     debug!("Message ({}) not found in cache, added to wanted list", id);
                                 }
@@ -326,12 +365,39 @@ impl WebSocketTransport {
 
     async fn process_inbound_didcomm_message(&mut self, atm: &ATM, message: String) {
         debug!("Received text message ({})", message);
+
+        // If skip_unpack_messages is true, send the packed message directly
+        if self.skip_unpack_messages {
+            // for packed messages skip cache lookup
+            if let Some(next_request) = self.next_requests_list.pop_front() {
+                debug!("Next message found, sending to requestor packed");
+                if let Some(sender) = self.next_requests.remove(&next_request) {
+                    let _ =
+                        sender.send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
+                    return;
+                } else {
+                    error!(
+                        "Next message requestor not found - bug in the SDK - inbound message may be lost"
+                    );
+                }
+            }
+
+            if let Some(direct_channel) = self.direct_channel.as_mut() {
+                debug!("Sending message to direct channel packed");
+                let _ = direct_channel
+                    .send(WebSocketResponses::PackedMessageReceived(Box::new(message)));
+            } else {
+                debug!("No direct channel, should be cached");
+            }
+            return;
+        }
+
         match atm.unpack(&message).await {
             Ok((message, metadata)) => {
                 if let Some(sender) = self.inbound_cache.message_wanted(&message) {
                     debug!("Message is wanted, sending to requestor");
                     let _ = sender.send(WebSocketResponses::MessageReceived(
-                        message,
+                        Box::new(message),
                         Box::new(metadata),
                     ));
                     return;
@@ -340,7 +406,7 @@ impl WebSocketTransport {
                     debug!("Next message found, sending to requestor");
                     if let Some(sender) = self.next_requests.remove(&next_request) {
                         let _ = sender.send(WebSocketResponses::MessageReceived(
-                            message.clone(),
+                            Box::new(message.clone()),
                             Box::new(metadata),
                         ));
                         return;
@@ -354,7 +420,7 @@ impl WebSocketTransport {
                 if let Some(direct_channel) = self.direct_channel.as_mut() {
                     debug!("Sending message to direct channel");
                     let _ = direct_channel.send(WebSocketResponses::MessageReceived(
-                        message,
+                        Box::new(message),
                         Box::new(metadata),
                     ));
                 } else {
@@ -396,25 +462,33 @@ impl WebSocketTransport {
 
         debug!("Websocket connected. Next enable live streaming");
 
-        // Enable live_streaming on this socket
-        match protocols
-            .message_pickup
-            .toggle_live_delivery(atm, &self.profile, true)
-            .await
-        {
-            Ok(_) => {
-                debug!("Live streaming enabled");
-                self.connect_delay = 0;
-                self.connect_delay_timer = None;
-                self.awaiting_pong = false;
-                Some(web_socket)
-            }
-            Err(e) => {
-                error!("Error enabling live streaming: {:?}", e);
-                let _ = web_socket.close(None).await;
-                self.connect_delay = _calculate_delay(self.connect_delay);
-                self.connect_delay_timer = None;
-                None
+        // Do toggle_live_delivery on this socket if not skipped
+        if self.skip_toggle_live_delivery {
+            debug!("Skipping toggle_live_delivery as requested");
+            self.connect_delay = 0;
+            self.connect_delay_timer = None;
+            self.awaiting_pong = false;
+            Some(web_socket)
+        } else {
+            match protocols
+                .message_pickup
+                .toggle_live_delivery(atm, &self.profile, true)
+                .await
+            {
+                Ok(_) => {
+                    debug!("Live streaming enabled");
+                    self.connect_delay = 0;
+                    self.connect_delay_timer = None;
+                    self.awaiting_pong = false;
+                    Some(web_socket)
+                }
+                Err(e) => {
+                    error!("Error enabling live streaming: {:?}", e);
+                    let _ = web_socket.close(None).await;
+                    self.connect_delay = _calculate_delay(self.connect_delay);
+                    self.connect_delay_timer = None;
+                    None
+                }
             }
         }
     }
@@ -478,5 +552,18 @@ impl WebSocketTransport {
         debug!("Completed websocket connection");
 
         Ok(web_socket)
+    }
+}
+
+impl std::fmt::Debug for WebSocketTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebSocketTransport")
+            .field("profile", &self.profile)
+            .field("web_socket", &self.web_socket.is_some())
+            .field("connect_delay", &self.connect_delay)
+            .field("awaiting_pong", &self.awaiting_pong)
+            .field("skip_toggle_live_delivery", &self.skip_toggle_live_delivery)
+            .field("skip_unpack_messages", &self.skip_unpack_messages)
+            .finish()
     }
 }

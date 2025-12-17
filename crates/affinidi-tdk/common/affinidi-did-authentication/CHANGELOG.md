@@ -1,5 +1,14 @@
 # Affinidi DID Authentication
 
+## 15th December 2025 (0.2.3)
+
+- **FEATURE:** Added support for custom authentication handlers via `CustomAuthHandlers`
+  `CustomAuthHandler` trait allows custom authentication logic
+  `CustomRefreshHandler` trait allows custom token refresh logic
+- **FEATURE:** `DIDAuthentication::with_custom_handlers()` method added
+  Authentication and refresh methods now check for custom handlers before
+  using default logic
+
 ## 3rd November 2025 (0.2.2)
 
 - **MAINTENANCE:** Dependency updates

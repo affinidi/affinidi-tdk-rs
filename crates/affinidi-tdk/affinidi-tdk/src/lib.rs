@@ -103,7 +103,9 @@ impl TDK {
             &did_resolver,
             secrets_resolver.clone(),
             &client,
+            config.custom_auth_handlers.clone(),
         );
+
         authentication.start().await;
 
         // Load Environment

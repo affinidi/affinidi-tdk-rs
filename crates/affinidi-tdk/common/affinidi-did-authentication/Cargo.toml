@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-did-authentication"
 description = "Using proof of DID ownership to authenticate to services"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"

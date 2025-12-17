@@ -6,7 +6,9 @@
  * Do not pass message ID's to the mediator, it cannot see inside messages that it is handling.
  *
  */
-use affinidi_messaging_didcomm::{AttachmentData, Message, PackEncryptedOptions, UnpackMetadata};
+use affinidi_messaging_didcomm::{
+    AttachmentData, Message, PackEncryptedOptions, UnpackMetadata, envelope::MetaEnvelope,
+};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -280,7 +282,12 @@ impl MessagePickup {
                              if auto_delete {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                            Ok(Some((msg, meta)))
+                            Ok(Some((*msg, meta)))
+                        }
+                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
+                            ))
                         }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
@@ -361,7 +368,12 @@ impl MessagePickup {
                             if auto_delete {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
-                            Ok(Some((msg, meta)))
+                            Ok(Some((*msg, meta)))
+                        }
+                        Ok(WebSocketResponses::PackedMessageReceived(_)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
+                            ))
                         }
                         Err(e) => {
                             warn!("Error receiving message: {:?}", e);
@@ -602,5 +614,119 @@ impl MessagePickup {
         }
         .instrument(_span)
         .await
+    }
+
+    /// Waits for the next message to be received via websocket live delivery
+    /// Returns the message as a packed string without unpacking
+    /// atm         : The ATM SDK to use
+    /// profile     : The profile to use
+    /// wait        : How long to wait (in milliseconds) for a message before returning None
+    ///                 If None, will block forever until a message is received
+    /// auto_delete : If true, will delete the message after receiving it
+    /// Returns the packed message string, or None if no message was received
+    pub async fn live_stream_next_packed(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+        auto_delete: bool,
+    ) -> Result<Option<String>, ATMError> {
+        let _span = span!(Level::DEBUG, "live_stream_next_packed");
+
+        async move {
+            let Some(mediator) = &*profile.inner.mediator else {
+                warn!("Mediator not set for profile {}", profile.inner.alias);
+                return Err(ATMError::ProfileError("No Mediator set for profile".into()));
+            };
+
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // Send the next request to the profile websocket
+            let Some(ws_channel) = &*mediator.ws_channel_tx.read().await else {
+                warn!(
+                    "WebSocket channel not set for profile {}",
+                    profile.inner.alias
+                );
+                return Err(ATMError::ProfileError(
+                    "No WebSocket channel set for profile".into(),
+                ));
+            };
+
+            let tx_uuid = mediator.get_tx_uuid();
+            ws_channel
+                .send(WebSocketCommands::Next(tx_uuid, tx))
+                .await
+                .map_err(|err| {
+                    ATMError::TransportError(format!(
+                        "Could not send Next command to websocket: {err:?}"
+                    ))
+                })?;
+            debug!("sent next request to websocket for packed message");
+
+            // Setup the timer for the wait, doesn't do anything till `await` is called in the select! macro
+            let sleep: tokio::time::Sleep = tokio::time::sleep(wait.unwrap_or(Duration::MAX));
+
+            select! {
+                _ = sleep, if wait.is_some() => {
+                    debug!("Timeout reached, no message received");
+                    ws_channel.send(WebSocketCommands::CancelNext(tx_uuid)).await.map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send CancelNext command to websocket: {err:?}"
+                        ))
+                    })?;
+                    Ok(None)
+                }
+                value = rx => {
+                    match value {
+                        Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
+                            // If auto_delete is true, delete the message
+                            if auto_delete {
+                                match MetaEnvelope::new(&packed_msg, &atm.get_tdk().did_resolver).await
+                                {
+                                    Ok(envelope) => {
+                                        debug!("Trying to delete message in background with hash: {}", envelope.sha256_hash);
+                                        atm.delete_message_background(profile, &envelope.sha256_hash.clone()).await?;
+                                        debug!("Deleted message in background with hash: {}", envelope.sha256_hash);
+                                    },
+                                    Err(e) => {
+                                        return Err(ATMError::DidcommError(
+                                            "Cannot convert string to MetaEnvelope".into(),
+                                            e.to_string(),
+                                        ));
+                                    }
+                                };
+                            }
+                            Ok(Some(*packed_msg))
+                        }
+                        Ok(WebSocketResponses::MessageReceived(_, _)) => {
+                            Err(ATMError::MsgReceiveError(
+                                "Received unpacked message when expecting packed message. Make sure WebSocket is configured with skip_unpack_messages=true".into()
+                            ))
+                        }
+                        Err(e) => {
+                            warn!("Error receiving message: {:?}", e);
+                            Err(ATMError::MsgReceiveError(format!(
+                                "Error receiving message: {e:?}"
+                            )))
+                        }
+                    }
+                }
+            }
+        }
+        .instrument(_span)
+        .await
+    }
+
+    /// Attempts to retrieve a specific message from the server via websocket live delivery (packed version)
+    /// Note: This method is not yet implemented as it requires changes to the message cache to support packed messages
+    #[allow(dead_code)]
+    async fn live_stream_get_packed(
+        &self,
+        _profile: &Arc<ATMProfile>,
+        _msg_id: &str,
+        _wait: Duration,
+    ) -> Result<Option<String>, ATMError> {
+        Err(ATMError::MsgReceiveError(
+            "live_stream_get_packed is not yet implemented. The message cache currently only supports unpacked messages. Use live_stream_next_packed() instead.".into()
+        ))
     }
 }

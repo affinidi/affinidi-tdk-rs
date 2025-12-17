@@ -19,5 +19,8 @@ pub(crate) mod ws_cache;
 #[derive(Clone)]
 pub enum WebSocketResponses {
     /// MessageReceived - sent to SDK when a message is received
-    MessageReceived(DidcommMessage, Box<UnpackMetadata>),
+    MessageReceived(Box<DidcommMessage>, Box<UnpackMetadata>),
+
+    /// PackedMessageReceived - sent to SDK when a message is received (still packed as string)
+    PackedMessageReceived(Box<String>),
 }

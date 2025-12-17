@@ -1,5 +1,13 @@
 # Affinidi TDK Changelog
 
+## 15th December 2025 (Release 0.2.10)
+
+- **FEATURE:** `TDKConfig` now supports custom authentication handlers via
+  `custom_auth_handlers` field. Custom auth handlers are passed to the AuthenticationCache during TDK
+  initialization
+- **FEATURE:** `TDKConfigBuilder::with_custom_auth_handlers()` added to configure custom
+  authentication logic
+
 ## 8th December 2025 (Release 0.2.9)
 
 - **MAINTENANCE:** Updated to support `affinidi-messaging-sdk` 0.13.x changes

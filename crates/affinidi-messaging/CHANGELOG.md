@@ -8,6 +8,23 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 15th December 2025
+
+### SDK (0.14.0)
+
+- **FEATURE:** `atm.profile_start_live_streaming()` added to allow manual control over WebSocket
+  connection setup with options to skip toggle_live_delivery and message unpacking
+- **FEATURE:** `live_stream_next_packed()` added to receive packed DIDComm messages without
+  automatic unpacking
+- **FEATURE:** WebSocket transport now supports `skip_toggle_live_delivery` and
+  `skip_unpack_messages` options for greater flexibility in message handling
+- **BREAKING:** `WebSocketResponses::MessageReceived` now wraps message in `Box`
+- **FEATURE:** `WebSocketResponses::PackedMessageReceived` added for receiving packed messages
+
+### Text-Client (0.11.2)
+
+- **FEATURE:** Updated to handle new `WebSocketResponses::PackedMessageReceived` variant
+
 ## 8th December 2025
 
 ### SDK (0.13.0)

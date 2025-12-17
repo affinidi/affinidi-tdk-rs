@@ -478,6 +478,103 @@ impl ATM {
         Ok(())
     }
 
+    /// Will create a websocket connection for the profile if one doesn't already exist
+    /// Will return Ok() if a connection already exists, or if it successfully started a new connection
+    /// Automatically starts live_streaming
+    /// skip_toggle_live_delivery: if true, will not call toggle_live_delivery during connection setup
+    /// skip_unpack_messages: if true, messages received via websocket will not be unpacked
+    pub async fn profile_start_live_streaming(
+        &self,
+        profile: &Arc<ATMProfile>,
+        skip_toggle_live_delivery: bool,
+        skip_unpack_messages: bool,
+    ) -> Result<(), ATMError> {
+        let mediator = {
+            let Some(mediator) = &*profile.inner.mediator else {
+                return Err(ATMError::ConfigError(
+                    "No Mediator is configured for this Profile".to_string(),
+                ));
+            };
+            mediator
+        };
+
+        {
+            if mediator.ws_channel_tx.read().await.is_some() {
+                // Already connected
+                debug!(
+                    "Profile ({}): is already connected to the WebSocket",
+                    profile.inner.alias
+                );
+                return Ok(());
+            }
+        }
+
+        debug!("Profile({}): enabling...", profile.inner.alias);
+
+        let (_, ws_channel) = WebSocketTransport::start_with_options(
+            profile.clone(),
+            self.inner.clone(),
+            self.inner.config.inbound_message_channel.clone(),
+            skip_toggle_live_delivery,
+            skip_unpack_messages,
+        )
+        .await;
+        {
+            mediator.ws_channel_tx.write().await.replace(ws_channel);
+        }
+
+        let (tx, rx) = oneshot::channel();
+
+        {
+            if let Some(channel_tx) = &*mediator.ws_channel_tx.read().await {
+                channel_tx
+                    .send(WebSocketCommands::NotifyConnection(tx))
+                    .await
+                    .map_err(|err| {
+                        ATMError::TransportError(format!(
+                            "Could not send websocket NotifyConnection? command: {err:?}"
+                        ))
+                    })?;
+            } else {
+                return Err(ATMError::TransportError(
+                    "No WebSocket channel is configured for this Profile".to_string(),
+                ));
+            }
+        }
+
+        let sleep = tokio::time::sleep(Duration::from_secs(10));
+        tokio::pin!(sleep);
+
+        select! {
+            _ = sleep => {
+                return Err(ATMError::TransportError(
+                    "WebSocket isActive? command timed out".to_string(),
+                ));
+            }
+            val = rx => {
+                match val {
+                    Ok(is_active) => {
+                        if is_active {
+                            debug!("Profile({}): WebSocket is active", profile.inner.alias);
+                        } else {
+                            debug!("Profile({}): WebSocket is not active", profile.inner.alias);
+                            return Err(ATMError::TransportError(
+                                "WebSocket is not active".to_string(),
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        return Err(ATMError::TransportError(format!(
+                            "Could not receive websocket NotifyConnection? response: {err:?}"
+                        )));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Returns all active profiles within ATM
     pub fn get_profiles(&self) -> Arc<RwLock<Profiles>> {
         self.inner.profiles.clone()
