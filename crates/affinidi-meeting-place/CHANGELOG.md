@@ -1,5 +1,9 @@
 # Meeting Place Changelog
 
+## 18th December 2025 (0.2.2)
+
+- **CHORE:** Updating dependencies
+
 ## 3rd November 2025 (0.2.1)
 
 - **CHORE:** Updating dependencies
