@@ -8,6 +8,10 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 22th December 2025
+
+- **CHORE:** Updating dependencies for `affinidi-messaging-helpers` and `affinidi-messaging-text-client`
+
 ## 15th December 2025
 
 ### SDK (0.14.0)
