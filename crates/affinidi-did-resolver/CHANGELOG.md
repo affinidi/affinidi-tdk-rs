@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 6th January 2026
+
+#### affinidi-did-common (0.1.5)
+
+- **FIX:** serde support was not enabled for `Url` type, causing compile errors
+
 ### 4th December 2025
 
 #### affinidi-did-resolver-cache-sdk (0.6.5)
