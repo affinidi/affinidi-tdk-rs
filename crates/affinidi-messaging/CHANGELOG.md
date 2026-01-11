@@ -17,6 +17,10 @@ tooling.
   - Now returns a 404 (NOT-FOUND) HTTP code
 - **CHORE:** Updating dependencies to latest versions
 
+### Mediator-Common (0.11.1)
+
+- **CHORE:** Update to the latest messaging SDK version
+
 ## 22nd December 2025
 
 - **CHORE:** Updating dependencies for `affinidi-messaging-helpers` and `affinidi-messaging-text-client`
