@@ -175,15 +175,26 @@ pub async fn start() {
         .await
         .expect("bad certificate/key");
 
-        axum_server::bind_rustls(config.listen_address.parse().unwrap(), ssl_config)
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .unwrap();
+        axum_server::bind_rustls(
+            config
+                .listen_address
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+            ssl_config,
+        )
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
     } else {
         event!(Level::WARN, "**** WARNING: Running without SSL/TLS ****");
-        axum_server::bind(config.listen_address.parse().unwrap())
-            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .unwrap();
+        axum_server::bind(
+            config
+                .listen_address
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        )
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
     }
 }

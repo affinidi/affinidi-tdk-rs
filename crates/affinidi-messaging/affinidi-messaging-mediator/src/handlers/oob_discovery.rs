@@ -147,8 +147,8 @@ pub async fn oobid_handler(
     State(state): State<SharedData>,
     oobid: Query<Parameters>,
 ) -> Result<(StatusCode, Json<SuccessResponse<String>>), AppError> {
-    match state.database.oob_discovery_get(&oobid._oobid).await? {
-        Some((invite, _)) => Ok((
+    match state.database.oob_discovery_get(&oobid._oobid).await {
+        Ok(Some((invite, _))) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
                 sessionId: "NA".into(),
@@ -159,7 +159,7 @@ pub async fn oobid_handler(
                 data: Some(invite),
             }),
         )),
-        _ => Ok((
+        Ok(_) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
                 sessionId: "NA".into(),
@@ -170,6 +170,38 @@ pub async fn oobid_handler(
                 data: None,
             }),
         )),
+        Err(MediatorError::DatabaseError(code, _, text)) => Err(MediatorError::MediatorError(
+            code,
+            "NA".to_string(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.error".into(),
+                "Database transaction error: {1}".into(),
+                vec![text.to_string()],
+                None,
+            )),
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            format!("Database transaction error: {text}"),
+        )
+        .into()),
+        Err(e) => Err(MediatorError::MediatorError(
+            87,
+            "NA".to_string(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "oob.store".into(),
+                "Couldn't store OOB invite. Reason: {1}".into(),
+                vec![e.to_string()],
+                None,
+            )),
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            format!("Couldn't store OOB invite. Reason: {e}"),
+        )
+        .into()),
     }
 }
 
