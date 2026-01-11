@@ -159,11 +159,11 @@ pub async fn oobid_handler(
                 data: Some(invite),
             }),
         )),
-        Ok(_) => Ok((
+        Ok(None) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
                 sessionId: "NA".into(),
-                httpCode: StatusCode::NO_CONTENT.as_u16(),
+                httpCode: StatusCode::NOT_FOUND.as_u16(),
                 errorCode: 0,
                 errorCodeStr: "NA".to_string(),
                 message: "NO CONTENT".to_string(),
