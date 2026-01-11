@@ -8,7 +8,16 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
-## 22th December 2025
+## 11th January 2026
+
+### Mediator (0.11.4)
+
+- **FIX:** Incorrect error returned if you tried to fetch an invalid OOB invite
+  message (was returning a database 5xx error).
+  - Now returns a 204 (NO-CONTENT) HTTP code
+- **CHORE:** Updating dependencies to latest versions
+
+## 22nd December 2025
 
 - **CHORE:** Updating dependencies for `affinidi-messaging-helpers` and `affinidi-messaging-text-client`
 
@@ -16,18 +25,22 @@ tooling.
 
 ### SDK (0.14.0)
 
-- **FEATURE:** `atm.profile_start_live_streaming()` added to allow manual control over WebSocket
+- **FEATURE:** `atm.profile_start_live_streaming()` added to allow manual control
+  over WebSocket
   connection setup with options to skip toggle_live_delivery and message unpacking
-- **FEATURE:** `live_stream_next_packed()` added to receive packed DIDComm messages without
+- **FEATURE:** `live_stream_next_packed()` added to receive packed DIDComm messages
+  without
   automatic unpacking
 - **FEATURE:** WebSocket transport now supports `skip_toggle_live_delivery` and
   `skip_unpack_messages` options for greater flexibility in message handling
 - **BREAKING:** `WebSocketResponses::MessageReceived` now wraps message in `Box`
-- **FEATURE:** `WebSocketResponses::PackedMessageReceived` added for receiving packed messages
+- **FEATURE:** `WebSocketResponses::PackedMessageReceived` added for receiving
+  packed messages
 
 ### Text-Client (0.11.2)
 
-- **FEATURE:** Updated to handle new `WebSocketResponses::PackedMessageReceived` variant
+- **FEATURE:** Updated to handle new `WebSocketResponses::PackedMessageReceived`
+  variant
 
 ## 8th December 2025
 
@@ -248,8 +261,8 @@ tooling.
   robust failure detection and handling
   - Able to direct receive some messages while streaming others to common channel
     (this allows for some commands to operate independently of the stream)
-    - For Example: Getting Account information in the midst of an active stream of
-      messages - you can now pull the individual response out
+    - For Example: Getting Account information in the midst of an active stream
+      of messages - you can now pull the individual response out
 - Breaking Changes
   - protocols.message_pickup.live_stream_get(): Removed the `use_profile_channel`
     option
@@ -529,7 +542,8 @@ tooling.
 - Removing Accounts implemented with full cleanup of associated data
   - If admin account, correctly removes from the ADMIN list
   - Can not remove the Mediator DID or Root-Admin DID
-- Database Schema version is now recorded, allows for upgrade paths when schema changes
+- Database Schema version is now recorded, allows for upgrade paths when schema
+  changes
 - Mediator Account Type added, allows for treating the Mediator DID separately
 - **FIX:** Trying to strip admin rights from an empty list will now correctly
   create a ProblemReport that explains the issue
@@ -539,7 +553,8 @@ tooling.
   SHA256 hashed DID's
 - **FEATURE:** Added AccountChangeType to the mediator account-management protocol
 - **FIX/FEATURE:** Mediator will detect when forwarding a message to itself.
-  - When a forward to itself is detected, it will block the forward and deliver locally
+  - When a forward to itself is detected, it will block the forward and deliver
+    locally
   - Added configurtion for other local mediator DID's that you want to block
     forwarding towards
 

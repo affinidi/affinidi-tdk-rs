@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.11.3"
+version = "0.11.4"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -30,17 +30,17 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
-aws-sdk-secretsmanager = "1.92"
-aws-sdk-ssm = "1.98"
+aws-sdk-secretsmanager = "1.97"
+aws-sdk-ssm = "1.101"
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.12", features = ["typed-header"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
-jsonwebtoken = { version = "10.0", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "10.2", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
@@ -61,7 +61,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 subtle = "2.6"
-tokio = { version = "1.48", features = ["full"] }
+tokio = { version = "1.49", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.9"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
@@ -72,10 +72,10 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.18", features = ["v4", "fast-rng"] }
+uuid = { version = "1.19", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 console = "0.16"
 dialoguer = "0.12"
 lazy_static = "1.5"
-reqwest = { version = "0.12", features = ["rustls-tls-manual-roots", "json"] }
+reqwest = { version = "0.13", features = ["rustls", "json"] }

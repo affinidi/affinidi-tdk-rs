@@ -127,14 +127,18 @@ impl Database {
                 .arg("GLOBAL")
                 .arg("OOB_INVITES_CLAIMED")
                 .arg(1)
-                .query_async::<(Vec<String>, String)>(&mut conn)
+                .query_async::<(Vec<Option<String>>, String)>(&mut conn)
                 .await
             {
                 Ok((oob, _)) => {
                     if oob.len() != 2 {
                         None
+                    } else if let Some(field1) = &oob[0]
+                        && let Some(field2) = &oob[1]
+                    {
+                        Some((field1.clone(), field2.clone()))
                     } else {
-                        Some((oob[0].clone(), oob[1].clone()))
+                        None
                     }
                 }
                 Err(err) => {
