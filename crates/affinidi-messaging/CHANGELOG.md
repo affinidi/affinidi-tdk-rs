@@ -14,7 +14,7 @@ tooling.
 
 - **FIX:** Incorrect error returned if you tried to fetch an invalid OOB invite
   message (was returning a database 5xx error).
-  - Now returns a 204 (NO-CONTENT) HTTP code
+  - Now returns a 404 (NOT-FOUND) HTTP code
 - **CHORE:** Updating dependencies to latest versions
 
 ## 22nd December 2025
