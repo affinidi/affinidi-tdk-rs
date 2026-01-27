@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+### 27th January 2026
+
+#### affinidi-did-common (0.2.0)
+
+- **FEATURE:** New strongly-typed `DID` struct implementing W3C DID Core 1.0
+  - `DIDMethod` enum with `Web`, `Peer`, `Key`, `Jwk`, and `Other(String)` variants
+  - Strict validation at parse time per W3C ABNF grammar
+  - RFC 3986 validation for path, query, and fragment components
+  - Builder pattern with `with_path()`, `with_query()`, `with_fragment()` methods
+  - Custom serde implementation (serializes as string)
+  - `#[non_exhaustive]` on `DIDMethod` for forward compatibility
+  - `#[must_use]` on builder methods
+- **TESTS:** 51 unit tests covering parsing, validation, serde, normalization, and edge cases
+
 ### 6th January 2026
 
 #### affinidi-did-common (0.1.5)
