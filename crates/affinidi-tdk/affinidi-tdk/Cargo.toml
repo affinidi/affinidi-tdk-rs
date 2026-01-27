@@ -47,3 +47,6 @@ tracing-subscriber = { version = "0.3", features = [
   "fmt",
   "json",
 ] }
+
+[lints]
+workspace = true

@@ -191,7 +191,7 @@ pub fn init(reload_handle: Option<Handle<LevelFilter, Registry>>) -> Result<Conf
     let config = read_config_file("conf/cache-conf.toml")?;
 
     // Setup logging
-    if reload_handle.is_some() {
+    if let Some(reload_handle) = &reload_handle {
         let level: LevelFilter = match config.log_level.as_str() {
             "trace" => LevelFilter::TRACE,
             "debug" => LevelFilter::DEBUG,
@@ -208,7 +208,6 @@ pub fn init(reload_handle: Option<Handle<LevelFilter, Registry>>) -> Result<Conf
             }
         };
         reload_handle
-            .unwrap()
             .modify(|filter| *filter = level)
             .map_err(|e| CacheError::InternalError("NA".into(), e.to_string()))?;
         event!(Level::INFO, "Log level set to ({})", config.log_level);

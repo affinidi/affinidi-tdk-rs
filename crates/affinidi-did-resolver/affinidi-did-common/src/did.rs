@@ -135,13 +135,13 @@ impl fmt::Display for DIDError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DIDError::MissingPrefix => write!(f, "DID must start with 'did:'"),
-            DIDError::InvalidMethod(m) => write!(f, "Invalid DID method: {}", m),
+            DIDError::InvalidMethod(m) => write!(f, "Invalid DID method: {m}"),
             DIDError::InvalidMethodSpecificId(id) => {
-                write!(f, "Invalid method-specific ID: {}", id)
+                write!(f, "Invalid method-specific ID: {id}")
             }
-            DIDError::InvalidPath(msg) => write!(f, "Invalid path: {}", msg),
-            DIDError::InvalidQuery(msg) => write!(f, "Invalid query: {}", msg),
-            DIDError::InvalidFragment(msg) => write!(f, "Invalid fragment: {}", msg),
+            DIDError::InvalidPath(msg) => write!(f, "Invalid path: {msg}"),
+            DIDError::InvalidQuery(msg) => write!(f, "Invalid query: {msg}"),
+            DIDError::InvalidFragment(msg) => write!(f, "Invalid fragment: {msg}"),
         }
     }
 }
@@ -233,8 +233,7 @@ fn validate_method_specific_id(s: &str) -> Result<(), DIDError> {
             }
         }
         return Err(DIDError::InvalidMethodSpecificId(format!(
-            "invalid character '{}'",
-            c
+            "invalid character '{c}'"
         )));
     }
 
@@ -281,7 +280,7 @@ fn validate_pchar_sequence(s: &str, allow_slash_question: bool) -> Result<(), St
                 _ => return Err("invalid percent-encoding".into()),
             }
         }
-        return Err(format!("invalid character '{}'", c));
+        return Err(format!("invalid character '{c}'"));
     }
     Ok(())
 }
@@ -390,13 +389,13 @@ impl fmt::Display for DID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "did:{}:{}", self.method, self.method_specific_id)?;
         if let Some(ref path) = self.path {
-            write!(f, "/{}", path)?;
+            write!(f, "/{path}")?;
         }
         if let Some(ref query) = self.query {
-            write!(f, "?{}", query)?;
+            write!(f, "?{query}")?;
         }
         if let Some(ref fragment) = self.fragment {
-            write!(f, "#{}", fragment)?;
+            write!(f, "#{fragment}")?;
         }
         Ok(())
     }

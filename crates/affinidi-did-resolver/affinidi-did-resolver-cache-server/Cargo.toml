@@ -38,3 +38,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 affinidi-secrets-resolver.workspace = true
+
+[lints]
+workspace = true

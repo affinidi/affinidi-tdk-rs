@@ -71,3 +71,6 @@ affinidi-tdk-common = { version = "0.3.0", path = "./crates/affinidi-tdk/common/
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
 lto = true
+
+[workspace.lints.clippy]
+uninlined_format_args = "warn"
