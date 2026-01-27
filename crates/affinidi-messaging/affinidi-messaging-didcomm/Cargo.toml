@@ -44,3 +44,6 @@ tracing-test = "0.2"
 
 [features]
 testvectors = ["lazy_static"]
+
+[lints]
+workspace = true

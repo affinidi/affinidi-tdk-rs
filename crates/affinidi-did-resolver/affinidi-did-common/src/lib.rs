@@ -15,10 +15,13 @@ use crate::{
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 
+pub mod did;
 pub mod document;
 pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
+
+pub use did::{DID, DIDError, DIDMethod};
 
 #[derive(Error, Debug)]
 pub enum DocumentError {

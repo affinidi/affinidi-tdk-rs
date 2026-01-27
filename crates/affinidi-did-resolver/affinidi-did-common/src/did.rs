@@ -1,0 +1,919 @@
+/*!
+ * DID (Decentralized Identifier) type definitions per W3C DID Core 1.0
+ *
+ * Provides a structured representation of DIDs with parsing, validation,
+ * and component access.
+ *
+ * # W3C DID Grammar (ABNF)
+ * ```abnf
+ * did                = "did:" method-name ":" method-specific-id
+ * method-name        = 1*method-char
+ * method-char        = %x61-7A / DIGIT  ; lowercase + digits
+ * method-specific-id = *( *idchar ":" ) 1*idchar
+ * did-url            = did [ "/" path ] [ "?" query ] [ "#" fragment ]
+ * ```
+ */
+
+use std::{fmt, str::FromStr};
+
+use serde::{Deserialize, Serialize};
+
+/// DID method identifiers per W3C DID Core 1.0
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DIDMethod {
+    Web,
+    Peer,
+    Key,
+    Jwk,
+    /// Catch-all for methods we don't explicitly model
+    Other(String),
+}
+
+impl Serialize for DIDMethod {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for DIDMethod {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Display for DIDMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                DIDMethod::Web => "web",
+                DIDMethod::Peer => "peer",
+                DIDMethod::Key => "key",
+                DIDMethod::Jwk => "jwk",
+                DIDMethod::Other(s) => s,
+            }
+        )
+    }
+}
+
+impl FromStr for DIDMethod {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "web" => DIDMethod::Web,
+            "peer" => DIDMethod::Peer,
+            "key" => DIDMethod::Key,
+            "jwk" => DIDMethod::Jwk,
+            other => DIDMethod::Other(other.to_string()),
+        })
+    }
+}
+
+/// A validated Decentralized Identifier (DID) or DID URL
+///
+/// DIDs are parsed and validated at construction time according to W3C DID Core 1.0.
+/// Invalid DIDs are rejected immediately, ensuring type-level guarantees.
+///
+/// # Examples
+///
+/// ```
+/// use affinidi_did_common::did::DID;
+///
+/// // Parse a basic DID
+/// let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".parse().unwrap();
+/// assert_eq!(did.method().to_string(), "key");
+///
+/// // Parse a DID URL with fragment
+/// let did_url: DID = "did:example:123#key-1".parse().unwrap();
+/// assert_eq!(did_url.fragment(), Some("key-1"));
+///
+/// // Create programmatically
+/// let did = DID::new(affinidi_did_common::did::DIDMethod::Peer, "2.Ez6L...")
+///     .unwrap()
+///     .with_fragment("key-1")
+///     .unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DID {
+    method: DIDMethod,
+    method_specific_id: String,
+    path: Option<String>,
+    query: Option<String>,
+    fragment: Option<String>,
+}
+
+/// Errors that can occur when parsing or constructing a DID
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DIDError {
+    /// DID string does not start with "did:"
+    MissingPrefix,
+    /// Method name is invalid (empty or contains invalid characters)
+    InvalidMethod(String),
+    /// Method-specific identifier is invalid
+    InvalidMethodSpecificId(String),
+    /// Path component is invalid per RFC 3986
+    InvalidPath(String),
+    /// Query component is invalid per RFC 3986
+    InvalidQuery(String),
+    /// Fragment component is invalid per RFC 3986
+    InvalidFragment(String),
+}
+
+impl std::error::Error for DIDError {}
+
+impl fmt::Display for DIDError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DIDError::MissingPrefix => write!(f, "DID must start with 'did:'"),
+            DIDError::InvalidMethod(m) => write!(f, "Invalid DID method: {m}"),
+            DIDError::InvalidMethodSpecificId(id) => {
+                write!(f, "Invalid method-specific ID: {id}")
+            }
+            DIDError::InvalidPath(msg) => write!(f, "Invalid path: {msg}"),
+            DIDError::InvalidQuery(msg) => write!(f, "Invalid query: {msg}"),
+            DIDError::InvalidFragment(msg) => write!(f, "Invalid fragment: {msg}"),
+        }
+    }
+}
+
+impl FromStr for DID {
+    type Err = DIDError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let rest = s.strip_prefix("did:").ok_or(DIDError::MissingPrefix)?;
+
+        let (method_str, rest) = rest
+            .split_once(':')
+            .ok_or_else(|| DIDError::InvalidMethod("missing method".into()))?;
+
+        // Validate method name: must be non-empty, lowercase letters and digits only
+        if method_str.is_empty()
+            || !method_str
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        {
+            return Err(DIDError::InvalidMethod(method_str.into()));
+        }
+
+        // DIDMethod::FromStr is infallible (falls back to Other)
+        let method: DIDMethod = method_str.parse().unwrap();
+
+        let components = parse_did_url_components(rest)?;
+
+        validate_method_specific_id(&components.method_specific_id)?;
+
+        Ok(DID {
+            method,
+            method_specific_id: components.method_specific_id,
+            path: components.path,
+            query: components.query,
+            fragment: components.fragment,
+        })
+    }
+}
+
+/// Parsed components from a DID URL string
+struct DIDUrlComponents {
+    method_specific_id: String,
+    path: Option<String>,
+    query: Option<String>,
+    fragment: Option<String>,
+}
+
+/// Check if a character is a valid `idchar` per W3C DID Core 1.0
+/// `idchar = ALPHA / DIGIT / "." / "-" / "_"`
+/// Note: pct-encoded and ":" are handled separately
+fn is_idchar(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')
+}
+
+/// Validate method-specific-id per W3C DID Core 1.0
+///
+/// Grammar: `method-specific-id = *( *idchar ":" ) 1*idchar`
+/// Where: `idchar = ALPHA / DIGIT / "." / "-" / "_" / pct-encoded`
+/// And: `pct-encoded = "%" HEXDIG HEXDIG`
+fn validate_method_specific_id(s: &str) -> Result<(), DIDError> {
+    if s.is_empty() {
+        return Err(DIDError::InvalidMethodSpecificId("empty".into()));
+    }
+
+    // Cannot end with ":" (grammar requires 1*idchar at the end)
+    if s.ends_with(':') {
+        return Err(DIDError::InvalidMethodSpecificId(
+            "cannot end with ':'".into(),
+        ));
+    }
+
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if is_idchar(c) || c == ':' {
+            continue;
+        }
+        // pct-encoded = "%" HEXDIG HEXDIG
+        if c == '%' {
+            match (chars.next(), chars.next()) {
+                (Some(h1), Some(h2)) if h1.is_ascii_hexdigit() && h2.is_ascii_hexdigit() => {
+                    continue;
+                }
+                _ => {
+                    return Err(DIDError::InvalidMethodSpecificId(
+                        "invalid percent-encoding".into(),
+                    ));
+                }
+            }
+        }
+        return Err(DIDError::InvalidMethodSpecificId(format!(
+            "invalid character '{c}'"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Check if a character is an `unreserved` char per RFC 3986
+/// `unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"`
+fn is_unreserved(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')
+}
+
+/// Check if a character is a `sub-delims` char per RFC 3986
+/// `sub-delims = "!" / "$" / "&" / "'" / "(" / ")" / "*" / "+" / "," / ";" / "="`
+fn is_sub_delims(c: char) -> bool {
+    matches!(
+        c,
+        '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
+    )
+}
+
+/// Check if a character is a `pchar` per RFC 3986 (excluding pct-encoded)
+/// `pchar = unreserved / sub-delims / ":" / "@"`
+fn is_pchar(c: char) -> bool {
+    is_unreserved(c) || is_sub_delims(c) || matches!(c, ':' | '@')
+}
+
+/// Validate a string as RFC 3986 pchar sequence (with pct-encoded support)
+fn validate_pchar_sequence(s: &str, allow_slash_question: bool) -> Result<(), String> {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if is_pchar(c) {
+            continue;
+        }
+        if allow_slash_question && matches!(c, '/' | '?') {
+            continue;
+        }
+        // pct-encoded = "%" HEXDIG HEXDIG
+        if c == '%' {
+            match (chars.next(), chars.next()) {
+                (Some(h1), Some(h2)) if h1.is_ascii_hexdigit() && h2.is_ascii_hexdigit() => {
+                    continue;
+                }
+                _ => return Err("invalid percent-encoding".into()),
+            }
+        }
+        return Err(format!("invalid character '{c}'"));
+    }
+    Ok(())
+}
+
+/// Validate path per RFC 3986
+/// `path = *( "/" segment )` where `segment = *pchar`
+fn validate_path(s: &str) -> Result<(), DIDError> {
+    // Path segments are separated by "/", each segment is *pchar
+    for segment in s.split('/') {
+        validate_pchar_sequence(segment, false).map_err(DIDError::InvalidPath)?;
+    }
+    Ok(())
+}
+
+/// Validate query per RFC 3986
+/// `query = *( pchar / "/" / "?" )`
+fn validate_query(s: &str) -> Result<(), DIDError> {
+    validate_pchar_sequence(s, true).map_err(DIDError::InvalidQuery)
+}
+
+/// Validate fragment per RFC 3986
+/// `fragment = *( pchar / "/" / "?" )`
+fn validate_fragment(s: &str) -> Result<(), DIDError> {
+    validate_pchar_sequence(s, true).map_err(DIDError::InvalidFragment)
+}
+
+/// Normalize empty strings to None
+fn none_if_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Parse DID URL components (path, query, fragment) from the remainder after "did:method:"
+fn parse_did_url_components(s: &str) -> Result<DIDUrlComponents, DIDError> {
+    let path_start = s.find('/');
+    let query_start = s.find('?');
+    let fragment_start = s.find('#');
+
+    // Find where the method-specific-id ends
+    let id_end = [path_start, query_start, fragment_start]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(s.len());
+
+    let method_specific_id = s[..id_end].to_string();
+    let remainder = &s[id_end..];
+
+    if remainder.is_empty() {
+        return Ok(DIDUrlComponents {
+            method_specific_id,
+            path: None,
+            query: None,
+            fragment: None,
+        });
+    }
+
+    let mut path = None;
+    let mut query = None;
+    let mut fragment = None;
+
+    // Parse path, query, fragment in order (empty values normalized to None)
+    if let Some(stripped) = remainder.strip_prefix('/') {
+        let end = stripped.find(['?', '#']).unwrap_or(stripped.len());
+        path = none_if_empty(stripped[..end].to_string());
+        let remainder = &stripped[end..];
+
+        if let Some(stripped) = remainder.strip_prefix('?') {
+            let end = stripped.find('#').unwrap_or(stripped.len());
+            query = none_if_empty(stripped[..end].to_string());
+            if let Some(stripped) = stripped[end..].strip_prefix('#') {
+                fragment = none_if_empty(stripped.to_string());
+            }
+        } else if let Some(stripped) = remainder.strip_prefix('#') {
+            fragment = none_if_empty(stripped.to_string());
+        }
+    } else if let Some(stripped) = remainder.strip_prefix('?') {
+        let end = stripped.find('#').unwrap_or(stripped.len());
+        query = none_if_empty(stripped[..end].to_string());
+        if let Some(frag) = stripped[end..].strip_prefix('#') {
+            fragment = none_if_empty(frag.to_string());
+        }
+    } else if let Some(stripped) = remainder.strip_prefix('#') {
+        fragment = none_if_empty(stripped.to_string());
+    }
+
+    // Validate components per RFC 3986
+    if let Some(ref p) = path {
+        validate_path(p)?;
+    }
+    if let Some(ref q) = query {
+        validate_query(q)?;
+    }
+    if let Some(ref f) = fragment {
+        validate_fragment(f)?;
+    }
+
+    Ok(DIDUrlComponents {
+        method_specific_id,
+        path,
+        query,
+        fragment,
+    })
+}
+
+impl fmt::Display for DID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "did:{}:{}", self.method, self.method_specific_id)?;
+        if let Some(ref path) = self.path {
+            write!(f, "/{path}")?;
+        }
+        if let Some(ref query) = self.query {
+            write!(f, "?{query}")?;
+        }
+        if let Some(ref fragment) = self.fragment {
+            write!(f, "#{fragment}")?;
+        }
+        Ok(())
+    }
+}
+
+// Construction
+impl DID {
+    /// Create a new DID with the given method and method-specific identifier
+    pub fn new(method: DIDMethod, method_specific_id: impl Into<String>) -> Result<Self, DIDError> {
+        let id = method_specific_id.into();
+        validate_method_specific_id(&id)?;
+        Ok(DID {
+            method,
+            method_specific_id: id,
+            path: None,
+            query: None,
+            fragment: None,
+        })
+    }
+
+    pub fn new_key(id: impl Into<String>) -> Result<Self, DIDError> {
+        DID::new(DIDMethod::Key, id)
+    }
+
+    pub fn new_peer(id: impl Into<String>) -> Result<Self, DIDError> {
+        DID::new(DIDMethod::Peer, id)
+    }
+
+    pub fn new_web(id: impl Into<String>) -> Result<Self, DIDError> {
+        DID::new(DIDMethod::Web, id)
+    }
+
+    pub fn new_jwk(id: impl Into<String>) -> Result<Self, DIDError> {
+        DID::new(DIDMethod::Jwk, id)
+    }
+
+    /// Parse a DID string (convenience method, equivalent to `str.parse()`)
+    pub fn parse(s: &str) -> Result<Self, DIDError> {
+        s.parse()
+    }
+}
+
+// Accessors
+impl DID {
+    /// Returns the DID method
+    pub fn method(&self) -> DIDMethod {
+        self.method.clone()
+    }
+
+    /// Returns the method-specific identifier
+    pub fn method_specific_id(&self) -> String {
+        self.method_specific_id.clone()
+    }
+
+    /// Returns the path component, if present
+    pub fn path(&self) -> Option<String> {
+        self.path.clone()
+    }
+
+    /// Returns the query component, if present
+    pub fn query(&self) -> Option<String> {
+        self.query.clone()
+    }
+
+    /// Returns the fragment component, if present
+    pub fn fragment(&self) -> Option<String> {
+        self.fragment.clone()
+    }
+
+    /// Returns true if this is a DID URL (has path, query, or fragment)
+    pub fn is_url(&self) -> bool {
+        self.path.is_some() || self.query.is_some() || self.fragment.is_some()
+    }
+
+    /// Returns the base DID without path, query, or fragment
+    #[must_use]
+    pub fn base_did(&self) -> DID {
+        DID {
+            method: self.method.clone(),
+            method_specific_id: self.method_specific_id.clone(),
+            path: None,
+            query: None,
+            fragment: None,
+        }
+    }
+}
+
+// Validation
+impl DID {
+    /// Validate all components of this DID
+    fn validate(&self) -> Result<(), DIDError> {
+        if let Some(ref p) = self.path {
+            validate_path(p)?;
+        }
+        if let Some(ref q) = self.query {
+            validate_query(q)?;
+        }
+        if let Some(ref f) = self.fragment {
+            validate_fragment(f)?;
+        }
+        Ok(())
+    }
+}
+
+// Builder methods (consuming self)
+impl DID {
+    pub fn with_path(mut self, path: impl Into<String>) -> Result<Self, DIDError> {
+        self.path = Some(path.into());
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_query(mut self, query: impl Into<String>) -> Result<Self, DIDError> {
+        self.query = Some(query.into());
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_fragment(mut self, fragment: impl Into<String>) -> Result<Self, DIDError> {
+        self.fragment = Some(fragment.into());
+        self.validate()?;
+        Ok(self)
+    }
+}
+
+// Mutators
+impl DID {
+    /// Set the path component
+    pub fn set_path(&mut self, path: Option<String>) -> Result<(), DIDError> {
+        self.path = path;
+        self.validate()
+    }
+
+    /// Set the query component
+    pub fn set_query(&mut self, query: Option<String>) -> Result<(), DIDError> {
+        self.query = query;
+        self.validate()
+    }
+
+    /// Set the fragment component
+    pub fn set_fragment(&mut self, fragment: Option<String>) -> Result<(), DIDError> {
+        self.fragment = fragment;
+        self.validate()
+    }
+}
+
+// Conversions
+impl From<DID> for String {
+    fn from(did: DID) -> Self {
+        did.to_string()
+    }
+}
+
+impl TryFrom<String> for DID {
+    type Error = DIDError;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl TryFrom<&str> for DID {
+    type Error = DIDError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic_did() {
+        let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        assert_eq!(did.method(), DIDMethod::Key);
+        assert_eq!(
+            did.method_specific_id(),
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        );
+        assert!(!did.is_url());
+    }
+
+    #[test]
+    fn parse_did_peer() {
+        let did: DID = "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc"
+            .parse()
+            .unwrap();
+        assert_eq!(did.method(), DIDMethod::Peer);
+        assert!(
+            did.method_specific_id()
+                .starts_with("2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc")
+        );
+    }
+
+    #[test]
+    fn parse_did_web() {
+        let did: DID = "did:web:example.com".parse().unwrap();
+        assert_eq!(did.method(), DIDMethod::Web);
+        assert_eq!(did.method_specific_id(), "example.com");
+    }
+
+    #[test]
+    fn parse_did_with_fragment() {
+        let did: DID = "did:example:123#key-1".parse().unwrap();
+        assert_eq!(did.method(), DIDMethod::Other("example".to_string()));
+        assert_eq!(did.method_specific_id(), "123");
+        assert_eq!(did.fragment(), Some("key-1".to_string()));
+        assert!(did.is_url());
+    }
+
+    #[test]
+    fn parse_did_with_path() {
+        let did: DID = "did:example:123/path/to/resource".parse().unwrap();
+        assert_eq!(did.path(), Some("path/to/resource".to_string()));
+    }
+
+    #[test]
+    fn parse_did_with_query() {
+        let did: DID = "did:example:123?service=files".parse().unwrap();
+        assert_eq!(did.query(), Some("service=files".to_string()));
+    }
+
+    #[test]
+    fn parse_full_did_url() {
+        let did: DID = "did:example:123/path?query=value#fragment".parse().unwrap();
+        assert_eq!(did.method_specific_id(), "123");
+        assert_eq!(did.path(), Some("path".to_string()));
+        assert_eq!(did.query(), Some("query=value".to_string()));
+        assert_eq!(did.fragment(), Some("fragment".to_string()));
+    }
+
+    #[test]
+    fn display_roundtrip() {
+        let original = "did:peer:2.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc";
+        let did: DID = original.parse().unwrap();
+        assert_eq!(did.to_string(), original);
+    }
+
+    #[test]
+    fn display_roundtrip_with_fragment() {
+        let original = "did:example:123#key-1";
+        let did: DID = original.parse().unwrap();
+        assert_eq!(did.to_string(), original);
+    }
+
+    #[test]
+    fn display_roundtrip_full_url() {
+        let original = "did:example:123/path?query=value#fragment";
+        let did: DID = original.parse().unwrap();
+        assert_eq!(did.to_string(), original);
+    }
+
+    #[test]
+    fn new_did() {
+        let did = DID::new(
+            DIDMethod::Key,
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+        )
+        .unwrap();
+        assert_eq!(
+            did.to_string(),
+            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        );
+    }
+
+    #[test]
+    fn builder_methods() {
+        let did = DID::new(DIDMethod::Peer, "2.Ez6L")
+            .unwrap()
+            .with_fragment("key-1")
+            .unwrap();
+        assert_eq!(did.to_string(), "did:peer:2.Ez6L#key-1");
+    }
+
+    #[test]
+    fn base_did_strips_url_components() {
+        let did: DID = "did:example:123/path?query#fragment".parse().unwrap();
+        let base = did.base_did();
+        assert_eq!(base.to_string(), "did:example:123");
+        assert!(!base.is_url());
+    }
+
+    #[test]
+    fn error_missing_prefix() {
+        let result: Result<DID, _> = "not-a-did".parse();
+        assert_eq!(result.unwrap_err(), DIDError::MissingPrefix);
+    }
+
+    #[test]
+    fn error_invalid_method() {
+        let result: Result<DID, _> = "did:UPPER:123".parse();
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidMethod(_)));
+    }
+
+    #[test]
+    fn error_empty_method_specific_id() {
+        let result: Result<DID, _> = "did:example:".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    #[test]
+    fn method_other() {
+        let did: DID = "did:ethr:0x1234567890abcdef".parse().unwrap();
+        assert_eq!(did.method(), DIDMethod::Other("ethr".to_string()));
+    }
+
+    #[test]
+    fn colons_in_method_specific_id() {
+        // DIDs can have colons in the method-specific-id
+        let did: DID = "did:web:example.com:user:alice".parse().unwrap();
+        assert_eq!(did.method_specific_id(), "example.com:user:alice");
+    }
+
+    // Validation tests per W3C DID Core 1.0
+
+    #[test]
+    fn valid_percent_encoding() {
+        let did: DID = "did:web:example.com%3A8080".parse().unwrap();
+        assert_eq!(did.method_specific_id(), "example.com%3A8080");
+    }
+
+    #[test]
+    fn valid_minimal_did() {
+        let did: DID = "did:a:b".parse().unwrap();
+        assert_eq!(did.method().to_string(), "a");
+        assert_eq!(did.method_specific_id(), "b");
+    }
+
+    #[test]
+    fn valid_idchars() {
+        // All valid idchar: ALPHA / DIGIT / "." / "-" / "_"
+        let did: DID = "did:example:ABC-123_test.value".parse().unwrap();
+        assert_eq!(did.method_specific_id(), "ABC-123_test.value");
+    }
+
+    #[test]
+    fn error_invalid_character_space() {
+        let result: Result<DID, _> = "did:example:has space".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    #[test]
+    fn error_invalid_character_at() {
+        let result: Result<DID, _> = "did:example:user@domain".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    #[test]
+    fn error_trailing_colon() {
+        let result: Result<DID, _> = "did:example:123:".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    #[test]
+    fn error_invalid_percent_encoding() {
+        // Incomplete percent encoding
+        let result: Result<DID, _> = "did:example:test%2".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    #[test]
+    fn error_invalid_percent_encoding_non_hex() {
+        let result: Result<DID, _> = "did:example:test%GH".parse();
+        assert!(matches!(
+            result.unwrap_err(),
+            DIDError::InvalidMethodSpecificId(_)
+        ));
+    }
+
+    // Normalization tests - empty components become None
+
+    #[test]
+    fn normalize_empty_fragment() {
+        let did: DID = "did:example:123#".parse().unwrap();
+        assert_eq!(did.fragment(), None);
+        assert!(!did.is_url());
+    }
+
+    #[test]
+    fn normalize_empty_query() {
+        let did: DID = "did:example:123?".parse().unwrap();
+        assert_eq!(did.query(), None);
+        assert!(!did.is_url());
+    }
+
+    #[test]
+    fn normalize_empty_path() {
+        let did: DID = "did:example:123/".parse().unwrap();
+        assert_eq!(did.path(), None);
+        assert!(!did.is_url());
+    }
+
+    #[test]
+    fn normalize_empty_all() {
+        let did: DID = "did:example:123/?#".parse().unwrap();
+        assert_eq!(did.path(), None);
+        assert_eq!(did.query(), None);
+        assert_eq!(did.fragment(), None);
+        assert!(!did.is_url());
+    }
+
+    #[test]
+    fn normalize_mixed_empty_and_present() {
+        let did: DID = "did:example:123/?query#".parse().unwrap();
+        assert_eq!(did.path(), None);
+        assert_eq!(did.query(), Some("query".to_string()));
+        assert_eq!(did.fragment(), None);
+        assert!(did.is_url()); // query is present
+    }
+
+    // Method with digits (W3C allows digits in method name)
+
+    #[test]
+    fn valid_method_with_digits() {
+        let did: DID = "did:web3:0x123".parse().unwrap();
+        assert_eq!(did.method(), DIDMethod::Other("web3".to_string()));
+        assert_eq!(did.method_specific_id(), "0x123");
+    }
+
+    // DIDMethod serde tests
+
+    #[test]
+    fn didmethod_serde_roundtrip() {
+        let method = DIDMethod::Web;
+        let json = serde_json::to_string(&method).unwrap();
+        assert_eq!(json, "\"web\"");
+        let parsed: DIDMethod = serde_json::from_str(&json).unwrap();
+        assert_eq!(method, parsed);
+    }
+
+    #[test]
+    fn didmethod_other_serde() {
+        let method = DIDMethod::Other("ethr".to_string());
+        let json = serde_json::to_string(&method).unwrap();
+        assert_eq!(json, "\"ethr\"");
+        let parsed: DIDMethod = serde_json::from_str(&json).unwrap();
+        assert_eq!(method, parsed);
+    }
+
+    // RFC 3986 path/query/fragment validation
+
+    #[test]
+    fn valid_path_with_pchar() {
+        // pchar includes unreserved, sub-delims, ":", "@"
+        let did: DID = "did:example:123/path-to_resource.txt".parse().unwrap();
+        assert_eq!(did.path(), Some("path-to_resource.txt".to_string()));
+    }
+
+    #[test]
+    fn valid_query_with_special_chars() {
+        // query allows pchar plus "/" and "?"
+        let did: DID = "did:example:123?key=value&other=123".parse().unwrap();
+        assert_eq!(did.query(), Some("key=value&other=123".to_string()));
+    }
+
+    #[test]
+    fn valid_fragment_with_slash() {
+        // fragment allows pchar plus "/" and "?"
+        let did: DID = "did:example:123#section/subsection".parse().unwrap();
+        assert_eq!(did.fragment(), Some("section/subsection".to_string()));
+    }
+
+    #[test]
+    fn error_invalid_path_char() {
+        let result: Result<DID, _> = "did:example:123/path<script>".parse();
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn error_invalid_query_char() {
+        let result: Result<DID, _> = "did:example:123?query<script>".parse();
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidQuery(_)));
+    }
+
+    #[test]
+    fn error_invalid_fragment_char() {
+        let result: Result<DID, _> = "did:example:123#frag<script>".parse();
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidFragment(_)));
+    }
+
+    #[test]
+    fn error_invalid_path_space() {
+        let result: Result<DID, _> = "did:example:123/has space".parse();
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn builder_validates_path() {
+        let result = DID::new(DIDMethod::Key, "z6Mk123")
+            .unwrap()
+            .with_path("invalid<path>");
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn builder_validates_fragment() {
+        let result = DID::new(DIDMethod::Key, "z6Mk123")
+            .unwrap()
+            .with_fragment("invalid<frag>");
+        assert!(matches!(result.unwrap_err(), DIDError::InvalidFragment(_)));
+    }
+}
