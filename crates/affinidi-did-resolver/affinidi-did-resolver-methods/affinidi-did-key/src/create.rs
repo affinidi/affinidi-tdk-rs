@@ -6,7 +6,7 @@ use affinidi_secrets_resolver::{
 use crate::{DIDKey, errors::Error};
 
 impl DIDKey {
-    pub fn generate<'a>(key_type: KeyType) -> Result<(String, Secret), Error<'a>> {
+    pub fn generate(key_type: KeyType) -> Result<(String, Secret), Error> {
         let mut secret = match key_type {
             KeyType::Ed25519 => Secret::generate_ed25519(None, None),
             KeyType::X25519 => Secret::generate_x25519(None, None)?,

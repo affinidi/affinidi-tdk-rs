@@ -1,5 +1,5 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
-use affinidi_did_common::Document;
+use affinidi_did_common::{DID, Document};
 use affinidi_did_key::DIDKey;
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
@@ -12,16 +12,16 @@ use did_web::DIDWeb;
 #[cfg(feature = "did-webvh")]
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
 use ssi_dids_core::{
-    DID, DIDMethodResolver, DIDResolver,
+    DID as SSIDID, DIDMethodResolver, DIDResolver,
     resolution::{self},
 };
 use tracing::error;
 
 impl DIDCacheClient {
     /// Resolves a DID to a DID Document
-    pub(crate) async fn local_resolve(
+    pub(crate) async fn local_resolve(  
         &self,
-        did: &str,
+        did: &DID,
         parts: &[&str],
     ) -> Result<Document, DIDCacheError> {
         // Match the DID method

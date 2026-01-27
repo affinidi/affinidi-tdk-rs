@@ -3,160 +3,111 @@
 
 use crate::errors::Error;
 use affinidi_did_common::{
-    Document,
+    DID, DIDMethod, Document,
     verification_method::{VerificationMethod, VerificationRelationship},
 };
-use affinidi_secrets_resolver::{
-    crypto::ed25519::ed25519_public_to_x25519_public_key,
-    multicodec::{ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB},
-};
-use base58::FromBase58;
+use affinidi_encoding::{ED25519_PUB, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB};
+use affinidi_secrets_resolver::crypto::ed25519::ed25519_public_to_x25519_public_key;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use url::Url;
 
 pub mod create;
 pub mod errors;
 
 pub struct DIDKey;
 
+const PUBLIC_KEY_MULTIBASE: &str = "publicKeyMultibase";
+const MULTIKEY_TYPE: &str = "Multikey";
+
 impl DIDKey {
     /// Resolves a Key DID method and returns a DID Document or error
-    pub fn resolve<'a>(did: &'a str) -> Result<Document, Error<'a>> {
-        if !did.starts_with("did:key:z") {
-            return Err(Error::InvalidDid(
-                did,
-                "DID Url doesn't start with did:key:z".to_string(),
-            ));
-        }
+    ///
+    /// Note: The DID is assumed to be pre-validated (codec and key length checked at parse time).
+    pub fn resolve(did: &DID) -> Result<Document, Error> {
+        debug_assert!(
+            did.method() == DIDMethod::Key,
+            "DIDKey::resolve called with non-key DID"
+        );
 
-        let identifier = &did[8..]; // Strip the leading did:key: prefix
+        let identifier = did.method_specific_id();
 
-        // did:key only support base58 decoding as denoted by the leading z prefix
-        let decoded = identifier[1..]
-            .from_base58()
-            .map_err(|_| Error::InvalidPublicKey("Couldn't decode base58".to_string()))?;
+        // Safe to unwrap: DID parsing already validated the encoding
+        let (codec, _) = affinidi_encoding::decode_multikey_with_codec(&identifier)
+            .expect("DID was validated at parse time");
 
-        let multicodec = MultiEncoded::new(decoded.as_slice())
-            .map_err(|_| Error::InvalidPublicKey("Unknown multicodec value".to_string()))?;
+        let mut vm_id = did.url();
+        vm_id.set_fragment(Some(&identifier));
 
-        let vm_id = Url::parse(&[did, "#", identifier].concat())
-            .map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?;
         let mut vms = Vec::new();
-
         let mut key_agreement = Vec::new();
 
-        // Check public key type and lengths
-        match multicodec.codec() {
-            P256_PUB => {
-                if multicodec.data().len() != 33 {
-                    return Err(Error::InvalidPublicKeyLength(multicodec.data().len()));
-                }
-                key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
-            }
-            P384_PUB => {
-                if multicodec.data().len() != 49 {
-                    return Err(Error::InvalidPublicKeyLength(multicodec.data().len()));
-                }
-                key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
-            }
-            SECP256K1_PUB => {
-                if multicodec.data().len() != 33 {
-                    return Err(Error::InvalidPublicKeyLength(multicodec.data().len()));
-                }
-                key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
-            }
-            X25519_PUB => {
-                if multicodec.data().len() != 32 {
-                    return Err(Error::InvalidPublicKeyLength(multicodec.data().len()));
-                }
-                key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
-            }
+        match codec {
             ED25519_PUB => {
-                if multicodec.data().len() != 32 {
-                    return Err(Error::InvalidPublicKeyLength(multicodec.data().len()));
-                }
-
+                // ED25519 keys also derive an X25519 key for key agreement
                 let (x25519_encoded, _) =
-                    ed25519_public_to_x25519_public_key(identifier).map_err(|e| {
+                    ed25519_public_to_x25519_public_key(&identifier).map_err(|e| {
                         Error::InvalidPublicKey(format!(
                             "Couldn't convert ed25519 to x25519 public-key: {e}"
                         ))
                     })?;
 
-                let mut property_set = HashMap::new();
-                property_set.insert(
-                    "publicKeyMultibase".to_string(),
-                    Value::String(x25519_encoded.clone()),
-                );
-
-                let x25519_vm_id =
-                    Url::parse(&[did, "#", &x25519_encoded].concat()).map_err(|e| {
-                        Error::InvalidPublicKey(format!(
-                            "Couldn't create valid URL ID for x25519 VerificationMethod: {e}"
-                        ))
-                    })?;
+                let mut x25519_vm_id = did.url();
+                x25519_vm_id.set_fragment(Some(&x25519_encoded));
 
                 vms.push(VerificationMethod {
                     id: x25519_vm_id.clone(),
-                    type_: "Multikey".to_string(),
-                    controller: Url::parse(did)
-                        .map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
+                    type_: MULTIKEY_TYPE.to_string(),
+                    controller: did.url(),
                     expires: None,
                     revoked: None,
-                    property_set,
+                    property_set: HashMap::from([(
+                        PUBLIC_KEY_MULTIBASE.to_string(),
+                        Value::String(x25519_encoded),
+                    )]),
                 });
 
-                key_agreement.push(VerificationRelationship::Reference(x25519_vm_id.clone()));
+                key_agreement.push(VerificationRelationship::Reference(x25519_vm_id));
             }
-            _ => {
-                return Err(Error::UnsupportedPublicKeyType(format!(
-                    "Unknown codec: {}",
-                    multicodec.codec()
-                )));
+            P256_PUB | P384_PUB | SECP256K1_PUB | X25519_PUB => {
+                key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
             }
+            _ => unreachable!("DID parsing validates only known public key codecs are accepted"),
         }
 
-        let mut property_set = HashMap::new();
-        property_set.insert(
-            "publicKeyMultibase".to_string(),
-            Value::String(identifier.to_string()),
-        );
-
+        // Primary verification method
         vms.insert(
             0,
             VerificationMethod {
                 id: vm_id.clone(),
-                type_: "Multikey".to_string(),
-                controller: Url::parse(did)
-                    .map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
+                type_: MULTIKEY_TYPE.to_string(),
+                controller: did.url(),
                 expires: None,
                 revoked: None,
-                property_set,
+                property_set: HashMap::from([(
+                    PUBLIC_KEY_MULTIBASE.to_string(),
+                    Value::String(identifier),
+                )]),
             },
         );
 
-        let vm_relationship = VerificationRelationship::Reference(vm_id.clone());
-
-        let mut parameters_set = HashMap::new();
-        parameters_set.insert(
-            "@context".to_string(),
-            json!([
-                "https://www.w3.org/ns/did/v1".to_string(),
-                "https://w3id.org/security/multikey/v1".to_string(),
-            ]),
-        );
+        let vm_relationship = VerificationRelationship::Reference(vm_id);
 
         Ok(Document {
-            id: Url::parse(did).map_err(|e| Error::InvalidDidUrl(did, e.to_string()))?,
+            id: did.url(),
             verification_method: vms,
             authentication: vec![vm_relationship.clone()],
             assertion_method: vec![vm_relationship.clone()],
             key_agreement,
             capability_invocation: vec![vm_relationship.clone()],
-            capability_delegation: vec![vm_relationship.clone()],
+            capability_delegation: vec![vm_relationship],
             service: vec![],
-            parameters_set,
+            parameters_set: HashMap::from([(
+                "@context".to_string(),
+                json!([
+                    "https://www.w3.org/ns/did/v1",
+                    "https://w3id.org/security/multikey/v1",
+                ]),
+            )]),
         })
     }
 }

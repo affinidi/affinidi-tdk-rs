@@ -14,9 +14,9 @@
  * ```
  */
 
-use std::{fmt, str::FromStr};
-
+use affinidi_encoding::Codec;
 use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 
 /// DID method identifiers per W3C DID Core 1.0
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -95,7 +95,7 @@ impl FromStr for DIDMethod {
 ///
 /// // Parse a DID URL with fragment
 /// let did_url: DID = "did:example:123#key-1".parse().unwrap();
-/// assert_eq!(did_url.fragment(), Some("key-1"));
+/// assert_eq!(did_url.fragment(), Some("key-1".to_string()));
 ///
 /// // Create programmatically
 /// let did = DID::new(affinidi_did_common::did::DIDMethod::Peer, "2.Ez6L...")
@@ -110,6 +110,8 @@ pub struct DID {
     path: Option<String>,
     query: Option<String>,
     fragment: Option<String>,
+    /// Pre-parsed URL representation (guaranteed valid at construction)
+    url: url::Url,
 }
 
 /// Errors that can occur when parsing or constructing a DID
@@ -127,6 +129,8 @@ pub enum DIDError {
     InvalidQuery(String),
     /// Fragment component is invalid per RFC 3986
     InvalidFragment(String),
+    /// DID is not a valid URL (WHATWG URL Standard)
+    InvalidUrl(String),
 }
 
 impl std::error::Error for DIDError {}
@@ -142,6 +146,7 @@ impl fmt::Display for DIDError {
             DIDError::InvalidPath(msg) => write!(f, "Invalid path: {msg}"),
             DIDError::InvalidQuery(msg) => write!(f, "Invalid query: {msg}"),
             DIDError::InvalidFragment(msg) => write!(f, "Invalid fragment: {msg}"),
+            DIDError::InvalidUrl(msg) => write!(f, "Invalid URL: {msg}"),
         }
     }
 }
@@ -170,15 +175,15 @@ impl FromStr for DID {
 
         let components = parse_did_url_components(rest)?;
 
-        validate_method_specific_id(&components.method_specific_id)?;
+        validate_method_specific_id(&components.method_specific_id, &method)?;
 
-        Ok(DID {
+        DID::build(
             method,
-            method_specific_id: components.method_specific_id,
-            path: components.path,
-            query: components.query,
-            fragment: components.fragment,
-        })
+            components.method_specific_id,
+            components.path,
+            components.query,
+            components.fragment,
+        )
     }
 }
 
@@ -202,7 +207,7 @@ fn is_idchar(c: char) -> bool {
 /// Grammar: `method-specific-id = *( *idchar ":" ) 1*idchar`
 /// Where: `idchar = ALPHA / DIGIT / "." / "-" / "_" / pct-encoded`
 /// And: `pct-encoded = "%" HEXDIG HEXDIG`
-fn validate_method_specific_id(s: &str) -> Result<(), DIDError> {
+fn validate_method_specific_id(s: &str, method: &DIDMethod) -> Result<(), DIDError> {
     if s.is_empty() {
         return Err(DIDError::InvalidMethodSpecificId("empty".into()));
     }
@@ -235,6 +240,31 @@ fn validate_method_specific_id(s: &str) -> Result<(), DIDError> {
         return Err(DIDError::InvalidMethodSpecificId(format!(
             "invalid character '{c}'"
         )));
+    }
+
+    if method == &DIDMethod::Key {
+        let (codec, data) = affinidi_encoding::decode_multikey_with_codec(s).map_err(|e| {
+            DIDError::InvalidMethodSpecificId(format!("invalid did:key encoding: {e}"))
+        })?;
+
+        let codec_type = Codec::from_u64(codec);
+
+        // Must be a known public key codec
+        if !codec_type.is_public() {
+            return Err(DIDError::InvalidMethodSpecificId(format!(
+                "unsupported did:key codec: 0x{codec:x}"
+            )));
+        }
+
+        // Validate key length
+        if let Some(expected_len) = codec_type.expected_key_length()
+            && data.len() != expected_len
+        {
+            return Err(DIDError::InvalidMethodSpecificId(format!(
+                "invalid key length for codec 0x{codec:x}: expected {expected_len}, got {}",
+                data.len()
+            )));
+        }
     }
 
     Ok(())
@@ -403,17 +433,48 @@ impl fmt::Display for DID {
 
 // Construction
 impl DID {
+    /// Internal constructor that builds the URL from components
+    pub(crate) fn build(
+        method: DIDMethod,
+        method_specific_id: String,
+        path: Option<String>,
+        query: Option<String>,
+        fragment: Option<String>,
+    ) -> Result<Self, DIDError> {
+        // Build the DID string
+        let mut did_string = format!("did:{method}:{method_specific_id}");
+        if let Some(ref p) = path {
+            did_string.push('/');
+            did_string.push_str(p);
+        }
+        if let Some(ref q) = query {
+            did_string.push('?');
+            did_string.push_str(q);
+        }
+        if let Some(ref f) = fragment {
+            did_string.push('#');
+            did_string.push_str(f);
+        }
+
+        // Parse as URL to guarantee validity
+        let url =
+            url::Url::parse(&did_string).map_err(|e| DIDError::InvalidUrl(e.to_string()))?;
+
+        Ok(DID {
+            method,
+            method_specific_id,
+            path,
+            query,
+            fragment,
+            url,
+        })
+    }
+
     /// Create a new DID with the given method and method-specific identifier
     pub fn new(method: DIDMethod, method_specific_id: impl Into<String>) -> Result<Self, DIDError> {
         let id = method_specific_id.into();
-        validate_method_specific_id(&id)?;
-        Ok(DID {
-            method,
-            method_specific_id: id,
-            path: None,
-            query: None,
-            fragment: None,
-        })
+        validate_method_specific_id(&id, &method)?;
+        Self::build(method, id, None, None, None)
     }
 
     pub fn new_key(id: impl Into<String>) -> Result<Self, DIDError> {
@@ -470,75 +531,48 @@ impl DID {
         self.path.is_some() || self.query.is_some() || self.fragment.is_some()
     }
 
-    /// Returns the base DID without path, query, or fragment
-    #[must_use]
-    pub fn base_did(&self) -> DID {
-        DID {
-            method: self.method.clone(),
-            method_specific_id: self.method_specific_id.clone(),
-            path: None,
-            query: None,
-            fragment: None,
-        }
-    }
-}
-
-// Validation
-impl DID {
-    /// Validate all components of this DID
-    fn validate(&self) -> Result<(), DIDError> {
-        if let Some(ref p) = self.path {
-            validate_path(p)?;
-        }
-        if let Some(ref q) = self.query {
-            validate_query(q)?;
-        }
-        if let Some(ref f) = self.fragment {
-            validate_fragment(f)?;
-        }
-        Ok(())
+    /// Returns this DID as a URL
+    pub fn url(&self) -> url::Url {
+        self.url.clone()
     }
 }
 
 // Builder methods (consuming self)
 impl DID {
-    pub fn with_path(mut self, path: impl Into<String>) -> Result<Self, DIDError> {
-        self.path = Some(path.into());
-        self.validate()?;
-        Ok(self)
+    pub fn with_path(self, path: impl Into<String>) -> Result<Self, DIDError> {
+        let path = path.into();
+        validate_path(&path)?;
+        DID::build(
+            self.method,
+            self.method_specific_id,
+            Some(path),
+            self.query,
+            self.fragment,
+        )
     }
 
-    pub fn with_query(mut self, query: impl Into<String>) -> Result<Self, DIDError> {
-        self.query = Some(query.into());
-        self.validate()?;
-        Ok(self)
+    pub fn with_query(self, query: impl Into<String>) -> Result<Self, DIDError> {
+        let query = query.into();
+        validate_query(&query)?;
+        DID::build(
+            self.method,
+            self.method_specific_id,
+            self.path,
+            Some(query),
+            self.fragment,
+        )
     }
 
-    pub fn with_fragment(mut self, fragment: impl Into<String>) -> Result<Self, DIDError> {
-        self.fragment = Some(fragment.into());
-        self.validate()?;
-        Ok(self)
-    }
-}
-
-// Mutators
-impl DID {
-    /// Set the path component
-    pub fn set_path(&mut self, path: Option<String>) -> Result<(), DIDError> {
-        self.path = path;
-        self.validate()
-    }
-
-    /// Set the query component
-    pub fn set_query(&mut self, query: Option<String>) -> Result<(), DIDError> {
-        self.query = query;
-        self.validate()
-    }
-
-    /// Set the fragment component
-    pub fn set_fragment(&mut self, fragment: Option<String>) -> Result<(), DIDError> {
-        self.fragment = fragment;
-        self.validate()
+    pub fn with_fragment(self, fragment: impl Into<String>) -> Result<Self, DIDError> {
+        let fragment = fragment.into();
+        validate_fragment(&fragment)?;
+        DID::build(
+            self.method,
+            self.method_specific_id,
+            self.path,
+            self.query,
+            Some(fragment),
+        )
     }
 }
 
@@ -672,14 +706,6 @@ mod tests {
             .with_fragment("key-1")
             .unwrap();
         assert_eq!(did.to_string(), "did:peer:2.Ez6L#key-1");
-    }
-
-    #[test]
-    fn base_did_strips_url_components() {
-        let did: DID = "did:example:123/path?query#fragment".parse().unwrap();
-        let base = did.base_did();
-        assert_eq!(base.to_string(), "did:example:123");
-        assert!(!base.is_url());
     }
 
     #[test]
@@ -903,17 +929,23 @@ mod tests {
 
     #[test]
     fn builder_validates_path() {
-        let result = DID::new(DIDMethod::Key, "z6Mk123")
-            .unwrap()
-            .with_path("invalid<path>");
+        let result = DID::new(
+            DIDMethod::Key,
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+        )
+        .unwrap()
+        .with_path("invalid<path>");
         assert!(matches!(result.unwrap_err(), DIDError::InvalidPath(_)));
     }
 
     #[test]
     fn builder_validates_fragment() {
-        let result = DID::new(DIDMethod::Key, "z6Mk123")
-            .unwrap()
-            .with_fragment("invalid<frag>");
+        let result = DID::new(
+            DIDMethod::Key,
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+        )
+        .unwrap()
+        .with_fragment("invalid<frag>");
         assert!(matches!(result.unwrap_err(), DIDError::InvalidFragment(_)));
     }
 }

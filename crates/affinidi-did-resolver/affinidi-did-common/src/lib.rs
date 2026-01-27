@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use affinidi_secrets_resolver::errors::SecretsResolverError;
+use affinidi_encoding::EncodingError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -31,8 +31,8 @@ pub enum DocumentError {
     #[error("VerificationMethod Error: {0}")]
     VM(String),
 
-    #[error("Secrets Error: {0}")]
-    Secret(#[from] SecretsResolverError),
+    #[error("Encoding Error: {0}")]
+    Encoding(#[from] EncodingError),
 }
 
 /// A [DID Document]

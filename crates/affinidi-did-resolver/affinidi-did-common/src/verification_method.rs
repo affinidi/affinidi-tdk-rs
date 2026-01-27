@@ -2,7 +2,6 @@
 //! <https://www.w3.org/TR/cid-1.0/#verification-methods>
 use std::collections::HashMap;
 
-use affinidi_secrets_resolver::secrets::Secret;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -32,7 +31,7 @@ pub struct VerificationMethod {
 
 impl VerificationMethod {
     /// Attempts to extract Public Key Bytes from the Verification Method
-    /// WARN: This function only supportes Multikey VM types for now
+    /// WARN: This function only supports Multikey VM types for now
     pub fn get_public_key_bytes(&self) -> Result<Vec<u8>, DocumentError> {
         match self.type_.as_str() {
             "Multikey" => {
@@ -40,7 +39,7 @@ impl VerificationMethod {
                 if let Some(key) = self.property_set.get("publicKeyMultibase")
                     && let Some(key) = key.as_str()
                 {
-                    Ok(Secret::decode_multikey(key)?)
+                    Ok(affinidi_encoding::decode_multikey(key)?)
                 } else {
                     Err(DocumentError::VM(
                         "Multikey type, but does not include the `publicKeyMultibase` attribute"

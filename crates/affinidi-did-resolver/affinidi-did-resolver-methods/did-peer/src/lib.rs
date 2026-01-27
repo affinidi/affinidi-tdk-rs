@@ -18,10 +18,7 @@
 //! ```
 //!
 use affinidi_did_common::{
-    Document,
-    one_or_many::OneOrMany,
-    service::{Endpoint, Service},
-    verification_method::{VerificationMethod, VerificationRelationship},
+    DID, Document, one_or_many::OneOrMany, service::{Endpoint, Service}, verification_method::{VerificationMethod, VerificationRelationship}
 };
 use affinidi_did_key::DIDKey;
 use affinidi_secrets_resolver::{
@@ -351,14 +348,19 @@ fn process_key(did: &str, kid: &str, public_key: &str) -> VerificationMethod {
 }
 
 impl DIDPeer {
-    pub async fn resolve(&self, did: &str) -> Result<Document, DIDPeerError> {
+    pub async fn resolve(&self, did: &DID) -> Result<Document, DIDPeerError> {
         let Some(method_specific_id) = did.strip_prefix("did:peer:") else {
             return Err(DIDPeerError::MethodNotSupported);
         };
 
         // If did:peer is type 0, then treat it as a did:key
         if let Some(id) = method_specific_id.strip_prefix('0') {
-            return DIDKey::resolve(&["did:key:", id].concat()).map_err(|e| {
+            let did = DID::from_str(&format!("did:key:{}", id)).map_err(|e| {
+                DIDPeerError::InternalError(format!(
+                    "Parsing version 0 of did:peer as did:key resulted in the following error: {e}"
+                ))
+            })?;
+            return DIDKey::resolve(&did).map_err(|e| {
                 DIDPeerError::InternalError(format!(
                     "Resolving version 0 of did:peer resulted in the following error: {e}"
                 ))
@@ -665,7 +667,12 @@ impl DIDPeer {
             ));
         };
 
-        let document = match DIDKey::resolve(&did_key) {
+        let did = DID::from_str(&did_key).map_err(|e| {
+            DIDPeerError::KeyParsingError(format!(
+                "Failed to parse DID Key ({did_key}). Reason: {e}",
+            ))
+        })?;
+        let document = match DIDKey::resolve(&did) {
             Ok(document) => document,
             Err(e) => {
                 return Err(DIDPeerError::KeyParsingError(format!(

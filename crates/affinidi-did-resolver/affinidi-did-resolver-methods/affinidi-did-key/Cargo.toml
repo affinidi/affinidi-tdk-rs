@@ -13,10 +13,10 @@ readme = "README.md"
 rust-version.workspace = true
 
 [dependencies]
-affinidi-secrets-resolver.workspace = true
 affinidi-did-common.workspace = true
+affinidi-encoding.workspace = true
+affinidi-secrets-resolver.workspace = true
 
-base58 = "0.2"
 serde_json = "1.0"
 thiserror = "2.0"
 url = "2.5"

@@ -3,14 +3,14 @@ use thiserror::Error;
 
 /// Error states for did:key method
 #[derive(Error, Debug)]
-pub enum Error<'a> {
+pub enum Error {
     /// Wrong DID method or structure
     #[error("Invalid DID ({0}) Error: {1}")]
-    InvalidDid(&'a str, String),
+    InvalidDid(String, String),
 
     /// DID URL isn't valid
     #[error("Invalid DID URL ({0}) Error: {1}")]
-    InvalidDidUrl(&'a str, String),
+    InvalidDidUrl(String, String),
 
     /// Public key string length doesn't match what is expected
     #[error("Invalid public key length ({0})")]
@@ -26,7 +26,7 @@ pub enum Error<'a> {
 
     /// Invalid Public Key type specified
     #[error("Invalid public key type: {0}")]
-    InvalidPublicKeyType(&'a str),
+    InvalidPublicKeyType(String),
 
     /// Couldn't generate did:key
     #[error("Failed to generate did:key: {0}")]
