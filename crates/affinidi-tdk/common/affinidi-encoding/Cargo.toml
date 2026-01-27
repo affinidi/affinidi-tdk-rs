@@ -1,0 +1,22 @@
+[package]
+name = "affinidi-encoding"
+description = "Multibase and multicodec encoding utilities for Affinidi TDK"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bs58.workspace = true
+thiserror = "2.0"
+unsigned-varint = "0.8"
+zeroize = { version = "1.8", features = ["derive"] }
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/affinidi-did-key",
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
 
+  "crates/affinidi-tdk/common/affinidi-encoding",
   "crates/affinidi-tdk/common/affinidi-secrets-resolver",
 
   "crates/affinidi-messaging/affinidi-messaging-didcomm",
@@ -66,6 +67,10 @@ affinidi-data-integrity = { version = "0.3.4", path = "./crates/affinidi-tdk/com
 affinidi-did-authentication = { version = "0.2.3", path = "./crates/affinidi-tdk/common/affinidi-did-authentication" }
 affinidi-secrets-resolver = { version = "0.4.0", path = "./crates/affinidi-tdk/common/affinidi-secrets-resolver" }
 affinidi-tdk-common = { version = "0.3.0", path = "./crates/affinidi-tdk/common/affinidi-tdk-common" }
+affinidi-encoding = { version = "0.1.0", path = "./crates/affinidi-tdk/common/affinidi-encoding" }
+
+# External crates
+bs58 = "0.5"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

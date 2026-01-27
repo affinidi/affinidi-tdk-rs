@@ -2,11 +2,15 @@
  * Secrets Manager Errors
  */
 
+use affinidi_encoding::EncodingError;
 use thiserror::Error;
 
 /// Affinidi Secrets Resolver Errors
 #[derive(Error, Debug)]
 pub enum SecretsResolverError {
+    #[error("Encoding error: {0}")]
+    EncodingError(#[from] EncodingError),
+
     #[error("Authentication Error: {0}")]
     AuthenticationError(String),
     #[error("Key Error: {0}")]
