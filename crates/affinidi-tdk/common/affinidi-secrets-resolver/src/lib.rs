@@ -24,9 +24,10 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
-pub mod crypto;
+// Private module - contains impl Secret blocks for generate_* methods
+mod crypto;
+
 pub mod errors;
-pub mod jwk;
 pub mod secrets;
 pub mod task;
 

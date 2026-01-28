@@ -24,7 +24,13 @@ pub mod verification_method;
 
 pub use did::{DID, DIDError};
 pub use did_method::DIDMethod;
+pub use document::DocumentExt;
 pub use did_method::key::{KeyError, KeyMaterial, KeyMaterialFormat, KeyMaterialType};
+pub use did_method::peer::{
+    PeerCreateKey, PeerCreatedKey, PeerError, PeerKeyPurpose, PeerKeyType, PeerNumAlgo,
+    PeerPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
+    PeerServiceEndpointShort,
+};
 
 #[derive(Error, Debug)]
 pub enum DocumentError {
@@ -36,6 +42,9 @@ pub enum DocumentError {
 
     #[error("Encoding Error: {0}")]
     Encoding(#[from] EncodingError),
+
+    #[error("Key expansion error: {0}")]
+    KeyExpansionError(String),
 }
 
 /// A [DID Document]

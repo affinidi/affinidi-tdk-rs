@@ -35,8 +35,8 @@ pub use affinidi_messaging_didcomm as didcomm;
 #[cfg(feature = "messaging")]
 pub use affinidi_messaging_sdk as messaging;
 
-#[cfg(feature = "did-peer")]
-pub use did_peer;
+// did-peer functionality is now integrated into affinidi_did_common
+// Use affinidi_tdk::dids module for DID generation
 
 #[cfg(feature = "data-integrity")]
 pub use affinidi_data_integrity as data_integrity;

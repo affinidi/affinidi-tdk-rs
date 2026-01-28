@@ -1,11 +1,10 @@
-use affinidi_did_common::{Document, one_or_many::OneOrMany};
+use affinidi_did_common::{
+    Document, DID as DIDCommon, PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
+    PeerServiceEndpointLong, one_or_many::OneOrMany,
+};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_did_resolver_cache_server::server::start;
 use affinidi_secrets_resolver::secrets::Secret;
-use did_peer::{
-    DIDPeer, DIDPeerCreateKeys, DIDPeerKeyType, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
-};
 use tokio::time::{Duration, sleep};
 
 const DID_ETHR: &str = "did:ethr:0x1:0xb9c5714089478a327f09197987f16f9e5d936e8a";
@@ -70,23 +69,22 @@ async fn _start_cache_server() {
 }
 
 fn _create_and_validate_did_peer() -> String {
-    let (e_did_key, v_did_key, keys) = _get_keys(DIDPeerKeyType::Secp256k1, true);
-    let services = vec![DIDPeerService {
-        _type: "dm".into(),
-        service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(OneOrMany::One(
-            PeerServiceEndPointLongMap {
-                uri: "https://localhost:7037".into(),
-                accept: vec!["didcomm/v2".into()],
-                routing_keys: vec![],
-            },
-        ))),
+    let (e_did_key, v_did_key, keys) = _get_keys(true);
+    let services = vec![PeerService {
+        type_: "dm".into(),
+        endpoint: PeerServiceEndpoint::Long(OneOrMany::One(PeerServiceEndpointLong {
+            uri: "https://localhost:7037".into(),
+            accept: vec!["didcomm/v2".into()],
+            routing_keys: vec![],
+        })),
         id: None,
     }];
 
-    let (did_peer, _) = DIDPeer::create_peer_did(&keys, Some(&services)).unwrap();
-    _validate_did_peer(&did_peer, &e_did_key, &v_did_key);
+    let (did_peer, _) = DIDCommon::generate_peer(&keys, Some(&services)).unwrap();
+    let did_peer_str = did_peer.to_string();
+    _validate_did_peer(&did_peer_str, &e_did_key, &v_did_key);
 
-    did_peer
+    did_peer_str
 }
 
 fn _validate_did_peer(did_peer: &str, e_did_key: &str, v_did_key: &str) {
@@ -103,28 +101,13 @@ fn _validate_did_peer(did_peer: &str, e_did_key: &str, v_did_key: &str) {
     assert_eq!(parts[1], "peer");
 }
 
-fn _get_keys(
-    key_type: DIDPeerKeyType,
-    with_pub_key: bool,
-) -> (String, String, Vec<DIDPeerCreateKeys>) {
-    let encryption_key = match key_type {
-        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None, None),
-        DIDPeerKeyType::P256 => {
-            Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
-        }
-        DIDPeerKeyType::Secp256k1 => {
-            Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret")
-        }
-    };
-    let verification_key = match key_type {
-        DIDPeerKeyType::Ed25519 => Secret::generate_ed25519(None, None),
-        DIDPeerKeyType::P256 => {
-            Secret::generate_p256(None, None).expect("Couldn't create P256 secret")
-        }
-        DIDPeerKeyType::Secp256k1 => {
-            Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret")
-        }
-    };
+fn _get_keys(with_pub_key: bool) -> (String, String, Vec<PeerCreateKey>) {
+    // Using Secp256k1 keys for this test
+    let encryption_key =
+        Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret");
+    let verification_key =
+        Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret");
+
     //  Create the did:key DID's for each key above
     let e_did_key = [
         "did:key:",
@@ -142,26 +125,15 @@ fn _get_keys(
     .concat();
 
     // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
-    let keys = vec![
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Verification,
-            type_: Some(key_type.clone()),
-            public_key_multibase: if with_pub_key {
-                Some(v_did_key[8..].to_string())
-            } else {
-                None
-            },
-        },
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Encryption,
-            type_: Some(key_type.clone()),
-            public_key_multibase: if with_pub_key {
-                Some(e_did_key[8..].to_string())
-            } else {
-                None
-            },
-        },
-    ];
+    let keys = if with_pub_key {
+        vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, v_did_key[8..].to_string()),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, e_did_key[8..].to_string()),
+        ]
+    } else {
+        // Without public key - not used in this test but preserved for completeness
+        vec![]
+    };
 
     (e_did_key, v_did_key, keys)
 }

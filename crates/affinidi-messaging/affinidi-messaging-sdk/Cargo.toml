@@ -39,8 +39,6 @@ tracing = { version = "0.1", features = ["valuable"] }
 uuid = { version = "1.19", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-did-peer.workspace = true
-
 clap = { version = "4.5", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"

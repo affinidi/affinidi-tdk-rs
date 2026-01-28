@@ -1,4 +1,4 @@
-use affinidi_secrets_resolver::jwk::JWK;
+use affinidi_crypto::JWK;
 use askar_crypto::{
     alg::{
         aes::{A128Kw, A256Kw, AesKey},

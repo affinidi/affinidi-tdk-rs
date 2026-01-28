@@ -1,4 +1,7 @@
-//! Crypto related functions are here
+//! Crypto-related Secret generation methods
+//!
+//! These modules implement `Secret::generate_*` methods that use
+//! `affinidi-crypto` for the underlying key operations.
 
 #[cfg(feature = "ed25519")]
 pub mod ed25519;

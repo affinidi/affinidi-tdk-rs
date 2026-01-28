@@ -1,15 +1,10 @@
+use affinidi_crypto::KeyType;
+use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
 use crate::{
     errors::SecretsResolverError,
-    jwk::{ECParams, JWK, Params},
-    secrets::{KeyType, Secret, SecretMaterial, SecretType},
+    secrets::{Secret, SecretMaterial, SecretType},
 };
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use k256::{
-    AffinePoint, EncodedPoint,
-    ecdsa::{SigningKey, VerifyingKey},
-    elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
-};
-use rand::{RngCore, rngs::OsRng};
 
 impl Secret {
     /// Creates a secp256k1 key pair
@@ -19,98 +14,32 @@ impl Secret {
         kid: Option<&str>,
         secret: Option<&[u8]>,
     ) -> Result<Self, SecretsResolverError> {
-        let mut csprng = OsRng;
+        let keypair = affinidi_crypto::secp256k1::generate(secret)?;
 
-        let signing_key = if let Some(secret) = secret {
-            SigningKey::from_slice(secret).map_err(|e| {
-                SecretsResolverError::KeyError(format!(
-                    "Secp256k1 secret material isn't valid: {e}"
-                ))
-            })?
-        } else {
-            SigningKey::random(&mut csprng)
-        };
-        let verifying_key = VerifyingKey::from(&signing_key);
-
-        let kid = if let Some(kid) = kid {
-            kid.to_string()
-        } else {
-            BASE64_URL_SAFE_NO_PAD.encode(csprng.next_u64().to_ne_bytes())
-        };
+        let kid = kid
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| {
+                use rand::{RngCore, rngs::OsRng};
+                BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
+            });
 
         Ok(Secret {
             id: kid,
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK(JWK {
-                key_id: None,
-                params: Params::EC(ECParams {
-                    curve: "secp256k1".to_string(),
-                    x: BASE64_URL_SAFE_NO_PAD
-                        .encode(verifying_key.to_encoded_point(false).x().unwrap()),
-                    y: BASE64_URL_SAFE_NO_PAD
-                        .encode(verifying_key.to_encoded_point(false).y().unwrap()),
-                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(signing_key.to_bytes())),
-                }),
-            }),
-            private_bytes: signing_key.to_bytes().to_vec(),
-            public_bytes: verifying_key.to_encoded_point(false).to_bytes().to_vec(),
+            secret_material: SecretMaterial::JWK(keypair.jwk.clone()),
+            private_bytes: keypair.private_bytes,
+            public_bytes: keypair.public_bytes,
             key_type: KeyType::Secp256k1,
-        })
-    }
-
-    /// Generates a Public JWK from a multikey value
-    pub fn secp256k1_public_jwk(data: &[u8]) -> Result<JWK, SecretsResolverError> {
-        let ep = EncodedPoint::from_bytes(data).map_err(|e| {
-            SecretsResolverError::KeyError(format!("secp256k1 public key isn't valid: {e}"))
-        })?;
-
-        // Convert to AffinePoint to validate the point is on the curve
-        let ap: AffinePoint = if let Some(ap) = AffinePoint::from_encoded_point(&ep).into() {
-            ap
-        } else {
-            return Err(SecretsResolverError::KeyError(
-                "Couldn't convert secp256k1 EncodedPoint to AffinePoint".to_string(),
-            ));
-        };
-
-        // Decompress the AffinePoint back to EncodedPoint to get x and y coordinates
-        let ep = ap.to_encoded_point(false);
-
-        let params = ECParams {
-            curve: "secp256k1".to_string(),
-            d: None,
-            #[allow(deprecated)]
-            x: BASE64_URL_SAFE_NO_PAD.encode(
-                ep.x()
-                    .ok_or_else(|| {
-                        SecretsResolverError::KeyError("Couldn't get X coordinate".to_string())
-                    })?
-                    .as_slice(),
-            ),
-            #[allow(deprecated)]
-            y: BASE64_URL_SAFE_NO_PAD.encode(
-                ep.y()
-                    .ok_or_else(|| {
-                        SecretsResolverError::KeyError("Couldn't get Y coordinate".to_string())
-                    })?
-                    .as_slice(),
-            ),
-        };
-
-        Ok(JWK {
-            key_id: None,
-            params: Params::EC(params),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        jwk::{JWK, Params},
-        secrets::{Secret, SecretMaterial},
-    };
+    use affinidi_crypto::Params;
     use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    use crate::secrets::{Secret, SecretMaterial};
 
     #[test]
     fn check_secp256k1_encoding() {
@@ -122,12 +51,11 @@ mod tests {
             .expect("Couldn't decode secret bytes");
 
         let mut public_bytes: Vec<u8> = vec![4]; // Leading byte '4' denotes uncompressed
-        // public_bytes
         public_bytes.append(&mut BASE64_URL_SAFE_NO_PAD.decode(x).expect("Couldn't decode X"));
         public_bytes.append(&mut BASE64_URL_SAFE_NO_PAD.decode(y).expect("Couldn't decode Y"));
 
         let secp256k1_secret = Secret::generate_secp256k1(None, Some(&secret_bytes))
-            .expect("Couldbn't create secp256k1 secret");
+            .expect("Couldn't create secp256k1 secret");
 
         if let SecretMaterial::JWK(jwk) = &secp256k1_secret.secret_material
             && let Params::EC(params) = &jwk.params
@@ -145,33 +73,5 @@ mod tests {
 
         assert_eq!(secp256k1_secret.private_bytes, secret_bytes);
         assert_eq!(secp256k1_secret.public_bytes, public_bytes);
-    }
-
-    #[test]
-    fn check_public_jwk() {
-        let bytes: [u8; 33] = [
-            2, 83, 143, 208, 17, 61, 39, 58, 251, 55, 174, 187, 147, 60, 3, 197, 119, 164, 52, 196,
-            220, 107, 174, 114, 244, 201, 214, 48, 217, 125, 54, 168, 92,
-        ];
-        let a = Secret::secp256k1_public_jwk(&bytes);
-
-        assert!(a.is_ok());
-
-        let a = a.unwrap();
-        if let Params::EC(params) = &a.params {
-            assert_eq!(params.curve, "secp256k1");
-            assert!(params.d.is_none(),);
-            assert_eq!(params.x, "U4_QET0nOvs3rruTPAPFd6Q0xNxrrnL0ydYw2X02qFw");
-            assert_eq!(params.y, "H2xAfO9HZXYAdMdDckRv0Hl73YsE5PpAh9w2z4ShKBA");
-        } else {
-            panic!("Expected EC Params");
-        }
-    }
-
-    #[test]
-    fn check_secp256k1_public_multi_encoded() {
-        assert!(JWK::from_multikey("zQ3shokFTS3brHcDQrn82RUDfCZESWL1ZdCEJwekUDPQiYBme").is_ok());
-        assert!(JWK::from_multikey("zQ3shtxV1FrJfhqE1dvxYRcCknWNjHc3c5X1y3ZSoPDi2aur2").is_ok());
-        assert!(JWK::from_multikey("zQ3shZc2QzApp2oymGvQbzP8eKheVshBHbU4ZYjeXqwSKEn6N").is_ok());
     }
 }

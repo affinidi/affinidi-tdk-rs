@@ -2,6 +2,7 @@
  * Secrets Manager Errors
  */
 
+use affinidi_crypto::CryptoError;
 use affinidi_encoding::EncodingError;
 use thiserror::Error;
 
@@ -10,6 +11,9 @@ use thiserror::Error;
 pub enum SecretsResolverError {
     #[error("Encoding error: {0}")]
     EncodingError(#[from] EncodingError),
+
+    #[error("Crypto error: {0}")]
+    CryptoError(#[from] CryptoError),
 
     #[error("Authentication Error: {0}")]
     AuthenticationError(String),

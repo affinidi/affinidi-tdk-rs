@@ -9,11 +9,10 @@ use affinidi_messaging_sdk::{
     },
 };
 use affinidi_tdk::{
-    dids::{DID, KeyType},
+    dids::{DID, KeyType, PeerKeyRole},
     secrets_resolver::SecretsResolver,
 };
 use anyhow::anyhow;
-use did_peer::DIDPeerKeys;
 use sha256::digest;
 use tracing::warn;
 
@@ -31,9 +30,9 @@ pub async fn manual_connect_setup(
     // Create a local DID for this connection
     let (did_peer, mut secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::P256),
-            (DIDPeerKeys::Encryption, KeyType::P256),
-            (DIDPeerKeys::Encryption, KeyType::Ed25519),
+            (PeerKeyRole::Verification, KeyType::P256),
+            (PeerKeyRole::Encryption, KeyType::P256),
+            (PeerKeyRole::Encryption, KeyType::Ed25519),
         ],
         Some(mediator_did.clone()),
     )?;

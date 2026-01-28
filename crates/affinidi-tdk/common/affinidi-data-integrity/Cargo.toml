@@ -13,6 +13,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+affinidi-crypto.workspace = true
 affinidi-secrets-resolver.workspace = true
 affinidi-did-common.workspace = true
 

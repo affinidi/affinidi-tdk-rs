@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
 use crate::did_method::{DIDMethod, parse::parse_method};
+use crate::did_method::peer::{PeerCreateKey, PeerCreatedKey, PeerService};
 use crate::Document;
 
 /// A validated Decentralized Identifier (DID) or DID URL
@@ -391,6 +392,101 @@ impl DID {
         key.id = format!("{}#{}", did_string, multibase);
 
         Ok((did, key))
+    }
+
+    /// Generate a new did:peer:2 with the specified keys and optional services
+    ///
+    /// Returns both the DID and any generated key material (for keys that weren't
+    /// provided as pre-existing multibase strings).
+    ///
+    /// # Example
+    /// ```
+    /// use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
+    ///
+    /// // Generate a did:peer with new keys
+    /// let keys = vec![
+    ///     PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+    ///     PeerCreateKey::new(PeerKeyPurpose::Encryption, PeerKeyType::Ed25519),
+    /// ];
+    /// let (did, created_keys) = DID::generate_peer(&keys, None).unwrap();
+    /// assert!(did.to_string().starts_with("did:peer:2"));
+    /// assert_eq!(created_keys.len(), 2);
+    /// ```
+    pub fn generate_peer(
+        keys: &[PeerCreateKey],
+        services: Option<&[PeerService]>,
+    ) -> Result<(Self, Vec<PeerCreatedKey>), DIDError> {
+        use crate::did_method::key::KeyMaterial;
+        use affinidi_crypto::Params;
+
+        let mut did_string = String::from("did:peer:2");
+        let mut created_keys: Vec<PeerCreatedKey> = Vec::new();
+
+        for key_spec in keys {
+            // Get or generate the multibase key
+            let multibase = if let Some(ref existing) = key_spec.public_key_multibase {
+                existing.clone()
+            } else {
+                // Generate a new key
+                let key_type = key_spec.key_type.ok_or_else(|| {
+                    DIDError::InvalidMethodSpecificId(
+                        "Must provide either public_key_multibase or key_type".to_string(),
+                    )
+                })?;
+
+                let key = KeyMaterial::generate(key_type.to_crypto_key_type())
+                    .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
+
+                let multibase = key.public_multibase()
+                    .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
+
+                // Extract JWK params for the created key
+                if let crate::did_method::key::KeyMaterialFormat::JWK(jwk) = &key.format {
+                    let (curve, d, x, y) = match &jwk.params {
+                        Params::OKP(params) => (
+                            params.curve.clone(),
+                            params.d.clone().unwrap_or_default(),
+                            params.x.clone(),
+                            None,
+                        ),
+                        Params::EC(params) => (
+                            params.curve.clone(),
+                            params.d.clone().unwrap_or_default(),
+                            params.x.clone(),
+                            Some(params.y.clone()),
+                        ),
+                    };
+
+                    created_keys.push(PeerCreatedKey {
+                        key_multibase: multibase.clone(),
+                        curve,
+                        d,
+                        x,
+                        y,
+                    });
+                }
+
+                multibase
+            };
+
+            // Add to DID string with purpose prefix
+            let purpose_char = key_spec.purpose.to_char();
+            did_string.push_str(&format!(".{}{}", purpose_char, multibase));
+        }
+
+        // Encode and add services
+        if let Some(svcs) = services {
+            for service in svcs {
+                let encoded = service
+                    .encode()
+                    .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
+                did_string.push('.');
+                did_string.push_str(&encoded);
+            }
+        }
+
+        let did: DID = did_string.parse()?;
+        Ok((did, created_keys))
     }
 
     /// Resolve this DID to a DID Document

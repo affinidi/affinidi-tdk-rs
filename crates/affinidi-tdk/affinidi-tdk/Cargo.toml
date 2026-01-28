@@ -16,7 +16,7 @@ rust-version.workspace = true
 default = ["messaging", "meeting-place", "did-peer", "data-integrity"]
 messaging = ["dep:affinidi-messaging-sdk"]
 meeting-place = ["dep:affinidi-meeting-place"]
-did-peer = ["dep:did-peer"]
+did-peer = []
 data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 
 [dependencies]
@@ -28,8 +28,6 @@ affinidi-did-authentication.workspace = true
 affinidi-tdk-common.workspace = true
 affinidi-secrets-resolver.workspace = true
 affinidi-meeting-place = { workspace = true, optional = true }
-did-peer = { workspace = true, optional = true }
-affinidi-did-key.workspace = true
 affinidi-data-integrity = { workspace = true, optional = true }
 
 # External Crates

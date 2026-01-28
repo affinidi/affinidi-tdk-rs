@@ -15,6 +15,7 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
+affinidi-crypto.workspace = true
 affinidi-secrets-resolver.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
 affinidi-did-common.workspace = true

@@ -1,15 +1,14 @@
 //! Methods relating to working with DID's
 
 use affinidi_did_common::one_or_many::OneOrMany;
-use affinidi_did_key::DIDKey;
+use affinidi_did_common::{
+    PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
+    PeerServiceEndpointLongMap, DID as DIDCommon,
+};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_tdk::secrets_resolver::secrets::{KeyType, Secret};
 use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
-use did_peer::{
-    DIDPeer, DIDPeerCreateKeys, DIDPeerKeys, DIDPeerService, PeerServiceEndPoint,
-    PeerServiceEndPointLong, PeerServiceEndPointLongMap,
-};
 use sha256::digest;
 use std::error::Error;
 
@@ -21,39 +20,43 @@ pub fn create_did(
     auth_service: bool,
 ) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
     // Generate keys for encryption and verification
-    let (v_did_key, mut v_ed25519_key) = DIDKey::generate(KeyType::Ed25519)?;
-    let (e_did_key, mut e_secp256k1_key) = DIDKey::generate(KeyType::Secp256k1)?;
+    let mut v_ed25519_key = Secret::generate_ed25519(None, None);
+    let mut e_secp256k1_key =
+        Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret");
 
-    // Put these keys in order and specify the type of each key (we strip the did:key: from the front)
+    // Get the multibase public keys
+    let v_multibase = v_ed25519_key.get_public_keymultibase()?;
+    let e_multibase = e_secp256k1_key.get_public_keymultibase()?;
+
+    // Put these keys in order and specify the type of each key
     let keys = vec![
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Verification,
-            type_: None,
-            public_key_multibase: Some(v_did_key[8..].to_string()),
-        },
-        DIDPeerCreateKeys {
-            purpose: DIDPeerKeys::Encryption,
-            type_: None,
-            public_key_multibase: Some(e_did_key[8..].to_string()),
-        },
+        PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, v_multibase),
+        PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, e_multibase),
     ];
 
     // Create a service definition
     let mut services = service.as_ref().map(|service| {
-        let endpoints: Vec<PeerServiceEndPointLongMap> = service
+        let endpoints: Vec<PeerServiceEndpointLongMap> = service
             .iter()
-            .map(|uri| PeerServiceEndPointLongMap {
+            .map(|uri| PeerServiceEndpointLongMap {
                 uri: uri.to_string(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
             })
             .collect();
 
-        vec![DIDPeerService {
+        vec![PeerService {
             id: None,
-            _type: "dm".into(),
-            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::Map(
-                OneOrMany::Many(endpoints),
+            type_: "dm".into(),
+            endpoint: PeerServiceEndpoint::Long(OneOrMany::Many(
+                endpoints
+                    .into_iter()
+                    .map(|m| PeerServiceEndpointLong {
+                        uri: m.uri,
+                        accept: m.accept,
+                        routing_keys: m.routing_keys,
+                    })
+                    .collect(),
             )),
         }]
     });
@@ -64,26 +67,24 @@ pub fn create_did(
             return Err("Service URI is required for authentication service".into());
         };
 
-        let auth_service = DIDPeerService {
+        let auth_svc = PeerService {
             id: Some("#auth".into()),
-            _type: "Authentication".into(),
-            service_end_point: PeerServiceEndPoint::Long(PeerServiceEndPointLong::URI(
-                [&service[0], "/authenticate"].concat(),
-            )),
+            type_: "Authentication".into(),
+            endpoint: PeerServiceEndpoint::Uri([&service[0], "/authenticate"].concat()),
         };
-        services.as_mut().unwrap().push(auth_service);
+        services.as_mut().unwrap().push(auth_svc);
     }
 
-    let services = services.as_ref();
     // Create the did:peer DID
     let (did_peer, _) =
-        DIDPeer::create_peer_did(&keys, services).expect("Failed to create did:peer");
+        DIDCommon::generate_peer(&keys, services.as_deref()).map_err(|e| e.to_string())?;
+    let did_peer_str = did_peer.to_string();
 
-    v_ed25519_key.id = [did_peer.as_str(), "#key-1"].concat();
-    e_secp256k1_key.id = [did_peer.as_str(), "#key-2"].concat();
+    v_ed25519_key.id = [did_peer_str.as_str(), "#key-1"].concat();
+    e_secp256k1_key.id = [did_peer_str.as_str(), "#key-2"].concat();
     let secrets_json = vec![v_ed25519_key, e_secp256k1_key];
 
-    Ok((did_peer, secrets_json))
+    Ok((did_peer_str, secrets_json))
 }
 
 /// Helper function to resolve a DID and retrieve the URI address of the service endpoint

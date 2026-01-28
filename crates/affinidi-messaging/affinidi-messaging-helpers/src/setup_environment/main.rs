@@ -3,12 +3,11 @@
 use affinidi_messaging_helpers::common::{affinidi_logo, check_path};
 use affinidi_tdk::{
     common::{environments::TDKEnvironments, profiles::TDKProfile},
-    dids::{DID, KeyType},
+    dids::{DID, KeyType, PeerKeyRole},
 };
 use clap::Parser;
 use console::{Style, Term, style};
 use dialoguer::{Confirm, theme::ColorfulTheme};
-use did_peer::DIDPeerKeys;
 use std::error::Error;
 use ui::{MediatorType, init_local_mediator, init_remote_mediator, local_remote_mediator};
 
@@ -103,7 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     {
 
         fn _create_friend(alias: &str, mediator: Option<&str>) -> TDKProfile {
-            let (did, secrets) = DID::generate_did_peer(vec![(DIDPeerKeys::Verification, KeyType::P256), (DIDPeerKeys::Verification, KeyType::Ed25519), (DIDPeerKeys::Encryption, KeyType::Secp256k1), (DIDPeerKeys::Encryption, KeyType::P256)], None).unwrap();
+            let (did, secrets) = DID::generate_did_peer(vec![(PeerKeyRole::Verification, KeyType::P256), (PeerKeyRole::Verification, KeyType::Ed25519), (PeerKeyRole::Encryption, KeyType::Secp256k1), (PeerKeyRole::Encryption, KeyType::P256)], None).unwrap();
             TDKProfile {
                 alias: alias.to_string(),
                 did,

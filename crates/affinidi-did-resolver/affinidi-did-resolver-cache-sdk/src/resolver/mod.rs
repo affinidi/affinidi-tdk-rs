@@ -1,10 +1,8 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
-use affinidi_did_common::{DID, Document};
-use affinidi_did_key::DIDKey;
+use affinidi_did_common::{DID, DIDMethod, Document, DocumentExt};
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
 use did_jwk::DIDJWK;
-use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
 #[cfg(feature = "did-cheqd")]
 use did_resolver_cheqd::DIDCheqd;
@@ -19,22 +17,15 @@ use tracing::error;
 
 impl DIDCacheClient {
     /// Resolves a DID to a DID Document
-    pub(crate) async fn local_resolve(  
-        &self,
-        did: &DID,
-        parts: &[&str],
-    ) -> Result<Document, DIDCacheError> {
+    pub(crate) async fn local_resolve(&self, did: &DID) -> Result<Document, DIDCacheError> {
         // Match the DID method
 
-        match parts[1] {
-            "ethr" => {
+        match did.method() {
+            DIDMethod::Ethr { identifier, .. } => {
                 let method = DIDEthr;
 
                 match method
-                    .resolve_method_representation(
-                        parts[parts.len() - 1],
-                        resolution::Options::default(),
-                    )
+                    .resolve_method_representation(identifier, resolution::Options::default())
                     .await
                 {
                     Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
@@ -64,31 +55,26 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "key" => match DIDKey::resolve(did) {
+            DIDMethod::Key { .. } => match did.resolve() {
                 Ok(doc) => Ok(doc),
                 Err(e) => {
                     error!("Error: {:?}", e);
                     Err(DIDCacheError::DIDError(e.to_string()))
                 }
             },
-            "peer" => {
-                let method = DIDPeer;
-
-                match method.resolve(did).await {
-                    Ok(res) => {
-                        // DID Peer will resolve to MultiKey, which confuses key matching
-                        // Expand the keys to raw keys
-                        DIDPeer::expand_keys(&res)
-                            .await
-                            .map_err(|e| DIDCacheError::DIDError(e.to_string()))
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
+            DIDMethod::Peer { .. } => match did.resolve() {
+                Ok(doc) => {
+                    // DID Peer will resolve to MultiKey, which confuses key matching
+                    // Expand the keys to raw keys
+                    doc.expand_peer_keys()
+                        .map_err(|e| DIDCacheError::DIDError(e.to_string()))
+                }
+                Err(e) => {
+                    error!("Error: {:?}", e);
+                    Err(DIDCacheError::DIDError(e.to_string()))
                 }
             }
-            "pkh" => {
+            DIDMethod::Pkh { .. } => {
                 let method = DIDPKH;
 
                 match method.resolve(DID::new::<str>(did).unwrap()).await {
@@ -102,7 +88,7 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "web" => {
+            DIDMethod::Web { .. } => {
                 let method = DIDWeb;
 
                 match method.resolve(DID::new::<str>(did).unwrap()).await {
@@ -116,7 +102,7 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "webvh" => {
+            DIDMethod::WebVH { .. } => {
                 #[cfg(feature = "did-webvh")]
                 {
                     let mut method = DIDWebVHState::default();
@@ -137,7 +123,7 @@ impl DIDCacheClient {
                     "did:webvh is not enabled".to_string(),
                 ))
             }
-            "cheqd" => {
+            DIDMethod::Cheqd { .. } => {
                 #[cfg(feature = "did-cheqd")]
                 match DIDCheqd::default()
                     .resolve(DID::new::<str>(did).unwrap())
@@ -158,7 +144,7 @@ impl DIDCacheClient {
                     "did:cheqd is not enabled".to_string(),
                 ))
             }
-            "scid" => {
+            DIDMethod::Scid { .. } => {
                 #[cfg(feature = "did-scid")]
                 {
                     did_scid::resolve(did, None, None)

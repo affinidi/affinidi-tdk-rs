@@ -16,7 +16,6 @@ rust-version.workspace = true
 # Affinidi Crates
 affinidi-did-resolver-cache-sdk = { workspace = true, features = ["network"] }
 affinidi-did-common.workspace = true
-did-peer.workspace = true
 
 # External Crates
 ahash = "0.8"
