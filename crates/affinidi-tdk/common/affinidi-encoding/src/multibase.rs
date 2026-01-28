@@ -53,6 +53,15 @@ pub fn decode_multikey_with_codec(key: &str) -> Result<(u64, Vec<u8>), EncodingE
     Ok((multi_encoded.codec(), multi_encoded.data().to_vec()))
 }
 
+/// Encode key bytes with a multicodec prefix as a multibase (base58btc) string
+///
+/// This is the inverse of `decode_multikey`. The result is suitable for
+/// use as a DID key identifier or publicKeyMultibase value.
+pub fn encode_multikey(codec: u64, key_bytes: &[u8]) -> String {
+    let encoded = crate::multicodec::MultiEncodedBuf::encode_bytes(codec, key_bytes);
+    encode_base58btc(encoded.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

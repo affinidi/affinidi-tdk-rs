@@ -4,6 +4,7 @@ use affinidi_encoding::Codec;
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod identifier;
+pub mod key;
 pub(crate) mod parse;
 pub(crate) mod peer;
 pub(crate) mod resolve;

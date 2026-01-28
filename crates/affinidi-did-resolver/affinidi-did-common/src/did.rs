@@ -14,15 +14,10 @@
  * ```
  */
 
-use affinidi_encoding::Codec;
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-use crate::did_method::{
-    DIDMethod,
-    parse::parse_method,
-    peer::{PeerNumAlgo, PeerPurpose},
-};
+use crate::did_method::{DIDMethod, parse::parse_method};
 
 /// A validated Decentralized Identifier (DID) or DID URL
 ///
@@ -364,9 +359,40 @@ impl DID {
         s.parse()
     }
 
-    pub fn resolve(&self) -> &'static str {
-        self.method.resolve()
+    /// Generate a new did:key with the specified key type
+    ///
+    /// Returns both the DID and the associated key material (including private key).
+    ///
+    /// # Example
+    /// ```
+    /// use affinidi_did_common::{DID, KeyMaterial};
+    /// use affinidi_crypto::KeyType;
+    ///
+    /// let (did, key) = DID::generate_key(KeyType::Ed25519).unwrap();
+    /// assert!(did.to_string().starts_with("did:key:z6Mk"));
+    /// ```
+    pub fn generate_key(key_type: affinidi_crypto::KeyType) -> Result<(Self, crate::KeyMaterial), DIDError> {
+        use crate::did_method::key::KeyMaterial;
+
+        let mut key = KeyMaterial::generate(key_type)
+            .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
+
+        let multibase = key.public_multibase()
+            .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
+
+        let did_string = format!("did:key:{}", multibase);
+        let did: DID = did_string.parse()?;
+
+        // Set the key ID to the DID URL with fragment
+        key.id = format!("{}#{}", did_string, multibase);
+
+        Ok((did, key))
     }
+
+    // TODO: Implement resolve() once DIDMethod::resolve() is complete
+    // pub fn resolve(&self) -> DIDDocument {
+    //     self.method.resolve()
+    // }
 }
 
 // Accessors

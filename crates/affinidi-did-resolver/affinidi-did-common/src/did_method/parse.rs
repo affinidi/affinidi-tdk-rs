@@ -5,7 +5,6 @@ use crate::{
     DIDError,
     did_method::{
         identifier::validate_identifier_format,
-        parse,
         peer::{PeerNumAlgo, PeerPurpose},
     },
 };

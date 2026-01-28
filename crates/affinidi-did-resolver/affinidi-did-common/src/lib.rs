@@ -24,6 +24,7 @@ pub mod verification_method;
 
 pub use did::{DID, DIDError};
 pub use did_method::DIDMethod;
+pub use did_method::key::{KeyError, KeyMaterial, KeyMaterialFormat, KeyMaterialType};
 
 #[derive(Error, Debug)]
 pub enum DocumentError {
