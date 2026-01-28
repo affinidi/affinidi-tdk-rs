@@ -1,5 +1,5 @@
-use affinidi_did_key::DIDKey;
 use affinidi_messaging_didcomm::{Attachment, Message, MessageBuilder};
+use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_messaging_sdk::{
     ATM,
     messages::SuccessResponse,
@@ -9,7 +9,7 @@ use affinidi_messaging_sdk::{
         mediator::acls::{AccessListModeType, MediatorACLSet},
     },
 };
-use affinidi_tdk::secrets_resolver::{SecretsResolver, secrets::KeyType};
+use affinidi_tdk::secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use image::Luma;
 use log::info;
@@ -71,21 +71,21 @@ pub async fn create_new_profile(
     alias_suffix: bool,
     state: &mut State,
 ) -> anyhow::Result<ATMProfile> {
-    let (did_key, p256_secret) = DIDKey::generate(KeyType::P256)?;
+    let (did_key, p256_secret) = DIDKey::generate_did_key(KeyType::P256)?;
 
     let mut alias = if let Some(alias) = alias {
         alias
     } else {
         format!(
             "Invite {}",
-            &did_key.to_string()[did_key.to_string().char_indices().nth_back(3).unwrap().0..]
+            &did_key[did_key.char_indices().nth_back(3).unwrap().0..]
         )
     };
 
     if alias_suffix {
         alias.push_str(&format!(
             " {}",
-            &did_key.to_string()[did_key.to_string().char_indices().nth_back(3).unwrap().0..]
+            &did_key[did_key.char_indices().nth_back(3).unwrap().0..]
         ));
     }
 
@@ -97,7 +97,7 @@ pub async fn create_new_profile(
     match ATMProfile::new(
         atm,
         Some(alias),
-        did_key.to_string(),
+        did_key.clone(),
         Some(mediator_did.to_string()),
     )
     .await

@@ -160,7 +160,7 @@ fn expand_verification_method(vm: &VerificationMethod) -> Result<VerificationMet
     };
 
     // Resolve as did:key to get the expanded verification method
-    let did_key_string = format!("did:key:{}", key_multibase);
+    let did_key_string = format!("did:key:{key_multibase}");
     let did_key: DID = did_key_string.parse().map_err(|e| {
         DocumentError::KeyExpansionError(format!("Failed to parse as did:key: {e}"))
     })?;

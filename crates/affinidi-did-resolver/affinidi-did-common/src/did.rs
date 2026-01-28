@@ -385,11 +385,11 @@ impl DID {
         let multibase = key.public_multibase()
             .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
 
-        let did_string = format!("did:key:{}", multibase);
+        let did_string = format!("did:key:{multibase}");
         let did: DID = did_string.parse()?;
 
         // Set the key ID to the DID URL with fragment
-        key.id = format!("{}#{}", did_string, multibase);
+        key.id = format!("{did_string}#{multibase}");
 
         Ok((did, key))
     }
@@ -471,7 +471,7 @@ impl DID {
 
             // Add to DID string with purpose prefix
             let purpose_char = key_spec.purpose.to_char();
-            did_string.push_str(&format!(".{}{}", purpose_char, multibase));
+            did_string.push_str(&format!(".{purpose_char}{multibase}"));
         }
 
         // Encode and add services

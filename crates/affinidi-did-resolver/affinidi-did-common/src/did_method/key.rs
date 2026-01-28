@@ -125,7 +125,7 @@ impl KeyMaterial {
             KeyType::P256 => Self::generate_p256(None),
             KeyType::P384 => Self::generate_p384(None),
             KeyType::Secp256k1 => Self::generate_secp256k1(None),
-            _ => Err(KeyError::UnsupportedKeyType(format!("{:?}", key_type))),
+            _ => Err(KeyError::UnsupportedKeyType(format!("{key_type:?}"))),
         }
     }
 
@@ -276,7 +276,7 @@ impl KeyMaterial {
                 if self.public_bytes.len() < 65 {
                     return Err(KeyError::Key("Invalid public key length".into()));
                 }
-                let parity: u8 = if self.public_bytes[64] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03
@@ -289,7 +289,7 @@ impl KeyMaterial {
                 if self.public_bytes.len() < 97 {
                     return Err(KeyError::Key("Invalid public key length".into()));
                 }
-                let parity: u8 = if self.public_bytes[96] % 2 == 0 {
+                let parity: u8 = if self.public_bytes[96].is_multiple_of(2) {
                     0x02
                 } else {
                     0x03

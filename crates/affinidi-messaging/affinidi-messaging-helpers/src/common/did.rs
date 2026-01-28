@@ -3,10 +3,10 @@
 use affinidi_did_common::one_or_many::OneOrMany;
 use affinidi_did_common::{
     PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
-    PeerServiceEndpointLongMap, DID as DIDCommon,
+    DID as DIDCommon,
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_tdk::secrets_resolver::secrets::{KeyType, Secret};
+use affinidi_tdk::secrets_resolver::secrets::Secret;
 use console::style;
 use dialoguer::{Input, theme::ColorfulTheme};
 use sha256::digest;
@@ -36,9 +36,9 @@ pub fn create_did(
 
     // Create a service definition
     let mut services = service.as_ref().map(|service| {
-        let endpoints: Vec<PeerServiceEndpointLongMap> = service
+        let endpoints: Vec<PeerServiceEndpointLong> = service
             .iter()
-            .map(|uri| PeerServiceEndpointLongMap {
+            .map(|uri| PeerServiceEndpointLong {
                 uri: uri.to_string(),
                 accept: vec!["didcomm/v2".into()],
                 routing_keys: vec![],
@@ -48,16 +48,7 @@ pub fn create_did(
         vec![PeerService {
             id: None,
             type_: "dm".into(),
-            endpoint: PeerServiceEndpoint::Long(OneOrMany::Many(
-                endpoints
-                    .into_iter()
-                    .map(|m| PeerServiceEndpointLong {
-                        uri: m.uri,
-                        accept: m.accept,
-                        routing_keys: m.routing_keys,
-                    })
-                    .collect(),
-            )),
+            endpoint: PeerServiceEndpoint::Long(OneOrMany::Many(endpoints)),
         }]
     });
 

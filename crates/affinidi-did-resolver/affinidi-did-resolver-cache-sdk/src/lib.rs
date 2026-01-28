@@ -52,6 +52,7 @@ pub enum DIDMethod {
     WEB,
     WEBVH,
     CHEQD,
+    SCID,
     EXAMPLE,
 }
 
@@ -67,6 +68,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::WEB => write!(f, "web"),
             DIDMethod::WEBVH => write!(f, "webvh"),
             DIDMethod::CHEQD => write!(f, "cheqd"),
+            DIDMethod::SCID => write!(f, "scid"),
             DIDMethod::EXAMPLE => write!(f, "example"),
         }
     }
@@ -94,6 +96,7 @@ impl TryFrom<&str> for DIDMethod {
             "web" => Ok(DIDMethod::WEB),
             "webvh" => Ok(DIDMethod::WEBVH),
             "cheqd" => Ok(DIDMethod::CHEQD),
+            "scid" => Ok(DIDMethod::SCID),
             #[cfg(feature = "did_example")]
             "example" => Ok(DIDMethod::EXAMPLE),
             _ => Err(DIDCacheError::UnsupportedMethod(value.to_string())),

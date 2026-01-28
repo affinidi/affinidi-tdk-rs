@@ -131,7 +131,7 @@ fn resolve_peer(did: &DID, numalgo: &PeerNumAlgo, identifier: &str) -> Result<Do
             // Numalgo 0: The identifier IS the did:key multibase
             // Strip the leading '0' and treat as did:key
             let key_multibase = identifier.strip_prefix('0').unwrap_or(identifier);
-            let key_did: DID = format!("did:key:{}", key_multibase)
+            let key_did: DID = format!("did:key:{key_multibase}")
                 .parse()
                 .map_err(|e| DIDError::ResolutionError(format!("Invalid did:peer:0 key: {e}")))?;
             key_did.resolve()
@@ -177,7 +177,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
         })?;
 
         let purpose = PeerPurpose::from_char(purpose_char).ok_or_else(|| {
-            DIDError::ResolutionError(format!("Invalid purpose code: {}", purpose_char))
+            DIDError::ResolutionError(format!("Invalid purpose code: {purpose_char}"))
         })?;
 
         if purpose == PeerPurpose::Service {
@@ -194,7 +194,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
         } else {
             // Key entry
             key_count += 1;
-            let kid = format!("{}#key-{}", did_string, key_count);
+            let kid = format!("{did_string}#key-{key_count}");
             let public_key_multibase = &part[1..]; // Skip purpose char
 
             let vm = VerificationMethod {

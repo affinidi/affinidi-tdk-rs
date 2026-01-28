@@ -12,7 +12,7 @@ use affinidi_did_common::{
     PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
     PeerServiceEndpointLong,
 };
-use affinidi_secrets_resolver::secrets::Secret;
+use affinidi_secrets_resolver::secrets::{KeyType as CryptoKeyType, Secret};
 use affinidi_tdk_common::errors::{Result, TDKError};
 use std::fmt::Display;
 
@@ -75,23 +75,13 @@ impl TryFrom<&str> for KeyType {
 }
 
 impl KeyType {
-    fn to_secrets_key_type(self) -> SecretsKeyType {
+    fn to_crypto_key_type(self) -> CryptoKeyType {
         match self {
-            KeyType::P256 => SecretsKeyType::P256,
-            KeyType::P384 => SecretsKeyType::P384,
-            KeyType::Ed25519 => SecretsKeyType::Ed25519,
-            KeyType::X25519 => SecretsKeyType::X25519,
-            KeyType::Secp256k1 => SecretsKeyType::Secp256k1,
-        }
-    }
-
-    fn to_crypto_key_type(self) -> affinidi_crypto::KeyType {
-        match self {
-            KeyType::P256 => affinidi_crypto::KeyType::P256,
-            KeyType::P384 => affinidi_crypto::KeyType::P384,
-            KeyType::Ed25519 => affinidi_crypto::KeyType::Ed25519,
-            KeyType::X25519 => affinidi_crypto::KeyType::X25519,
-            KeyType::Secp256k1 => affinidi_crypto::KeyType::Secp256k1,
+            KeyType::P256 => CryptoKeyType::P256,
+            KeyType::P384 => CryptoKeyType::P384,
+            KeyType::Ed25519 => CryptoKeyType::Ed25519,
+            KeyType::X25519 => CryptoKeyType::X25519,
+            KeyType::Secp256k1 => CryptoKeyType::Secp256k1,
         }
     }
 }
@@ -214,8 +204,8 @@ impl DID {
             }]
         });
 
-        let (peer_did, _created_keys) =
-            DIDCommon::generate_peer(peer_keys, services.as_deref())?;
+        let (peer_did, _created_keys) = DIDCommon::generate_peer(peer_keys, services.as_deref())
+            .map_err(|e| TDKError::DIDMethod(e.to_string()))?;
         let peer = peer_did.to_string();
 
         // Change the Secret ID's to match the created did:peer

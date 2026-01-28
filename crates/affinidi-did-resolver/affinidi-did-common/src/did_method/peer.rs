@@ -326,10 +326,10 @@ impl PeerService {
         } else if index == 0 {
             "#service".to_string()
         } else {
-            format!("#service-{}", index)
+            format!("#service-{index}")
         };
 
-        let id = Url::from_str(&format!("{}{}", did, id_fragment))
+        let id = Url::from_str(&format!("{did}{id_fragment}"))
             .map_err(|e| PeerError::ServiceSyntaxError(format!("Invalid service ID: {e}")))?;
 
         // Convert endpoint to standard format
