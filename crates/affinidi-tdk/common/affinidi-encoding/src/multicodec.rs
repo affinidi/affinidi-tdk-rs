@@ -6,6 +6,7 @@
 //! See: <https://github.com/multiformats/multicodec>
 
 use crate::EncodingError;
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 // ****************************************************************************
@@ -26,7 +27,7 @@ pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
 
 /// Known codec types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Codec {
     Ed25519Pub,
     Ed25519Priv,

@@ -9,6 +9,7 @@ members = [
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
 
   "crates/affinidi-tdk/common/affinidi-encoding",
+  "crates/affinidi-tdk/common/affinidi-crypto",
   "crates/affinidi-tdk/common/affinidi-secrets-resolver",
 
   "crates/affinidi-messaging/affinidi-messaging-didcomm",
@@ -68,6 +69,7 @@ affinidi-did-authentication = { version = "0.2.3", path = "./crates/affinidi-tdk
 affinidi-secrets-resolver = { version = "0.4.0", path = "./crates/affinidi-tdk/common/affinidi-secrets-resolver" }
 affinidi-tdk-common = { version = "0.3.0", path = "./crates/affinidi-tdk/common/affinidi-tdk-common" }
 affinidi-encoding = { version = "0.1.0", path = "./crates/affinidi-tdk/common/affinidi-encoding" }
+affinidi-crypto = { version = "0.1.0", path = "./crates/affinidi-tdk/common/affinidi-crypto" }
 
 # External crates
 bs58 = "0.5"

@@ -16,12 +16,14 @@ use crate::{
 };
 
 pub mod did;
+pub mod did_method;
 pub mod document;
 pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
 
-pub use did::{DID, DIDError, DIDMethod};
+pub use did::{DID, DIDError};
+pub use did_method::DIDMethod;
 
 #[derive(Error, Debug)]
 pub enum DocumentError {

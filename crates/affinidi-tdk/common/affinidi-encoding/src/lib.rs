@@ -9,11 +9,11 @@ pub mod multibase;
 pub mod multicodec;
 
 pub use multibase::{
-    decode_base58btc, decode_multikey, decode_multikey_with_codec, encode_base58btc,
-    validate_base58btc, BASE58BTC_PREFIX,
+    BASE58BTC_PREFIX, decode_base58btc, decode_multikey, decode_multikey_with_codec,
+    encode_base58btc, validate_base58btc,
 };
 pub use multicodec::{
-    Codec, MultiEncoded, MultiEncodedBuf, ED25519_PRIV, ED25519_PUB, P256_PRIV, P256_PUB,
+    Codec, ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB,
     P384_PRIV, P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV,
     X25519_PUB,
 };

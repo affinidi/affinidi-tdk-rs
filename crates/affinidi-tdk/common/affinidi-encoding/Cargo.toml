@@ -17,6 +17,7 @@ bs58.workspace = true
 thiserror = "2.0"
 unsigned-varint = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"]}
 
 [lints]
 workspace = true

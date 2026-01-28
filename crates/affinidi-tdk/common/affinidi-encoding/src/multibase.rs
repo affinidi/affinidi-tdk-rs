@@ -5,8 +5,8 @@
 //!
 //! See: <https://github.com/multiformats/multibase>
 
-use crate::multicodec::MultiEncoded;
 use crate::EncodingError;
+use crate::multicodec::MultiEncoded;
 
 /// Multibase prefix for base58btc (Bitcoin alphabet)
 pub const BASE58BTC_PREFIX: char = 'z';
