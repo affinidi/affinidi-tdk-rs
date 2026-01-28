@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
 use crate::did_method::{DIDMethod, parse::parse_method};
+use crate::Document;
 
 /// A validated Decentralized Identifier (DID) or DID URL
 ///
@@ -67,6 +68,8 @@ pub enum DIDError {
     InvalidFragment(String),
     /// DID is not a valid URL (WHATWG URL Standard)
     InvalidUrl(String),
+    /// Error during DID resolution
+    ResolutionError(String),
 }
 
 impl std::error::Error for DIDError {}
@@ -83,6 +86,7 @@ impl fmt::Display for DIDError {
             DIDError::InvalidQuery(msg) => write!(f, "Invalid query: {msg}"),
             DIDError::InvalidFragment(msg) => write!(f, "Invalid fragment: {msg}"),
             DIDError::InvalidUrl(msg) => write!(f, "Invalid URL: {msg}"),
+            DIDError::ResolutionError(msg) => write!(f, "Resolution error: {msg}"),
         }
     }
 }
@@ -389,10 +393,25 @@ impl DID {
         Ok((did, key))
     }
 
-    // TODO: Implement resolve() once DIDMethod::resolve() is complete
-    // pub fn resolve(&self) -> DIDDocument {
-    //     self.method.resolve()
-    // }
+    /// Resolve this DID to a DID Document
+    ///
+    /// Works for locally-resolvable methods (did:key, did:peer).
+    /// For network methods (did:web, did:cheqd, etc.), returns an error
+    /// indicating external resolution is required.
+    ///
+    /// # Example
+    /// ```
+    /// use affinidi_did_common::DID;
+    ///
+    /// let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+    ///     .parse()
+    ///     .unwrap();
+    /// let doc = did.resolve().unwrap();
+    /// assert_eq!(doc.id.as_str(), did.to_string());
+    /// ```
+    pub fn resolve(&self) -> Result<Document, DIDError> {
+        self.method.resolve(self)
+    }
 }
 
 // Accessors
