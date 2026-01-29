@@ -24,13 +24,13 @@ pub mod verification_method;
 
 pub use did::{DID, DIDError};
 pub use did_method::DIDMethod;
-pub use document::DocumentExt;
 pub use did_method::key::{KeyError, KeyMaterial, KeyMaterialFormat, KeyMaterialType};
 pub use did_method::peer::{
     PeerCreateKey, PeerCreatedKey, PeerError, PeerKeyPurpose, PeerKeyType, PeerNumAlgo,
     PeerPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
     PeerServiceEndpointShort,
 };
+pub use document::DocumentExt;
 
 #[derive(Error, Debug)]
 pub enum DocumentError {

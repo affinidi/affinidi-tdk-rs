@@ -40,8 +40,10 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
             key_id: None,
             params: Params::EC(ECParams {
                 curve: "secp256k1".to_string(),
-                x: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).x().unwrap()),
-                y: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).y().unwrap()),
+                x: BASE64_URL_SAFE_NO_PAD
+                    .encode(verifying_key.to_encoded_point(false).x().unwrap()),
+                y: BASE64_URL_SAFE_NO_PAD
+                    .encode(verifying_key.to_encoded_point(false).y().unwrap()),
                 d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
             }),
         },

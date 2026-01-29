@@ -2,8 +2,8 @@
 
 use affinidi_did_common::one_or_many::OneOrMany;
 use affinidi_did_common::{
-    PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
-    DID as DIDCommon,
+    DID as DIDCommon, PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
+    PeerServiceEndpointLong,
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_tdk::secrets_resolver::secrets::Secret;

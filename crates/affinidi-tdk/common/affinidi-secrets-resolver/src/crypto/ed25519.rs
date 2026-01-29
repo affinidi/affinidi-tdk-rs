@@ -13,12 +13,10 @@ impl Secret {
     pub fn generate_ed25519(kid: Option<&str>, seed: Option<&[u8; 32]>) -> Self {
         let keypair = affinidi_crypto::ed25519::generate(seed);
 
-        let kid = kid
-            .map(|k| k.to_string())
-            .unwrap_or_else(|| {
-                use rand::{RngCore, rngs::OsRng};
-                BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
-            });
+        let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
+            use rand::{RngCore, rngs::OsRng};
+            BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
+        });
 
         Secret {
             id: kid,

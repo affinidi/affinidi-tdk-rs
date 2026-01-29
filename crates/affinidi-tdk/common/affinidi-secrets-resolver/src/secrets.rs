@@ -3,8 +3,6 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 
-pub use affinidi_crypto::KeyType;
-use affinidi_crypto::{JWK, Params};
 use crate::{
     errors::{Result, SecretsResolverError},
     multicodec::{
@@ -12,6 +10,8 @@ use crate::{
         P384_PUB, P521_PRIV, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
+pub use affinidi_crypto::KeyType;
+use affinidi_crypto::{JWK, Params};
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use multihash::Multihash;

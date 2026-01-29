@@ -16,12 +16,10 @@ impl Secret {
     ) -> Result<Self, SecretsResolverError> {
         let keypair = affinidi_crypto::p384::generate(secret)?;
 
-        let kid = kid
-            .map(|k| k.to_string())
-            .unwrap_or_else(|| {
-                use rand::{RngCore, rngs::OsRng};
-                BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
-            });
+        let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
+            use rand::{RngCore, rngs::OsRng};
+            BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
+        });
 
         Ok(Secret {
             id: kid,

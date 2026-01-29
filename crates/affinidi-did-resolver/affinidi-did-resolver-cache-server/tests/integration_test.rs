@@ -1,5 +1,5 @@
 use affinidi_did_common::{
-    Document, DID as DIDCommon, PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
+    DID as DIDCommon, Document, PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
     PeerServiceEndpointLong, one_or_many::OneOrMany,
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};

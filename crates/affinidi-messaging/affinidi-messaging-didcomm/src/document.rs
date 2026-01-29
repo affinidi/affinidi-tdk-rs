@@ -201,10 +201,7 @@ impl AsKnownKeyPairSecret for Secret {
                     .map(KnownKeyPair::X25519),
                 _ => Err(err_msg(
                     ErrorKind::Unsupported,
-                    format!(
-                        "Unsupported key type or curve key_type({})",
-                        jwk.key_type()
-                    ),
+                    format!("Unsupported key type or curve key_type({})", jwk.key_type()),
                 )),
             },
 

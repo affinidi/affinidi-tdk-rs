@@ -167,9 +167,9 @@ impl DIDCacheClient {
         }
 
         // Parse the DID string into a DID struct
-        let parsed_did: DID = did.parse().map_err(|e| {
-            DIDCacheError::DIDError(format!("Failed to parse DID: {e}"))
-        })?;
+        let parsed_did: DID = did
+            .parse()
+            .map_err(|e| DIDCacheError::DIDError(format!("Failed to parse DID: {e}")))?;
 
         let hash = DIDCacheClient::hash_did(did);
 

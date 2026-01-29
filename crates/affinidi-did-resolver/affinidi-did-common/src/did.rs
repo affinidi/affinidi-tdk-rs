@@ -17,9 +17,9 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-use crate::did_method::{DIDMethod, parse::parse_method};
-use crate::did_method::peer::{PeerCreateKey, PeerCreatedKey, PeerService};
 use crate::Document;
+use crate::did_method::peer::{PeerCreateKey, PeerCreatedKey, PeerService};
+use crate::did_method::{DIDMethod, parse::parse_method};
 
 /// A validated Decentralized Identifier (DID) or DID URL
 ///
@@ -376,13 +376,16 @@ impl DID {
     /// let (did, key) = DID::generate_key(KeyType::Ed25519).unwrap();
     /// assert!(did.to_string().starts_with("did:key:z6Mk"));
     /// ```
-    pub fn generate_key(key_type: affinidi_crypto::KeyType) -> Result<(Self, crate::KeyMaterial), DIDError> {
+    pub fn generate_key(
+        key_type: affinidi_crypto::KeyType,
+    ) -> Result<(Self, crate::KeyMaterial), DIDError> {
         use crate::did_method::key::KeyMaterial;
 
         let mut key = KeyMaterial::generate(key_type)
             .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
 
-        let multibase = key.public_multibase()
+        let multibase = key
+            .public_multibase()
             .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
 
         let did_string = format!("did:key:{multibase}");
@@ -437,7 +440,8 @@ impl DID {
                 let key = KeyMaterial::generate(key_type.to_crypto_key_type())
                     .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
 
-                let multibase = key.public_multibase()
+                let multibase = key
+                    .public_multibase()
                     .map_err(|e| DIDError::InvalidMethodSpecificId(e.to_string()))?;
 
                 // Extract JWK params for the created key

@@ -13,13 +13,13 @@ use serde_json::{Value, json};
 use affinidi_crypto::ed25519::ed25519_public_to_x25519;
 use affinidi_encoding::{ED25519_PUB, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB};
 
+use super::DIDMethod;
+use super::peer::{PeerNumAlgo, PeerPurpose, PeerService};
 use crate::{
     DID, DIDError, Document,
     service::Service,
     verification_method::{VerificationMethod, VerificationRelationship},
 };
-use super::DIDMethod;
-use super::peer::{PeerNumAlgo, PeerPurpose, PeerService};
 
 const PUBLIC_KEY_MULTIBASE: &str = "publicKeyMultibase";
 const MULTIKEY_TYPE: &str = "Multikey";
@@ -32,7 +32,10 @@ impl DIDMethod {
     pub fn resolve(&self, did: &DID) -> Result<Document, DIDError> {
         match self {
             DIDMethod::Key { identifier, .. } => resolve_key(did, identifier),
-            DIDMethod::Peer { numalgo, identifier } => resolve_peer(did, numalgo, identifier),
+            DIDMethod::Peer {
+                numalgo,
+                identifier,
+            } => resolve_peer(did, numalgo, identifier),
             _ => Err(DIDError::ResolutionError(format!(
                 "DID method '{}' requires network resolution",
                 self.name()
@@ -172,9 +175,10 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
             continue;
         }
 
-        let purpose_char = part.chars().next().ok_or_else(|| {
-            DIDError::ResolutionError("Empty part in did:peer".to_string())
-        })?;
+        let purpose_char = part
+            .chars()
+            .next()
+            .ok_or_else(|| DIDError::ResolutionError("Empty part in did:peer".to_string()))?;
 
         let purpose = PeerPurpose::from_char(purpose_char).ok_or_else(|| {
             DIDError::ResolutionError(format!("Invalid purpose code: {purpose_char}"))

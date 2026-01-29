@@ -146,7 +146,9 @@ impl DocumentExt for Document {
 }
 
 /// Expand a single verification method from multibase to JWK format
-fn expand_verification_method(vm: &VerificationMethod) -> Result<VerificationMethod, DocumentError> {
+fn expand_verification_method(
+    vm: &VerificationMethod,
+) -> Result<VerificationMethod, DocumentError> {
     // Get the multibase key from either publicKeyMultibase or publicKeyBase58
     let multibase_key = vm
         .property_set
@@ -165,9 +167,9 @@ fn expand_verification_method(vm: &VerificationMethod) -> Result<VerificationMet
         DocumentError::KeyExpansionError(format!("Failed to parse as did:key: {e}"))
     })?;
 
-    let key_doc = did_key.resolve().map_err(|e| {
-        DocumentError::KeyExpansionError(format!("Failed to resolve did:key: {e}"))
-    })?;
+    let key_doc = did_key
+        .resolve()
+        .map_err(|e| DocumentError::KeyExpansionError(format!("Failed to resolve did:key: {e}")))?;
 
     // Get the first verification method from the resolved document
     let resolved_vm = key_doc.verification_method.first().ok_or_else(|| {
@@ -343,9 +345,11 @@ mod tests {
 
         // Verify we have multibase keys before expansion
         assert_eq!(doc.verification_method.len(), 2);
-        assert!(doc.verification_method[0]
-            .property_set
-            .contains_key("publicKeyMultibase"));
+        assert!(
+            doc.verification_method[0]
+                .property_set
+                .contains_key("publicKeyMultibase")
+        );
 
         // Expand the keys
         let expanded = doc.expand_peer_keys().unwrap();
@@ -355,14 +359,18 @@ mod tests {
 
         // Keys should still have publicKeyMultibase (that's what did:key resolution produces)
         // but now they're "expanded" through did:key resolution
-        assert!(expanded.verification_method[0]
-            .property_set
-            .contains_key("publicKeyMultibase"));
+        assert!(
+            expanded.verification_method[0]
+                .property_set
+                .contains_key("publicKeyMultibase")
+        );
 
         // The original IDs should be preserved
-        assert!(expanded.verification_method[0]
-            .id
-            .as_str()
-            .contains("did:peer"));
+        assert!(
+            expanded.verification_method[0]
+                .id
+                .as_str()
+                .contains("did:peer")
+        );
     }
 }

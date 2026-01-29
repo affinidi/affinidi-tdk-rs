@@ -1,11 +1,11 @@
 //! Runs a series of performance benchmarks against the DID cache.
 //! Benchmark references: (Apple M1 Max)
 //! - 1 million did:key's generated in ~4.2 seconds, consumes 2.3MiB of memory
+use affinidi_crypto::KeyType;
 use affinidi_did_common::DID;
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
-use affinidi_crypto::KeyType;
 use clap::Parser;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};

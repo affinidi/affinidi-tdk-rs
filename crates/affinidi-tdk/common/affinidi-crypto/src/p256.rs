@@ -22,8 +22,9 @@ pub struct KeyPair {
 /// Generates a P-256 key pair
 pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
     let signing_key = match secret {
-        Some(secret) => SigningKey::from_slice(secret)
-            .map_err(|e| CryptoError::KeyError(format!("P-256 secret material isn't valid: {e}")))?,
+        Some(secret) => SigningKey::from_slice(secret).map_err(|e| {
+            CryptoError::KeyError(format!("P-256 secret material isn't valid: {e}"))
+        })?,
         None => SigningKey::random(&mut OsRng),
     };
 
@@ -39,8 +40,10 @@ pub fn generate(secret: Option<&[u8]>) -> Result<KeyPair> {
             key_id: None,
             params: Params::EC(ECParams {
                 curve: "P-256".to_string(),
-                x: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).x().unwrap()),
-                y: BASE64_URL_SAFE_NO_PAD.encode(verifying_key.to_encoded_point(false).y().unwrap()),
+                x: BASE64_URL_SAFE_NO_PAD
+                    .encode(verifying_key.to_encoded_point(false).x().unwrap()),
+                y: BASE64_URL_SAFE_NO_PAD
+                    .encode(verifying_key.to_encoded_point(false).y().unwrap()),
                 d: Some(BASE64_URL_SAFE_NO_PAD.encode(&private_bytes)),
             }),
         },

@@ -9,8 +9,7 @@ use affinidi_did_common::DID as DIDCommon;
 use affinidi_did_common::one_or_many::OneOrMany;
 #[cfg(feature = "did-peer")]
 use affinidi_did_common::{
-    PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
-    PeerServiceEndpointLong,
+    PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
 };
 use affinidi_secrets_resolver::secrets::{KeyType as CryptoKeyType, Secret};
 use affinidi_tdk_common::errors::{Result, TDKError};
@@ -120,15 +119,16 @@ impl DID {
         // Convert KeyMaterial to Secret via JWK
         let secret = match &key_material.format {
             KeyMaterialFormat::JWK(jwk) => {
-                let mut s = Secret::from_jwk(jwk)
-                    .map_err(|e| TDKError::DIDMethod(format!("Couldn't convert key to secret: {e}")))?;
+                let mut s = Secret::from_jwk(jwk).map_err(|e| {
+                    TDKError::DIDMethod(format!("Couldn't convert key to secret: {e}"))
+                })?;
                 s.id = key_material.id.clone();
                 s
             }
             _ => {
                 return Err(TDKError::DIDMethod(
                     "KeyMaterial format not supported for conversion".to_string(),
-                ))
+                ));
             }
         };
 

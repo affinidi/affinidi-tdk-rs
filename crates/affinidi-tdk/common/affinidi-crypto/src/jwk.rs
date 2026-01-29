@@ -1,6 +1,6 @@
 //! JWK (JSON Web Key) types per RFC 7517
 
-use affinidi_encoding::{MultiEncoded, ED25519_PUB, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB};
+use affinidi_encoding::{ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -148,10 +148,12 @@ mod tests {
 
     #[test]
     fn from_multikey_p384() {
-        assert!(JWK::from_multikey(
-            "z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9"
-        )
-        .is_ok());
+        assert!(
+            JWK::from_multikey(
+                "z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9"
+            )
+            .is_ok()
+        );
     }
 
     #[test]

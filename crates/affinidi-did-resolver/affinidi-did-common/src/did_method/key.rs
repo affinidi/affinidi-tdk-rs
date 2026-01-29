@@ -5,8 +5,8 @@
 
 use affinidi_crypto::{JWK, KeyType, Params};
 use affinidi_encoding::{
-    ED25519_PRIV, ED25519_PUB, P256_PRIV, P256_PUB, P384_PRIV, P384_PUB,
-    SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+    ED25519_PRIV, ED25519_PUB, P256_PRIV, P256_PUB, P384_PRIV, P384_PUB, SECP256K1_PRIV,
+    SECP256K1_PUB, X25519_PRIV, X25519_PUB,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
@@ -140,32 +140,57 @@ impl KeyMaterial {
     #[cfg(feature = "ed25519")]
     pub fn generate_x25519(seed: Option<&[u8; 32]>) -> Result<Self, KeyError> {
         let kp = affinidi_crypto::ed25519::generate_x25519(seed);
-        Ok(Self::from_parts(kp.key_type, kp.private_bytes, kp.public_bytes, kp.jwk))
+        Ok(Self::from_parts(
+            kp.key_type,
+            kp.private_bytes,
+            kp.public_bytes,
+            kp.jwk,
+        ))
     }
 
     /// Generate a random P-256 key pair
     #[cfg(feature = "p256")]
     pub fn generate_p256(seed: Option<&[u8]>) -> Result<Self, KeyError> {
         let kp = affinidi_crypto::p256::generate(seed)?;
-        Ok(Self::from_parts(kp.key_type, kp.private_bytes, kp.public_bytes, kp.jwk))
+        Ok(Self::from_parts(
+            kp.key_type,
+            kp.private_bytes,
+            kp.public_bytes,
+            kp.jwk,
+        ))
     }
 
     /// Generate a random P-384 key pair
     #[cfg(feature = "p384")]
     pub fn generate_p384(seed: Option<&[u8]>) -> Result<Self, KeyError> {
         let kp = affinidi_crypto::p384::generate(seed)?;
-        Ok(Self::from_parts(kp.key_type, kp.private_bytes, kp.public_bytes, kp.jwk))
+        Ok(Self::from_parts(
+            kp.key_type,
+            kp.private_bytes,
+            kp.public_bytes,
+            kp.jwk,
+        ))
     }
 
     /// Generate a random secp256k1 key pair
     #[cfg(feature = "k256")]
     pub fn generate_secp256k1(seed: Option<&[u8]>) -> Result<Self, KeyError> {
         let kp = affinidi_crypto::secp256k1::generate(seed)?;
-        Ok(Self::from_parts(kp.key_type, kp.private_bytes, kp.public_bytes, kp.jwk))
+        Ok(Self::from_parts(
+            kp.key_type,
+            kp.private_bytes,
+            kp.public_bytes,
+            kp.jwk,
+        ))
     }
 
     /// Create KeyMaterial from raw key parts
-    fn from_parts(key_type: KeyType, private_bytes: Vec<u8>, public_bytes: Vec<u8>, jwk: JWK) -> Self {
+    fn from_parts(
+        key_type: KeyType,
+        private_bytes: Vec<u8>,
+        public_bytes: Vec<u8>,
+        jwk: JWK,
+    ) -> Self {
         KeyMaterial {
             id: String::new(),
             type_: KeyMaterialType::JsonWebKey2020,
@@ -241,7 +266,10 @@ impl KeyMaterial {
     /// Get the private key as multibase (Base58btc) encoded string
     pub fn private_multibase(&self) -> Result<String, KeyError> {
         let codec = Self::private_codec(self.key_type);
-        Ok(affinidi_encoding::encode_multikey(codec, &self.private_bytes))
+        Ok(affinidi_encoding::encode_multikey(
+            codec,
+            &self.private_bytes,
+        ))
     }
 
     /// Map KeyType to public key codec

@@ -1,5 +1,4 @@
 use affinidi_messaging_didcomm::{Attachment, Message, MessageBuilder};
-use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_messaging_sdk::{
     ATM,
     messages::SuccessResponse,
@@ -9,6 +8,7 @@ use affinidi_messaging_sdk::{
         mediator::acls::{AccessListModeType, MediatorACLSet},
     },
 };
+use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_tdk::secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use image::Luma;

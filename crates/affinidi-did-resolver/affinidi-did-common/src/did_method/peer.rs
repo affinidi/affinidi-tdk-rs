@@ -299,9 +299,13 @@ impl PeerServiceEndpointLong {
 impl PeerService {
     /// Encode this service for inclusion in a did:peer string
     pub fn encode(&self) -> Result<String, PeerError> {
-        let json = serde_json::to_string(self)
-            .map_err(|e| PeerError::ServiceSyntaxError(format!("Failed to serialize service: {e}")))?;
-        Ok(format!("S{}", BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes())))
+        let json = serde_json::to_string(self).map_err(|e| {
+            PeerError::ServiceSyntaxError(format!("Failed to serialize service: {e}"))
+        })?;
+        Ok(format!(
+            "S{}",
+            BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes())
+        ))
     }
 
     /// Decode a service from a did:peer encoded string (including S prefix)
@@ -316,7 +320,11 @@ impl PeerService {
     }
 
     /// Convert to standard DID Document Service format
-    pub fn to_did_service(&self, did: &str, index: u32) -> Result<crate::service::Service, PeerError> {
+    pub fn to_did_service(
+        &self,
+        did: &str,
+        index: u32,
+    ) -> Result<crate::service::Service, PeerError> {
         use std::str::FromStr;
         use url::Url;
 

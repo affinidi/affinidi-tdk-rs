@@ -1,6 +1,6 @@
 //! Ed25519 and X25519 key operations
 
-use affinidi_encoding::{MultiEncoded, MultiEncodedBuf, ED25519_PUB, X25519_PUB};
+use affinidi_encoding::{ED25519_PUB, MultiEncoded, MultiEncodedBuf, X25519_PUB};
 use base58::{FromBase58, ToBase58};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use ed25519_dalek::{SigningKey, VerifyingKey};

@@ -78,10 +78,7 @@ impl DIDCacheClient {
                 let method = DIDPKH;
                 let did_str = did.to_string();
 
-                match method
-                    .resolve(SSIDID::new(&did_str).unwrap())
-                    .await
-                {
+                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
                     Ok(res) => {
                         let doc_value = serde_json::to_value(res.document.into_document())?;
                         Ok(serde_json::from_value(doc_value)?)
@@ -96,10 +93,7 @@ impl DIDCacheClient {
                 let method = DIDWeb;
                 let did_str = did.to_string();
 
-                match method
-                    .resolve(SSIDID::new(&did_str).unwrap())
-                    .await
-                {
+                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
                     Ok(res) => {
                         let doc_value = serde_json::to_value(res.document.into_document())?;
                         Ok(serde_json::from_value(doc_value)?)
@@ -135,20 +129,20 @@ impl DIDCacheClient {
             DIDMethod::Cheqd { .. } => {
                 #[cfg(feature = "did-cheqd")]
                 {
-                let did_str = did.to_string();
-                match DIDCheqd::default()
-                    .resolve(SSIDID::new(&did_str).unwrap())
-                    .await
-                {
-                    Ok(res) => {
-                        let doc_value = serde_json::to_value(res.document.into_document())?;
-                        Ok(serde_json::from_value(doc_value)?)
+                    let did_str = did.to_string();
+                    match DIDCheqd::default()
+                        .resolve(SSIDID::new(&did_str).unwrap())
+                        .await
+                    {
+                        Ok(res) => {
+                            let doc_value = serde_json::to_value(res.document.into_document())?;
+                            Ok(serde_json::from_value(doc_value)?)
+                        }
+                        Err(e) => {
+                            error!("Error: {:?}", e);
+                            Err(DIDCacheError::DIDError(e.to_string()))
+                        }
                     }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
                 }
 
                 #[cfg(not(feature = "did-cheqd"))]
