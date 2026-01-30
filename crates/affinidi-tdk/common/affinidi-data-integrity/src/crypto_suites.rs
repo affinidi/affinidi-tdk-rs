@@ -97,7 +97,7 @@ impl CryptoSuite {
 
 #[cfg(test)]
 mod tests {
-    use affinidi_secrets_resolver::secrets::KeyType;
+    use affinidi_crypto::KeyType;
 
     use super::CryptoSuite;
 

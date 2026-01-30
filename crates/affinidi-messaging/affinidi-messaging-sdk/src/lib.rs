@@ -42,15 +42,10 @@ pub(crate) struct SharedState {
 /// Example:
 /// ```ignore
 /// use affinidi_messaging_sdk::ATM;
-/// use affinidi_messaging_sdk::config::Config;
+/// use affinidi_messaging_sdk::config::ATMConfigBuilder;
 ///
-/// let config = Config::builder().build();
-/// let mut atm = ATM::new(config);
-///
-/// // Add the DID:Peer method
-/// atm.add_did_method(Box::new(DIDPeer));
-///
-/// let response = atm.ping("did:example:123", true);
+/// let config = ATMConfigBuilder::default().build()?;
+/// let atm = ATM::new(config, tdk_shared_state).await?;
 /// ```
 impl ATM {
     /// Creates a new instance of the SDK with a given configuration

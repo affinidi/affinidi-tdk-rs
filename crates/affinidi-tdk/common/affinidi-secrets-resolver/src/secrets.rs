@@ -3,17 +3,15 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 
-use std::fmt;
-
 use crate::{
-    crypto::ed25519::ed25519_private_to_x25519_private_key,
     errors::{Result, SecretsResolverError},
-    jwk::{JWK, Params},
     multicodec::{
         ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
         P384_PUB, P521_PRIV, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
+pub use affinidi_crypto::KeyType;
+use affinidi_crypto::{JWK, Params};
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use multihash::Multihash;
@@ -351,7 +349,7 @@ impl Secret {
             )))
         } else {
             // Convert to X25519 Secret bytes
-            let x25519_secret = ed25519_private_to_x25519_private_key(
+            let x25519_secret = affinidi_crypto::ed25519::ed25519_private_to_x25519(
                 self.private_bytes.first_chunk::<32>().unwrap(),
             );
 
@@ -385,49 +383,7 @@ pub enum SecretType {
     Other,
 }
 
-/// Known Crypto types
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Zeroize)]
-pub enum KeyType {
-    Ed25519,
-    X25519,
-    P256,
-    P384,
-    P521,
-    Secp256k1,
-    #[default]
-    Unknown,
-}
-
-impl TryFrom<&str> for KeyType {
-    type Error = SecretsResolverError;
-
-    fn try_from(value: &str) -> Result<Self> {
-        match value {
-            "Ed25519" => Ok(KeyType::Ed25519),
-            "X25519" => Ok(KeyType::X25519),
-            "P-256" => Ok(KeyType::P256),
-            "P-384" => Ok(KeyType::P384),
-            "P-521" => Ok(KeyType::P521),
-            "secp256k1" => Ok(KeyType::Secp256k1),
-            _ => Err(SecretsResolverError::KeyError(format!(
-                "Unknown key type: {value}",
-            ))),
-        }
-    }
-}
-impl fmt::Display for KeyType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            KeyType::Ed25519 => write!(f, "Ed25519"),
-            KeyType::X25519 => write!(f, "X25519"),
-            KeyType::P256 => write!(f, "P-256"),
-            KeyType::P384 => write!(f, "P-384"),
-            KeyType::P521 => write!(f, "P-521"),
-            KeyType::Secp256k1 => write!(f, "secp256k1"),
-            KeyType::Unknown => write!(f, "Unknown"),
-        }
-    }
-}
+// KeyType is re-exported from affinidi_crypto
 
 /// Represents secret crypto material.
 #[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]

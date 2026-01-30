@@ -24,12 +24,15 @@ use tokio::{
 };
 use tracing::{debug, warn};
 
-pub mod crypto;
+// Private module - contains impl Secret blocks for generate_* methods
+mod crypto;
+
 pub mod errors;
-pub mod jwk;
-pub mod multicodec;
 pub mod secrets;
 pub mod task;
+
+// Re-export multicodec from affinidi-encoding
+pub use affinidi_encoding::multicodec;
 
 /// Affinidi Secrets Resolver
 #[allow(async_fn_in_trait)]

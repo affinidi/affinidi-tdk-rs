@@ -1,9 +1,10 @@
 //! Extends the SSI Crate Document with new methods and functions
 
 use crate::{
-    Document,
+    DID, Document, DocumentError,
     verification_method::{VerificationMethod, VerificationRelationship},
 };
+use std::collections::HashMap;
 use std::str::FromStr;
 use url::Url;
 
@@ -31,6 +32,13 @@ pub trait DocumentExt {
 
     /// Returns a DID Verification Method if found by ID
     fn get_verification_method(&self, id: &str) -> Option<&VerificationMethod>;
+
+    /// Expand peer DID verification methods from multibase to full JWK format
+    ///
+    /// This resolves each verification method's `publicKeyMultibase` as a did:key
+    /// and replaces it with the full JWK representation. Useful for cryptographic
+    /// operations that need the full key material.
+    fn expand_peer_keys(&self) -> Result<Document, DocumentError>;
 }
 
 impl DocumentExt for Document {
@@ -123,6 +131,65 @@ impl DocumentExt for Document {
             .iter()
             .find(|vm| vm.id.as_str() == id)
     }
+
+    fn expand_peer_keys(&self) -> Result<Document, DocumentError> {
+        let mut new_doc = self.clone();
+        let mut expanded_vms: Vec<VerificationMethod> = Vec::new();
+
+        for vm in &self.verification_method {
+            expanded_vms.push(expand_verification_method(vm)?);
+        }
+
+        new_doc.verification_method = expanded_vms;
+        Ok(new_doc)
+    }
+}
+
+/// Expand a single verification method from multibase to JWK format
+fn expand_verification_method(
+    vm: &VerificationMethod,
+) -> Result<VerificationMethod, DocumentError> {
+    // Get the multibase key from either publicKeyMultibase or publicKeyBase58
+    let multibase_key = vm
+        .property_set
+        .get("publicKeyMultibase")
+        .or_else(|| vm.property_set.get("publicKeyBase58"))
+        .and_then(|v| v.as_str());
+
+    let Some(key_multibase) = multibase_key else {
+        // No multibase key to expand, return as-is
+        return Ok(vm.clone());
+    };
+
+    // Resolve as did:key to get the expanded verification method
+    let did_key_string = format!("did:key:{key_multibase}");
+    let did_key: DID = did_key_string.parse().map_err(|e| {
+        DocumentError::KeyExpansionError(format!("Failed to parse as did:key: {e}"))
+    })?;
+
+    let key_doc = did_key
+        .resolve()
+        .map_err(|e| DocumentError::KeyExpansionError(format!("Failed to resolve did:key: {e}")))?;
+
+    // Get the first verification method from the resolved document
+    let resolved_vm = key_doc.verification_method.first().ok_or_else(|| {
+        DocumentError::KeyExpansionError("Resolved did:key has no verification method".to_string())
+    })?;
+
+    // Build new verification method with expanded properties but original id/controller
+    let mut new_properties: HashMap<String, serde_json::Value> = HashMap::new();
+    for (k, v) in &resolved_vm.property_set {
+        new_properties.insert(k.clone(), v.clone());
+    }
+
+    Ok(VerificationMethod {
+        id: vm.id.clone(),
+        type_: resolved_vm.type_.clone(),
+        controller: vm.controller.clone(),
+        expires: vm.expires.clone(),
+        revoked: vm.revoked.clone(),
+        property_set: new_properties,
+    })
 }
 
 #[cfg(test)]
@@ -263,6 +330,47 @@ mod tests {
             doc.find_assertion_method(Some("did:test:1234#missing"))
                 .len(),
             0
+        );
+    }
+
+    #[test]
+    fn test_expand_peer_keys() {
+        use crate::DID;
+
+        // Resolve a did:peer:2 which has multibase keys
+        let did: DID = "did:peer:2.Vz6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK.Ez6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc"
+            .parse()
+            .unwrap();
+        let doc = did.resolve().unwrap();
+
+        // Verify we have multibase keys before expansion
+        assert_eq!(doc.verification_method.len(), 2);
+        assert!(
+            doc.verification_method[0]
+                .property_set
+                .contains_key("publicKeyMultibase")
+        );
+
+        // Expand the keys
+        let expanded = doc.expand_peer_keys().unwrap();
+
+        // Should still have the same number of verification methods
+        assert_eq!(expanded.verification_method.len(), 2);
+
+        // Keys should still have publicKeyMultibase (that's what did:key resolution produces)
+        // but now they're "expanded" through did:key resolution
+        assert!(
+            expanded.verification_method[0]
+                .property_set
+                .contains_key("publicKeyMultibase")
+        );
+
+        // The original IDs should be preserved
+        assert!(
+            expanded.verification_method[0]
+                .id
+                .as_str()
+                .contains("did:peer")
         );
     }
 }

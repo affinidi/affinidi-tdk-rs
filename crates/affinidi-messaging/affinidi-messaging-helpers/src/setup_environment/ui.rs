@@ -9,11 +9,10 @@ use affinidi_tdk::{
         environments::{TDKEnvironment, TDKEnvironments},
         profiles::TDKProfile,
     },
-    dids::{DID, KeyType},
+    dids::{DID, KeyType, PeerKeyRole},
 };
 use console::style;
 use dialoguer::{Confirm, Input, Select, theme::ColorfulTheme};
-use did_peer::DIDPeerKeys;
 use regex::Regex;
 use std::{error::Error, path::Path};
 use toml::Value;
@@ -184,8 +183,8 @@ pub(crate) async fn init_remote_mediator(
         {
             let (did, secrets) = DID::generate_did_peer(
                 vec![
-                    (DIDPeerKeys::Verification, KeyType::Ed25519),
-                    (DIDPeerKeys::Encryption, KeyType::Secp256k1),
+                    (PeerKeyRole::Verification, KeyType::Ed25519),
+                    (PeerKeyRole::Encryption, KeyType::Secp256k1),
                 ],
                 None,
             )
@@ -421,8 +420,8 @@ pub(crate) async fn init_local_mediator(
     // Creating new Admin account
     let (did, secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::Ed25519),
-            (DIDPeerKeys::Encryption, KeyType::Secp256k1),
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::Secp256k1),
         ],
         None,
     )

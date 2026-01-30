@@ -1,10 +1,8 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
-use affinidi_did_common::Document;
-use affinidi_did_key::DIDKey;
+use affinidi_did_common::{DID, DIDMethod, Document, DocumentExt};
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]
 use did_jwk::DIDJWK;
-use did_peer::DIDPeer;
 use did_pkh::DIDPKH;
 #[cfg(feature = "did-cheqd")]
 use did_resolver_cheqd::DIDCheqd;
@@ -12,29 +10,22 @@ use did_web::DIDWeb;
 #[cfg(feature = "did-webvh")]
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
 use ssi_dids_core::{
-    DID, DIDMethodResolver, DIDResolver,
+    DID as SSIDID, DIDMethodResolver, DIDResolver,
     resolution::{self},
 };
 use tracing::error;
 
 impl DIDCacheClient {
     /// Resolves a DID to a DID Document
-    pub(crate) async fn local_resolve(
-        &self,
-        did: &str,
-        parts: &[&str],
-    ) -> Result<Document, DIDCacheError> {
+    pub(crate) async fn local_resolve(&self, did: &DID) -> Result<Document, DIDCacheError> {
         // Match the DID method
 
-        match parts[1] {
-            "ethr" => {
+        match did.method() {
+            DIDMethod::Ethr { identifier, .. } => {
                 let method = DIDEthr;
 
                 match method
-                    .resolve_method_representation(
-                        parts[parts.len() - 1],
-                        resolution::Options::default(),
-                    )
+                    .resolve_method_representation(&identifier, resolution::Options::default())
                     .await
                 {
                     Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
@@ -45,14 +36,14 @@ impl DIDCacheClient {
                 }
             }
             #[cfg(feature = "did-jwk")]
-            "jwk" => {
+            DIDMethod::Jwk { .. } => {
                 // This method isn't working as the VM references are relatative and not valid
                 // URL's
                 let method = DIDJWK;
 
                 match method
                     .resolve_method_representation(
-                        parts[parts.len() - 1],
+                        did.method_specific_id(),
                         resolution::Options::default(),
                     )
                     .await
@@ -64,34 +55,30 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "key" => match DIDKey::resolve(did) {
+            DIDMethod::Key { .. } => match did.resolve() {
                 Ok(doc) => Ok(doc),
                 Err(e) => {
                     error!("Error: {:?}", e);
                     Err(DIDCacheError::DIDError(e.to_string()))
                 }
             },
-            "peer" => {
-                let method = DIDPeer;
-
-                match method.resolve(did).await {
-                    Ok(res) => {
-                        // DID Peer will resolve to MultiKey, which confuses key matching
-                        // Expand the keys to raw keys
-                        DIDPeer::expand_keys(&res)
-                            .await
-                            .map_err(|e| DIDCacheError::DIDError(e.to_string()))
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
+            DIDMethod::Peer { .. } => match did.resolve() {
+                Ok(doc) => {
+                    // DID Peer will resolve to MultiKey, which confuses key matching
+                    // Expand the keys to raw keys
+                    doc.expand_peer_keys()
+                        .map_err(|e| DIDCacheError::DIDError(e.to_string()))
                 }
-            }
-            "pkh" => {
+                Err(e) => {
+                    error!("Error: {:?}", e);
+                    Err(DIDCacheError::DIDError(e.to_string()))
+                }
+            },
+            DIDMethod::Pkh { .. } => {
                 let method = DIDPKH;
+                let did_str = did.to_string();
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
+                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
                     Ok(res) => {
                         let doc_value = serde_json::to_value(res.document.into_document())?;
                         Ok(serde_json::from_value(doc_value)?)
@@ -102,10 +89,11 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "web" => {
+            DIDMethod::Web { .. } => {
                 let method = DIDWeb;
+                let did_str = did.to_string();
 
-                match method.resolve(DID::new::<str>(did).unwrap()).await {
+                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
                     Ok(res) => {
                         let doc_value = serde_json::to_value(res.document.into_document())?;
                         Ok(serde_json::from_value(doc_value)?)
@@ -116,12 +104,13 @@ impl DIDCacheClient {
                     }
                 }
             }
-            "webvh" => {
+            DIDMethod::Webvh { .. } => {
                 #[cfg(feature = "did-webvh")]
                 {
                     let mut method = DIDWebVHState::default();
+                    let did_str = did.to_string();
 
-                    match method.resolve(did, None).await {
+                    match method.resolve(&did_str, None).await {
                         Ok((log_entry, _)) => {
                             Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
                         }
@@ -137,19 +126,22 @@ impl DIDCacheClient {
                     "did:webvh is not enabled".to_string(),
                 ))
             }
-            "cheqd" => {
+            DIDMethod::Cheqd { .. } => {
                 #[cfg(feature = "did-cheqd")]
-                match DIDCheqd::default()
-                    .resolve(DID::new::<str>(did).unwrap())
-                    .await
                 {
-                    Ok(res) => {
-                        let doc_value = serde_json::to_value(res.document.into_document())?;
-                        Ok(serde_json::from_value(doc_value)?)
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
+                    let did_str = did.to_string();
+                    match DIDCheqd::default()
+                        .resolve(SSIDID::new(&did_str).unwrap())
+                        .await
+                    {
+                        Ok(res) => {
+                            let doc_value = serde_json::to_value(res.document.into_document())?;
+                            Ok(serde_json::from_value(doc_value)?)
+                        }
+                        Err(e) => {
+                            error!("Error: {:?}", e);
+                            Err(DIDCacheError::DIDError(e.to_string()))
+                        }
                     }
                 }
 
@@ -158,10 +150,11 @@ impl DIDCacheClient {
                     "did:cheqd is not enabled".to_string(),
                 ))
             }
-            "scid" => {
+            DIDMethod::Scid { .. } => {
                 #[cfg(feature = "did-scid")]
                 {
-                    did_scid::resolve(did, None, None)
+                    let did_str = did.to_string();
+                    did_scid::resolve(&did_str, None, None)
                         .await
                         .map_err(|e| DIDCacheError::DIDError(e.to_string()))
                 }
@@ -173,7 +166,7 @@ impl DIDCacheClient {
             }
             _ => Err(DIDCacheError::DIDError(format!(
                 "DID Method ({}) not supported",
-                parts[1]
+                did.method()
             ))),
         }
     }
@@ -182,8 +175,7 @@ impl DIDCacheClient {
 #[cfg(test)]
 mod tests {
     use crate::{DIDCacheClient, config};
-    use std::str::FromStr;
-    use url::Url;
+    use affinidi_did_common::DID;
 
     const DID_ETHR: &str = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a";
     #[cfg(feature = "did-jwk")]
@@ -204,10 +196,10 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
 
-        let parts: Vec<&str> = DID_ETHR.split(':').collect();
-        let did_document = client.local_resolve(DID_ETHR, &parts).await.unwrap();
+        let did: DID = DID_ETHR.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
 
-        assert_eq!(did_document.id, Url::from_str(DID_ETHR).unwrap());
+        assert_eq!(did_document.id.as_str(), DID_ETHR);
 
         assert_eq!(did_document.authentication.len(), 2);
         assert_eq!(did_document.assertion_method.len(), 2);
@@ -221,8 +213,8 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
 
-        let parts: Vec<&str> = DID_JWK.split(':').collect();
-        let did_document = client.local_resolve(DID_JWK, &parts).await.unwrap();
+        let did: DID = DID_JWK.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
 
         assert_eq!(did_document.id.as_str(), DID_JWK);
 
@@ -248,8 +240,8 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
 
-        let parts: Vec<&str> = DID_KEY.split(':').collect();
-        let did_document = client.local_resolve(DID_KEY, &parts).await.unwrap();
+        let did: DID = DID_KEY.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
 
         assert_eq!(did_document.id.as_str(), DID_KEY);
 
@@ -265,8 +257,8 @@ mod tests {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
 
-        let parts: Vec<&str> = DID_PEER.split(':').collect();
-        let did_document = client.local_resolve(DID_PEER, &parts).await.unwrap();
+        let did: DID = DID_PEER.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
         let verification_method = did_document.verification_method;
         let service = did_document.service;
 
@@ -307,9 +299,9 @@ mod tests {
     async fn local_resolve_pkh() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
-        let parts: Vec<&str> = DID_PKH.split(':').collect();
 
-        let did_document = client.local_resolve(DID_PKH, &parts).await.unwrap();
+        let did: DID = DID_PKH.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
         let verification_method = did_document.verification_method;
         let vm_properties_first = verification_method.first().unwrap().property_set.clone();
         let vm_properties_last = verification_method.last().unwrap().property_set.clone();
@@ -320,6 +312,8 @@ mod tests {
         assert_eq!(did_document.assertion_method.len(), 2);
 
         assert_eq!(verification_method.len(), 2);
+        // The last part of the DID is the public key
+        let parts: Vec<&str> = DID_PKH.split(':').collect();
         assert_eq!(
             vm_properties_first["publicKeyBase58"],
             parts.last().unwrap().to_string()
@@ -340,9 +334,9 @@ mod tests {
     async fn local_resolve_webvh() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
-        let parts: Vec<&str> = DID_WEBVH.split(':').collect();
 
-        let did_document = client.local_resolve(DID_WEBVH, &parts).await.unwrap();
+        let did: DID = DID_WEBVH.parse().unwrap();
+        let did_document = client.local_resolve(&did).await.unwrap();
 
         assert_eq!(did_document.id.as_str(), DID_WEBVH);
     }

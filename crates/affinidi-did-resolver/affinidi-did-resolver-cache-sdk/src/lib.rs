@@ -52,6 +52,7 @@ pub enum DIDMethod {
     WEB,
     WEBVH,
     CHEQD,
+    SCID,
     EXAMPLE,
 }
 
@@ -67,6 +68,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::WEB => write!(f, "web"),
             DIDMethod::WEBVH => write!(f, "webvh"),
             DIDMethod::CHEQD => write!(f, "cheqd"),
+            DIDMethod::SCID => write!(f, "scid"),
             DIDMethod::EXAMPLE => write!(f, "example"),
         }
     }
@@ -94,6 +96,7 @@ impl TryFrom<&str> for DIDMethod {
             "web" => Ok(DIDMethod::WEB),
             "webvh" => Ok(DIDMethod::WEBVH),
             "cheqd" => Ok(DIDMethod::CHEQD),
+            "scid" => Ok(DIDMethod::SCID),
             #[cfg(feature = "did_example")]
             "example" => Ok(DIDMethod::EXAMPLE),
             _ => Err(DIDCacheError::UnsupportedMethod(value.to_string())),
@@ -136,6 +139,8 @@ impl DIDCacheClient {
     /// NOTE: The DID Document id may be different to the requested DID due to the DID having been updated.
     ///       The original DID should be in the `also_known_as` field of the DID Document.
     pub async fn resolve(&self, did: &str) -> Result<ResolveResponse, DIDCacheError> {
+        use affinidi_did_common::DID;
+
         // If DID's size is greater than 1KB we don't resolve it
         if did.len() > self.config.max_did_size_in_bytes {
             return Err(DIDCacheError::DIDError(format!(
@@ -160,6 +165,11 @@ impl DIDCacheClient {
                 parts.len()
             )));
         }
+
+        // Parse the DID string into a DID struct
+        let parsed_did: DID = did
+            .parse()
+            .map_err(|e| DIDCacheError::DIDError(format!("Failed to parse DID: {e}")))?;
 
         let hash = DIDCacheClient::hash_did(did);
 
@@ -195,12 +205,12 @@ impl DIDCacheClient {
                 if self.config.service_address.is_some() {
                     self.network_resolve(did, hash).await?
                 } else {
-                    self.local_resolve(did, &parts).await?
+                    self.local_resolve(&parsed_did).await?
                 }
             };
 
             #[cfg(not(feature = "network"))]
-            let doc = self.local_resolve(did, &parts).await?;
+            let doc = self.local_resolve(&parsed_did).await?;
 
             debug!("adding did ({}) to cache ({:#?})", did, hash);
             self.cache.insert(hash, doc.clone()).await;

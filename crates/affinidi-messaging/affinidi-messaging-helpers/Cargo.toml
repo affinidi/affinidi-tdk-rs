@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.11.3"
+version = "0.11.4"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -33,8 +33,6 @@ affinidi-did-common.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-messaging-sdk.workspace = true
 affinidi-tdk.workspace = true
-affinidi-did-key.workspace = true
-did-peer.workspace = true
 
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"

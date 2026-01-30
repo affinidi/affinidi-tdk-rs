@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.2.0"
+version = "0.3.0"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -12,14 +12,25 @@ repository.workspace = true
 readme = "README.md"
 rust-version.workspace = true
 
+[features]
+default = ["ed25519", "p256", "p384", "k256"]
+ed25519 = ["affinidi-crypto/ed25519"]
+p256 = ["affinidi-crypto/p256"]
+p384 = ["affinidi-crypto/p384"]
+k256 = ["affinidi-crypto/k256"]
+
 [dependencies]
-affinidi-secrets-resolver.workspace = true
+affinidi-crypto.workspace = true
+affinidi-encoding.workspace = true
 
 # External Crates
+base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 url = { version = "2.5", features = ["serde"] }
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+zeroize = { version = "1.8", features = ["derive"] }
 
 [lints]
 workspace = true

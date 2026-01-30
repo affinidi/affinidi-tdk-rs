@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.6.5"
+version = "0.7.0"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -37,9 +37,7 @@ did-scid = ["dep:did-scid"]
 [dependencies]
 # Affinidi Crates
 affinidi-did-common.workspace = true
-did-peer.workspace = true
 did-example = { workspace = true, optional = true }
-affinidi-did-key.workspace = true
 did-scid = { workspace = true, optional = true }
 
 # External Crates
@@ -76,6 +74,7 @@ wasm-bindgen-futures = "0.4"
 web-socket = { version = "0.7", optional = true }
 
 [dev-dependencies]
+affinidi-crypto.workspace = true
 affinidi-secrets-resolver.workspace = true
 url = "2.5"
 clap = { version = "4.5", features = ["derive"] }

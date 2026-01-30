@@ -1,10 +1,9 @@
 //! Helps to generate DIDs and secrets to setup self-hosted mediator.
 use affinidi_messaging_helpers::common::{affinidi_logo, check_path};
-use affinidi_tdk::dids::{DID, KeyType};
+use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
 use base64::prelude::*;
 use clap::Parser;
 use console::{Term, style};
-use did_peer::DIDPeerKeys;
 use ring::signature::Ed25519KeyPair;
 use serde_json::{Value, json};
 use std::error::Error;
@@ -27,10 +26,10 @@ struct Args {
 fn generate_secrets_and_did() -> Result<(String, Value), Box<dyn Error>> {
     let (did, secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::P256),
-            (DIDPeerKeys::Verification, KeyType::Ed25519),
-            (DIDPeerKeys::Encryption, KeyType::Secp256k1),
-            (DIDPeerKeys::Encryption, KeyType::P256),
+            (PeerKeyRole::Verification, KeyType::P256),
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::Secp256k1),
+            (PeerKeyRole::Encryption, KeyType::P256),
         ],
         None,
     )
@@ -163,11 +162,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Creating new Admin account
     let (admin_did, admin_did_secrets) = DID::generate_did_peer(
         vec![
-            (DIDPeerKeys::Verification, KeyType::P256),
-            (DIDPeerKeys::Verification, KeyType::Ed25519),
-            (DIDPeerKeys::Encryption, KeyType::Secp256k1),
-            (DIDPeerKeys::Encryption, KeyType::P256),
-            (DIDPeerKeys::Encryption, KeyType::X25519),
+            (PeerKeyRole::Verification, KeyType::P256),
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::Secp256k1),
+            (PeerKeyRole::Encryption, KeyType::P256),
+            (PeerKeyRole::Encryption, KeyType::X25519),
         ],
         None,
     )

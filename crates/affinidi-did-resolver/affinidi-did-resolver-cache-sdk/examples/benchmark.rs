@@ -1,11 +1,11 @@
 //! Runs a series of performance benchmarks against the DID cache.
 //! Benchmark references: (Apple M1 Max)
 //! - 1 million did:key's generated in ~4.2 seconds, consumes 2.3MiB of memory
-use affinidi_did_key::DIDKey;
+use affinidi_crypto::KeyType;
+use affinidi_did_common::DID;
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
-use affinidi_secrets_resolver::secrets::KeyType;
 use clap::Parser;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};
@@ -140,9 +140,9 @@ async fn generate_dids(count: u32) -> Vec<String> {
         .into_par_iter()
         .map(|x| {
             if x % 2 == 0 {
-                DIDKey::generate(KeyType::Ed25519).unwrap().0
+                DID::generate_key(KeyType::Ed25519).unwrap().0.to_string()
             } else {
-                DIDKey::generate(KeyType::Secp256k1).unwrap().0
+                DID::generate_key(KeyType::Secp256k1).unwrap().0.to_string()
             }
         })
         .collect();
@@ -173,7 +173,8 @@ async fn resolve_dids_no_cache(dids: Arc<Vec<String>>, count: u32) -> Result<(),
 
         //let _cache = cache.clone();
         handles.push(tokio::spawn(async move {
-            let _ = match DIDKey::resolve(_dids.get(r).unwrap()) {
+            let did: DID = _dids.get(r).unwrap().parse().unwrap();
+            let _ = match did.resolve() {
                 Ok(doc) => Some(doc),
                 Err(e) => {
                     eprintln!("Error: {e:?}");

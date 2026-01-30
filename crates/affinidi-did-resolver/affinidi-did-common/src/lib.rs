@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use affinidi_secrets_resolver::errors::SecretsResolverError;
+use affinidi_encoding::EncodingError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -16,12 +16,21 @@ use crate::{
 };
 
 pub mod did;
+pub mod did_method;
 pub mod document;
 pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
 
-pub use did::{DID, DIDError, DIDMethod};
+pub use did::{DID, DIDError};
+pub use did_method::DIDMethod;
+pub use did_method::key::{KeyError, KeyMaterial, KeyMaterialFormat, KeyMaterialType};
+pub use did_method::peer::{
+    PeerCreateKey, PeerCreatedKey, PeerError, PeerKeyPurpose, PeerKeyType, PeerNumAlgo,
+    PeerPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
+    PeerServiceEndpointShort,
+};
+pub use document::DocumentExt;
 
 #[derive(Error, Debug)]
 pub enum DocumentError {
@@ -31,8 +40,11 @@ pub enum DocumentError {
     #[error("VerificationMethod Error: {0}")]
     VM(String),
 
-    #[error("Secrets Error: {0}")]
-    Secret(#[from] SecretsResolverError),
+    #[error("Encoding Error: {0}")]
+    Encoding(#[from] EncodingError),
+
+    #[error("Key expansion error: {0}")]
+    KeyExpansionError(String),
 }
 
 /// A [DID Document]

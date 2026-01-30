@@ -4,10 +4,10 @@ members = [
   "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk",
   "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server",
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example",
-  "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer",
-  "crates/affinidi-did-resolver/affinidi-did-resolver-methods/affinidi-did-key",
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
 
+  "crates/affinidi-tdk/common/affinidi-encoding",
+  "crates/affinidi-tdk/common/affinidi-crypto",
   "crates/affinidi-tdk/common/affinidi-secrets-resolver",
 
   "crates/affinidi-messaging/affinidi-messaging-didcomm",
@@ -43,29 +43,32 @@ publish = true
 rust-version = "1.88.0"
 
 [workspace.dependencies]
-affinidi-did-common = { version = "0.2.0", path = "crates/affinidi-did-resolver/affinidi-did-common" }
-affinidi-did-resolver-cache-sdk = { version = "0.6.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
+affinidi-did-common = { version = "0.3.0", path = "crates/affinidi-did-resolver/affinidi-did-common" }
+affinidi-did-resolver-cache-sdk = { version = "0.7.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
   "network",
 ] }
 affinidi-did-resolver-cache-server = { version = "0.6.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
 did-example = { version = "0.5.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example" }
-did-peer = { version = "0.7.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-peer" }
 did-cheqd = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-cheqd" }
-affinidi-did-key = { version = "0.1.4", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/affinidi-did-key" }
 did-scid = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
 affinidi-meeting-place = { version = "0.2.2", path = "./crates/affinidi-meeting-place" }
-affinidi-messaging-didcomm = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
-affinidi-messaging-helpers = { version = "0.11.3", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
+affinidi-messaging-didcomm = { version = "0.11.5", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
+affinidi-messaging-helpers = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
 affinidi-messaging-mediator = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.11.1", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.11.0", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
 affinidi-messaging-sdk = { version = "0.14.0", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
-affinidi-messaging-text-client = { version = "0.11.3", path = "./crates/affinidi-messaging/affinidi-messaging-text-client" }
-affinidi-tdk = { version = "0.3.0", path = "./crates/affinidi-tdk/affinidi-tdk" }
+affinidi-messaging-text-client = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-text-client" }
+affinidi-tdk = { version = "0.4.0", path = "./crates/affinidi-tdk/affinidi-tdk" }
 affinidi-data-integrity = { version = "0.3.4", path = "./crates/affinidi-tdk/common/affinidi-data-integrity" }
 affinidi-did-authentication = { version = "0.2.3", path = "./crates/affinidi-tdk/common/affinidi-did-authentication" }
-affinidi-secrets-resolver = { version = "0.4.0", path = "./crates/affinidi-tdk/common/affinidi-secrets-resolver" }
+affinidi-secrets-resolver = { version = "0.5.0", path = "./crates/affinidi-tdk/common/affinidi-secrets-resolver" }
 affinidi-tdk-common = { version = "0.3.0", path = "./crates/affinidi-tdk/common/affinidi-tdk-common" }
+affinidi-encoding = { version = "0.1.0", path = "./crates/affinidi-tdk/common/affinidi-encoding" }
+affinidi-crypto = { version = "0.1.0", path = "./crates/affinidi-tdk/common/affinidi-crypto", default-features = false }
+
+# External crates
+bs58 = "0.5"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.11.3"
+version = "0.11.4"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -18,8 +18,6 @@ affinidi-tdk.workspace = true
 affinidi-messaging-sdk.workspace = true
 affinidi-messaging-didcomm.workspace = true
 affinidi-did-resolver-cache-sdk.workspace = true
-did-peer.workspace = true
-affinidi-did-key.workspace = true
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

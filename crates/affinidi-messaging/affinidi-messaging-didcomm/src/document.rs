@@ -6,11 +6,9 @@ use crate::{
     jwk::FromJwkValue,
     utils::crypto::{AsKnownKeyPair, AsKnownKeyPairSecret, KnownKeyAlg, KnownKeyPair},
 };
+use affinidi_crypto::{JWK, Params};
 use affinidi_did_common::verification_method::VerificationMethod;
-use affinidi_secrets_resolver::{
-    jwk::{JWK, Params},
-    secrets::{KeyType, Secret, SecretMaterial, SecretType},
-};
+use affinidi_secrets_resolver::secrets::{KeyType, Secret, SecretMaterial, SecretType};
 use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, k256::K256KeyPair, p256::P256KeyPair, x25519::X25519KeyPair},
     repr::{KeyPublicBytes, KeySecretBytes},
@@ -151,7 +149,7 @@ impl AsKnownKeyPair for VerificationMethod {
 impl AsKnownKeyPairSecret for Secret {
     fn key_alg(&self) -> KnownKeyAlg {
         match (&self.type_, &self.secret_material) {
-            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.get_key_type() {
+            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.key_type() {
                 KeyType::P256 => KnownKeyAlg::P256,
                 KeyType::Secp256k1 => KnownKeyAlg::K256,
                 KeyType::Ed25519 => KnownKeyAlg::Ed25519,
@@ -188,7 +186,7 @@ impl AsKnownKeyPairSecret for Secret {
 
     fn as_key_pair(&self) -> Result<KnownKeyPair> {
         match (&self.type_, &self.secret_material) {
-            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.get_key_type() {
+            (SecretType::JsonWebKey2020, SecretMaterial::JWK(jwk)) => match jwk.key_type() {
                 KeyType::P256 => P256KeyPair::from_jwk_value(&serde_json::to_value(jwk)?)
                     .kind(ErrorKind::Malformed, "Unable parse jwk")
                     .map(KnownKeyPair::P256),
@@ -203,10 +201,7 @@ impl AsKnownKeyPairSecret for Secret {
                     .map(KnownKeyPair::X25519),
                 _ => Err(err_msg(
                     ErrorKind::Unsupported,
-                    format!(
-                        "Unsupported key type or curve key_type({})",
-                        jwk.get_key_type()
-                    ),
+                    format!("Unsupported key type or curve key_type({})", jwk.key_type()),
                 )),
             },
 

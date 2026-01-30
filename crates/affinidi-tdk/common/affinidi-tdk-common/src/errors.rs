@@ -3,9 +3,9 @@
  */
 
 use affinidi_data_integrity::DataIntegrityError;
+use affinidi_did_common::PeerError;
 use affinidi_did_resolver_cache_sdk::errors::DIDCacheError;
 use affinidi_secrets_resolver::errors::SecretsResolverError;
-use did_peer::DIDPeerError;
 use thiserror::Error;
 
 /// Affinidi Trust Development Kit Errors
@@ -62,8 +62,8 @@ impl From<SecretsResolverError> for TDKError {
     }
 }
 
-impl From<DIDPeerError> for TDKError {
-    fn from(error: DIDPeerError) -> Self {
+impl From<PeerError> for TDKError {
+    fn from(error: PeerError) -> Self {
         TDKError::DIDMethod(error.to_string())
     }
 }
