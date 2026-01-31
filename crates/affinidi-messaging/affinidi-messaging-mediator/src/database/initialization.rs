@@ -87,7 +87,7 @@ impl Database {
                         .await?;
                     info!("Database schema version updated to ({})", mediator_version);
                 } else if schema_version < Version::parse("0.11.4").unwrap() {
-                    self.upgrade_0_11_4().await?;
+                    self.upgrade_0_11_5().await?;
                     info!("Database schema version updated to ({})", mediator_version);
                 } else {
                     error!(

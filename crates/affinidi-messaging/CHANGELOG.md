@@ -8,6 +8,12 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 1st February 2026
+
+### Mediator (0.11.5)
+
+- **CHORE:** Updating dependencies to latest versions
+
 ## 11th January 2026
 
 ### Mediator (0.11.4)

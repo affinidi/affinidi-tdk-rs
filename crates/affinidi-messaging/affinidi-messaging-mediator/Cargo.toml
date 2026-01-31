@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.11.4"
+version = "0.11.5"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -30,8 +30,8 @@ affinidi-secrets-resolver.workspace = true
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
-aws-sdk-secretsmanager = "1.97"
-aws-sdk-ssm = "1.101"
+aws-sdk-secretsmanager = "1.98"
+aws-sdk-ssm = "1.102"
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.12", features = ["typed-header"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
@@ -40,7 +40,7 @@ chrono = "0.4"
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
-jsonwebtoken = { version = "10.2", features = ["aws_lc_rs"] }
+jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.9"
@@ -72,7 +72,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.19", features = ["v4", "fast-rng"] }
+uuid = { version = "1.20", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 console = "0.16"
