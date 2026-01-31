@@ -10,6 +10,10 @@ tooling.
 
 ## 1st February 2026
 
+### SDK (0.14.1)
+
+- **CHORE:** Updating dependencies to latest versions
+
 ### Mediator (0.11.5)
 
 - **CHORE:** Updating dependencies to latest versions
