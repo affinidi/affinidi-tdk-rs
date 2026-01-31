@@ -43,7 +43,7 @@ impl DIDCacheClient {
 
                 match method
                     .resolve_method_representation(
-                        did.method_specific_id(),
+                        &did.method_specific_id(),
                         resolution::Options::default(),
                     )
                     .await
