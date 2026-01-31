@@ -5,4 +5,4 @@ Contains common structs, traits and methods relating to Decentralized Identifier
 
 ## Prerequisites
 
-Rust version 1.88
+Rust version 1.90
