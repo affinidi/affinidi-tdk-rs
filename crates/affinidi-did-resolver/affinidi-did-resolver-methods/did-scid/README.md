@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/did-scid.svg)](https://crates.io/crates/did-scid)
 [![Documentation](https://docs.rs/did-scid/badge.svg)](https://docs.rs/did-scid)
-[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid)
 
 ## Self Certifying Identifiers (SCID)
 
