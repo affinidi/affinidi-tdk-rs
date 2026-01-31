@@ -122,10 +122,15 @@ pub async fn start() -> Result<(), DIDCacheError> {
             get(health_checker_handler).with_state(shared_state),
         );
 
-    axum_server::bind(config.listen_address.parse().unwrap())
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+    axum_server::bind(
+        config
+            .listen_address
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    )
+    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+    .await
+    .unwrap();
 
     Ok(())
 }

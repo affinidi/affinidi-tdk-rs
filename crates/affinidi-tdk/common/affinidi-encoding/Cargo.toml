@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-encoding"
 description = "Multibase and multicodec encoding utilities for Affinidi TDK"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,7 +17,7 @@ bs58.workspace = true
 thiserror = "2.0"
 unsigned-varint = "0.8"
 zeroize = { version = "1.8", features = ["derive"] }
-serde = { version = "1", features = ["derive"]}
+serde = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.11.5"
+version = "0.11.6"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
