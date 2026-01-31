@@ -50,7 +50,7 @@ affinidi-did-resolver-cache-sdk = { version = "0.7.0", path = "crates/affinidi-d
 affinidi-did-resolver-cache-server = { version = "0.6.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
 did-example = { version = "0.5.5", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example" }
 did-cheqd = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-cheqd" }
-did-scid = { version = "0.1.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
+did-scid = { version = "0.1.1", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
 affinidi-meeting-place = { version = "0.2.2", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.11.5", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-helpers = { version = "0.11.4", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
@@ -77,4 +77,3 @@ lto = true
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
-
