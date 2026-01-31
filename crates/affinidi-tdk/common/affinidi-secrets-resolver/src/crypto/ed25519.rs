@@ -1,5 +1,6 @@
 use affinidi_crypto::{JWK, KeyType, OctectParams, Params};
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use rand::{TryRngCore, rngs::OsRng};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::{
@@ -14,8 +15,7 @@ impl Secret {
         let keypair = affinidi_crypto::ed25519::generate(seed);
 
         let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
-            use rand::{RngCore, rngs::OsRng};
-            BASE64_URL_SAFE_NO_PAD.encode(OsRng.next_u64().to_ne_bytes())
+            BASE64_URL_SAFE_NO_PAD.encode(OsRng.try_next_u64().unwrap().to_ne_bytes())
         });
 
         Secret {

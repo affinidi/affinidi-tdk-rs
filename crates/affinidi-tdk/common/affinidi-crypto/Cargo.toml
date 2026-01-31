@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -26,9 +26,18 @@ base58 = "0.2"
 base64 = "0.22"
 multibase = "0.9"
 ed25519-dalek = { version = "2.2", features = ["rand_core"], optional = true }
-k256 = { version = "0.13", features = ["ecdsa-core", "arithmetic"], optional = true }
-p256 = { version = "0.13", features = ["ecdsa-core", "arithmetic"], optional = true }
-p384 = { version = "0.13", features = ["ecdsa-core", "arithmetic"], optional = true }
+k256 = { version = "0.13", features = [
+  "ecdsa-core",
+  "arithmetic",
+], optional = true }
+p256 = { version = "0.13", features = [
+  "ecdsa-core",
+  "arithmetic",
+], optional = true }
+p384 = { version = "0.13", features = [
+  "ecdsa-core",
+  "arithmetic",
+], optional = true }
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

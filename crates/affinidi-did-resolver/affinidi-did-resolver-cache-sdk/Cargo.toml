@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.7.1"
+version = "0.7.2"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -84,4 +84,3 @@ rayon = "1.11"
 
 [lints]
 workspace = true
-
