@@ -44,7 +44,7 @@ rust-version = "1.88.0"
 
 [workspace.dependencies]
 affinidi-did-common = { version = "0.3.0", path = "crates/affinidi-did-resolver/affinidi-did-common" }
-affinidi-did-resolver-cache-sdk = { version = "0.7.0", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
+affinidi-did-resolver-cache-sdk = { version = "0.7.1", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
   "network",
 ] }
 affinidi-did-resolver-cache-server = { version = "0.6.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-server" }
