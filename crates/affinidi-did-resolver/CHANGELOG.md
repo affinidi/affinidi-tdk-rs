@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 1st February 2026
+
+#### did-scid (0.1.1)
+
+- **CHORE:** Updating dependencies to latest versions
+
 ### 27th January 2026
 
 #### affinidi-did-common (0.2.0)
@@ -14,7 +20,8 @@
   - Custom serde implementation (serializes as string)
   - `#[non_exhaustive]` on `DIDMethod` for forward compatibility
   - `#[must_use]` on builder methods
-- **TESTS:** 51 unit tests covering parsing, validation, serde, normalization, and edge cases
+- **TESTS:** 51 unit tests covering parsing, validation, serde, normalization, and
+  edge cases
 
 ### 6th January 2026
 
@@ -289,7 +296,8 @@
 
 ### 24th April 2025 (release 0.5.3)
 
-- **MAINTENANCE:** Updating crate dependencies and including updated `did-peer` crate.
+- **MAINTENANCE:** Updating crate dependencies and including updated `did-peer`
+  crate.
 
 ### 22nd April 2025 did-peer (release 0.6.1)
 
@@ -350,7 +358,8 @@ Network Performance has increased by approx 82% in this release
 
 ### 30th January 2025 (release 0.2.8)
 
-- **FEATURE:** add_did_document() added to manually load DID Documents into the cache.
+- **FEATURE:** add_did_document() added to manually load DID Documents into the
+  cache.
   - Can be used when you want to pre-load a DID Document or for testing purposes
     load non-public documents
 - **MAINTENANCE:** Crates updated (rand 0.8 --> 0.9)
@@ -400,8 +409,8 @@ Network Performance has increased by approx 82% in this release
 
 ### 15th September 2024 (release 0.1.9)
 
-- **clarity:** Added a note regarding serviceEndpoint Id's being a URI vs a IRI (SSI
-  Crate limitation)
+- **clarity:** Added a note regarding serviceEndpoint Id's being a URI vs a IRI
+  (SSI Crate limitation)
   - This changes serviceEndpoint.id from `#service` to `did:peer:#service` so
     that it passes Uri checks
 - **fix:** If more than a single service was specified, then this would crash due
