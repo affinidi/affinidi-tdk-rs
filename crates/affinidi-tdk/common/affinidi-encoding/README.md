@@ -1,5 +1,8 @@
 # Affinidi Encoding Library
 
+[![Crates.io](https://img.shields.io/crates/v/affinidi-encoding.svg)](https://crates.io/crates/affinidi-encoding)
+[![Documentation](https://docs.rs/affinidi-encoding/badge.svg)](https://docs.rs/affinidi-encoding)
+[![Rust](https://img.shields.io/badge/rust-1.88.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-encoding)
 **IMPORTANT:**
 
 > affinidi-encoding crate is provided "as is" without any warranties or guarantees,
