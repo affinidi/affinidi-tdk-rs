@@ -31,7 +31,7 @@ keyring = { version = "3.6", features = [
   "sync-secret-service",
 ] }
 moka = { version = "0.12", features = ["future"] }
-reqwest = { version = "0.13", features = ["rustls-tls-manual-roots", "json"] }
+reqwest = { version = "0.13", features = ["rustls", "json"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
