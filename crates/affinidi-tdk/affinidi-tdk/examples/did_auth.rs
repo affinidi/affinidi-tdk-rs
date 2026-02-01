@@ -108,11 +108,11 @@ async fn main() -> Result<()> {
         }
         Commands::ManualEntry(manual_args) => {
             let mut secrets_buf = String::new();
-            io::stdin().read_to_string(&mut secrets_buf).map_err(|e| {
-                TDKError::Authentication(format!("Couldn't read from STDIN: {}", e))
-            })?;
+            io::stdin()
+                .read_to_string(&mut secrets_buf)
+                .map_err(|e| TDKError::Authentication(format!("Couldn't read from STDIN: {e}")))?;
             let secrets: Vec<Secret> = serde_json::from_str(&secrets_buf).map_err(|e| {
-                TDKError::Authentication(format!("DID Secrets not valid JSON: {}", e))
+                TDKError::Authentication(format!("DID Secrets not valid JSON: {e}"))
             })?;
             (
                 TDKProfile::new("manual", &manual_args.did, None, vec![]),

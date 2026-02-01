@@ -42,6 +42,7 @@ pub use affinidi_messaging_sdk as messaging;
 pub use affinidi_data_integrity as data_integrity;
 
 // Always exported
+pub use affinidi_crypto;
 pub use affinidi_did_common as did_common;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
@@ -348,7 +349,7 @@ mod tests {
                         .to_string()
                 );
             }
-            _ => panic!("Invalid return type {:#?}", result),
+            _ => panic!("Invalid return type {result:#?}"),
         }
     }
 }
