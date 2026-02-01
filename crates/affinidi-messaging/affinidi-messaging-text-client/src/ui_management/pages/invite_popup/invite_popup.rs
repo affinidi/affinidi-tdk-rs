@@ -1,15 +1,14 @@
-use std::sync::Mutex;
-
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use image::{DynamicImage, ImageBuffer, ImageReader, Luma};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Flex, Layout},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, StatefulWidget, Widget, Wrap},
 };
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
