@@ -47,6 +47,6 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-tui-input = { version = "0.15", features = ["ratatui-crossterm"] }
+tui-input = { version = "0.14", features = ["ratatui-crossterm"] }
 tui-logger = { version = "0.18", features = ["tracing-support"] }
 uuid = { version = "1.20", features = ["v4", "fast-rng"] }
