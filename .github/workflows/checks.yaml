@@ -8,8 +8,7 @@ on:
 
 jobs:
   rust-pipeline:
-    # TODO: replace with main
-    uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@feat/chafa
+    uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@main
     secrets: inherit
     with:
       toolchain: "1.93.0"
