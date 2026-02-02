@@ -13,5 +13,6 @@ jobs:
       toolchain: "1.93.0"
       rustflags: "-D warnings --cfg tracing_unstable"
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
+      ubuntu-rust-deps: "libdbus-1-dev libssl-dev chafa"
       release_debug: true
       release_dry_run: false
