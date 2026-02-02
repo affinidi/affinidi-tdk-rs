@@ -8,13 +8,13 @@ on:
 
 jobs:
   rust-pipeline:
-    uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@main
+    uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@feat/chafa
     secrets: inherit
     with:
       toolchain: "1.93.0"
       rustflags: "-D warnings --cfg tracing_unstable"
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
-      ubuntu-rust-deps: "libdbus-1-dev libssl-dev chafa"
+      ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       coverage: 0
       useRedis: true
       verifyPublish: true
