@@ -5,6 +5,7 @@ on:
     types:
       - opened
       - synchronize
+
 jobs:
   rust-pipeline:
     uses: affinidi/pipeline-rust/.github/workflows/checks.yaml@main
@@ -15,3 +16,5 @@ jobs:
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
       coverage: 0
       useRedis: true
+      verifyPublish: true
+      deprecationCheck: true

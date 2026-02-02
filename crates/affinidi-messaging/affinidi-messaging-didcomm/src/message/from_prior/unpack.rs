@@ -182,7 +182,7 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::Malformed);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable to parse compactly serialized JWS"
         );
     }
@@ -199,7 +199,7 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::Malformed);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable to verify from_prior signature: Unable decode signature: Invalid last symbol 104, offset 85."
         );
     }

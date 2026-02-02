@@ -337,7 +337,7 @@ mod tests {
 
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::InvalidState);
-        assert_eq!(format!("{}", err), "Invalid state: Wrong skid used");
+        assert_eq!(format!("{err}"), "Invalid state: Wrong skid used");
     }
 
     #[test]
@@ -355,7 +355,7 @@ mod tests {
 
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::InvalidState);
-        assert_eq!(format!("{}", err), "Invalid state: Wrong skid used");
+        assert_eq!(format!("{err}"), "Invalid state: Wrong skid used");
     }
 
     #[test]
@@ -369,7 +369,7 @@ mod tests {
 
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::InvalidState);
-        assert_eq!(format!("{}", err), "Invalid state: Wrong skid used");
+        assert_eq!(format!("{err}"), "Invalid state: Wrong skid used");
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
 
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::InvalidState);
-        assert_eq!(format!("{}", err), "Invalid state: Recipient not found");
+        assert_eq!(format!("{err}"), "Invalid state: Recipient not found");
     }
 
     #[test]
@@ -406,7 +406,7 @@ mod tests {
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::Malformed);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode encrypted_key: Invalid symbol 33, offset 0."
         );
     }
@@ -428,7 +428,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode tag: Invalid symbol 33, offset 0."
         );
     }
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode iv: Invalid symbol 33, offset 0."
         );
     }
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode ciphertext: Invalid symbol 33, offset 0."
         );
     }
@@ -497,7 +497,7 @@ mod tests {
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::Malformed);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Uanble instantiate epk: Unable produce jwk"
         );
     }
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable instantiate epk: Unable produce jwk: Invalid key data",
         );
     }
@@ -626,7 +626,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Malformed);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Malformed: Unable unwrap cek: Malformed: Unable decrypt key: Encryption error: Unable decrypt key: Encryption error",
             );
         }
@@ -738,7 +738,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Malformed);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Malformed: Unable unwrap cek: Malformed: Unable decrypt key: Encryption error: Unable decrypt key: Encryption error",
             );
         }
@@ -965,7 +965,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Malformed);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Malformed: Unable decrypt content: AEAD decryption error",
             );
         }

@@ -316,7 +316,7 @@ mod tests {
                 .expect_err("res is ok");
 
             assert_eq!(err.kind(), err_kind);
-            assert_eq!(format!("{}", err), err_mgs);
+            assert_eq!(format!("{err}"), err_mgs);
         }
     }
 
@@ -365,7 +365,7 @@ mod tests {
                 .expect_err("res is ok");
 
             assert_eq!(err.kind(), err_kind);
-            assert_eq!(format!("{}", err), err_mgs);
+            assert_eq!(format!("{err}"), err_mgs);
         }
     }
 }

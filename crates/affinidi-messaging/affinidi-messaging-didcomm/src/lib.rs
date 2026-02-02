@@ -73,10 +73,7 @@ mod tests {
             .expect("messagin service present.")
             .service_endpoint;
 
-        println!(
-            "Sending message {} through {}",
-            packed_msg, service_endpoint
-        );
+        println!("Sending message {packed_msg} through {service_endpoint}");
 
         // --- Unpacking message ---
 

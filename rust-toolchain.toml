@@ -1,2 +1,4 @@
 [toolchain]
-channel = "stable"
+channel = "1.93.0"
+# Pin to specific version to prevent drift between local dev and CI
+# Must be >= rust-version in Cargo.toml (currently 1.90.0)
