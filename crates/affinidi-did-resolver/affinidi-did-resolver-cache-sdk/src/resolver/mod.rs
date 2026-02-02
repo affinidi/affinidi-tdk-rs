@@ -331,6 +331,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "did-webvh")]
+    #[ignore = "requires external network (identity.foundation)"]
     async fn local_resolve_webvh() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
@@ -343,6 +344,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "did-cheqd")]
+    #[ignore = "requires external network (cheqd.net)"]
     async fn local_resolve_cheqd() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();
@@ -359,6 +361,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "did-scid")]
+    #[ignore = "requires external network (identity.foundation)"]
     async fn local_resolve_scid() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let client = DIDCacheClient::new(config).await.unwrap();

@@ -345,7 +345,7 @@ mod tests {
             Err(TDKError::DIDResolver(txt)) => {
                 assert_eq!(
                     txt,
-                    "DID error: Invalid DID (did:key:test) Error: DID Url doesn't start with did:key:z"
+                    "DID error: Failed to parse DID: Invalid method-specific ID: invalid did:key encoding: Invalid multibase prefix: expected 'z' (base58btc), got 't'"
                         .to_string()
                 );
             }

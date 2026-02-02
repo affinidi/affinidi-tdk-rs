@@ -1013,7 +1013,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `from` value is not a valid DID or DID URL"
         );
     }
@@ -1045,7 +1045,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `to` value is not a valid DID or DID URL"
         );
     }
@@ -1077,7 +1077,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `sign_from` value is not a valid DID or DID URL"
         );
     }
@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `message.from` value is not equal to `from` value's DID"
         );
     }
@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `message.to` value does not contain `to` value's DID"
         );
     }
@@ -1205,7 +1205,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `from` value is not a valid DID or DID URL"
         );
     }
@@ -1239,7 +1239,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `to` value is not a valid DID or DID URL"
         );
     }
@@ -1348,7 +1348,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `message.from` value is not equal to `from` value's DID"
         );
     }
@@ -1382,7 +1382,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::IllegalArgument);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Illegal argument: `message.to` value does not contain `to` value's DID"
         );
     }
@@ -1415,7 +1415,7 @@ mod tests {
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::DIDNotResolved);
 
-        assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
+        assert_eq!(format!("{err}"), "DID not resolved: Sender did not found");
     }
 
     #[ignore]
@@ -1444,7 +1444,7 @@ mod tests {
         let err = res.expect_err("res is ok");
 
         assert_eq!(err.kind(), ErrorKind::DIDNotResolved);
-        assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
+        assert_eq!(format!("{err}"), "DID not resolved: Sender did not found");
     }
 
     #[ignore]
@@ -1475,7 +1475,7 @@ mod tests {
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::DIDNotResolved);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "DID not resolved: Recipient did not found"
         );
     }
@@ -1506,7 +1506,7 @@ mod tests {
 
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::DIDNotResolved);
-        assert_eq!(format!("{}", err), "DID not resolved: Sender did not found");
+        assert_eq!(format!("{err}"), "DID not resolved: Sender did not found");
     }
 
     #[ignore]

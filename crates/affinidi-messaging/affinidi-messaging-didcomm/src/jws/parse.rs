@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse jws: trailing comma at line 10 column 19"
         );
     }
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse jws: missing field `kid` at line 9 column 17"
         );
     }
@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode protected header: Invalid symbol 33, offset 0."
         );
     }
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse protected header: key must be a string at line 1 column 2"
         );
     }
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse protected header: missing field `alg` at line 1 column 41"
         );
     }
@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable to parse compactly serialized JWS"
         );
     }
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable to parse compactly serialized JWS"
         );
     }
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode header: Invalid symbol 33, offset 0."
         );
     }
@@ -583,7 +583,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse header: key must be a string at line 1 column 2"
         );
     }
@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable parse header: missing field `alg` at line 1 column 55"
         );
     }

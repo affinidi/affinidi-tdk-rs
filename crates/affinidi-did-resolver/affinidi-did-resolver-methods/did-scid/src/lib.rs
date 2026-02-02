@@ -210,6 +210,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires external network (identity.foundation)"]
     async fn test_scid_webvh_resolution() {
         match resolve("did:scid:vh:1:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai?src=identity.foundation/didwebvh-implementations/implementations/affinidi-didwebvh-rs", None, None).await {
             Ok(doc) => {
@@ -220,6 +221,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires external network (cheqd.net)"]
     async fn test_scid_cheqd_resolution() {
         match resolve(
             "did:scid:vh:1:cad53e1d-71e0-48d2-9352-39cc3d0fac99?src=did:cheqd:testnet",

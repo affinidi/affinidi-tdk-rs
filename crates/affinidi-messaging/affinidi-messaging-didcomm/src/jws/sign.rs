@@ -250,7 +250,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::InvalidState);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Invalid state: Unable create signature: Unsupported signature type"
             );
         }
@@ -291,7 +291,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Unsupported);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Unsupported crypto or method: Unsupported signature type"
             );
         }
@@ -432,7 +432,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::InvalidState);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Invalid state: Unable create signature: Unsupported signature type"
             );
         }
@@ -477,7 +477,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Unsupported);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Unsupported crypto or method: Unsupported signature type"
             );
         }

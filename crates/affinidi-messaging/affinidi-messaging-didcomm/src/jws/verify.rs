@@ -212,7 +212,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Malformed);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Malformed: Unable verify signature: Unsupported signature type"
             );
         }
@@ -239,7 +239,7 @@ mod tests {
 
             let err = res.expect_err("res is ok");
             assert_eq!(err.kind(), ErrorKind::InvalidState);
-            assert_eq!(format!("{}", err), "Invalid state: KID not found");
+            assert_eq!(format!("{err}"), "Invalid state: KID not found");
         }
     }
 
@@ -274,7 +274,7 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::Malformed);
 
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Malformed: Unable decode signature: Invalid symbol 33, offset 0."
             );
         }
@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable verify signature: Unsupported signature type"
         );
     }
@@ -330,7 +330,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Malformed);
 
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Malformed: Unable decode signature: Invalid symbol 33, offset 0."
         );
     }

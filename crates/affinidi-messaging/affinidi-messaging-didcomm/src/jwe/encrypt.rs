@@ -458,7 +458,7 @@ mod tests {
         let err = res.expect_err("res is ok");
         assert_eq!(err.kind(), ErrorKind::InvalidState);
         assert_eq!(
-            format!("{}", err),
+            format!("{err}"),
             "Invalid state: Unable derive kw: Invalid state: No sender key for ecdh-1pu: No sender key for ecdh-1pu"
         );
     }
