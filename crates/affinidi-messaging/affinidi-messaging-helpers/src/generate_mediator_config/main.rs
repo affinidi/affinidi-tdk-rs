@@ -30,6 +30,7 @@ fn generate_secrets_and_did() -> Result<(String, Value), Box<dyn Error>> {
             (PeerKeyRole::Verification, KeyType::Ed25519),
             (PeerKeyRole::Encryption, KeyType::Secp256k1),
             (PeerKeyRole::Encryption, KeyType::P256),
+            (PeerKeyRole::Encryption, KeyType::X25519),
         ],
         None,
     )
@@ -141,13 +142,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", style("Generating new DID info...").yellow(),);
     let (old_did, secrets_json) = generate_secrets_and_did()?;
-    let mut well_known_did_part = if api_prefix.is_empty() {
-        format!("{}{}", api_prefix, "/.well-known")
+    let new_did = if !api_prefix.is_empty() {
+        // If prefix is supplied, include it in the DID (no .well-known)
+        let did_path_part = api_prefix.replace("/", ":");
+        format!("did:web:{}{}", &host, &did_path_part)
     } else {
-        String::from("")
+        // If base domain (no prefix), DID is just the host (no .well-known in DID)
+        format!("did:web:{}", &host)
     };
-    well_known_did_part = well_known_did_part.replace("/", ":");
-    let new_did = format!("did:web:{}{}", &host, &well_known_did_part);
     let did_doc = build_did_doc(
         &host,
         &new_did,

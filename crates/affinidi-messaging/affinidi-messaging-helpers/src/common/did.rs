@@ -21,13 +21,12 @@ pub fn create_did(
 ) -> Result<(String, Vec<Secret>), Box<dyn Error>> {
     // Generate keys for encryption and verification
     let mut v_ed25519_key = Secret::generate_ed25519(None, None);
-    let mut e_secp256k1_key =
-        Secret::generate_secp256k1(None, None).expect("Couldn't create secp256k1 secret");
+    let mut e_x25519_key =
+        Secret::generate_x25519(None, None).expect("Couldn't create x25519 secret");
 
     // Get the multibase public keys
     let v_multibase = v_ed25519_key.get_public_keymultibase()?;
-    let e_multibase = e_secp256k1_key.get_public_keymultibase()?;
-
+    let e_multibase = e_x25519_key.get_public_keymultibase()?;
     // Put these keys in order and specify the type of each key
     let keys = vec![
         PeerCreateKey::from_multibase(PeerKeyPurpose::Verification, v_multibase),
@@ -72,8 +71,8 @@ pub fn create_did(
     let did_peer_str = did_peer.to_string();
 
     v_ed25519_key.id = [did_peer_str.as_str(), "#key-1"].concat();
-    e_secp256k1_key.id = [did_peer_str.as_str(), "#key-2"].concat();
-    let secrets_json = vec![v_ed25519_key, e_secp256k1_key];
+    e_x25519_key.id = [did_peer_str.as_str(), "#key-2"].concat();
+    let secrets_json = vec![v_ed25519_key, e_x25519_key];
 
     Ok((did_peer_str, secrets_json))
 }
