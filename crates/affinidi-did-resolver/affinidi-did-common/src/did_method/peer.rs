@@ -238,10 +238,10 @@ pub struct PeerService {
 pub enum PeerServiceEndpoint {
     /// Simple URI endpoint
     Uri(String),
-    /// Structured endpoint with routing info (short format)
-    Short(OneOrMany<PeerServiceEndpointShort>),
     /// Structured endpoint with routing info (long format)
     Long(OneOrMany<PeerServiceEndpointLong>),
+    /// Structured endpoint with routing info (short format)
+    Short(OneOrMany<PeerServiceEndpointShort>),
 }
 
 /// Short format service endpoint map (for DID encoding)
