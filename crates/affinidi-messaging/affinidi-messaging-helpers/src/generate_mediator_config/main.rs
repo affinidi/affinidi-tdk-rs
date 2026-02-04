@@ -94,6 +94,7 @@ fn build_did_doc(
           "keyAgreement": [
             format!("{}#key-3", did),
             format!("{}#key-4", did),
+            format!("{}#key-5", did),
           ],
         "service": [
         {
