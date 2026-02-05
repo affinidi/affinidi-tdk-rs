@@ -77,7 +77,9 @@ impl VerificationRelationship {
 
 #[cfg(test)]
 mod tests {
-    use crate::verification_method::VerificationMethod;
+    use crate::verification_method::{VerificationMethod, VerificationRelationship};
+    use std::collections::HashMap;
+    use url::Url;
 
     #[test]
     pub fn test_multikey_vm_get_public_key_bytes() {
@@ -97,5 +99,108 @@ mod tests {
         let result = vm.get_public_key_bytes().unwrap();
 
         assert_eq!(bytes, result.as_slice());
+    }
+
+    #[test]
+    fn get_public_key_bytes_unsupported_type() {
+        let vm = VerificationMethod {
+            id: Url::parse("did:example:123#key-0").unwrap(),
+            type_: "JsonWebKey2020".to_string(),
+            controller: Url::parse("did:example:123").unwrap(),
+            expires: None,
+            revoked: None,
+            property_set: HashMap::new(),
+        };
+        assert!(vm.get_public_key_bytes().is_err());
+    }
+
+    #[test]
+    fn get_public_key_bytes_multikey_missing_attribute() {
+        let vm = VerificationMethod {
+            id: Url::parse("did:example:123#key-0").unwrap(),
+            type_: "Multikey".to_string(),
+            controller: Url::parse("did:example:123").unwrap(),
+            expires: None,
+            revoked: None,
+            property_set: HashMap::new(),
+        };
+        assert!(vm.get_public_key_bytes().is_err());
+    }
+
+    #[test]
+    fn get_id_reference() {
+        let rel = VerificationRelationship::Reference(
+            Url::parse("did:test:1234#key-1").unwrap(),
+        );
+        assert_eq!(rel.get_id(), "did:test:1234#key-1");
+    }
+
+    #[test]
+    fn get_id_embedded() {
+        let vm = VerificationMethod {
+            id: Url::parse("did:test:1234#key-2").unwrap(),
+            type_: "Multikey".to_string(),
+            controller: Url::parse("did:test:1234").unwrap(),
+            expires: None,
+            revoked: None,
+            property_set: HashMap::new(),
+        };
+        let rel = VerificationRelationship::VerificationMethod(Box::new(vm));
+        assert_eq!(rel.get_id(), "did:test:1234#key-2");
+    }
+
+    #[test]
+    fn verification_method_serde_roundtrip() {
+        let json = r#"{
+            "id": "did:example:123#key-0",
+            "type": "Multikey",
+            "controller": "did:example:123",
+            "publicKeyMultibase": "z6MkwdwKx2P9X13goHtcowBBrPFRwqPNcnX1qWd39CnS4yjx"
+        }"#;
+        let vm: VerificationMethod = serde_json::from_str(json).unwrap();
+        let serialized = serde_json::to_string(&vm).unwrap();
+        let back: VerificationMethod = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(vm, back);
+    }
+
+    #[test]
+    fn verification_relationship_reference_serde() {
+        let rel = VerificationRelationship::Reference(
+            Url::parse("did:test:1234#key-1").unwrap(),
+        );
+        let json = serde_json::to_string(&rel).unwrap();
+        assert_eq!(json, "\"did:test:1234#key-1\"");
+        let back: VerificationRelationship = serde_json::from_str(&json).unwrap();
+        assert_eq!(rel, back);
+    }
+
+    #[test]
+    fn verification_relationship_embedded_serde() {
+        let vm = VerificationMethod {
+            id: Url::parse("did:test:1234#key-1").unwrap(),
+            type_: "Multikey".to_string(),
+            controller: Url::parse("did:test:1234").unwrap(),
+            expires: None,
+            revoked: None,
+            property_set: HashMap::new(),
+        };
+        let rel = VerificationRelationship::VerificationMethod(Box::new(vm));
+        let json = serde_json::to_string(&rel).unwrap();
+        let back: VerificationRelationship = serde_json::from_str(&json).unwrap();
+        assert_eq!(rel, back);
+    }
+
+    #[test]
+    fn verification_method_with_optional_fields() {
+        let json = r#"{
+            "id": "did:example:123#key-0",
+            "type": "Multikey",
+            "controller": "did:example:123",
+            "expires": "2025-12-31T00:00:00Z",
+            "revoked": "2025-06-01T00:00:00Z"
+        }"#;
+        let vm: VerificationMethod = serde_json::from_str(json).unwrap();
+        assert_eq!(vm.expires.as_deref(), Some("2025-12-31T00:00:00Z"));
+        assert_eq!(vm.revoked.as_deref(), Some("2025-06-01T00:00:00Z"));
     }
 }

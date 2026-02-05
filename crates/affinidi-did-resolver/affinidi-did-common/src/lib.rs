@@ -15,6 +15,7 @@ use crate::{
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 
+pub mod builder;
 pub mod did;
 pub mod did_method;
 pub mod document;
@@ -30,6 +31,7 @@ pub use did_method::peer::{
     PeerPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
     PeerServiceEndpointShort,
 };
+pub use builder::{DocumentBuilder, ServiceBuilder, VerificationMethodBuilder};
 pub use document::DocumentExt;
 
 #[derive(Error, Debug)]
@@ -120,11 +122,39 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use url::Url;
 
     #[test]
     fn valid_id() {
         assert!(Url::parse("did:example:123456789abcdefghi").is_ok());
         assert!(Url::parse("did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs").is_ok());
+    }
+
+    #[test]
+    fn document_new_valid() {
+        let doc = Document::new("did:example:123").unwrap();
+        assert_eq!(doc.id.as_str(), "did:example:123");
+        assert!(doc.verification_method.is_empty());
+        assert!(doc.service.is_empty());
+    }
+
+    #[test]
+    fn document_new_invalid() {
+        assert!(Document::new("not a url").is_err());
+    }
+
+    #[test]
+    fn document_default_has_example_id() {
+        let doc = Document::default();
+        assert_eq!(doc.id.as_str(), "did:example:123456789abcdefghi");
+    }
+
+    #[test]
+    fn document_serde_roundtrip_minimal() {
+        let doc = Document::new("did:example:456").unwrap();
+        let json = serde_json::to_string(&doc).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc, back);
     }
 }

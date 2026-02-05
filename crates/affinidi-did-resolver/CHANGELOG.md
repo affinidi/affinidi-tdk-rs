@@ -2,6 +2,32 @@
 
 ## Changelog history
 
+### 5th February 2026
+
+#### affinidi-did-common (0.3.2)
+
+- **FEATURE:** Builder pattern for programmatic DID Document construction
+  - `DocumentBuilder` — fluent API for building `Document` with context helpers,
+    verification methods, relationships, services, and arbitrary parameters
+  - `VerificationMethodBuilder` — fluent API for building `VerificationMethod`
+    with convenience methods for `publicKeyMultibase` and `publicKeyJwk`
+  - `ServiceBuilder` — fluent API for building `Service` per the
+    [CID spec](https://www.w3.org/TR/cid-1.0/#services), supporting URL, map,
+    and raw `Endpoint` constructors
+  - All three builders are re-exported from the crate root
+- **DOCS:** README updated with usage examples for building DID Documents with
+  services
+- **TESTS:** 102 new unit tests across the crate covering previously untested
+  modules
+  - `one_or_many` — 37 tests for all public methods, iterators, and serde
+  - `service` — 17 tests for `Endpoint::get_uri`, `get_uris`,
+    `Document::find_service`, and type deserialization
+  - `verification_method` — 8 tests for `get_id`, error cases, and serde
+  - `did_method` — 4 tests for `DIDMethod::name`, `identifier`, and `Display`
+  - `did_method::peer` — 32 tests for enum conversions, `PeerCreateKey`,
+    endpoint format conversions, and `PeerService` encode/decode/to_did_service
+  - `lib` — 4 tests for `Document::new`, `Default`, and serde roundtrip
+
 ### 1st February 2026
 
 #### did-scid (0.1.1)
