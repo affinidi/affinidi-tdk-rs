@@ -296,6 +296,279 @@ impl PeerServiceEndpointLong {
 // Service Encoding/Decoding
 // ============================================================================
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- PeerNumAlgo ---
+
+    #[test]
+    fn numalgo_from_char_valid() {
+        assert_eq!(PeerNumAlgo::from_char('0'), Some(PeerNumAlgo::InceptionKey));
+        assert_eq!(PeerNumAlgo::from_char('1'), Some(PeerNumAlgo::GenesisDoc));
+        assert_eq!(PeerNumAlgo::from_char('2'), Some(PeerNumAlgo::MultipleKeys));
+    }
+
+    #[test]
+    fn numalgo_from_char_invalid() {
+        assert_eq!(PeerNumAlgo::from_char('3'), None);
+        assert_eq!(PeerNumAlgo::from_char('x'), None);
+    }
+
+    #[test]
+    fn numalgo_to_char() {
+        assert_eq!(PeerNumAlgo::InceptionKey.to_char(), '0');
+        assert_eq!(PeerNumAlgo::GenesisDoc.to_char(), '1');
+        assert_eq!(PeerNumAlgo::MultipleKeys.to_char(), '2');
+    }
+
+    #[test]
+    fn numalgo_roundtrip() {
+        for c in ['0', '1', '2'] {
+            let algo = PeerNumAlgo::from_char(c).unwrap();
+            assert_eq!(algo.to_char(), c);
+        }
+    }
+
+    // --- PeerPurpose ---
+
+    #[test]
+    fn purpose_from_char_valid() {
+        assert_eq!(PeerPurpose::from_char('A'), Some(PeerPurpose::Assertion));
+        assert_eq!(PeerPurpose::from_char('D'), Some(PeerPurpose::Delegation));
+        assert_eq!(PeerPurpose::from_char('E'), Some(PeerPurpose::Encryption));
+        assert_eq!(PeerPurpose::from_char('I'), Some(PeerPurpose::Invocation));
+        assert_eq!(PeerPurpose::from_char('V'), Some(PeerPurpose::Verification));
+        assert_eq!(PeerPurpose::from_char('S'), Some(PeerPurpose::Service));
+    }
+
+    #[test]
+    fn purpose_from_char_invalid() {
+        assert_eq!(PeerPurpose::from_char('X'), None);
+        assert_eq!(PeerPurpose::from_char('a'), None);
+    }
+
+    #[test]
+    fn purpose_to_char() {
+        assert_eq!(PeerPurpose::Assertion.to_char(), 'A');
+        assert_eq!(PeerPurpose::Delegation.to_char(), 'D');
+        assert_eq!(PeerPurpose::Encryption.to_char(), 'E');
+        assert_eq!(PeerPurpose::Invocation.to_char(), 'I');
+        assert_eq!(PeerPurpose::Verification.to_char(), 'V');
+        assert_eq!(PeerPurpose::Service.to_char(), 'S');
+    }
+
+    #[test]
+    fn purpose_roundtrip() {
+        for c in ['A', 'D', 'E', 'I', 'V', 'S'] {
+            let purpose = PeerPurpose::from_char(c).unwrap();
+            assert_eq!(purpose.to_char(), c);
+        }
+    }
+
+    #[test]
+    fn purpose_is_key() {
+        assert!(PeerPurpose::Assertion.is_key());
+        assert!(PeerPurpose::Delegation.is_key());
+        assert!(PeerPurpose::Encryption.is_key());
+        assert!(PeerPurpose::Invocation.is_key());
+        assert!(PeerPurpose::Verification.is_key());
+        assert!(!PeerPurpose::Service.is_key());
+    }
+
+    // --- PeerKeyPurpose ---
+
+    #[test]
+    fn key_purpose_to_char() {
+        assert_eq!(PeerKeyPurpose::Verification.to_char(), 'V');
+        assert_eq!(PeerKeyPurpose::Encryption.to_char(), 'E');
+    }
+
+    // --- PeerKeyType ---
+
+    #[test]
+    fn key_type_to_crypto_key_type() {
+        assert_eq!(
+            PeerKeyType::Ed25519.to_crypto_key_type(),
+            affinidi_crypto::KeyType::Ed25519
+        );
+        assert_eq!(
+            PeerKeyType::Secp256k1.to_crypto_key_type(),
+            affinidi_crypto::KeyType::Secp256k1
+        );
+        assert_eq!(
+            PeerKeyType::P256.to_crypto_key_type(),
+            affinidi_crypto::KeyType::P256
+        );
+    }
+
+    // --- PeerCreateKey ---
+
+    #[test]
+    fn peer_create_key_new() {
+        let k = PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519);
+        assert_eq!(k.purpose, PeerKeyPurpose::Verification);
+        assert_eq!(k.key_type, Some(PeerKeyType::Ed25519));
+        assert!(k.public_key_multibase.is_none());
+    }
+
+    #[test]
+    fn peer_create_key_from_multibase() {
+        let k = PeerCreateKey::from_multibase(
+            PeerKeyPurpose::Encryption,
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
+        );
+        assert_eq!(k.purpose, PeerKeyPurpose::Encryption);
+        assert!(k.key_type.is_none());
+        assert_eq!(
+            k.public_key_multibase.as_deref(),
+            Some("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+        );
+    }
+
+    // --- PeerServiceEndpoint conversion ---
+
+    #[test]
+    fn short_to_long_conversion() {
+        let short = PeerServiceEndpointShort {
+            uri: "https://example.com/didcomm".to_string(),
+            a: vec!["didcomm/v2".to_string()],
+            r: vec!["did:example:123#key-1".to_string()],
+        };
+        let long = short.to_long();
+        assert_eq!(long.uri, "https://example.com/didcomm");
+        assert_eq!(long.accept, vec!["didcomm/v2"]);
+        assert_eq!(long.routing_keys, vec!["did:example:123#key-1"]);
+    }
+
+    #[test]
+    fn long_to_short_conversion() {
+        let long = PeerServiceEndpointLong {
+            uri: "https://example.com/didcomm".to_string(),
+            accept: vec!["didcomm/v2".to_string()],
+            routing_keys: vec!["did:example:123#key-1".to_string()],
+        };
+        let short = long.to_short();
+        assert_eq!(short.uri, "https://example.com/didcomm");
+        assert_eq!(short.a, vec!["didcomm/v2"]);
+        assert_eq!(short.r, vec!["did:example:123#key-1"]);
+    }
+
+    #[test]
+    fn short_long_roundtrip() {
+        let short = PeerServiceEndpointShort {
+            uri: "https://example.com".to_string(),
+            a: vec!["a".to_string(), "b".to_string()],
+            r: vec![],
+        };
+        let roundtripped = short.to_long().to_short();
+        assert_eq!(roundtripped.uri, short.uri);
+        assert_eq!(roundtripped.a, short.a);
+        assert_eq!(roundtripped.r, short.r);
+    }
+
+    // --- PeerService encode/decode ---
+
+    #[test]
+    fn service_encode_decode_roundtrip() {
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com/didcomm".to_string()),
+            id: None,
+        };
+        let encoded = svc.encode().unwrap();
+        assert!(encoded.starts_with('S'));
+
+        let decoded = PeerService::decode(&encoded).unwrap();
+        assert_eq!(decoded.type_, "dm");
+        if let PeerServiceEndpoint::Uri(uri) = &decoded.endpoint {
+            assert_eq!(uri, "https://example.com/didcomm");
+        } else {
+            panic!("expected Uri endpoint");
+        }
+    }
+
+    #[test]
+    fn service_decode_without_s_prefix() {
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com".to_string()),
+            id: None,
+        };
+        let encoded = svc.encode().unwrap();
+        // Strip the S prefix manually
+        let without_prefix = &encoded[1..];
+        let decoded = PeerService::decode(without_prefix).unwrap();
+        assert_eq!(decoded.type_, "dm");
+    }
+
+    #[test]
+    fn service_decode_invalid_base64() {
+        assert!(PeerService::decode("S!!!invalid!!!").is_err());
+    }
+
+    #[test]
+    fn service_decode_invalid_json() {
+        let encoded = format!("S{}", BASE64_URL_SAFE_NO_PAD.encode(b"not json"));
+        assert!(PeerService::decode(&encoded).is_err());
+    }
+
+    // --- PeerService::to_did_service ---
+
+    #[test]
+    fn to_did_service_with_uri_endpoint() {
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com/didcomm".to_string()),
+            id: None,
+        };
+        let did_svc = svc.to_did_service("did:peer:2abc", 0).unwrap();
+        assert_eq!(did_svc.id.unwrap().as_str(), "did:peer:2abc#service");
+        assert_eq!(did_svc.type_, vec!["DIDCommMessaging"]);
+    }
+
+    #[test]
+    fn to_did_service_with_index() {
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com".to_string()),
+            id: None,
+        };
+        let did_svc = svc.to_did_service("did:peer:2abc", 3).unwrap();
+        assert_eq!(did_svc.id.unwrap().as_str(), "did:peer:2abc#service-3");
+    }
+
+    #[test]
+    fn to_did_service_with_custom_id() {
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Uri("https://example.com".to_string()),
+            id: Some("#my-svc".to_string()),
+        };
+        let did_svc = svc.to_did_service("did:peer:2abc", 0).unwrap();
+        assert_eq!(did_svc.id.unwrap().as_str(), "did:peer:2abc#my-svc");
+    }
+
+    #[test]
+    fn to_did_service_with_short_endpoint() {
+        let short = PeerServiceEndpointShort {
+            uri: "https://example.com/didcomm".to_string(),
+            a: vec!["didcomm/v2".to_string()],
+            r: vec![],
+        };
+        let svc = PeerService {
+            type_: "dm".to_string(),
+            endpoint: PeerServiceEndpoint::Short(OneOrMany::One(short)),
+            id: None,
+        };
+        let did_svc = svc.to_did_service("did:peer:2abc", 0).unwrap();
+        assert!(matches!(
+            did_svc.service_endpoint,
+            crate::service::Endpoint::Map(_)
+        ));
+    }
+}
+
 impl PeerService {
     /// Encode this service for inclusion in a did:peer string
     pub fn encode(&self) -> Result<String, PeerError> {

@@ -43,7 +43,7 @@ publish = true
 rust-version = "1.90.0"
 
 [workspace.dependencies]
-affinidi-did-common = { version = "0.3.1", path = "crates/affinidi-did-resolver/affinidi-did-common" }
+affinidi-did-common = { version = "0.3.2", path = "crates/affinidi-did-resolver/affinidi-did-common" }
 affinidi-did-resolver-cache-sdk = { version = "0.7.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk", features = [
   "network",
 ] }

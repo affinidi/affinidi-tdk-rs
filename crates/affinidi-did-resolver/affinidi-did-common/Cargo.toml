@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.3.1"
+version = "0.3.2"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -34,4 +34,3 @@ zeroize = { version = "1.8", features = ["derive"] }
 
 [lints]
 workspace = true
-

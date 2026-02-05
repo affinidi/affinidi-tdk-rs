@@ -141,3 +141,49 @@ impl fmt::Display for DIDMethod {
         write!(f, "{}", self.name())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::DID;
+
+    #[test]
+    fn name_returns_correct_method() {
+        let cases = [
+            ("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "key"),
+            ("did:peer:0z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "peer"),
+            ("did:web:example.com", "web"),
+            ("did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a", "ethr"),
+            ("did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a", "pkh"),
+            ("did:example:custom123", "example"),
+        ];
+        for (did_str, expected_name) in cases {
+            let did: DID = did_str.parse().unwrap();
+            assert_eq!(did.method().name(), expected_name, "failed for {did_str}");
+        }
+    }
+
+    #[test]
+    fn identifier_returns_raw_id() {
+        let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            did.method().identifier(),
+            "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        );
+    }
+
+    #[test]
+    fn display_matches_name() {
+        let did: DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+            .parse()
+            .unwrap();
+        assert_eq!(format!("{}", did.method()), "key");
+    }
+
+    #[test]
+    fn display_other_method() {
+        let did: DID = "did:example:abc123".parse().unwrap();
+        assert_eq!(format!("{}", did.method()), "example");
+    }
+}
