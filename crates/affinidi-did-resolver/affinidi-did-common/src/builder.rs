@@ -49,8 +49,7 @@ impl DocumentBuilder {
 
     /// Set an arbitrary `@context` value, replacing any existing context.
     pub fn context(mut self, value: Value) -> Self {
-        self.parameters_set
-            .insert("@context".to_string(), value);
+        self.parameters_set.insert("@context".to_string(), value);
         self
     }
 
@@ -465,29 +464,20 @@ mod tests {
 
     #[test]
     fn adding_verification_methods() {
-        let vm1 = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm1 =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
-        let vm2 = VerificationMethodBuilder::new(
-            "did:example:123#key-2",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm2 =
+            VerificationMethodBuilder::new("did:example:123#key-2", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
-        let vm3 = VerificationMethodBuilder::new(
-            "did:example:123#key-3",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm3 =
+            VerificationMethodBuilder::new("did:example:123#key-3", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()
@@ -500,13 +490,10 @@ mod tests {
 
     #[test]
     fn authentication_reference_and_embedded() {
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()
@@ -528,13 +515,10 @@ mod tests {
 
     #[test]
     fn assertion_method_reference_and_embedded() {
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()
@@ -548,13 +532,10 @@ mod tests {
 
     #[test]
     fn key_agreement_reference_and_embedded() {
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()
@@ -568,14 +549,11 @@ mod tests {
 
     #[test]
     fn full_chained_build() {
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .public_key_multibase("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .public_key_multibase("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+                .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()
@@ -602,21 +580,15 @@ mod tests {
         assert_eq!(doc.key_agreement.len(), 1);
         assert_eq!(doc.capability_invocation.len(), 1);
         assert_eq!(doc.capability_delegation.len(), 1);
-        assert_eq!(
-            doc.parameters_set.get("custom").unwrap(),
-            &json!("value")
-        );
+        assert_eq!(doc.parameters_set.get("custom").unwrap(), &json!("value"));
     }
 
     #[test]
     fn verification_method_builder_minimal() {
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .build();
 
         assert_eq!(vm.id.as_str(), "did:example:123#key-1");
         assert_eq!(vm.type_, "Multikey");
@@ -631,18 +603,15 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("extra".to_string(), json!("data"));
 
-        let vm = VerificationMethodBuilder::new(
-            "did:example:123#key-1",
-            "Multikey",
-            "did:example:123",
-        )
-        .unwrap()
-        .public_key_multibase("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
-        .public_key_jwk(json!({"kty": "OKP"}))
-        .expires("2025-12-31T00:00:00Z")
-        .revoked("2025-06-01T00:00:00Z")
-        .properties(extra)
-        .build();
+        let vm =
+            VerificationMethodBuilder::new("did:example:123#key-1", "Multikey", "did:example:123")
+                .unwrap()
+                .public_key_multibase("z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+                .public_key_jwk(json!({"kty": "OKP"}))
+                .expires("2025-12-31T00:00:00Z")
+                .revoked("2025-06-01T00:00:00Z")
+                .properties(extra)
+                .build();
 
         assert!(vm.property_set.contains_key("publicKeyMultibase"));
         assert!(vm.property_set.contains_key("publicKeyJwk"));
@@ -653,19 +622,18 @@ mod tests {
 
     #[test]
     fn verification_method_builder_invalid_id() {
-        assert!(VerificationMethodBuilder::new("not a url", "Multikey", "did:example:123").is_err());
+        assert!(
+            VerificationMethodBuilder::new("not a url", "Multikey", "did:example:123").is_err()
+        );
     }
 
     // --- ServiceBuilder tests ---
 
     #[test]
     fn service_builder_minimal_with_url_endpoint() {
-        let svc = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .build();
+        let svc = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .build();
 
         assert!(svc.id.is_none());
         assert_eq!(svc.type_, vec!["LinkedDomains"]);
@@ -686,14 +654,11 @@ mod tests {
 
     #[test]
     fn service_builder_with_id() {
-        let svc = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .id("did:example:123#linked-domain")
-        .unwrap()
-        .build();
+        let svc = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .id("did:example:123#linked-domain")
+            .unwrap()
+            .build();
 
         assert_eq!(
             svc.id.as_ref().unwrap().as_str(),
@@ -703,12 +668,9 @@ mod tests {
 
     #[test]
     fn service_builder_invalid_id_returns_error() {
-        let result = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .id("not a url");
+        let result = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .id("not a url");
 
         assert!(result.is_err());
     }
@@ -720,13 +682,10 @@ mod tests {
 
     #[test]
     fn service_builder_multiple_types() {
-        let svc = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .add_type("CredentialRepository")
-        .build();
+        let svc = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .add_type("CredentialRepository")
+            .build();
 
         assert_eq!(svc.type_.len(), 2);
         assert_eq!(svc.type_[0], "LinkedDomains");
@@ -735,13 +694,10 @@ mod tests {
 
     #[test]
     fn service_builder_replace_types() {
-        let svc = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .types(vec!["TypeA".to_string(), "TypeB".to_string()])
-        .build();
+        let svc = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .types(vec!["TypeA".to_string(), "TypeB".to_string()])
+            .build();
 
         assert_eq!(svc.type_, vec!["TypeA", "TypeB"]);
     }
@@ -751,16 +707,13 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("routingKeys".to_string(), json!(["did:example:123#key-1"]));
 
-        let svc = ServiceBuilder::new_with_url(
-            "DIDCommMessaging",
-            "https://example.com/didcomm",
-        )
-        .unwrap()
-        .id("did:example:123#didcomm")
-        .unwrap()
-        .property("accept", json!(["didcomm/v2"]))
-        .properties(extra)
-        .build();
+        let svc = ServiceBuilder::new_with_url("DIDCommMessaging", "https://example.com/didcomm")
+            .unwrap()
+            .id("did:example:123#didcomm")
+            .unwrap()
+            .property("accept", json!(["didcomm/v2"]))
+            .properties(extra)
+            .build();
 
         assert!(svc.property_set.contains_key("accept"));
         assert!(svc.property_set.contains_key("routingKeys"));
@@ -768,14 +721,11 @@ mod tests {
 
     #[test]
     fn service_builder_integrates_with_document_builder() {
-        let svc = ServiceBuilder::new_with_url(
-            "LinkedDomains",
-            "https://example.com",
-        )
-        .unwrap()
-        .id("did:example:123#linked-domain")
-        .unwrap()
-        .build();
+        let svc = ServiceBuilder::new_with_url("LinkedDomains", "https://example.com")
+            .unwrap()
+            .id("did:example:123#linked-domain")
+            .unwrap()
+            .build();
 
         let doc = DocumentBuilder::new("did:example:123")
             .unwrap()

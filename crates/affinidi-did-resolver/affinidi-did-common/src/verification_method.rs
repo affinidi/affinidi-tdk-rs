@@ -129,9 +129,7 @@ mod tests {
 
     #[test]
     fn get_id_reference() {
-        let rel = VerificationRelationship::Reference(
-            Url::parse("did:test:1234#key-1").unwrap(),
-        );
+        let rel = VerificationRelationship::Reference(Url::parse("did:test:1234#key-1").unwrap());
         assert_eq!(rel.get_id(), "did:test:1234#key-1");
     }
 
@@ -165,9 +163,7 @@ mod tests {
 
     #[test]
     fn verification_relationship_reference_serde() {
-        let rel = VerificationRelationship::Reference(
-            Url::parse("did:test:1234#key-1").unwrap(),
-        );
+        let rel = VerificationRelationship::Reference(Url::parse("did:test:1234#key-1").unwrap());
         let json = serde_json::to_string(&rel).unwrap();
         assert_eq!(json, "\"did:test:1234#key-1\"");
         let back: VerificationRelationship = serde_json::from_str(&json).unwrap();

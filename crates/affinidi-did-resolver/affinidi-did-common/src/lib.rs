@@ -23,6 +23,7 @@ pub mod one_or_many;
 pub mod service;
 pub mod verification_method;
 
+pub use builder::{DocumentBuilder, ServiceBuilder, VerificationMethodBuilder};
 pub use did::{DID, DIDError};
 pub use did_method::DIDMethod;
 pub use did_method::key::{KeyError, KeyMaterial, KeyMaterialFormat, KeyMaterialType};
@@ -31,7 +32,6 @@ pub use did_method::peer::{
     PeerPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
     PeerServiceEndpointShort,
 };
-pub use builder::{DocumentBuilder, ServiceBuilder, VerificationMethodBuilder};
 pub use document::DocumentExt;
 
 #[derive(Error, Debug)]
