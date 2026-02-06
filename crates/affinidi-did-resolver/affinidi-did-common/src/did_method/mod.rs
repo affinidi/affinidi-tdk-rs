@@ -149,11 +149,23 @@ mod tests {
     #[test]
     fn name_returns_correct_method() {
         let cases = [
-            ("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "key"),
-            ("did:peer:0z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK", "peer"),
+            (
+                "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "key",
+            ),
+            (
+                "did:peer:0z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                "peer",
+            ),
             ("did:web:example.com", "web"),
-            ("did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a", "ethr"),
-            ("did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a", "pkh"),
+            (
+                "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a",
+                "ethr",
+            ),
+            (
+                "did:pkh:eip155:1:0xb9c5714089478a327f09197987f16f9e5d936e8a",
+                "pkh",
+            ),
             ("did:example:custom123", "example"),
         ];
         for (did_str, expected_name) in cases {
