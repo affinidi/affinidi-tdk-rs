@@ -86,12 +86,17 @@ impl Database {
                     self.upgrade_0_10_0(&config.security.global_acl_default)
                         .await?;
                     info!("Database schema version updated to ({})", mediator_version);
-                } else if schema_version < Version::parse("0.11.7").unwrap() {
-                    self.upgrade_0_11_7().await?;
-                    info!("Database schema version updated to ({})", mediator_version);
+                // last check to cover versions which do not need migration and are just behind the current version
+                } else if schema_version < mediator_version {
+                    self.upgrade_to_current_version(mediator_version.to_string().as_str())
+                        .await?;
+                    info!(
+                        "Database schema version updated to the current version ({})",
+                        mediator_version
+                    );
                 } else {
                     error!(
-                        "Database is in an unknown schema state. Requires an intervention from a human please..."
+                        "Database is in an unknown (probably future version) schema state. Requires an intervention from a human please..."
                     );
                     return Err(MediatorError::InternalError(
                         17,
