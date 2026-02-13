@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 3rd November October 2025 (0.5.2)
+
+- **BREAKING:** Now uses the affinidi-crypto library for all cryptographic operations
+- **FEATURE:** Added ability to deserialize `Secret` from a privateKeyMultiBase
+  string
+
 ## 3rd November October 2025 (0.4.0)
 
 - **BREAKING:** `Secret::from_multibase()` API changed to just need a private string
@@ -15,7 +21,8 @@
 
 ## 12th October 2025 (0.3.3)
 
-- **IMPROVEMENT:** Implemented stronger and more consistent zeroize on drop for `Secret`
+- **IMPROVEMENT:** Implemented stronger and more consistent zeroize on drop for
+  `Secret`
   - This may cause breaking changes for apps where they were not using references
     to `Secret`
 
