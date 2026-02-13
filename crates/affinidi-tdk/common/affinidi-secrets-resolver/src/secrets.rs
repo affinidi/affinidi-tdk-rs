@@ -74,6 +74,9 @@ impl TryFrom<SecretShadow> for Secret {
                 secret.type_ = shadow.type_;
                 Ok(secret)
             }
+            SecretMaterial::Multibase {
+                private_key_multibase,
+            } => Secret::from_multibase(&private_key_multibase, Some(&shadow.id)),
             _ => Err(SecretsResolverError::KeyError(
                 "Unsupported secret material type".into(),
             )),
