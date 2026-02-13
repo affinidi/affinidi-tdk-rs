@@ -52,7 +52,7 @@ did-example = { version = "0.5.6", path = "crates/affinidi-did-resolver/affinidi
 did-scid = { version = "0.1.2", path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
 affinidi-meeting-place = { version = "0.2.4", path = "./crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm = { version = "0.11.6", path = "./crates/affinidi-messaging/affinidi-messaging-didcomm" }
-affinidi-messaging-helpers = { version = "0.11.6", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
+affinidi-messaging-helpers = { version = "0.11.7", path = "./crates/affinidi-messaging/affinidi-messaging-helpers" }
 affinidi-messaging-mediator = { version = "0.11.7", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.11.3", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.11.2", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
