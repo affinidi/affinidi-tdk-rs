@@ -74,6 +74,9 @@ impl TryFrom<SecretShadow> for Secret {
                 secret.type_ = shadow.type_;
                 Ok(secret)
             }
+            SecretMaterial::PrivateKeyMultibase(private) => {
+                Secret::from_multibase(&private, Some(&shadow.id))
+            }
             _ => Err(SecretsResolverError::KeyError(
                 "Unsupported secret material type".into(),
             )),
@@ -380,6 +383,7 @@ pub enum SecretType {
     Ed25519VerificationKey2018,
     Ed25519VerificationKey2020,
     EcdsaSecp256k1VerificationKey2019,
+    Multikey,
     Other,
 }
 
@@ -387,15 +391,22 @@ pub enum SecretType {
 
 /// Represents secret crypto material.
 #[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]
+#[serde(rename_all = "camelCase")]
 pub enum SecretMaterial {
-    #[serde(rename = "privateKeyJwk", rename_all = "camelCase")]
+    #[serde(rename = "privateKeyJwk")]
     JWK(JWK),
 
-    #[serde(rename_all = "camelCase")]
-    Multibase { private_key_multibase: String },
+    PrivateKeyMultibase(String),
 
-    #[serde(rename_all = "camelCase")]
-    Base58 { private_key_base58: String },
+    Base58 {
+        private_key_base58: String,
+    },
+
+    /// Not used - legacy reference
+    /// This can be removed in the future (affinidi-messaging-didcomm using this)
+    Multibase {
+        private_key_multibase: String,
+    },
 }
 
 #[cfg(test)]

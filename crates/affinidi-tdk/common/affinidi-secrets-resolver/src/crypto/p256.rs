@@ -1,6 +1,6 @@
 use affinidi_crypto::KeyType;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use rand::{TryRngCore, rngs::OsRng};
+use rand::{TryRng, rngs::SysRng};
 
 use crate::{
     errors::SecretsResolverError,
@@ -18,7 +18,7 @@ impl Secret {
         let keypair = affinidi_crypto::p256::generate(secret)?;
 
         let kid = kid.map(|k| k.to_string()).unwrap_or_else(|| {
-            BASE64_URL_SAFE_NO_PAD.encode(OsRng.try_next_u64().unwrap().to_ne_bytes())
+            BASE64_URL_SAFE_NO_PAD.encode(SysRng.try_next_u64().unwrap().to_ne_bytes())
         });
 
         Ok(Secret {
