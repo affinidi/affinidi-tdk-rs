@@ -9,7 +9,7 @@ use affinidi_secrets_resolver::SecretsResolver;
 use ahash::AHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::warn;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -247,6 +247,7 @@ fn generate_message_id() -> String {
 
 fn build_forward_message(
     forwarded_msg: &str,
+    to: &str,
     next: &str,
     headers: Option<&HashMap<String, Value>>,
 ) -> Result<String> {
@@ -261,7 +262,8 @@ fn build_forward_message(
     )
     .finalize();
 
-    let mut msg_builder = Message::build(generate_message_id(), FORWARD_MSG_TYPE.to_owned(), body);
+    let mut msg_builder =
+        Message::build(generate_message_id(), FORWARD_MSG_TYPE.to_owned(), body).to(to.to_string());
 
     if let Some(headers) = headers {
         for (name, value) in headers {
@@ -370,7 +372,8 @@ where
     let mut msg = msg.to_owned();
 
     for (to_, next_) in tos.iter().zip(nexts.iter()) {
-        msg = build_forward_message(&msg, next_, options.forward_headers.as_ref())?;
+        msg = build_forward_message(&msg, to, next_, options.forward_headers.as_ref())?;
+        debug!("Forward message: {:#}", msg);
         if let Some(sign_by) = sign_by {
             msg = authcrypt(
                 to,

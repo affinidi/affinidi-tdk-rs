@@ -126,9 +126,6 @@ impl Message {
 
         let parsed_jwe = anoncrypted.clone().unwrap_or(parsed_jwe);
 
-        debug!("metadata = {:#?}", envelope.metadata);
-        debug!("anoncrypted = {:#?}", anoncrypted);
-
         let authcrypted = _try_unpack_authcrypt(
             &parsed_jwe,
             did_resolver,
@@ -153,27 +150,55 @@ impl Message {
                 )
             })?;
 
+        debug!("metadata = {:#?}", envelope.metadata);
+        debug!("msg = {:#?}", msg);
+
         // Check Message Layer Addressing Consistency
-        if let Some(skid) = envelope.metadata.encrypted_from_kid.as_ref() {
-            // Encrypted message, must have a from field
-            if let Some(from) = msg.from.as_ref() {
-                if !skid.starts_with(from) {
+        if envelope.metadata.authenticated {
+            if let Some(skid) = envelope.metadata.sign_from.as_ref() {
+                // Encrypted message, must have a from field
+                if let Some(from) = msg.from.as_ref() {
+                    if !skid.starts_with(from) {
+                        return Err(err_msg(
+                            ErrorKind::InvalidState,
+                            format!("Message 'from' ({from}) doesn't match sign_from ({skid})"),
+                        ));
+                    }
+                } else {
+                    return Err(err_msg(
+                        ErrorKind::InvalidState,
+                        "Authenticated message must have 'from' field",
+                    ));
+                }
+            } else {
+                return Err(err_msg(
+                    ErrorKind::InvalidState,
+                    "Authenticated message missing 'sign_from' signing kid",
+                ));
+            }
+        }
+
+        if envelope.metadata.encrypted {
+            if let Some(skid) = envelope.metadata.encrypted_from_kid.as_ref() {
+                if let Some(from) = msg.from.as_ref()
+                    && !skid.starts_with(from)
+                {
                     return Err(err_msg(
                         ErrorKind::InvalidState,
                         format!(
                             "Message 'from' ({from}) doesn't match encrypted_from_kid ({skid})"
                         ),
                     ));
+                    // NOTE: It is ok if there is no from field, as the authentication check above will
+                    // catch if it is a signed message
                 }
             } else {
                 return Err(err_msg(
                     ErrorKind::InvalidState,
-                    "Encrypted message must have 'from' field",
+                    "Encrypted message missing 'encrypted_from_kid'",
                 ));
             }
-        }
 
-        if envelope.metadata.encrypted {
             let Some(to) = msg.to.as_ref() else {
                 return Err(err_msg(
                     ErrorKind::InvalidState,
