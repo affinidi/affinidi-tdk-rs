@@ -127,6 +127,7 @@ impl Message {
         let parsed_jwe = anoncrypted.clone().unwrap_or(parsed_jwe);
 
         debug!("metadata = {:#?}", envelope.metadata);
+        debug!("anoncrypted = {:#?}", anoncrypted);
 
         let authcrypted = _try_unpack_authcrypt(
             &parsed_jwe,
