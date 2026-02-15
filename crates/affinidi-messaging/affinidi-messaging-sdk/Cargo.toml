@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.14.2"
+version = "0.14.3"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -36,13 +36,13 @@ thiserror = "2.0"
 tokio = { version = "1.49", features = ["full"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 tracing = { version = "0.1", features = ["valuable"] }
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
+uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"
-rand = "0.9"
+rand = "0.10"
 rcgen = { version = "0.14", default-features = false, features = [
   "aws_lc_rs",
   "pem",

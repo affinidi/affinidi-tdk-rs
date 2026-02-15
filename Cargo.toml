@@ -56,7 +56,7 @@ affinidi-messaging-helpers = { version = "0.11.7", path = "./crates/affinidi-mes
 affinidi-messaging-mediator = { version = "0.11.7", path = "./crates/affinidi-messaging/affinidi-messaging-mediator" }
 affinidi-messaging-mediator-common = { version = "0.11.3", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 affinidi-messaging-mediator-processors = { version = "0.11.2", path = "./crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
-affinidi-messaging-sdk = { version = "0.14.2", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.14.3", path = "./crates/affinidi-messaging/affinidi-messaging-sdk" }
 affinidi-messaging-text-client = { version = "0.11.6", path = "./crates/affinidi-messaging/affinidi-messaging-text-client" }
 affinidi-tdk = { version = "0.4.1", path = "./crates/affinidi-tdk/affinidi-tdk" }
 affinidi-data-integrity = { version = "0.3.6", path = "./crates/affinidi-tdk/common/affinidi-data-integrity" }
