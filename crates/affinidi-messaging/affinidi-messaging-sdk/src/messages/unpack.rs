@@ -215,9 +215,7 @@ mod tests {
     /// Wraps inner_json in a forward envelope with a JSON attachment.
     fn wrap_in_forward_json(inner_json: &str, expires_time: Option<u64>) -> Message {
         let inner_value: serde_json::Value = serde_json::from_str(inner_json).unwrap();
-        let attachment = Attachment::json(inner_value)
-            .id("fwd-1".into())
-            .finalize();
+        let attachment = Attachment::json(inner_value).id("fwd-1".into()).finalize();
         let mut builder = Message::build(
             "fwd-msg-1".into(),
             FORWARD_TYPE.into(),
@@ -233,9 +231,7 @@ mod tests {
     /// Wraps inner_json in a forward envelope with a Base64 attachment.
     fn wrap_in_forward_base64(inner_json: &str, expires_time: Option<u64>) -> Message {
         let encoded = BASE64_URL_SAFE.encode(inner_json.as_bytes());
-        let attachment = Attachment::base64(encoded)
-            .id("fwd-1".into())
-            .finalize();
+        let attachment = Attachment::base64(encoded).id("fwd-1".into()).finalize();
         let mut builder = Message::build(
             "fwd-msg-1".into(),
             FORWARD_TYPE.into(),
@@ -450,12 +446,10 @@ mod tests {
 
     #[test]
     fn extract_forward_payload_unsupported_format() {
-        let attachment = Attachment::links(
-            vec!["https://example.com/msg".into()],
-            "abc123hash".into(),
-        )
-        .id("fwd-link".into())
-        .finalize();
+        let attachment =
+            Attachment::links(vec!["https://example.com/msg".into()], "abc123hash".into())
+                .id("fwd-link".into())
+                .finalize();
         let msg = Message::build(
             "fwd-links".into(),
             FORWARD_TYPE.into(),
