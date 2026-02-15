@@ -360,6 +360,7 @@ pub async fn wrap_in_forward<T>(
 where
     T: SecretsResolver,
 {
+    debug!("Attempting to wrap message in a forward to({to}) sign_by({sign_by:#?})");
     let mut tos = routing_keys.to_vec();
 
     let mut nexts = tos.clone();

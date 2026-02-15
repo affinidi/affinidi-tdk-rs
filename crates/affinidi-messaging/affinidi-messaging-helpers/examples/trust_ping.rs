@@ -6,7 +6,7 @@ use affinidi_messaging_sdk::{
     ATM,
     config::ATMConfig,
     errors::ATMError,
-    messages::{GetMessagesRequest, sending::InboundMessageResponse},
+    messages::{FetchDeletePolicy, fetch::FetchOptions, sending::InboundMessageResponse},
     profiles::ATMProfile,
     protocols::Protocols,
     transports::SendMessageResponse,
@@ -89,6 +89,24 @@ async fn main() -> Result<(), ATMError> {
 
     let mut success_count = 0;
 
+    // Delete all messages for Alice
+    let response = atm
+        .fetch_messages(
+            &alice,
+            &FetchOptions {
+                limit: 100,
+                delete_policy: FetchDeletePolicy::Optimistic,
+                start_id: None,
+            },
+        )
+        .await?;
+
+    println!(
+        "Alice existing messages ({}). Deleted all...",
+        response.success.len()
+    );
+    println!("{response:#?}");
+
     // Ready to send a trust-ping to ATM
     let start = SystemTime::now();
 
@@ -100,7 +118,7 @@ async fn main() -> Result<(), ATMError> {
     let after_ping = SystemTime::now();
 
     info!("PING sent: {}", response.message_hash);
-    let msg_id = if let SendMessageResponse::RestAPI(response) = response.response {
+    if let SendMessageResponse::RestAPI(response) = response.response {
         let a: InboundMessageResponse =
             match serde_json::from_value(response.get("data").unwrap().to_owned()) {
                 Ok(a) => a,
@@ -110,8 +128,7 @@ async fn main() -> Result<(), ATMError> {
                 }
             };
 
-        if let InboundMessageResponse::Stored(details) = a {
-            details.messages[0].1.clone()
+        if let InboundMessageResponse::Stored(_) = a {
         } else {
             error!("Expected a Stored response");
             return Ok(());
@@ -119,15 +136,16 @@ async fn main() -> Result<(), ATMError> {
     } else {
         error!("Expected a RestAPI response");
         return Ok(());
-    };
+    }
 
     // Get the PONG message from ATM
     let msgs = atm
-        .get_messages(
+        .fetch_messages(
             &alice,
-            &GetMessagesRequest {
-                delete: true,
-                message_ids: vec![msg_id],
+            &FetchOptions {
+                limit: 10,
+                delete_policy: FetchDeletePolicy::Optimistic,
+                start_id: None,
             },
         )
         .await?;
