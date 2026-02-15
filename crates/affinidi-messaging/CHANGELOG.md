@@ -8,6 +8,33 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 15th February 2026
+
+### DIDComm Library (0.11.7)
+
+- **FIX:** Incorrect forwarding logic in unpack and routing protocols
+  - Fixed anoncrypt unpacking and signed message handling for forwarded messages
+  - Corrected routing protocol forwarding behavior
+
+### SDK (0.14.3)
+
+- **FIX:** Refactored `unpack` to use a loop instead of mutual recursion with
+  `unpack_forward`, which caused a compile error due to infinitely-sized futures
+  - Forward payload extraction moved to a synchronous helper
+    (`extract_forward_payload`)
+- **FEATURE:** Added `unpack_forwards` config option to `ATMConfig` builder
+  - Controls whether forward messages are automatically unwrapped during unpack
+  - Defaults to `true` (existing behavior)
+- **DOCS:** Added crate-level RustDoc with getting started guide and usage
+  examples
+- **TEST:** Added 16 unit tests for `unpack` and `extract_forward_payload`
+  covering plaintext unpacking, forward unwrapping (JSON and Base64 attachments),
+  nested forwards, config-driven behavior, and error handling
+
+### Helpers (0.11.8)
+
+- **FEATURE:** Added `trust_ping` example
+
 ## 1st February 2026
 
 ### SDK (0.14.1)

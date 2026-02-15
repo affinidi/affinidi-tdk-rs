@@ -26,7 +26,10 @@ pub(crate) async fn _try_unpack_sign(
     );
     let parsed_jws: &jws::ParsedJWS = match msg {
         ParsedEnvelope::Jws(jws) => jws,
-        _ => return Ok(None),
+        _ => {
+            envelope.metadata.authenticated = false;
+            return Ok(None);
+        }
     };
     debug!("Trying to unpack signed envelope");
 
