@@ -1,5 +1,5 @@
 use self::protocols::ping;
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, database::session::Session, messages::protocols::discover_features};
 use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
@@ -128,6 +128,26 @@ impl MessageType {
                 )),
                 StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                 "Feature is not implemented by the mediator: Problem Reports are not supported to the Mediator"
+                    .to_string(),
+            )),
+            SDKMessageType::DiscoverFeaturesQueries => {
+                discover_features::process(message, session, state)
+            }
+            SDKMessageType::DiscoverFeaturesDisclose => Err(MediatorError::MediatorError(
+                88,
+                session.session_id.clone(),
+                Some(message.id.to_string()),
+                Box::new(ProblemReport::new(
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.not_implemented".into(),
+                    "Feature is not implemented by the mediator: Discover Features disclosures are not supported to the Mediator"
+                        .into(),
+                    vec![],
+                    None,
+                )),
+                StatusCode::BAD_REQUEST.as_u16(),
+                "Feature is not implemented by the mediator: Discover Features disclosures are not supported to the Mediator"
                     .to_string(),
             )),
             SDKMessageType::Other(ref type_) => Err(

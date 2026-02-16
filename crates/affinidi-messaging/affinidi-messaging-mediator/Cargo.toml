@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.11.7"
+version = "0.11.8"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = "0.14.4"
+affinidi-messaging-sdk = "0.14"
 affinidi-messaging-didcomm = "0.11"
 affinidi-messaging-mediator-processors = "0.11"
 affinidi-messaging-mediator-common = "0.11"
