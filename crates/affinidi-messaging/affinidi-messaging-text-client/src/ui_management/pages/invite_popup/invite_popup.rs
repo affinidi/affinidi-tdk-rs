@@ -3,7 +3,7 @@ use image::{DynamicImage, ImageBuffer, ImageReader, Luma};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Flex, Layout},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, StatefulWidget, Widget, Wrap},
 };

@@ -43,6 +43,7 @@ pub use affinidi_data_integrity as data_integrity;
 
 // Always exported
 pub use affinidi_crypto;
+pub use affinidi_did_authentication as did_authentication;
 pub use affinidi_did_common as did_common;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
