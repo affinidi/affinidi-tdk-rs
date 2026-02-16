@@ -4,10 +4,7 @@ use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::{
     errors::ATMError,
     profiles::ATMProfile,
-    protocols::{
-        Protocols,
-        mediator::acls::{AccessListModeType, MediatorACLSet},
-    },
+    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
 };
 use affinidi_tdk::{TDK, common::config::TDKConfig};
 use clap::Parser;
@@ -65,7 +62,6 @@ async fn main() -> Result<(), ATMError> {
 
     let environment = &tdk.get_shared_state().environment;
     let atm = tdk.atm.clone().unwrap();
-    let protocols = Protocols::new();
 
     // Activate Alice Profile
     let tdk_alice = if let Some(alice) = environment.profiles.get("Alice") {
@@ -81,9 +77,9 @@ async fn main() -> Result<(), ATMError> {
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
         .await?;
 
-    let Some(alice_info) = protocols
-        .mediator
-        .account_get(&atm, &atm_alice, None)
+    let Some(alice_info) = atm
+        .mediator()
+        .account_get(&atm_alice, None)
         .await?
     else {
         panic!("Alice account not found on mediator");
@@ -108,7 +104,7 @@ async fn main() -> Result<(), ATMError> {
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_bob).await?, true)
         .await?;
 
-    let Some(bob_info) = protocols.mediator.account_get(&atm, &atm_bob, None).await? else {
+    let Some(bob_info) = atm.mediator().account_get(&atm_bob, None).await? else {
         panic!("Bob account not found on mediator");
     };
 
@@ -124,15 +120,13 @@ async fn main() -> Result<(), ATMError> {
     // Reset Alice ACL's
     if let AccessListModeType::ExplicitAllow = alice_acl_mode {
         // Ensure Bob is added to Alice explicit allow list
-        protocols
-            .mediator
-            .access_list_add(&atm, &atm_alice, None, &[&bob_info.did_hash])
+        atm.mediator()
+            .access_list_add(&atm_alice, None, &[&bob_info.did_hash])
             .await?;
     } else {
         // Ensure Bob is removed from Alice explicit deny list
-        protocols
-            .mediator
-            .access_list_remove(&atm, &atm_alice, None, &[&bob_info.did_hash])
+        atm.mediator()
+            .access_list_remove(&atm_alice, None, &[&bob_info.did_hash])
             .await?;
     }
     info!("Alice Access Lists reset");
@@ -140,15 +134,13 @@ async fn main() -> Result<(), ATMError> {
     // Reset Bob ACL's
     if let AccessListModeType::ExplicitAllow = bob_acl_mode {
         // Ensure Bob is added to Bob explicit allow list
-        protocols
-            .mediator
-            .access_list_add(&atm, &atm_bob, None, &[&alice_info.did_hash])
+        atm.mediator()
+            .access_list_add(&atm_bob, None, &[&alice_info.did_hash])
             .await?;
     } else {
         // Ensure Bob is removed from Bob explicit deny list
-        protocols
-            .mediator
-            .access_list_remove(&atm, &atm_bob, None, &[&alice_info.did_hash])
+        atm.mediator()
+            .access_list_remove(&atm_bob, None, &[&alice_info.did_hash])
             .await?;
     }
     info!("Bob Access Lists reset");
@@ -199,10 +191,9 @@ async fn main() -> Result<(), ATMError> {
 
     // Wrap it in a forward
     let bobs_mediator_did = tdk_bob.mediator.to_owned().unwrap();
-    let (_forward_id, forward_msg) = protocols
-        .routing
+    let (_forward_id, forward_msg) = atm
+        .routing()
         .forward_message(
-            &atm,
             &atm_alice,
             false,
             &packed_msg.0,
@@ -236,9 +227,9 @@ async fn main() -> Result<(), ATMError> {
     // Bob gets his messages
     println!();
     println!("Bob receiving messages");
-    match protocols
-        .message_pickup
-        .live_stream_get(&atm, &atm_bob, &msg_id, Duration::from_secs(5), true)
+    match atm
+        .message_pickup()
+        .live_stream_get(&atm_bob, &msg_id, Duration::from_secs(5), true)
         .await?
     {
         Some(msg) => {

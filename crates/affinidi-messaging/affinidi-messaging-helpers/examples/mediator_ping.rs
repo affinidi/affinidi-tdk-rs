@@ -8,7 +8,6 @@ use affinidi_messaging_sdk::{
     errors::ATMError,
     messages::{GetMessagesRequest, sending::InboundMessageResponse},
     profiles::ATMProfile,
-    protocols::Protocols,
     transports::SendMessageResponse,
 };
 use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
@@ -76,7 +75,6 @@ async fn main() -> Result<(), ATMError> {
 
     // Create a new ATM Client
     let atm = ATM::new(config.build()?, tdk).await?;
-    let protocols = Protocols::new();
 
     debug!("Enabling Alice's Profile");
     let alice = atm
@@ -98,9 +96,9 @@ async fn main() -> Result<(), ATMError> {
     let start = SystemTime::now();
 
     // Send a trust-ping message to ATM, will generate a PONG response
-    let response = protocols
-        .trust_ping
-        .send_ping(&atm, &alice, &mediator_did, true, true, false)
+    let response = atm
+        .trust_ping()
+        .send_ping(&alice, &mediator_did, true, true, false)
         .await?;
     let after_ping = SystemTime::now();
 
@@ -179,17 +177,16 @@ async fn main() -> Result<(), ATMError> {
     atm.profile_enable_websocket(&alice).await?;
     let after_connect = SystemTime::now();
 
-    let response = protocols
-        .trust_ping
-        .send_ping(&atm, &alice, &mediator_did, true, true, false)
+    let response = atm
+        .trust_ping()
+        .send_ping(&alice, &mediator_did, true, true, false)
         .await?;
     let after_ping_send = SystemTime::now();
     info!("PING sent: {}", response.message_id);
 
-    let response = protocols
-        .message_pickup
+    let response = atm
+        .message_pickup()
         .live_stream_get(
-            &atm,
             &alice,
             &response.message_id,
             Duration::from_secs(10),
@@ -244,17 +241,16 @@ async fn main() -> Result<(), ATMError> {
     info!(" *****************************************************  ");
     info!("2nd WebSocket test...");
     let start = SystemTime::now();
-    let response = protocols
-        .trust_ping
-        .send_ping(&atm, &alice, &mediator_did, true, true, false)
+    let response = atm
+        .trust_ping()
+        .send_ping(&alice, &mediator_did, true, true, false)
         .await?;
     let after_ping_send = SystemTime::now();
     info!("PING sent: {}", response.message_id);
 
-    let response = protocols
-        .message_pickup
+    let response = atm
+        .message_pickup()
         .live_stream_get(
-            &atm,
             &alice,
             &response.message_id,
             Duration::from_secs(10),

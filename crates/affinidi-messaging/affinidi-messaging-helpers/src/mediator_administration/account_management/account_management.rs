@@ -3,12 +3,9 @@ use affinidi_messaging_helpers::common::did::manually_enter_did_or_hash;
 use affinidi_messaging_sdk::{
     ATM,
     profiles::ATMProfile,
-    protocols::{
-        Protocols,
-        mediator::{
-            accounts::{Account, AccountChangeQueueLimitsResponse, AccountType},
-            acls::MediatorACLSet,
-        },
+    protocols::mediator::{
+        accounts::{Account, AccountChangeQueueLimitsResponse, AccountType},
+        acls::MediatorACLSet,
     },
 };
 use console::style;
@@ -19,7 +16,6 @@ use std::sync::Arc;
 pub(crate) async fn account_management_menu(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -36,10 +32,10 @@ pub(crate) async fn account_management_menu(
 
         match selection {
             0 => {
-                select_did(atm, profile, protocols, theme, mediator_config).await?;
+                select_did(atm, profile, theme, mediator_config).await?;
             }
             1 => {
-                create_account_menu(atm, profile, protocols, theme, mediator_config).await?;
+                create_account_menu(atm, profile, theme, mediator_config).await?;
             }
             2 => {
                 return Ok(());
@@ -54,7 +50,6 @@ pub(crate) async fn account_management_menu(
 pub(crate) async fn create_account_menu(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -64,9 +59,9 @@ pub(crate) async fn create_account_menu(
     };
 
     // Does this account exist?
-    if protocols
-        .mediator
-        .account_get(atm, profile, Some(new_did_hash.clone()))
+    if atm
+        .mediator()
+        .account_get(profile, Some(new_did_hash.clone()))
         .await?
         .is_some()
     {
@@ -78,20 +73,19 @@ pub(crate) async fn create_account_menu(
     }
 
     // Create the account
-    let account = protocols
-        .mediator
-        .account_add(atm, profile, &new_did_hash, None)
+    let account = atm
+        .mediator()
+        .account_add(profile, &new_did_hash, None)
         .await?;
 
     println!("{}", style("Created account successfully").green());
 
-    manage_account_menu(atm, profile, protocols, theme, mediator_config, &account).await
+    manage_account_menu(atm, profile, theme, mediator_config, &account).await
 }
 
 pub(crate) async fn manage_account_menu(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
     account: &Account,
@@ -172,8 +166,7 @@ pub(crate) async fn manage_account_menu(
         match selection {
             0 => {
                 // Modify ACLs
-                match manage_account_acls(atm, profile, protocols, theme, mediator_config, &account)
-                    .await
+                match manage_account_acls(atm, profile, theme, mediator_config, &account).await
                 {
                     Ok(a) => {
                         account = a;
@@ -185,7 +178,7 @@ pub(crate) async fn manage_account_menu(
             }
             1 => {
                 // Change Account Type
-                match _change_account_type(atm, profile, protocols, theme, &account).await {
+                match _change_account_type(atm, profile, theme, &account).await {
                     Ok(_type) => {
                         account._type = _type;
                     }
@@ -197,7 +190,7 @@ pub(crate) async fn manage_account_menu(
             }
             2 => {
                 // Change Queue Limits
-                match _change_account_queue_limit(atm, profile, protocols, theme, &account).await {
+                match _change_account_queue_limit(atm, profile, theme, &account).await {
                     Ok(response) => {
                         if let Some(response) = response {
                             if let Some(limit) = response.send_queue_limit {
@@ -224,9 +217,9 @@ pub(crate) async fn manage_account_menu(
             }
             3 => {
                 // Delete Account
-                match protocols
-                    .mediator
-                    .account_remove(atm, profile, Some(account.did_hash.clone()))
+                match atm
+                    .mediator()
+                    .account_remove(profile, Some(account.did_hash.clone()))
                     .await
                 {
                     Ok(_) => {
@@ -252,7 +245,6 @@ pub(crate) async fn manage_account_menu(
 async fn _change_account_type(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     account: &Account,
 ) -> Result<AccountType, Box<dyn std::error::Error>> {
@@ -281,9 +273,8 @@ async fn _change_account_type(
         // No change, exit gracefully
         Ok(account._type)
     } else {
-        protocols
-            .mediator
-            .account_change_type(atm, profile, &account.did_hash, new_type)
+        atm.mediator()
+            .account_change_type(profile, &account.did_hash, new_type)
             .await
             .map_err(|e| e.to_string())?;
         println!("{}", style("Account type changed successfully").green());
@@ -294,7 +285,6 @@ async fn _change_account_type(
 async fn _change_account_queue_limit(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     account: &Account,
 ) -> Result<Option<AccountChangeQueueLimitsResponse>, Box<dyn std::error::Error>> {
@@ -384,10 +374,9 @@ async fn _change_account_queue_limit(
         }
     };
 
-    let response = protocols
-        .mediator
+    let response = atm
+        .mediator()
         .account_change_queue_limits(
-            atm,
             profile,
             &account.did_hash,
             send_queue_limit,
@@ -411,7 +400,6 @@ async fn _change_account_queue_limit(
 pub(crate) async fn select_did(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     mediator_config: &SharedConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -431,37 +419,22 @@ pub(crate) async fn select_did(
             0 => {
                 println!("Scan existing DIDs on Mediator");
 
-                if let Some(account) = _select_from_existing_dids(
-                    atm,
-                    profile,
-                    protocols,
-                    theme,
-                    None,
-                    mediator_config,
-                )
-                .await?
+                if let Some(account) =
+                    _select_from_existing_dids(atm, profile, theme, None, mediator_config).await?
                 {
-                    manage_account_menu(atm, profile, protocols, theme, mediator_config, &account)
-                        .await?;
+                    manage_account_menu(atm, profile, theme, mediator_config, &account).await?;
                 }
             }
             1 => {
                 if let Some(did_hash) = manually_enter_did_or_hash(theme) {
                     // Look up the Account for this DID
-                    let account = protocols
-                        .mediator
-                        .account_get(atm, profile, Some(did_hash))
+                    let account = atm
+                        .mediator()
+                        .account_get(profile, Some(did_hash))
                         .await?;
                     if let Some(account) = account {
-                        manage_account_menu(
-                            atm,
-                            profile,
-                            protocols,
-                            theme,
-                            mediator_config,
-                            &account,
-                        )
-                        .await?;
+                        manage_account_menu(atm, profile, theme, mediator_config, &account)
+                            .await?;
                     }
                 }
             }
@@ -476,14 +449,13 @@ pub(crate) async fn select_did(
 async fn _select_from_existing_dids(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     cursor: Option<u32>,
     mediator_config: &SharedConfig,
 ) -> Result<Option<Account>, Box<dyn std::error::Error>> {
-    let dids = protocols
-        .mediator
-        .accounts_list(atm, profile, cursor, Some(2))
+    let dids = atm
+        .mediator()
+        .accounts_list(profile, cursor, Some(2))
         .await?;
 
     if dids.accounts.is_empty() {
@@ -544,7 +516,6 @@ async fn _select_from_existing_dids(
         Box::pin(_select_from_existing_dids(
             atm,
             profile,
-            protocols,
             theme,
             Some(dids.cursor),
             mediator_config,

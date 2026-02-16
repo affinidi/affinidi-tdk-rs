@@ -2,7 +2,7 @@
 use affinidi_messaging_sdk::{
     ATM,
     profiles::ATMProfile,
-    protocols::{Protocols, mediator::accounts::AccountType},
+    protocols::mediator::accounts::AccountType,
 };
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -15,7 +15,6 @@ use crate::SharedConfig;
 pub(crate) async fn administration_accounts_menu(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
     shared_config: &SharedConfig,
 ) {
@@ -36,10 +35,10 @@ pub(crate) async fn administration_accounts_menu(
 
         match selection {
             0 => {
-                list_admins(atm, profile, protocols, shared_config).await;
+                list_admins(atm, profile, shared_config).await;
             }
-            1 => add_admin(atm, profile, protocols, theme).await,
-            2 => strip_admins(atm, profile, protocols, shared_config, theme).await,
+            1 => add_admin(atm, profile, theme).await,
+            2 => strip_admins(atm, profile, shared_config, theme).await,
             3 => {
                 break;
             }
@@ -54,14 +53,9 @@ pub(crate) async fn administration_accounts_menu(
 pub(crate) async fn list_admins(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     config: &SharedConfig,
 ) {
-    match protocols
-        .mediator
-        .list_admins(atm, profile, None, None)
-        .await
-    {
+    match atm.mediator().list_admins(profile, None, None).await {
         Ok(admins) => {
             println!(
                 "{}",
@@ -97,7 +91,6 @@ pub(crate) async fn list_admins(
 pub(crate) async fn add_admin(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     theme: &ColorfulTheme,
 ) {
     println!("Adding new Administration DID (type exit to quit this dialog)");
@@ -124,9 +117,9 @@ pub(crate) async fn add_admin(
         .interact()
         .unwrap()
     {
-        match protocols
-            .mediator
-            .add_admins(atm, profile, slice::from_ref(&input))
+        match atm
+            .mediator()
+            .add_admins(profile, slice::from_ref(&input))
             .await
         {
             Ok(result) => {
@@ -157,15 +150,10 @@ pub(crate) async fn add_admin(
 pub(crate) async fn strip_admins(
     atm: &ATM,
     profile: &Arc<ATMProfile>,
-    protocols: &Protocols,
     config: &SharedConfig,
     theme: &ColorfulTheme,
 ) {
-    match protocols
-        .mediator
-        .list_admins(atm, profile, None, None)
-        .await
-    {
+    match atm.mediator().list_admins(profile, None, None).await {
         Ok(admins) => {
             // remove the mediator administrator account from the list
             let admins: Vec<String> = admins
@@ -217,7 +205,7 @@ pub(crate) async fn strip_admins(
                     .iter()
                     .map(|&idx| admins[idx].clone())
                     .collect::<Vec<_>>();
-                match protocols.mediator.strip_admins(atm, profile, &admins).await {
+                match atm.mediator().strip_admins(profile, &admins).await {
                     Ok(result) => {
                         println!(
                             "{}",
