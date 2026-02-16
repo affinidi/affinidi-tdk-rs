@@ -29,6 +29,12 @@ tooling.
   `atm.<protocol>()` accessor pattern
 - **DOCS:** Crate-level RustDoc updated to use the new accessor pattern
 
+### Mediator (0.11.8)
+
+- **FEATURE:** Discover Features 2.0 Protocol support added to the Mediator
+  - Mediator can respond to incoming Discover Features queries with supported
+    protocol and feature disclosures
+
 ### Helpers (0.11.8)
 
 - **FEATURE:** Added `discover_features` example — sends a Discover Features 2.0
