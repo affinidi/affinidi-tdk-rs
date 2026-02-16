@@ -4,12 +4,12 @@ use crate::state_store::actions::chat_list::ChatStatus;
 use crate::state_store::actions::invitation::create_new_profile;
 use crate::state_store::chat_message::{ChatEffect, ChatMessage, ChatMessageType};
 use affinidi_messaging_didcomm::{Attachment, AttachmentData, Message, UnpackMetadata};
+use affinidi_messaging_sdk::ATM;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
-use affinidi_messaging_sdk::{ATM, protocols::Protocols};
 use base64::prelude::*;
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Alphanumeric;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -193,13 +193,7 @@ async fn _handle_connection_setup(
     info!("Added new profile to ATM");
 
     // Add the remote secure DID to the our new secure profile
-    let protocols = Protocols::default();
-
-    let our_new_profile_info = match protocols
-        .mediator
-        .account_get(atm, &our_new_profile, None)
-        .await
-    {
+    let our_new_profile_info = match atm.mediator().account_get(&our_new_profile, None).await {
         Ok(Some(info)) => info,
         Ok(None) => {
             warn!(
@@ -220,9 +214,9 @@ async fn _handle_connection_setup(
     let our_new_profile_acl_flags = MediatorACLSet::from_u64(our_new_profile_info.acls);
     if let AccessListModeType::ExplicitAllow = our_new_profile_acl_flags.get_access_list_mode().0 {
         // Add the new remote secure DID to our new secure DID
-        match protocols
-            .mediator
-            .access_list_add(atm, &our_new_profile, None, &[&digest(&remote_secure_did)])
+        match atm
+            .mediator()
+            .access_list_add(&our_new_profile, None, &[&digest(&remote_secure_did)])
             .await
         {
             Ok(_) => {}
@@ -282,11 +276,9 @@ async fn _handle_connection_setup(
         )
         .await;
 
-    let protocols = Protocols::default();
-    let forwarded = protocols
-        .routing
+    let forwarded = atm
+        .routing()
         .forward_message(
-            atm,
             &current_profile,
             false,
             packed.unwrap().0.as_str(),
@@ -691,29 +683,24 @@ pub async fn handle_message(
             };
 
             // Set up the ACL for the remote secure DID.
-            let protocols = Protocols::default();
-
-            let local_secure_profile_info = match protocols
-                .mediator
-                .account_get(atm, &our_secure_profile, None)
-                .await
-            {
-                Ok(Some(info)) => info,
-                Ok(None) => {
-                    warn!(
-                        "No profile info found for local secure DID ({})",
-                        &profile.inner.did
-                    );
-                    return;
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to get local secure profile info from mediator: {}",
-                        e
-                    );
-                    return;
-                }
-            };
+            let local_secure_profile_info =
+                match atm.mediator().account_get(&our_secure_profile, None).await {
+                    Ok(Some(info)) => info,
+                    Ok(None) => {
+                        warn!(
+                            "No profile info found for local secure DID ({})",
+                            &profile.inner.did
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to get local secure profile info from mediator: {}",
+                            e
+                        );
+                        return;
+                    }
+                };
 
             let local_secure_profile_acl_flags =
                 MediatorACLSet::from_u64(local_secure_profile_info.acls);
@@ -721,14 +708,9 @@ pub async fn handle_message(
                 local_secure_profile_acl_flags.get_access_list_mode().0
             {
                 // Add the remote secure DID to this profile's ACL
-                match protocols
-                    .mediator
-                    .access_list_add(
-                        atm,
-                        &our_secure_profile,
-                        None,
-                        &[&digest(&remote_secure_did)],
-                    )
+                match atm
+                    .mediator()
+                    .access_list_add(&our_secure_profile, None, &[&digest(&remote_secure_did)])
                     .await
                 {
                     Ok(_) => {

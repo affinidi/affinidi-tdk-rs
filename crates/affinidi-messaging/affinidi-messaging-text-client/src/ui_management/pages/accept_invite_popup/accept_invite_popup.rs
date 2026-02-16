@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
     crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Alignment, Constraint, Flex, Layout, Position},
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph, Widget, Wrap},
 };

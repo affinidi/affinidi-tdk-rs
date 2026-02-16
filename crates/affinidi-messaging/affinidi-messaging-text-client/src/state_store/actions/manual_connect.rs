@@ -3,10 +3,7 @@ use crate::state_store::State;
 use affinidi_messaging_sdk::{
     ATM,
     profiles::ATMProfile,
-    protocols::{
-        Protocols,
-        mediator::acls::{AccessListModeType, MediatorACLSet},
-    },
+    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
 };
 use affinidi_tdk::{
     dids::{DID, KeyType, PeerKeyRole},
@@ -51,9 +48,7 @@ pub async fn manual_connect_setup(
 
     // Setup Access List Setup
     // Add the remote secure DID to the our new secure profile
-    let protocols = Protocols::default();
-
-    let profile_info = match protocols.mediator.account_get(atm, &profile, None).await {
+    let profile_info = match atm.mediator().account_get(&profile, None).await {
         Ok(Some(info)) => info,
         Ok(None) => {
             warn!("No profile info found ({})", &profile.inner.did);
@@ -68,9 +63,9 @@ pub async fn manual_connect_setup(
     let profile_acl_flags = MediatorACLSet::from_u64(profile_info.acls);
     if let AccessListModeType::ExplicitAllow = profile_acl_flags.get_access_list_mode().0 {
         // Add the remote secure DID to our secure DID
-        match protocols
-            .mediator
-            .access_list_add(atm, &profile, None, &[&digest(remote_did)])
+        match atm
+            .mediator()
+            .access_list_add(&profile, None, &[&digest(remote_did)])
             .await
         {
             Ok(_) => {}

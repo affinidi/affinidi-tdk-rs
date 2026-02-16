@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.4.2"
+version = "0.4.3"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
