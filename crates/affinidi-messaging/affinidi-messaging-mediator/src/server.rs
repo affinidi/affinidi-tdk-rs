@@ -8,9 +8,10 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
+use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
 use axum_server::tls_rustls::RustlsConfig;
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, sync::Arc};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, event};
@@ -126,6 +127,23 @@ pub async fn start() {
         .await
         .unwrap();
 
+    // Create the Discover Feature Protocol set for the mediator
+    let discover_features = Arc::new(DiscoverFeatures {
+        protocols: vec![
+            "https://didcomm.org/discover-features/2.0".to_string(),
+            "https://didcomm.org/routing/2.0".to_string(),
+            "https://didcomm.org/trust-ping/2.0".to_string(),
+            "https://didcomm.org/out-of-band/2.0".to_string(),
+            "https://didcomm.org/messagepickup/3.0".to_string(),
+            "https://affinidi.com/atm/1.0/authenticate".to_string(),
+            "https://didcomm.org/mediator/1.0/admin-management".to_string(),
+            "https://didcomm.org/mediator/1.0/account-management".to_string(),
+            "https://didcomm.org/mediator/1.0/acl-management".to_string(),
+            "https://didcomm.org/report-problem/2.0".to_string(),
+        ],
+        ..Default::default()
+    });
+
     // Create the shared application State
     let shared_state = SharedData {
         config: config.clone(),
@@ -133,6 +151,7 @@ pub async fn start() {
         did_resolver,
         database,
         streaming_task,
+        discover_features,
     };
 
     // build our application routes

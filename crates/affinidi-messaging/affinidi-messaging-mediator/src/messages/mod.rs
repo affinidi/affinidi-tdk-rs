@@ -146,7 +146,6 @@ impl MessageType {
                     )),
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     format!("Feature is not implemented by the mediator: Message type ({type_}) is not supported to the Mediator")
-                        ,
                 )),
         }
     }
