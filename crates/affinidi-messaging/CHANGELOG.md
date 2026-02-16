@@ -8,6 +8,38 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 16th February 2026
+
+### SDK (0.14.4)
+
+- **FEATURE:** Discover Features 2.0 Protocol support added to the SDK
+  - Query remote agents for supported protocols, goal codes, and headers
+  - Respond to incoming queries with configurable discoverable state
+  - `ATMConfigBuilder::with_discovery_features()` to register features at
+    construction time
+  - `atm.discover_features().get_discoverable_state()` for runtime inspection
+    and updates via `Arc<RwLock<…>>`
+  - Wildcard prefix matching and exact matching per the spec
+  - 16 unit tests covering matching, edge cases, and multi-query scenarios
+- **FEATURE:** Ergonomic protocol accessor methods added to `ATM`
+  - `atm.trust_ping()`, `atm.message_pickup()`, `atm.routing()`,
+    `atm.mediator()`, `atm.oob_discovery()`, `atm.discover_features()`
+  - Eliminates the need to instantiate `Protocols` separately
+- **DEPRECATION:** `Protocols` struct deprecated in favour of the new
+  `atm.<protocol>()` accessor pattern
+- **DOCS:** Crate-level RustDoc updated to use the new accessor pattern
+
+### Helpers (0.11.8)
+
+- **FEATURE:** Added `discover_features` example — sends a Discover Features 2.0
+  query to a remote DID and displays the disclosure response
+- **FEATURE:** Added `discover_features_responder` example — listens via
+  WebSocket for incoming queries and responds with configured feature disclosures
+- **REFACTOR:** All examples updated to use the new `atm.<protocol>()` accessor
+  pattern instead of the deprecated `Protocols` struct
+- **CHORE:** Dependencies switched from workspace references to versioned
+  crates.io dependencies
+
 ## 15th February 2026
 
 ### DIDComm Library (0.11.7)

@@ -6,7 +6,7 @@
 
 use affinidi_did_common::Document;
 use network::WSCommands;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use tokio::{select, sync::oneshot};
 use tracing::{Instrument, Level, debug, span, warn};

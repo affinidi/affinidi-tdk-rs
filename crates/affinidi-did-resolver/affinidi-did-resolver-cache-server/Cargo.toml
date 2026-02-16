@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.6.3"
+version = "0.6.4"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -14,8 +14,8 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { workspace = true, features = ["network"] }
-affinidi-did-common.workspace = true
+affinidi-did-resolver-cache-sdk = { version = "0.7", features = ["network"] }
+affinidi-did-common = "0.3"
 
 # External Crates
 ahash = "0.8"
@@ -24,20 +24,19 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 chrono = "0.4"
 http = "1.4"
 moka = { version = "0.12", features = ["future"] }
-rand = "0.9"
+rand = "0.10"
 regex = "1.12"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.49", features = ["full"] }
-toml = "0.9"
+toml = "1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-affinidi-secrets-resolver.workspace = true
+affinidi-secrets-resolver = "0.5"
 
 [lints]
 workspace = true
-

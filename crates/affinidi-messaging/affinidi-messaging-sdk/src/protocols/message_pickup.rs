@@ -730,3 +730,101 @@ impl MessagePickup {
         ))
     }
 }
+
+/// Wrapper struct that holds a reference to ATM, enabling the `atm.message_pickup().method()` pattern
+pub struct MessagePickupOps<'a> {
+    pub(crate) atm: &'a ATM,
+}
+
+impl<'a> MessagePickupOps<'a> {
+    /// Sends a Message Pickup 3.0 `Status Request` message
+    /// See [`MessagePickup::send_status_request`] for full documentation
+    pub async fn send_status_request(
+        &self,
+        profile: &Arc<ATMProfile>,
+        wait_for_response: bool,
+        wait: Option<Duration>,
+    ) -> Result<Option<MessagePickupStatusReply>, ATMError> {
+        MessagePickup::default()
+            .send_status_request(self.atm, profile, wait_for_response, wait)
+            .await
+    }
+
+    /// Sends a Message Pickup 3.0 `Live Delivery` message
+    /// See [`MessagePickup::toggle_live_delivery`] for full documentation
+    pub async fn toggle_live_delivery(
+        &self,
+        profile: &Arc<ATMProfile>,
+        live_delivery: bool,
+    ) -> Result<String, ATMError> {
+        MessagePickup::default()
+            .toggle_live_delivery(self.atm, profile, live_delivery)
+            .await
+    }
+
+    /// Waits for the next message to be received via websocket live delivery
+    /// See [`MessagePickup::live_stream_next`] for full documentation
+    pub async fn live_stream_next(
+        &self,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+        auto_delete: bool,
+    ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
+        MessagePickup::default()
+            .live_stream_next(self.atm, profile, wait, auto_delete)
+            .await
+    }
+
+    /// Attempts to retrieve a specific message from the server via websocket live delivery
+    /// See [`MessagePickup::live_stream_get`] for full documentation
+    pub async fn live_stream_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        msg_id: &str,
+        wait: Duration,
+        auto_delete: bool,
+    ) -> Result<Option<(Message, Box<UnpackMetadata>)>, ATMError> {
+        MessagePickup::default()
+            .live_stream_get(self.atm, profile, msg_id, wait, auto_delete)
+            .await
+    }
+
+    /// Sends a Message Pickup 3.0 `Delivery Request` message
+    /// See [`MessagePickup::send_delivery_request`] for full documentation
+    pub async fn send_delivery_request(
+        &self,
+        profile: &Arc<ATMProfile>,
+        limit: Option<usize>,
+        wait_for_response: bool,
+    ) -> Result<Vec<(Message, UnpackMetadata)>, ATMError> {
+        MessagePickup::default()
+            .send_delivery_request(self.atm, profile, limit, wait_for_response)
+            .await
+    }
+
+    /// Sends a Message Pickup 3.0 `Messages Received` message
+    /// See [`MessagePickup::send_messages_received`] for full documentation
+    pub async fn send_messages_received(
+        &self,
+        profile: &Arc<ATMProfile>,
+        list: &Vec<String>,
+        wait_for_response: bool,
+    ) -> Result<Option<MessagePickupStatusReply>, ATMError> {
+        MessagePickup::default()
+            .send_messages_received(self.atm, profile, list, wait_for_response)
+            .await
+    }
+
+    /// Waits for the next message to be received via websocket live delivery (packed)
+    /// See [`MessagePickup::live_stream_next_packed`] for full documentation
+    pub async fn live_stream_next_packed(
+        &self,
+        profile: &Arc<ATMProfile>,
+        wait: Option<Duration>,
+        auto_delete: bool,
+    ) -> Result<Option<String>, ATMError> {
+        MessagePickup::default()
+            .live_stream_next_packed(self.atm, profile, wait, auto_delete)
+            .await
+    }
+}

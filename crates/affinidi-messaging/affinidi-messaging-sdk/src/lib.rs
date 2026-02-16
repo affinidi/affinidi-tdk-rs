@@ -84,15 +84,10 @@
 //! The simplest way to verify connectivity is a DIDComm Trust Ping:
 //!
 //! ```rust,ignore
-//! use affinidi_messaging_sdk::protocols::Protocols;
-//!
-//! let protocols = Protocols::new();
-//!
 //! // Send a signed trust-ping, requesting a pong response
-//! let ping = protocols
-//!     .trust_ping
+//! let ping = atm
+//!     .trust_ping()
 //!     .send_ping(
-//!         &atm,
 //!         &alice,       // sender profile
 //!         &target_did,  // recipient DID
 //!         true,         // signed
@@ -137,20 +132,19 @@
 //! atm.profile_enable_websocket(&alice).await?;
 //!
 //! // Send a ping (now routed over WebSocket automatically)
-//! let ping = protocols
-//!     .trust_ping
-//!     .send_ping(&atm, &alice, &target_did, true, true, false)
+//! let ping = atm
+//!     .trust_ping()
+//!     .send_ping(&alice, &target_did, true, true, false)
 //!     .await?;
 //!
 //! // Wait for the pong via the live stream
-//! let pong = protocols
-//!     .message_pickup
+//! let pong = atm
+//!     .message_pickup()
 //!     .live_stream_get(
-//!         &atm,
 //!         &alice,
 //!         &ping.message_id,
 //!         Duration::from_secs(10),
-//!         true, // auto-unpack
+//!         true, // auto-delete
 //!     )
 //!     .await?;
 //! ```
@@ -185,6 +179,11 @@
 //! export RUST_LOG=none,affinidi_messaging_sdk=debug
 //! ```
 
+use crate::protocols::{
+    discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
+    message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
+    trust_ping::TrustPingOps,
+};
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
 use delete_handler::DeletionHandlerCommands;
@@ -302,5 +301,35 @@ impl ATM {
     /// Get the TDK Shared State
     pub fn get_tdk(&self) -> &TDKSharedState {
         &self.inner.tdk_common
+    }
+
+    /// Access Trust Ping protocol methods
+    pub fn trust_ping(&self) -> TrustPingOps<'_> {
+        TrustPingOps { atm: self }
+    }
+
+    /// Access Message Pickup 3.0 protocol methods
+    pub fn message_pickup(&self) -> MessagePickupOps<'_> {
+        MessagePickupOps { atm: self }
+    }
+
+    /// Access Routing protocol methods
+    pub fn routing(&self) -> RoutingOps<'_> {
+        RoutingOps { atm: self }
+    }
+
+    /// Access Mediator administration protocol methods
+    pub fn mediator(&self) -> MediatorOps<'_> {
+        MediatorOps { atm: self }
+    }
+
+    /// Access OOB Discovery protocol methods
+    pub fn oob_discovery(&self) -> OOBDiscoveryOps<'_> {
+        OOBDiscoveryOps { atm: self }
+    }
+
+    /// Access Discover Features protocol methods
+    pub fn discover_features(&self) -> DiscoverfeaturesOps<'_> {
+        DiscoverfeaturesOps { atm: self }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-meeting-place"
-version = "0.2.4"
+version = "0.2.5"
 description = "Affinidi Meeting Place SDK. Discover and connect with others in a secure and private way."
 edition.workspace = true
 authors.workspace = true
@@ -13,11 +13,11 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-did-authentication.workspace = true
-affinidi-tdk-common.workspace = true
-affinidi-messaging-didcomm.workspace = true
-affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-did-common.workspace = true
+affinidi-did-authentication = "0.2"
+affinidi-tdk-common = "0.3"
+affinidi-messaging-didcomm = "0.11"
+affinidi-did-resolver-cache-sdk = "0.7"
+affinidi-did-common = "0.3"
 
 base64 = "0.22"
 chrono = "0.4"
@@ -26,10 +26,10 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
+uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-affinidi-secrets-resolver.workspace = true
+affinidi-secrets-resolver = "0.5"
 
 clap = { version = "4.5", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = [

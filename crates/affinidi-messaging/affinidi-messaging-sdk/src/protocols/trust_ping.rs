@@ -183,3 +183,46 @@ impl TrustPing {
         Ok(msg.created_time(now).expires_time(now + 300).finalize())
     }
 }
+
+/// Wrapper struct that holds a reference to ATM, enabling the `atm.trust_ping().method()` pattern
+pub struct TrustPingOps<'a> {
+    pub(crate) atm: &'a ATM,
+}
+
+impl<'a> TrustPingOps<'a> {
+    /// Sends a DIDComm Trust-Ping message
+    /// See [`TrustPing::send_ping`] for full documentation
+    pub async fn send_ping(
+        &self,
+        profile: &Arc<ATMProfile>,
+        to_did: &str,
+        signed: bool,
+        expect_pong: bool,
+        wait_response: bool,
+    ) -> Result<TrustPingSent, ATMError> {
+        TrustPing::default()
+            .send_ping(self.atm, profile, to_did, signed, expect_pong, wait_response)
+            .await
+    }
+
+    /// Generate a DIDComm PlainText Trust-Ping message
+    /// See [`TrustPing::generate_ping_message`] for full documentation
+    pub fn generate_ping_message(
+        &self,
+        from_did: Option<&str>,
+        to_did: &str,
+        expect_pong: bool,
+    ) -> Result<Message, ATMError> {
+        TrustPing::default().generate_ping_message(from_did, to_did, expect_pong)
+    }
+
+    /// Generate a Trust-Ping Pong Response DIDComm PlainText message
+    /// See [`TrustPing::generate_pong_message`] for full documentation
+    pub fn generate_pong_message(
+        &self,
+        ping: &Message,
+        from_did: Option<&str>,
+    ) -> Result<Message, ATMError> {
+        TrustPing::default().generate_pong_message(ping, from_did)
+    }
+}

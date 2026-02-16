@@ -20,7 +20,7 @@ p384 = ["dep:p384"]
 ed25519 = ["dep:ed25519-dalek"]
 
 [dependencies]
-affinidi-encoding.workspace = true
+affinidi-encoding = "0.1"
 
 base58 = "0.2"
 base64 = "0.22"

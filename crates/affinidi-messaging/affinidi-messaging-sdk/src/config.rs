@@ -1,7 +1,10 @@
-use crate::{errors::ATMError, transports::websockets::WebSocketResponses};
+use crate::{
+    errors::ATMError, protocols::discover_features::DiscoverFeatures,
+    transports::websockets::WebSocketResponses,
+};
 use rustls::pki_types::CertificateDer;
-use std::{fs::File, io::BufReader};
-use tokio::sync::broadcast::Sender;
+use std::{fs::File, io::BufReader, sync::Arc};
+use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
 
 /// Configuration for the Affinidi Trusted Messaging (ATM) Service
@@ -23,6 +26,9 @@ pub struct ATMConfig {
 
     /// Should we auto unpack forwarded messages?
     pub(crate) unpack_forwards: bool,
+
+    /// Can configure any protocol discoverable information here
+    pub(crate) discover_features: Arc<RwLock<DiscoverFeatures>>,
 }
 
 impl ATMConfig {
@@ -56,6 +62,7 @@ pub struct ATMConfigBuilder {
     fetch_cache_limit_bytes: u64,
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
     unpack_forwards: bool,
+    discover_features: DiscoverFeatures,
 }
 
 impl Default for ATMConfigBuilder {
@@ -66,6 +73,7 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
             unpack_forwards: true,
+            discover_features: DiscoverFeatures::default(),
         }
     }
 }
@@ -115,6 +123,15 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// You can specificy protocol information that can be discovered by others using the Dicover
+    /// Features Protocol here. This is useful for things like indicating support for certain
+    /// message types, transports, etc.
+    /// Default: None (No discoverable information)
+    pub fn with_discovery_features(mut self, features: DiscoverFeatures) -> Self {
+        self.discover_features = features;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -149,6 +166,7 @@ impl ATMConfigBuilder {
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
             unpack_forwards: self.unpack_forwards,
+            discover_features: Arc::new(RwLock::new(self.discover_features)),
         })
     }
 }
