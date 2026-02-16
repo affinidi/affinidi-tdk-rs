@@ -1,6 +1,6 @@
 use chrono::Local;
 use ratatui::{
-    style::{Color, Style},
+    style::{Color, Style, Stylize},
     text::Line,
 };
 use serde::{Deserialize, Serialize};

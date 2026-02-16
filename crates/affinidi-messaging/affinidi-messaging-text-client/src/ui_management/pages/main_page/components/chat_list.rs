@@ -266,7 +266,7 @@ impl ComponentRender<RenderProps> for ChatListComponent {
             )
             .highlight_symbol(">");
 
-        let mut app_chat_list_state = self.list_state;
+        let mut app_chat_list_state = self.list_state.clone();
         frame.render_stateful_widget(chat_list, props.area, &mut app_chat_list_state);
     }
 }
