@@ -10,7 +10,7 @@ use clap::Parser;
 use futures_util::future::join_all;
 use num_format::{Locale, ToFormattedString};
 use number_prefix::NumberPrefix;
-use rand::Rng;
+use rand::RngExt;
 use rayon::prelude::*;
 use std::sync::Arc;
 use std::time::Duration;

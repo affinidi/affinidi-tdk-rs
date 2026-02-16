@@ -3,7 +3,6 @@ use crate::{
     errors::ATMError,
     messages::{GenericDataStruct, GetMessagesRequest, known::MessageType},
     profiles::ATMProfile,
-    protocols::{message_pickup::MessagePickup, routing::Routing},
 };
 use affinidi_messaging_didcomm::Message;
 use serde_json::Value;
@@ -97,8 +96,9 @@ impl ATM {
             );
 
             if wait_for_response {
-                let response = MessagePickup::default()
-                    .live_stream_get(self, profile, msg_id, Duration::from_secs(10), true)
+                let response = self
+                    .message_pickup()
+                    .live_stream_get(profile, msg_id, Duration::from_secs(10), true)
                     .await?;
 
                 if let Some((message, _)) = response {
@@ -177,12 +177,10 @@ impl ATM {
         delay_milli: Option<i64>,
         wait_for_response: bool,
     ) -> Result<SendMessageResponse, ATMError> {
-        let routing = Routing::default();
-
         // Wrap the message in a forward message
-        let forwarded_message = routing
+        let forwarded_message = self
+            .routing()
             .forward_message(
-                self,
                 profile,
                 anonymous,
                 message,

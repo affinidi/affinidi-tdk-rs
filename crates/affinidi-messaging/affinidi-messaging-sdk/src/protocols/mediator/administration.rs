@@ -368,3 +368,58 @@ impl Mediator {
         .await
     }
 }
+
+/// Wrapper struct that holds a reference to ATM, enabling the `atm.mediator().method()` pattern
+pub struct MediatorOps<'a> {
+    pub(crate) atm: &'a ATM,
+}
+
+impl<'a> MediatorOps<'a> {
+    /// Get mediator configuration
+    /// See [`Mediator::get_config`] for full documentation
+    pub async fn get_config(
+        &self,
+        profile: &Arc<ATMProfile>,
+    ) -> Result<Value, ATMError> {
+        Mediator::default()
+            .get_config(self.atm, profile)
+            .await
+    }
+
+    /// Adds a number of admins to the mediator
+    /// See [`Mediator::add_admins`] for full documentation
+    pub async fn add_admins(
+        &self,
+        profile: &Arc<ATMProfile>,
+        admins: &[String],
+    ) -> Result<i32, ATMError> {
+        Mediator::default()
+            .add_admins(self.atm, profile, admins)
+            .await
+    }
+
+    /// Strips admin rights from a number of accounts from the mediator
+    /// See [`Mediator::strip_admins`] for full documentation
+    pub async fn strip_admins(
+        &self,
+        profile: &Arc<ATMProfile>,
+        admins: &[String],
+    ) -> Result<i32, ATMError> {
+        Mediator::default()
+            .strip_admins(self.atm, profile, admins)
+            .await
+    }
+
+    /// Lists all the admins in the mediator
+    /// See [`Mediator::list_admins`] for full documentation
+    pub async fn list_admins(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<MediatorAdminList, ATMError> {
+        Mediator::default()
+            .list_admins(self.atm, profile, cursor, limit)
+            .await
+    }
+}

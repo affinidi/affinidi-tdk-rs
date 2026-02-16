@@ -26,13 +26,13 @@ path = "src/generate_mediator_config/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { workspace = true, features = [
+affinidi-did-resolver-cache-sdk = { version = "0.7", features = [
   "did_example",
 ] }
-affinidi-did-common.workspace = true
-affinidi-messaging-didcomm.workspace = true
-affinidi-messaging-sdk.workspace = true
-affinidi-tdk.workspace = true
+affinidi-did-common = "0.3"
+affinidi-messaging-didcomm = "0.11"
+affinidi-messaging-sdk = "0.14"
+affinidi-tdk = "0.4"
 
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
@@ -60,7 +60,3 @@ tracing-subscriber = { version = "0.3", features = [
   "valuable",
 ] }
 uuid = { version = "1.21", features = ["v4", "fast-rng"] }
-
-[dev-dependencies]
-affinidi-tdk.workspace = true
-affinidi-did-authentication.workspace = true

@@ -3,7 +3,7 @@
  */
 
 use super::{WebSocketResponses, ws_cache::MessageCache};
-use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile, protocols::Protocols};
+use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile};
 use ahash::{HashMap, HashMapExt};
 use futures_util::{SinkExt, StreamExt};
 use std::{collections::VecDeque, sync::Arc, time::Duration};
@@ -172,7 +172,6 @@ impl WebSocketTransport {
             let atm = ATM {
                 inner: self.shared.clone(),
             };
-            let protocols = Protocols::new();
 
             // Set up a watchdog to ping the mediator every 20 seconds
             let mut watchdog = interval_at(
@@ -198,7 +197,7 @@ impl WebSocketTransport {
                 select! {
                     Some(_) = WebSocketTransport::conditional_reconnect_delay(&mut self.connect_delay_timer), if self.web_socket.is_none() => {
                         debug!("Attempt to reconnect");
-                        self.web_socket = self._handle_connection(&atm, &protocols).await;
+                        self.web_socket = self._handle_connection(&atm).await;
                         if self.web_socket.is_some() && notify_connection.is_some() {
                             let _ = notify_connection.unwrap().send(true);
                             notify_connection = None;
@@ -435,7 +434,7 @@ impl WebSocketTransport {
     }
 
     // Wrapper that handles all of the logic of setting up a connection to the mediator
-    async fn _handle_connection(&mut self, atm: &ATM, protocols: &Protocols) -> Option<WebSocket> {
+    async fn _handle_connection(&mut self, atm: &ATM) -> Option<WebSocket> {
         debug!("Starting websocket connection");
 
         fn _calculate_delay(delay: u8) -> u8 {
@@ -470,9 +469,9 @@ impl WebSocketTransport {
             self.awaiting_pong = false;
             Some(web_socket)
         } else {
-            match protocols
-                .message_pickup
-                .toggle_live_delivery(atm, &self.profile, true)
+            match atm
+                .message_pickup()
+                .toggle_live_delivery(&self.profile, true)
                 .await
             {
                 Ok(_) => {

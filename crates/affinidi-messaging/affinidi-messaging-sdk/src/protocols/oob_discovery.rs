@@ -255,3 +255,42 @@ impl OOBDiscovery {
         }
     }
 }
+
+/// Wrapper struct that holds a reference to ATM, enabling the `atm.oob_discovery().method()` pattern
+pub struct OOBDiscoveryOps<'a> {
+    pub(crate) atm: &'a ATM,
+}
+
+impl<'a> OOBDiscoveryOps<'a> {
+    /// Creates an OOB Invite
+    /// See [`OOBDiscovery::create_invite`] for full documentation
+    pub async fn create_invite(
+        &self,
+        profile: &Arc<ATMProfile>,
+        expiry: Option<Duration>,
+    ) -> Result<String, ATMError> {
+        OOBDiscovery::default()
+            .create_invite(self.atm, profile, expiry)
+            .await
+    }
+
+    /// Retrieve an Invitation from a shortened OOB Invitation URL
+    /// See [`OOBDiscovery::retrieve_invite`] for full documentation
+    pub async fn retrieve_invite(&self, url: &str) -> Result<Message, ATMError> {
+        OOBDiscovery::default()
+            .retrieve_invite(self.atm, url)
+            .await
+    }
+
+    /// Deletes OOB Invite
+    /// See [`OOBDiscovery::delete_invite`] for full documentation
+    pub async fn delete_invite(
+        &self,
+        profile: &Arc<ATMProfile>,
+        oobid: &str,
+    ) -> Result<String, ATMError> {
+        OOBDiscovery::default()
+            .delete_invite(self.atm, profile, oobid)
+            .await
+    }
+}

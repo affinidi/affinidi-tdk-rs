@@ -23,7 +23,7 @@ did-webvh = ["dep:didwebvh-rs"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-affinidi-did-common.workspace = true
+affinidi-did-common = "0.3"
 
 didwebvh-rs = { version = "0.1", optional = true }
 did-resolver-cheqd = { version = "1.0.1", optional = true }

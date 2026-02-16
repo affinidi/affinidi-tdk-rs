@@ -95,3 +95,37 @@ impl Routing {
         .await
     }
 }
+
+/// Wrapper struct that holds a reference to ATM, enabling the `atm.routing().method()` pattern
+pub struct RoutingOps<'a> {
+    pub(crate) atm: &'a ATM,
+}
+
+impl<'a> RoutingOps<'a> {
+    /// Takes a DIDComm message and constructs a new message that can be forwarded to the target DID.
+    /// See [`Routing::forward_message`] for full documentation
+    #[allow(clippy::too_many_arguments)]
+    pub async fn forward_message(
+        &self,
+        profile: &Arc<ATMProfile>,
+        anonymous: bool,
+        message: &str,
+        target_did: &str,
+        next_did: &str,
+        expires_time: Option<u64>,
+        delay_milli: Option<i64>,
+    ) -> Result<(String, String), ATMError> {
+        Routing::default()
+            .forward_message(
+                self.atm,
+                profile,
+                anonymous,
+                message,
+                target_did,
+                next_did,
+                expires_time,
+                delay_milli,
+            )
+            .await
+    }
+}

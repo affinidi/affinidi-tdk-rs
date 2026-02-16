@@ -142,7 +142,7 @@ mod tests {
         networking::{network::WSCommands, request_queue::RequestList},
     };
     use ahash::AHashMap as HashMap;
-    use rand::{Rng, distr::Alphanumeric};
+    use rand::{RngExt, distr::Alphanumeric};
     use tokio::sync::oneshot::{self, Sender};
 
     const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";

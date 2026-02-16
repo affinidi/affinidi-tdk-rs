@@ -5,7 +5,7 @@ use sha256::digest;
 use tracing::{Instrument, Level, debug, span};
 use uuid::Uuid;
 
-use super::{acls::MediatorACLSet, administration::Mediator};
+use super::{acls::MediatorACLSet, administration::{Mediator, MediatorOps}};
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 use std::{
     fmt::{self, Display, Formatter},
@@ -636,5 +636,84 @@ impl Mediator {
                 "Mediator Account Change Queue Limit response could not be parsed. Reason: {err}"
             ))
         })
+    }
+}
+
+impl<'a> MediatorOps<'a> {
+    /// Fetch an account information from the mediator
+    /// See [`Mediator::account_get`] for full documentation
+    pub async fn account_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+    ) -> Result<Option<Account>, ATMError> {
+        Mediator::default()
+            .account_get(self.atm, profile, did_hash)
+            .await
+    }
+
+    /// Create a new account on the Mediator for a given DID
+    /// See [`Mediator::account_add`] for full documentation
+    pub async fn account_add(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: &str,
+        acls: Option<MediatorACLSet>,
+    ) -> Result<Account, ATMError> {
+        Mediator::default()
+            .account_add(self.atm, profile, did_hash, acls)
+            .await
+    }
+
+    /// Removes an account from the mediator
+    /// See [`Mediator::account_remove`] for full documentation
+    pub async fn account_remove(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<String>,
+    ) -> Result<bool, ATMError> {
+        Mediator::default()
+            .account_remove(self.atm, profile, did_hash)
+            .await
+    }
+
+    /// Lists known DID accounts in the mediator
+    /// See [`Mediator::accounts_list`] for full documentation
+    pub async fn accounts_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<MediatorAccountList, ATMError> {
+        Mediator::default()
+            .accounts_list(self.atm, profile, cursor, limit)
+            .await
+    }
+
+    /// Change the Account Type for a DID
+    /// See [`Mediator::account_change_type`] for full documentation
+    pub async fn account_change_type(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: &str,
+        new_type: AccountType,
+    ) -> Result<bool, ATMError> {
+        Mediator::default()
+            .account_change_type(self.atm, profile, did_hash, new_type)
+            .await
+    }
+
+    /// Change the Queue Limits for a DID
+    /// See [`Mediator::account_change_queue_limits`] for full documentation
+    pub async fn account_change_queue_limits(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: &str,
+        send_queue_limit: Option<i32>,
+        receive_queue_limit: Option<i32>,
+    ) -> Result<AccountChangeQueueLimitsResponse, ATMError> {
+        Mediator::default()
+            .account_change_queue_limits(self.atm, profile, did_hash, send_queue_limit, receive_queue_limit)
+            .await
     }
 }

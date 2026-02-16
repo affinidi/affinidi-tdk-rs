@@ -1,4 +1,4 @@
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use serde::{Serialize, de::DeserializeOwned};
 
 /// Helps with deserializing the generic data field in the SuccessResponse struct

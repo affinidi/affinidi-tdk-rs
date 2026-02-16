@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+### 16th February 2026
+
+#### affinidi-did-resolver-cache-sdk (0.7.4)
+
+- **CHORE:** Dependencies switched from workspace references to versioned
+  crates.io dependencies
+- **CHORE:** `rand` crate updated from 0.9 to 0.10
+  - `Rng` trait replaced with `RngExt` per the new API
+- **CHORE:** Minor dependency version specifiers relaxed (e.g. `did-ethr`,
+  `did-pkh`, `ssi-dids-core`, `tokio`)
+
+#### affinidi-did-common, did-example, did-scid, affinidi-did-resolver-cache-server
+
+- **CHORE:** Dependencies switched from workspace references to versioned
+  crates.io dependencies
+
 ### 5th February 2026
 
 #### affinidi-did-common (0.3.2)
