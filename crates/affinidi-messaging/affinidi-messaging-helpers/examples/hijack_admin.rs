@@ -16,7 +16,7 @@
 
 use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile};
-use affinidi_tdk::{TDK, common::config::TDKConfig};
+use affinidi_tdk::{TDK, common::config::TDKConfig, did_authentication::AuthorizationTokens};
 use clap::Parser;
 use serde_json::json;
 use sha256::digest;

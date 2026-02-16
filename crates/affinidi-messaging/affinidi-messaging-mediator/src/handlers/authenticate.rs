@@ -27,7 +27,7 @@ use affinidi_messaging_sdk::{
 use axum::{Json, extract::State};
 use http::StatusCode;
 use jsonwebtoken::{EncodingKey, Header, Validation, encode};
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::time::SystemTime;

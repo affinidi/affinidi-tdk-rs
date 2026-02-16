@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.11.9"
+version = "0.11.10"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true

@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = "0.14"
+affinidi-messaging-sdk = "0.14.4"
 affinidi-messaging-didcomm = "0.11"
 affinidi-messaging-mediator-processors = "0.11"
 affinidi-messaging-mediator-common = "0.11"
@@ -43,7 +43,7 @@ http = "1"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
-rand = "0.9"
+rand = "0.10"
 # Redis can only be updated when deadpool-redis supports the new version
 redis = { version = "0.32", features = [
   "tokio-rustls-comp",
@@ -63,7 +63,7 @@ sha256 = "1.6"
 subtle = "2.6"
 tokio = { version = "1.49", features = ["full"] }
 tokio-stream = "0.1"
-toml = "0.9"
+toml = "1"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
@@ -72,7 +72,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
+uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 console = "0.16"
