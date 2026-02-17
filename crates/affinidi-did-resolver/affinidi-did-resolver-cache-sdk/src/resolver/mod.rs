@@ -1,8 +1,12 @@
 pub mod network_resolvers;
 use crate::{DIDCacheClient, errors::DIDCacheError};
-use affinidi_did_common::{DID, Document};
-#[cfg(any(not(feature = "did-webvh"), not(feature = "did-cheqd"), not(feature = "did-scid")))]
+#[cfg(any(
+    not(feature = "did-webvh"),
+    not(feature = "did-cheqd"),
+    not(feature = "did-scid")
+))]
 use affinidi_did_common::DIDMethod;
+use affinidi_did_common::{DID, Document};
 
 impl DIDCacheClient {
     /// Resolves a DID to a DID Document by iterating registered resolvers.

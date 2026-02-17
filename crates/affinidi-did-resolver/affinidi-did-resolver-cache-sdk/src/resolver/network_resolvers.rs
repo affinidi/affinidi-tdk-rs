@@ -24,15 +24,12 @@ fn document_from_bytes(bytes: Vec<u8>) -> Result<Document, ResolverError> {
 }
 
 /// Convert an ssi `DIDResolver` result (typed output) into a `Document`.
-fn document_from_ssi_output(
-    output: impl serde::Serialize,
-) -> Result<Document, ResolverError> {
+fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, ResolverError> {
     let value = serde_json::to_value(output)
         .map_err(|e| ResolverError::InvalidDocument(format!("Serialization failed: {e}")))?;
     serde_json::from_value(value)
         .map_err(|e| ResolverError::InvalidDocument(format!("Invalid document shape: {e}")))
 }
-
 
 // ---------------------------------------------------------------------------
 // did:ethr
@@ -42,7 +39,10 @@ fn document_from_ssi_output(
 pub struct EthrResolver;
 
 impl AsyncResolver for EthrResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             let identifier = match did.method() {
                 DIDMethod::Ethr { identifier, .. } => identifier,
@@ -79,7 +79,10 @@ impl AsyncResolver for EthrResolver {
 pub struct PkhResolver;
 
 impl AsyncResolver for PkhResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Pkh { .. }) {
                 return None;
@@ -90,21 +93,20 @@ impl AsyncResolver for PkhResolver {
             use ssi_dids_core::DIDResolver;
             let ssi_did = match ssi_dids_core::DID::new(&did_str) {
                 Ok(d) => d,
-                Err(e) => return Some(Err(ResolverError::InvalidDocument(format!("Invalid DID: {e}")))),
+                Err(e) => {
+                    return Some(Err(ResolverError::InvalidDocument(format!(
+                        "Invalid DID: {e}"
+                    ))));
+                }
             };
 
-            Some(
-                match method
-                    .resolve(ssi_did)
-                    .await
-                {
-                    Ok(res) => document_from_ssi_output(res.document.into_document()),
-                    Err(e) => {
-                        error!("did:pkh resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
-            )
+            Some(match method.resolve(ssi_did).await {
+                Ok(res) => document_from_ssi_output(res.document.into_document()),
+                Err(e) => {
+                    error!("did:pkh resolution error: {e:?}");
+                    Err(ResolverError::ResolutionFailed(e.to_string()))
+                }
+            })
         })
     }
 }
@@ -117,7 +119,10 @@ impl AsyncResolver for PkhResolver {
 pub struct WebResolver;
 
 impl AsyncResolver for WebResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Web { .. }) {
                 return None;
@@ -128,21 +133,20 @@ impl AsyncResolver for WebResolver {
             use ssi_dids_core::DIDResolver;
             let ssi_did = match ssi_dids_core::DID::new(&did_str) {
                 Ok(d) => d,
-                Err(e) => return Some(Err(ResolverError::InvalidDocument(format!("Invalid DID: {e}")))),
+                Err(e) => {
+                    return Some(Err(ResolverError::InvalidDocument(format!(
+                        "Invalid DID: {e}"
+                    ))));
+                }
             };
 
-            Some(
-                match method
-                    .resolve(ssi_did)
-                    .await
-                {
-                    Ok(res) => document_from_ssi_output(res.document.into_document()),
-                    Err(e) => {
-                        error!("did:web resolution error: {e:?}");
-                        Err(ResolverError::ResolutionFailed(e.to_string()))
-                    }
-                },
-            )
+            Some(match method.resolve(ssi_did).await {
+                Ok(res) => document_from_ssi_output(res.document.into_document()),
+                Err(e) => {
+                    error!("did:web resolution error: {e:?}");
+                    Err(ResolverError::ResolutionFailed(e.to_string()))
+                }
+            })
         })
     }
 }
@@ -157,7 +161,10 @@ pub struct JwkResolver;
 
 #[cfg(feature = "did-jwk")]
 impl AsyncResolver for JwkResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Jwk { .. }) {
                 return None;
@@ -195,7 +202,10 @@ pub struct WebvhResolver;
 
 #[cfg(feature = "did-webvh")]
 impl AsyncResolver for WebvhResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Webvh { .. }) {
                 return None;
@@ -239,7 +249,10 @@ pub struct CheqdResolver;
 
 #[cfg(feature = "did-cheqd")]
 impl AsyncResolver for CheqdResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Cheqd { .. }) {
                 return None;
@@ -249,7 +262,11 @@ impl AsyncResolver for CheqdResolver {
             use ssi_dids_core::DIDResolver;
             let ssi_did = match ssi_dids_core::DID::new(&did_str) {
                 Ok(d) => d,
-                Err(e) => return Some(Err(ResolverError::InvalidDocument(format!("Invalid DID: {e}")))),
+                Err(e) => {
+                    return Some(Err(ResolverError::InvalidDocument(format!(
+                        "Invalid DID: {e}"
+                    ))));
+                }
             };
 
             Some(
@@ -278,7 +295,10 @@ pub struct ScidResolver;
 
 #[cfg(feature = "did-scid")]
 impl AsyncResolver for ScidResolver {
-    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if !matches!(did.method(), DIDMethod::Scid { .. }) {
                 return None;
@@ -286,14 +306,10 @@ impl AsyncResolver for ScidResolver {
 
             let did_str = did.to_string();
 
-            Some(
-                did_scid::resolve(&did_str, None, None)
-                    .await
-                    .map_err(|e| {
-                        error!("did:scid resolution error: {e:?}");
-                        ResolverError::ResolutionFailed(e.to_string())
-                    }),
-            )
+            Some(did_scid::resolve(&did_str, None, None).await.map_err(|e| {
+                error!("did:scid resolution error: {e:?}");
+                ResolverError::ResolutionFailed(e.to_string())
+            }))
         })
     }
 }
