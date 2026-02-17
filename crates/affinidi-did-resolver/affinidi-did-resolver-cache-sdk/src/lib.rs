@@ -25,7 +25,6 @@ use networking::{
     WSRequest,
     network::{NetworkTask, WSCommands},
 };
-#[cfg(feature = "network")]
 use std::sync::Arc;
 use std::{fmt, time::Duration};
 #[cfg(feature = "network")]
@@ -124,7 +123,6 @@ pub struct ResolveResponse {
 /// network_task: OPTIONAL: Task to handle network requests
 /// network_rx: OPTIONAL: Channel to listen for responses from the network task
 #[wasm_bindgen(getter_with_clone)]
-#[derive(Clone)]
 pub struct DIDCacheClient {
     config: DIDCacheConfig,
     cache: Cache<[u64; 2], Document>,
@@ -134,9 +132,39 @@ pub struct DIDCacheClient {
     network_task_rx: Option<Arc<Mutex<mpsc::Receiver<WSCommands>>>>,
     #[cfg(feature = "did_example")]
     did_example_cache: did_example::DiDExampleCache,
+    resolvers: Arc<Vec<Box<dyn AsyncResolver>>>,
+}
+
+impl Clone for DIDCacheClient {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            cache: self.cache.clone(),
+            #[cfg(feature = "network")]
+            network_task_tx: self.network_task_tx.clone(),
+            #[cfg(feature = "network")]
+            network_task_rx: self.network_task_rx.clone(),
+            #[cfg(feature = "did_example")]
+            did_example_cache: self.did_example_cache.clone(),
+            resolvers: self.resolvers.clone(),
+        }
+    }
 }
 
 impl DIDCacheClient {
+    /// Register a custom resolver. Custom resolvers are tried before built-in
+    /// resolvers — call this after construction, before resolving.
+    ///
+    /// # Panics
+    /// Panics if the client has already been cloned (Arc refcount > 1).
+    /// Registration must happen during setup, before the client is shared.
+    pub fn register_resolver(&mut self, resolver: Box<dyn AsyncResolver>) {
+        // Prepend so custom resolvers take priority over built-ins
+        Arc::get_mut(&mut self.resolvers)
+            .expect("Cannot register resolvers after DIDCacheClient has been cloned")
+            .insert(0, resolver);
+    }
+
     /// Front end for resolving a DID
     /// Will check the cache first, and if not found, will resolve the DID
     /// Returns the initial DID, the hashed DID, and the resolved DID Document
@@ -273,12 +301,33 @@ impl DIDCacheClient {
     /// Establishes websocket connection and sets up the cache.
     // using Self instead of DIDCacheClient leads to E0401 errors in dependent crates
     // this is due to wasm_bindgen generated code (check via `cargo expand`)
+    #[allow(clippy::vec_init_then_push)] // Can't use vec![] with interleaved #[cfg]
     pub async fn new(config: DIDCacheConfig) -> Result<DIDCacheClient, DIDCacheError> {
         // Create the initial cache
         let cache = Cache::builder()
             .max_capacity(config.cache_capacity.into())
             .time_to_live(Duration::from_secs(config.cache_ttl.into()))
             .build();
+
+        // Register built-in resolvers
+        #[allow(clippy::vec_init_then_push)] // Can't use vec![] with interleaved #[cfg]
+        let mut resolvers: Vec<Box<dyn AsyncResolver>> = Vec::new();
+        // Local (sync) resolvers via blanket impl
+        resolvers.push(Box::new(affinidi_did_resolver_traits::KeyResolver));
+        resolvers.push(Box::new(affinidi_did_resolver_traits::PeerResolver));
+        // Network resolvers
+        resolvers.push(Box::new(network_resolvers::EthrResolver));
+        resolvers.push(Box::new(network_resolvers::PkhResolver));
+        resolvers.push(Box::new(network_resolvers::WebResolver));
+        #[cfg(feature = "did-jwk")]
+        resolvers.push(Box::new(network_resolvers::JwkResolver));
+        #[cfg(feature = "did-webvh")]
+        resolvers.push(Box::new(network_resolvers::WebvhResolver));
+        #[cfg(feature = "did-cheqd")]
+        resolvers.push(Box::new(network_resolvers::CheqdResolver));
+        #[cfg(feature = "did-scid")]
+        resolvers.push(Box::new(network_resolvers::ScidResolver));
+        let resolvers = Arc::new(resolvers);
 
         #[cfg(feature = "network")]
         let mut client = Self {
@@ -288,6 +337,7 @@ impl DIDCacheClient {
             network_task_rx: None,
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
+            resolvers: resolvers.clone(),
         };
         #[cfg(not(feature = "network"))]
         let client = Self {
@@ -295,6 +345,7 @@ impl DIDCacheClient {
             cache,
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
+            resolvers,
         };
 
         #[cfg(feature = "network")]

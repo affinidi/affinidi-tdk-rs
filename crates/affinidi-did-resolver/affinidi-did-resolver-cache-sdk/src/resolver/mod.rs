@@ -1,173 +1,37 @@
-use crate::{DIDCacheClient, errors::DIDCacheError};
-
 pub mod network_resolvers;
-use affinidi_did_common::{DID, DIDMethod, Document, DocumentExt};
-use did_ethr::DIDEthr;
-#[cfg(feature = "did-jwk")]
-use did_jwk::DIDJWK;
-use did_pkh::DIDPKH;
-#[cfg(feature = "did-cheqd")]
-use did_resolver_cheqd::DIDCheqd;
-use did_web::DIDWeb;
-#[cfg(feature = "did-webvh")]
-use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
-use ssi_dids_core::{
-    DID as SSIDID, DIDMethodResolver, DIDResolver,
-    resolution::{self},
-};
-use tracing::error;
+use crate::{DIDCacheClient, errors::DIDCacheError};
+use affinidi_did_common::{DID, Document};
+#[cfg(any(not(feature = "did-webvh"), not(feature = "did-cheqd"), not(feature = "did-scid")))]
+use affinidi_did_common::DIDMethod;
 
 impl DIDCacheClient {
-    /// Resolves a DID to a DID Document
+    /// Resolves a DID to a DID Document by iterating registered resolvers.
+    ///
+    /// Each resolver returns `None` if it doesn't handle the DID method,
+    /// `Some(Ok(doc))` on success, or `Some(Err(e))` on failure.
+    /// The first resolver that returns `Some` wins.
     pub(crate) async fn local_resolve(&self, did: &DID) -> Result<Document, DIDCacheError> {
-        // Match the DID method
-
+        for resolver in self.resolvers.iter() {
+            if let Some(result) = resolver.resolve(did).await {
+                return result.map_err(|e| DIDCacheError::DIDError(e.to_string()));
+            }
+        }
+        // Preserve UnsupportedMethod errors for known but feature-disabled methods
         match did.method() {
-            DIDMethod::Ethr { identifier, .. } => {
-                let method = DIDEthr;
-
-                match method
-                    .resolve_method_representation(&identifier, resolution::Options::default())
-                    .await
-                {
-                    Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
-            }
-            #[cfg(feature = "did-jwk")]
-            DIDMethod::Jwk { .. } => {
-                // This method isn't working as the VM references are relatative and not valid
-                // URL's
-                let method = DIDJWK;
-
-                match method
-                    .resolve_method_representation(
-                        &did.method_specific_id(),
-                        resolution::Options::default(),
-                    )
-                    .await
-                {
-                    Ok(res) => Ok(serde_json::from_str(&String::from_utf8(res.document)?)?),
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
-            }
-            DIDMethod::Key { .. } => match did.resolve() {
-                Ok(doc) => Ok(doc),
-                Err(e) => {
-                    error!("Error: {:?}", e);
-                    Err(DIDCacheError::DIDError(e.to_string()))
-                }
-            },
-            DIDMethod::Peer { .. } => match did.resolve() {
-                Ok(doc) => {
-                    // DID Peer will resolve to MultiKey, which confuses key matching
-                    // Expand the keys to raw keys
-                    doc.expand_peer_keys()
-                        .map_err(|e| DIDCacheError::DIDError(e.to_string()))
-                }
-                Err(e) => {
-                    error!("Error: {:?}", e);
-                    Err(DIDCacheError::DIDError(e.to_string()))
-                }
-            },
-            DIDMethod::Pkh { .. } => {
-                let method = DIDPKH;
-                let did_str = did.to_string();
-
-                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
-                    Ok(res) => {
-                        let doc_value = serde_json::to_value(res.document.into_document())?;
-                        Ok(serde_json::from_value(doc_value)?)
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
-            }
-            DIDMethod::Web { .. } => {
-                let method = DIDWeb;
-                let did_str = did.to_string();
-
-                match method.resolve(SSIDID::new(&did_str).unwrap()).await {
-                    Ok(res) => {
-                        let doc_value = serde_json::to_value(res.document.into_document())?;
-                        Ok(serde_json::from_value(doc_value)?)
-                    }
-                    Err(e) => {
-                        error!("Error: {:?}", e);
-                        Err(DIDCacheError::DIDError(e.to_string()))
-                    }
-                }
-            }
-            DIDMethod::Webvh { .. } => {
-                #[cfg(feature = "did-webvh")]
-                {
-                    let mut method = DIDWebVHState::default();
-                    let did_str = did.to_string();
-
-                    match method.resolve(&did_str, None).await {
-                        Ok((log_entry, _)) => {
-                            Ok(serde_json::from_value(log_entry.get_did_document().map_err(|e| DIDCacheError::DIDError(format!("Successfully resolved webvh DID, but couldn't convert to a valid DID Document: {e}")))?)?)
-                        }
-                        Err(e) => {
-                            error!("Error: {:?}", e);
-                            Err(DIDCacheError::DIDError(e.to_string()))
-                        }
-                    }
-                }
-
-                #[cfg(not(feature = "did-webvh"))]
-                Err(DIDCacheError::UnsupportedMethod(
-                    "did:webvh is not enabled".to_string(),
-                ))
-            }
-            DIDMethod::Cheqd { .. } => {
-                #[cfg(feature = "did-cheqd")]
-                {
-                    let did_str = did.to_string();
-                    match DIDCheqd::default()
-                        .resolve(SSIDID::new(&did_str).unwrap())
-                        .await
-                    {
-                        Ok(res) => {
-                            let doc_value = serde_json::to_value(res.document.into_document())?;
-                            Ok(serde_json::from_value(doc_value)?)
-                        }
-                        Err(e) => {
-                            error!("Error: {:?}", e);
-                            Err(DIDCacheError::DIDError(e.to_string()))
-                        }
-                    }
-                }
-
-                #[cfg(not(feature = "did-cheqd"))]
-                Err(DIDCacheError::UnsupportedMethod(
-                    "did:cheqd is not enabled".to_string(),
-                ))
-            }
-            DIDMethod::Scid { .. } => {
-                #[cfg(feature = "did-scid")]
-                {
-                    let did_str = did.to_string();
-                    did_scid::resolve(&did_str, None, None)
-                        .await
-                        .map_err(|e| DIDCacheError::DIDError(e.to_string()))
-                }
-
-                #[cfg(not(feature = "did-scid"))]
-                Err(DIDCacheError::UnsupportedMethod(
-                    "did:scid is not enabled".to_string(),
-                ))
-            }
+            #[cfg(not(feature = "did-webvh"))]
+            DIDMethod::Webvh { .. } => Err(DIDCacheError::UnsupportedMethod(
+                "did:webvh is not enabled".to_string(),
+            )),
+            #[cfg(not(feature = "did-cheqd"))]
+            DIDMethod::Cheqd { .. } => Err(DIDCacheError::UnsupportedMethod(
+                "did:cheqd is not enabled".to_string(),
+            )),
+            #[cfg(not(feature = "did-scid"))]
+            DIDMethod::Scid { .. } => Err(DIDCacheError::UnsupportedMethod(
+                "did:scid is not enabled".to_string(),
+            )),
             _ => Err(DIDCacheError::DIDError(format!(
-                "DID Method ({}) not supported",
+                "No resolver registered for DID method '{}'",
                 did.method()
             ))),
         }
@@ -178,6 +42,10 @@ impl DIDCacheClient {
 mod tests {
     use crate::{DIDCacheClient, config};
     use affinidi_did_common::DID;
+    use affinidi_did_common::Document;
+    use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
+    use std::future::Future;
+    use std::pin::Pin;
 
     const DID_ETHR: &str = "did:ethr:0xb9c5714089478a327f09197987f16f9e5d936e8a";
     #[cfg(feature = "did-jwk")]
@@ -373,5 +241,100 @@ mod tests {
             did_document.did.as_str(),
             "did:webvh:Qmd1FCL9Vj2vJ433UDfC9MBstK6W6QWSQvYyeNn8va2fai:identity.foundation:didwebvh-implementations:implementations:affinidi-didwebvh-rs"
         );
+    }
+
+    /// A test resolver that handles `did:test:*` DIDs.
+    struct TestResolver;
+
+    impl AsyncResolver for TestResolver {
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                let did_str = did.to_string();
+                if !did_str.starts_with("did:test:") {
+                    return None;
+                }
+                // Return a minimal valid document
+                let doc_json = format!(
+                    r#"{{"id":"{}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
+                    did_str
+                );
+                Some(
+                    serde_json::from_str::<Document>(&doc_json)
+                        .map_err(|e| ResolverError::InvalidDocument(e.to_string())),
+                )
+            })
+        }
+    }
+
+    /// A resolver that intercepts did:key and returns a stub document,
+    /// proving custom resolvers take priority over built-ins.
+    struct OverrideKeyResolver;
+
+    impl AsyncResolver for OverrideKeyResolver {
+        fn resolve<'a>(
+            &'a self,
+            did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            Box::pin(async move {
+                let did_str = did.to_string();
+                if !did_str.starts_with("did:key:") {
+                    return None;
+                }
+                // Return a stub document with 0 verification methods
+                // (built-in KeyResolver returns 2 for Ed25519)
+                let doc_json = format!(
+                    r#"{{"id":"{}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
+                    did_str
+                );
+                Some(
+                    serde_json::from_str::<Document>(&doc_json)
+                        .map_err(|e| ResolverError::InvalidDocument(e.to_string())),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn custom_resolver_for_new_method() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // Register a resolver for a method with no built-in
+        client.register_resolver(Box::new(TestResolver));
+        let did: DID = "did:test:alice".parse().unwrap();
+        let doc = client.local_resolve(&did).await.unwrap();
+        assert_eq!(doc.id.as_str(), "did:test:alice");
+    }
+
+    #[tokio::test]
+    async fn custom_resolver_overrides_builtin() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // Built-in KeyResolver returns 2 verification methods for Ed25519
+        let did: DID = DID_KEY.parse().unwrap();
+        let doc = client.local_resolve(&did).await.unwrap();
+        assert_eq!(doc.verification_method.len(), 2);
+
+        // Register override that returns 0 verification methods
+        client.register_resolver(Box::new(OverrideKeyResolver));
+        let doc = client.local_resolve(&did).await.unwrap();
+        // Custom resolver wins — 0 VMs instead of 2
+        assert_eq!(doc.verification_method.len(), 0);
+        assert_eq!(doc.id.as_str(), DID_KEY);
+    }
+
+    #[tokio::test]
+    async fn unregistered_method_returns_error() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        // did:test is not registered by default
+        let did: DID = "did:test:alice".parse().unwrap();
+        let result = client.local_resolve(&did).await;
+        assert!(result.is_err());
     }
 }
