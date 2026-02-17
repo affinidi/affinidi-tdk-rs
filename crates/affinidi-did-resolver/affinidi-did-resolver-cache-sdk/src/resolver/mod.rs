@@ -1,4 +1,6 @@
 use crate::{DIDCacheClient, errors::DIDCacheError};
+
+pub mod network_resolvers;
 use affinidi_did_common::{DID, DIDMethod, Document, DocumentExt};
 use did_ethr::DIDEthr;
 #[cfg(feature = "did-jwk")]

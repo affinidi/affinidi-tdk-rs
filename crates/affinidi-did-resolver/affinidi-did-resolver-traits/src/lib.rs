@@ -56,12 +56,12 @@ pub trait Resolver: Send + Sync {
 /// `Vec<Box<dyn AsyncResolver>>` for composition.
 pub trait AsyncResolver: Send + Sync {
     /// Attempt to resolve the given DID to a Document.
-    fn resolve(&self, did: &DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + '_>>;
+    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>>;
 }
 
 /// Every sync [`Resolver`] is automatically an [`AsyncResolver`].
 impl<T: Resolver> AsyncResolver for T {
-    fn resolve(&self, did: &DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + '_>> {
+    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(std::future::ready(Resolver::resolve(self, did)))
     }
 }

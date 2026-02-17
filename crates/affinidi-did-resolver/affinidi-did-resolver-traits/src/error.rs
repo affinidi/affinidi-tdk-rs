@@ -1,6 +1,6 @@
 //! Error types for DID resolution.
 
-use affinidi_did_common::DIDError;
+use affinidi_did_common::{DIDError, DocumentError};
 
 /// Error type for resolver failures.
 ///
@@ -16,6 +16,10 @@ pub enum ResolverError {
     /// Resolution failed due to a DID-level error (parsing, validation).
     #[error("DID error: {0}")]
     DIDError(#[from] DIDError),
+
+    /// Resolution failed due to a document-level error (key expansion, encoding).
+    #[error("Document error: {0}")]
+    DocumentError(#[from] DocumentError),
 
     /// Resolution failed due to a network or IO error.
     #[error("Resolution failed: {0}")]

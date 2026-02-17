@@ -1,6 +1,6 @@
 //! Built-in resolver implementations for locally-resolvable DID methods.
 
-use affinidi_did_common::{DID, DIDMethod};
+use affinidi_did_common::{DID, DIDMethod, DocumentExt};
 
 use crate::{Resolution, Resolver, ResolverError};
 
@@ -28,7 +28,11 @@ pub struct PeerResolver;
 impl Resolver for PeerResolver {
     fn resolve(&self, did: &DID) -> Resolution {
         match did.method() {
-            DIDMethod::Peer { .. } => Some(did.resolve().map_err(ResolverError::from)),
+            DIDMethod::Peer { .. } => Some(
+                did.resolve()
+                    .map_err(ResolverError::from)
+                    .and_then(|doc| doc.expand_peer_keys().map_err(ResolverError::from)),
+            ),
             _ => None,
         }
     }

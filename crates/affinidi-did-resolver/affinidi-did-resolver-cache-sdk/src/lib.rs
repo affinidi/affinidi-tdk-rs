@@ -40,6 +40,10 @@ pub mod errors;
 pub mod networking;
 mod resolver;
 
+// Re-export resolver traits and network resolver implementations
+pub use affinidi_did_resolver_traits::{AsyncResolver, Resolution, Resolver, ResolverError};
+pub use resolver::network_resolvers;
+
 /// DID Methods supported by the DID Universal Resolver Cache
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[wasm_bindgen]
