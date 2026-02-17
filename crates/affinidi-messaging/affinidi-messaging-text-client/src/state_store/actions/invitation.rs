@@ -469,8 +469,7 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Ensure Mediator ACL set up is correctly setup
-                        let Some(profile_info) =
-                            atm.mediator().account_get(&profile, None).await?
+                        let Some(profile_info) = atm.mediator().account_get(&profile, None).await?
                         else {
                             state.invite_popup.messages.push(Line::from(Span::styled(
                                 "Failed to get profile info from mediator",
@@ -519,11 +518,7 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Get the OOB Invite itself
-                        match atm
-                            .oob_discovery()
-                            .create_invite(&profile, None)
-                            .await
-                        {
+                        match atm.oob_discovery().create_invite(&profile, None).await {
                             Ok(invite) => {
                                 state.invite_popup.messages.push(Line::from(Span::styled(
                                     "OOB Invite Link successfully created",

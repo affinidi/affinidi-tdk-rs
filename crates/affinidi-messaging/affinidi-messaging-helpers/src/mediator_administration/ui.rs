@@ -1,8 +1,6 @@
 //! UI Related functions
 use affinidi_messaging_sdk::{
-    ATM,
-    profiles::ATMProfile,
-    protocols::mediator::accounts::AccountType,
+    ATM, profiles::ATMProfile, protocols::mediator::accounts::AccountType,
 };
 use console::style;
 use dialoguer::{Confirm, Input, MultiSelect, Select, theme::ColorfulTheme};
@@ -50,11 +48,7 @@ pub(crate) async fn administration_accounts_menu(
 }
 
 /// List first 100 Administration DIDs
-pub(crate) async fn list_admins(
-    atm: &ATM,
-    profile: &Arc<ATMProfile>,
-    config: &SharedConfig,
-) {
+pub(crate) async fn list_admins(atm: &ATM, profile: &Arc<ATMProfile>, config: &SharedConfig) {
     match atm.mediator().list_admins(profile, None, None).await {
         Ok(admins) => {
             println!(
@@ -88,11 +82,7 @@ pub(crate) async fn list_admins(
 }
 
 /// Add new Administration DID
-pub(crate) async fn add_admin(
-    atm: &ATM,
-    profile: &Arc<ATMProfile>,
-    theme: &ColorfulTheme,
-) {
+pub(crate) async fn add_admin(atm: &ATM, profile: &Arc<ATMProfile>, theme: &ColorfulTheme) {
     println!("Adding new Administration DID (type exit to quit this dialog)");
 
     let input: String = Input::with_theme(theme)

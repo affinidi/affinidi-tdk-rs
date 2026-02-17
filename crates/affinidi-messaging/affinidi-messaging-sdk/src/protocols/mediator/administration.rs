@@ -377,13 +377,8 @@ pub struct MediatorOps<'a> {
 impl<'a> MediatorOps<'a> {
     /// Get mediator configuration
     /// See [`Mediator::get_config`] for full documentation
-    pub async fn get_config(
-        &self,
-        profile: &Arc<ATMProfile>,
-    ) -> Result<Value, ATMError> {
-        Mediator::default()
-            .get_config(self.atm, profile)
-            .await
+    pub async fn get_config(&self, profile: &Arc<ATMProfile>) -> Result<Value, ATMError> {
+        Mediator::default().get_config(self.atm, profile).await
     }
 
     /// Adds a number of admins to the mediator

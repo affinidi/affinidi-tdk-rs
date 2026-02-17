@@ -78,11 +78,7 @@ async fn main() -> Result<(), ATMError> {
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_alice).await?, true)
         .await?;
 
-    let Some(alice_info) = atm
-        .mediator()
-        .account_get(&atm_alice, None)
-        .await?
-    else {
+    let Some(alice_info) = atm.mediator().account_get(&atm_alice, None).await? else {
         panic!("Alice account not found on mediator");
     };
 
@@ -132,11 +128,7 @@ async fn main() -> Result<(), ATMError> {
         )
         .await?;
 
-    let Some(mallory_info) = atm
-        .mediator()
-        .account_get(&atm_mallory, None)
-        .await?
-    else {
+    let Some(mallory_info) = atm.mediator().account_get(&atm_mallory, None).await? else {
         panic!("Mallory account not found on mediator");
     };
 

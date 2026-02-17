@@ -697,9 +697,7 @@ impl<'a> MediatorOps<'a> {
         profile: &Arc<ATMProfile>,
         dids: &Vec<String>,
     ) -> Result<MediatorACLGetResponse, ATMError> {
-        Mediator::default()
-            .acls_get(self.atm, profile, dids)
-            .await
+        Mediator::default().acls_get(self.atm, profile, dids).await
     }
 
     /// Set the ACL's for a DID
