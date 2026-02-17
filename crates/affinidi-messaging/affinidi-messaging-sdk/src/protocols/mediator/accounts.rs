@@ -5,7 +5,10 @@ use sha256::digest;
 use tracing::{Instrument, Level, debug, span};
 use uuid::Uuid;
 
-use super::{acls::MediatorACLSet, administration::{Mediator, MediatorOps}};
+use super::{
+    acls::MediatorACLSet,
+    administration::{Mediator, MediatorOps},
+};
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 use std::{
     fmt::{self, Display, Formatter},
@@ -713,7 +716,13 @@ impl<'a> MediatorOps<'a> {
         receive_queue_limit: Option<i32>,
     ) -> Result<AccountChangeQueueLimitsResponse, ATMError> {
         Mediator::default()
-            .account_change_queue_limits(self.atm, profile, did_hash, send_queue_limit, receive_queue_limit)
+            .account_change_queue_limits(
+                self.atm,
+                profile,
+                did_hash,
+                send_queue_limit,
+                receive_queue_limit,
+            )
             .await
     }
 }

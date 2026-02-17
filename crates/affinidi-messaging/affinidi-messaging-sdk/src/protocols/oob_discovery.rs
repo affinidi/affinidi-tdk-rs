@@ -277,9 +277,7 @@ impl<'a> OOBDiscoveryOps<'a> {
     /// Retrieve an Invitation from a shortened OOB Invitation URL
     /// See [`OOBDiscovery::retrieve_invite`] for full documentation
     pub async fn retrieve_invite(&self, url: &str) -> Result<Message, ATMError> {
-        OOBDiscovery::default()
-            .retrieve_invite(self.atm, url)
-            .await
+        OOBDiscovery::default().retrieve_invite(self.atm, url).await
     }
 
     /// Deletes OOB Invite

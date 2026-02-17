@@ -201,7 +201,14 @@ impl<'a> TrustPingOps<'a> {
         wait_response: bool,
     ) -> Result<TrustPingSent, ATMError> {
         TrustPing::default()
-            .send_ping(self.atm, profile, to_did, signed, expect_pong, wait_response)
+            .send_ping(
+                self.atm,
+                profile,
+                to_did,
+                signed,
+                expect_pong,
+                wait_response,
+            )
             .await
     }
 

@@ -6,10 +6,7 @@
 //! Press Ctrl+C to stop listening.
 
 use affinidi_messaging_sdk::{
-    ATM,
-    config::ATMConfig,
-    errors::ATMError,
-    profiles::ATMProfile,
+    ATM, config::ATMConfig, errors::ATMError, profiles::ATMProfile,
     protocols::discover_features::DiscoverFeatures,
 };
 use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
@@ -160,8 +157,7 @@ async fn main() -> Result<(), ATMError> {
         // Generate the disclosure from our configured state
         let state = atm.discover_features().get_discoverable_state();
         let features = state.read().await;
-        let disclosure_msg =
-            features.generate_disclosure_message(my_did, &from_did, &msg, None)?;
+        let disclosure_msg = features.generate_disclosure_message(my_did, &from_did, &msg, None)?;
         drop(features);
 
         let disclosure_id = disclosure_msg.id.clone();
@@ -169,13 +165,7 @@ async fn main() -> Result<(), ATMError> {
 
         // Pack the disclosure for the querier
         let (packed_msg, _) = atm
-            .pack_encrypted(
-                &disclosure_msg,
-                &from_did,
-                Some(my_did),
-                Some(my_did),
-                None,
-            )
+            .pack_encrypted(&disclosure_msg, &from_did, Some(my_did), Some(my_did), None)
             .await?;
 
         // Send the disclosure back

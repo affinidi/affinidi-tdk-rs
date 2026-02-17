@@ -14,7 +14,9 @@ use crate::messages::GenericDataStruct;
 use mediator::administration::Mediator;
 
 /// **Deprecated**: Use `atm.trust_ping()`, `atm.message_pickup()`, etc. instead.
-#[deprecated(note = "Use ATM accessor methods instead: atm.trust_ping(), atm.message_pickup(), etc.")]
+#[deprecated(
+    note = "Use ATM accessor methods instead: atm.trust_ping(), atm.message_pickup(), etc."
+)]
 #[derive(Default)]
 pub struct Protocols {
     pub message_pickup: message_pickup::MessagePickup,
@@ -37,7 +39,9 @@ impl GenericDataStruct for MessageString {}
 #[allow(deprecated)]
 impl Protocols {
     /// **Deprecated**: Use `atm.trust_ping()`, `atm.message_pickup()`, etc. instead.
-    #[deprecated(note = "Use ATM accessor methods instead: atm.trust_ping(), atm.message_pickup(), etc.")]
+    #[deprecated(
+        note = "Use ATM accessor methods instead: atm.trust_ping(), atm.message_pickup(), etc."
+    )]
     pub fn new() -> Protocols {
         Protocols {
             message_pickup: message_pickup::MessagePickup::default(),

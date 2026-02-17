@@ -166,8 +166,7 @@ pub(crate) async fn manage_account_menu(
         match selection {
             0 => {
                 // Modify ACLs
-                match manage_account_acls(atm, profile, theme, mediator_config, &account).await
-                {
+                match manage_account_acls(atm, profile, theme, mediator_config, &account).await {
                     Ok(a) => {
                         account = a;
                     }
@@ -428,13 +427,9 @@ pub(crate) async fn select_did(
             1 => {
                 if let Some(did_hash) = manually_enter_did_or_hash(theme) {
                     // Look up the Account for this DID
-                    let account = atm
-                        .mediator()
-                        .account_get(profile, Some(did_hash))
-                        .await?;
+                    let account = atm.mediator().account_get(profile, Some(did_hash)).await?;
                     if let Some(account) = account {
-                        manage_account_menu(atm, profile, theme, mediator_config, &account)
-                            .await?;
+                        manage_account_menu(atm, profile, theme, mediator_config, &account).await?;
                     }
                 }
             }
