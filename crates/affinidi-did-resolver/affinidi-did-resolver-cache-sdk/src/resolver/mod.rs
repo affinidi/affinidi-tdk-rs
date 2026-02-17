@@ -1,5 +1,5 @@
 pub mod network_resolvers;
-use crate::{DIDCacheClient, errors::DIDCacheError};
+use crate::{DIDCacheClient, MethodName, errors::DIDCacheError};
 #[cfg(any(
     not(feature = "did-webvh"),
     not(feature = "did-cheqd"),
@@ -9,17 +9,22 @@ use affinidi_did_common::DIDMethod;
 use affinidi_did_common::{DID, Document};
 
 impl DIDCacheClient {
-    /// Resolves a DID to a DID Document by iterating registered resolvers.
+    /// Resolves a DID to a DID Document by looking up the method's resolver chain.
     ///
-    /// Each resolver returns `None` if it doesn't handle the DID method,
-    /// `Some(Ok(doc))` on success, or `Some(Err(e))` on failure.
+    /// Resolvers for the method are tried front-to-back. Each returns `None` if
+    /// it declines, `Some(Ok(doc))` on success, or `Some(Err(e))` on failure.
     /// The first resolver that returns `Some` wins.
     pub(crate) async fn local_resolve(&self, did: &DID) -> Result<Document, DIDCacheError> {
-        for resolver in self.resolvers.iter() {
-            if let Some(result) = resolver.resolve(did).await {
-                return result.map_err(|e| DIDCacheError::DIDError(e.to_string()));
+        let method_name: MethodName = MethodName::from(&did.method());
+
+        if let Some(chain) = self.resolvers.get(&method_name) {
+            for resolver in chain.iter() {
+                if let Some(result) = resolver.resolve(did).await {
+                    return result.map_err(|e| DIDCacheError::DIDError(e.to_string()));
+                }
             }
         }
+
         // Preserve UnsupportedMethod errors for known but feature-disabled methods
         match did.method() {
             #[cfg(not(feature = "did-webvh"))]
@@ -44,7 +49,7 @@ impl DIDCacheClient {
 
 #[cfg(test)]
 mod tests {
-    use crate::{DIDCacheClient, config};
+    use crate::{DIDCacheClient, MethodName, config};
     use affinidi_did_common::DID;
     use affinidi_did_common::Document;
     use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
@@ -247,10 +252,18 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Test resolvers
+    // -----------------------------------------------------------------------
+
     /// A test resolver that handles `did:test:*` DIDs.
     struct TestResolver;
 
     impl AsyncResolver for TestResolver {
+        fn name(&self) -> &str {
+            "TestResolver"
+        }
+
         fn resolve<'a>(
             &'a self,
             did: &'a DID,
@@ -278,6 +291,10 @@ mod tests {
     struct OverrideKeyResolver;
 
     impl AsyncResolver for OverrideKeyResolver {
+        fn name(&self) -> &str {
+            "OverrideKeyResolver"
+        }
+
         fn resolve<'a>(
             &'a self,
             did: &'a DID,
@@ -301,13 +318,20 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // API tests
+    // -----------------------------------------------------------------------
+
     #[tokio::test]
     async fn custom_resolver_for_new_method() {
         let config = config::DIDCacheConfigBuilder::default().build();
         let mut client = DIDCacheClient::new(config).await.unwrap();
 
         // Register a resolver for a method with no built-in
-        client.register_resolver(Box::new(TestResolver));
+        client.set_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
         let did: DID = "did:test:alice".parse().unwrap();
         let doc = client.local_resolve(&did).await.unwrap();
         assert_eq!(doc.id.as_str(), "did:test:alice");
@@ -323,8 +347,8 @@ mod tests {
         let doc = client.local_resolve(&did).await.unwrap();
         assert_eq!(doc.verification_method.len(), 2);
 
-        // Register override that returns 0 verification methods
-        client.register_resolver(Box::new(OverrideKeyResolver));
+        // Replace built-in with override that returns 0 verification methods
+        client.set_resolver(MethodName::Key, Box::new(OverrideKeyResolver));
         let doc = client.local_resolve(&did).await.unwrap();
         // Custom resolver wins — 0 VMs instead of 2
         assert_eq!(doc.verification_method.len(), 0);
@@ -340,5 +364,111 @@ mod tests {
         let did: DID = "did:test:alice".parse().unwrap();
         let result = client.local_resolve(&did).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn prepend_resolver_enforces_uniqueness() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // First registration succeeds
+        let result = client.prepend_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
+        assert!(result.is_ok());
+
+        // Duplicate name fails
+        let result = client.prepend_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn append_resolver_enforces_uniqueness() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        let result = client.append_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
+        assert!(result.is_ok());
+
+        let result = client.append_resolver(
+            MethodName::Other("test".to_string()),
+            Box::new(TestResolver),
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn find_and_remove_resolver() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // KeyResolver is registered at construction
+        let idx = client.find_resolver(&MethodName::Key, "KeyResolver");
+        assert_eq!(idx, Some(0));
+
+        // Remove it
+        let removed = client.remove_resolver(&MethodName::Key, 0);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().name(), "KeyResolver");
+
+        // Now it's gone
+        assert!(
+            client
+                .find_resolver(&MethodName::Key, "KeyResolver")
+                .is_none()
+        );
+
+        // did:key resolution should fail
+        let did: DID = DID_KEY.parse().unwrap();
+        assert!(client.local_resolve(&did).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn clear_resolvers_removes_all() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // Verify key resolution works
+        let did: DID = DID_KEY.parse().unwrap();
+        assert!(client.local_resolve(&did).await.is_ok());
+
+        // Clear and verify it fails
+        client.clear_resolvers(&MethodName::Key);
+        assert!(client.local_resolve(&did).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn prepend_gives_priority_over_existing() {
+        let config = config::DIDCacheConfigBuilder::default().build();
+        let mut client = DIDCacheClient::new(config).await.unwrap();
+
+        // Built-in KeyResolver returns 2 VMs
+        let did: DID = DID_KEY.parse().unwrap();
+        let doc = client.local_resolve(&did).await.unwrap();
+        assert_eq!(doc.verification_method.len(), 2);
+
+        // Prepend override (0 VMs) — it goes before built-in
+        client
+            .prepend_resolver(MethodName::Key, Box::new(OverrideKeyResolver))
+            .unwrap();
+        let doc = client.local_resolve(&did).await.unwrap();
+        assert_eq!(doc.verification_method.len(), 0);
+
+        // Built-in is still there at index 1
+        assert_eq!(
+            client.find_resolver(&MethodName::Key, "KeyResolver"),
+            Some(1)
+        );
+        assert_eq!(
+            client.find_resolver(&MethodName::Key, "OverrideKeyResolver"),
+            Some(0)
+        );
     }
 }

@@ -7,7 +7,7 @@ Pluggable DID resolution traits for the Affinidi TDK.
 - **`Resolver`** (sync) — for methods requiring no IO (e.g., `did:key`, `did:peer`)
 - **`AsyncResolver`** (async, dyn-compatible) — for methods requiring network access
 
-Every `Resolver` is automatically an `AsyncResolver` via blanket impl, so the SDK can compose all resolvers uniformly as `Vec<Box<dyn AsyncResolver>>`.
+Every `Resolver` is automatically an `AsyncResolver` via blanket impl, so the SDK can compose all resolvers uniformly.
 
 ## Return Convention
 
@@ -33,7 +33,11 @@ use std::pin::Pin;
 struct MyResolver;
 
 impl AsyncResolver for MyResolver {
-    fn resolve(&self, did: &DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + '_>> {
+    fn name(&self) -> &str {
+        "MyResolver"
+    }
+
+    fn resolve<'a>(&'a self, did: &'a DID) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
         Box::pin(async move {
             if did.to_string().starts_with("did:mymethod:") {
                 // Your resolution logic here

@@ -39,6 +39,10 @@ fn document_from_ssi_output(output: impl serde::Serialize) -> Result<Document, R
 pub struct EthrResolver;
 
 impl AsyncResolver for EthrResolver {
+    fn name(&self) -> &str {
+        "EthrResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -79,6 +83,10 @@ impl AsyncResolver for EthrResolver {
 pub struct PkhResolver;
 
 impl AsyncResolver for PkhResolver {
+    fn name(&self) -> &str {
+        "PkhResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -119,6 +127,10 @@ impl AsyncResolver for PkhResolver {
 pub struct WebResolver;
 
 impl AsyncResolver for WebResolver {
+    fn name(&self) -> &str {
+        "WebResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -161,6 +173,10 @@ pub struct JwkResolver;
 
 #[cfg(feature = "did-jwk")]
 impl AsyncResolver for JwkResolver {
+    fn name(&self) -> &str {
+        "JwkResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -202,6 +218,10 @@ pub struct WebvhResolver;
 
 #[cfg(feature = "did-webvh")]
 impl AsyncResolver for WebvhResolver {
+    fn name(&self) -> &str {
+        "WebvhResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -249,6 +269,10 @@ pub struct CheqdResolver;
 
 #[cfg(feature = "did-cheqd")]
 impl AsyncResolver for CheqdResolver {
+    fn name(&self) -> &str {
+        "CheqdResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,
@@ -295,6 +319,10 @@ pub struct ScidResolver;
 
 #[cfg(feature = "did-scid")]
 impl AsyncResolver for ScidResolver {
+    fn name(&self) -> &str {
+        "ScidResolver"
+    }
+
     fn resolve<'a>(
         &'a self,
         did: &'a DID,

@@ -11,6 +11,10 @@ use crate::{Resolution, Resolver, ResolverError};
 pub struct KeyResolver;
 
 impl Resolver for KeyResolver {
+    fn name(&self) -> &str {
+        "KeyResolver"
+    }
+
     fn resolve(&self, did: &DID) -> Resolution {
         match did.method() {
             DIDMethod::Key { .. } => Some(did.resolve().map_err(ResolverError::from)),
@@ -26,6 +30,10 @@ impl Resolver for KeyResolver {
 pub struct PeerResolver;
 
 impl Resolver for PeerResolver {
+    fn name(&self) -> &str {
+        "PeerResolver"
+    }
+
     fn resolve(&self, did: &DID) -> Resolution {
         match did.method() {
             DIDMethod::Peer { .. } => Some(

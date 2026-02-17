@@ -25,6 +25,7 @@ use networking::{
     WSRequest,
     network::{NetworkTask, WSCommands},
 };
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{fmt, time::Duration};
 #[cfg(feature = "network")]
@@ -40,7 +41,9 @@ pub mod networking;
 mod resolver;
 
 // Re-export resolver traits and network resolver implementations
-pub use affinidi_did_resolver_traits::{AsyncResolver, Resolution, Resolver, ResolverError};
+pub use affinidi_did_resolver_traits::{
+    AsyncResolver, MethodName, Resolution, Resolver, ResolverError,
+};
 pub use resolver::network_resolvers;
 
 /// DID Methods supported by the DID Universal Resolver Cache
@@ -132,7 +135,7 @@ pub struct DIDCacheClient {
     network_task_rx: Option<Arc<Mutex<mpsc::Receiver<WSCommands>>>>,
     #[cfg(feature = "did_example")]
     did_example_cache: did_example::DiDExampleCache,
-    resolvers: Arc<Vec<Box<dyn AsyncResolver>>>,
+    resolvers: Arc<HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>>>,
 }
 
 impl Clone for DIDCacheClient {
@@ -152,17 +155,97 @@ impl Clone for DIDCacheClient {
 }
 
 impl DIDCacheClient {
-    /// Register a custom resolver. Custom resolvers are tried before built-in
-    /// resolvers — call this after construction, before resolving.
+    /// Get a mutable reference to the inner resolver map.
     ///
     /// # Panics
     /// Panics if the client has already been cloned (Arc refcount > 1).
-    /// Registration must happen during setup, before the client is shared.
-    pub fn register_resolver(&mut self, resolver: Box<dyn AsyncResolver>) {
-        // Prepend so custom resolvers take priority over built-ins
+    /// All resolver mutations must happen during setup, before the client is shared.
+    fn resolvers_mut(&mut self) -> &mut HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>> {
         Arc::get_mut(&mut self.resolvers)
-            .expect("Cannot register resolvers after DIDCacheClient has been cloned")
-            .insert(0, resolver);
+            .expect("Cannot modify resolvers after DIDCacheClient has been cloned")
+    }
+
+    /// Replace all resolvers for a method with a single resolver.
+    ///
+    /// This is the most common operation — "I want this resolver for this method."
+    /// Clears any existing resolvers for the method before inserting.
+    pub fn set_resolver(&mut self, method: MethodName, resolver: Box<dyn AsyncResolver>) {
+        let map = self.resolvers_mut();
+        let deque = map.entry(method).or_default();
+        deque.clear();
+        deque.push_back(resolver);
+    }
+
+    /// Add a resolver to the front of the chain for a method (highest priority).
+    ///
+    /// Returns `Err` if a resolver with the same `name()` already exists for this method.
+    pub fn prepend_resolver(
+        &mut self,
+        method: MethodName,
+        resolver: Box<dyn AsyncResolver>,
+    ) -> Result<(), DIDCacheError> {
+        let name = resolver.name().to_string();
+        let map = self.resolvers_mut();
+        let deque = map.entry(method.clone()).or_default();
+        if deque.iter().any(|r| r.name() == name) {
+            return Err(DIDCacheError::DIDError(format!(
+                "Resolver '{name}' already registered for method '{method}'"
+            )));
+        }
+        deque.push_front(resolver);
+        Ok(())
+    }
+
+    /// Add a resolver to the back of the chain for a method (lowest priority / fallback).
+    ///
+    /// Returns `Err` if a resolver with the same `name()` already exists for this method.
+    pub fn append_resolver(
+        &mut self,
+        method: MethodName,
+        resolver: Box<dyn AsyncResolver>,
+    ) -> Result<(), DIDCacheError> {
+        let name = resolver.name().to_string();
+        let map = self.resolvers_mut();
+        let deque = map.entry(method.clone()).or_default();
+        if deque.iter().any(|r| r.name() == name) {
+            return Err(DIDCacheError::DIDError(format!(
+                "Resolver '{name}' already registered for method '{method}'"
+            )));
+        }
+        deque.push_back(resolver);
+        Ok(())
+    }
+
+    /// Remove all resolvers for a method.
+    pub fn clear_resolvers(&mut self, method: &MethodName) {
+        self.resolvers_mut().remove(method);
+    }
+
+    /// Remove a resolver at a specific index in a method's chain.
+    ///
+    /// Returns the removed resolver, or `None` if the index is out of bounds.
+    pub fn remove_resolver(
+        &mut self,
+        method: &MethodName,
+        index: usize,
+    ) -> Option<Box<dyn AsyncResolver>> {
+        let map = self.resolvers_mut();
+        let deque = map.get_mut(method)?;
+        let removed = deque.remove(index);
+        if deque.is_empty() {
+            map.remove(method);
+        }
+        removed
+    }
+
+    /// Find a resolver by name within a method's chain.
+    ///
+    /// Returns the index if found, suitable for use with `remove_resolver`.
+    pub fn find_resolver(&self, method: &MethodName, name: &str) -> Option<usize> {
+        self.resolvers
+            .get(method)?
+            .iter()
+            .position(|r| r.name() == name)
     }
 
     /// Front end for resolving a DID
@@ -301,7 +384,6 @@ impl DIDCacheClient {
     /// Establishes websocket connection and sets up the cache.
     // using Self instead of DIDCacheClient leads to E0401 errors in dependent crates
     // this is due to wasm_bindgen generated code (check via `cargo expand`)
-    #[allow(clippy::vec_init_then_push)] // Can't use vec![] with interleaved #[cfg]
     pub async fn new(config: DIDCacheConfig) -> Result<DIDCacheClient, DIDCacheError> {
         // Create the initial cache
         let cache = Cache::builder()
@@ -310,23 +392,51 @@ impl DIDCacheClient {
             .build();
 
         // Register built-in resolvers
-        #[allow(clippy::vec_init_then_push)] // Can't use vec![] with interleaved #[cfg]
-        let mut resolvers: Vec<Box<dyn AsyncResolver>> = Vec::new();
+        let mut resolvers: HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>> = HashMap::new();
+
         // Local (sync) resolvers via blanket impl
-        resolvers.push(Box::new(affinidi_did_resolver_traits::KeyResolver));
-        resolvers.push(Box::new(affinidi_did_resolver_traits::PeerResolver));
+        resolvers
+            .entry(MethodName::Key)
+            .or_default()
+            .push_back(Box::new(affinidi_did_resolver_traits::KeyResolver));
+        resolvers
+            .entry(MethodName::Peer)
+            .or_default()
+            .push_back(Box::new(affinidi_did_resolver_traits::PeerResolver));
         // Network resolvers
-        resolvers.push(Box::new(network_resolvers::EthrResolver));
-        resolvers.push(Box::new(network_resolvers::PkhResolver));
-        resolvers.push(Box::new(network_resolvers::WebResolver));
+        resolvers
+            .entry(MethodName::Ethr)
+            .or_default()
+            .push_back(Box::new(network_resolvers::EthrResolver));
+        resolvers
+            .entry(MethodName::Pkh)
+            .or_default()
+            .push_back(Box::new(network_resolvers::PkhResolver));
+        resolvers
+            .entry(MethodName::Web)
+            .or_default()
+            .push_back(Box::new(network_resolvers::WebResolver));
         #[cfg(feature = "did-jwk")]
-        resolvers.push(Box::new(network_resolvers::JwkResolver));
+        resolvers
+            .entry(MethodName::Jwk)
+            .or_default()
+            .push_back(Box::new(network_resolvers::JwkResolver));
         #[cfg(feature = "did-webvh")]
-        resolvers.push(Box::new(network_resolvers::WebvhResolver));
+        resolvers
+            .entry(MethodName::Webvh)
+            .or_default()
+            .push_back(Box::new(network_resolvers::WebvhResolver));
         #[cfg(feature = "did-cheqd")]
-        resolvers.push(Box::new(network_resolvers::CheqdResolver));
+        resolvers
+            .entry(MethodName::Cheqd)
+            .or_default()
+            .push_back(Box::new(network_resolvers::CheqdResolver));
         #[cfg(feature = "did-scid")]
-        resolvers.push(Box::new(network_resolvers::ScidResolver));
+        resolvers
+            .entry(MethodName::Scid)
+            .or_default()
+            .push_back(Box::new(network_resolvers::ScidResolver));
+
         let resolvers = Arc::new(resolvers);
 
         #[cfg(feature = "network")]
