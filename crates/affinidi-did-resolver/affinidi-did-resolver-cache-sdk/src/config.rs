@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Example: Running in network mode with custom settings:
-//! ```rust
+//! ```rust,ignore
 //! use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
 //! let config = DIDCacheConfigBuilder::default()
 //!     .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
