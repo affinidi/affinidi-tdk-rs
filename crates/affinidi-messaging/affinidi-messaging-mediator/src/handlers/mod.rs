@@ -66,7 +66,11 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
     if shared_data.config.mediator_did_doc.is_some() {
         app = app.route(
             "/.well-known/did.json",
-            get(well_known_did_fetch::well_known_web_did_handler),
+            get(well_known_did_fetch::well_known_did_doc_handler),
+        )
+        .route(
+            "/.well-known/did.jsonl",
+            get(well_known_did_fetch::well_known_did_doc_handler),
         );
     }
 

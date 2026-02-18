@@ -27,6 +27,7 @@ affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
 
 # External Crates
+didwebvh-rs = "0.1.16"
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
