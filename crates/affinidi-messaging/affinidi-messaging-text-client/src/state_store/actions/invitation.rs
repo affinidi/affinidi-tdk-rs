@@ -3,10 +3,7 @@ use affinidi_messaging_sdk::{
     ATM,
     messages::SuccessResponse,
     profiles::ATMProfile,
-    protocols::{
-        Protocols,
-        mediator::acls::{AccessListModeType, MediatorACLSet},
-    },
+    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
 };
 use affinidi_tdk::dids::{DID as DIDKey, KeyType};
 use affinidi_tdk::secrets_resolver::SecretsResolver;
@@ -116,8 +113,6 @@ pub async fn send_invitation_accept(
     state_tx: &UnboundedSender<State>,
     atm: &ATM,
 ) -> anyhow::Result<()> {
-    let protocols = Protocols::default();
-
     // Fetch the Invite message
     let body = reqwest::get(&state.accept_invite_popup.invite_link)
         .await?
@@ -197,9 +192,9 @@ pub async fn send_invitation_accept(
     let accept_temp_profile = atm.profile_add(&accept_temp_profile, true).await?;
 
     // Set up the ACL for the temporary profile. Allow the invite DID to send messages to this DID
-    let Some(accept_temp_profile_info) = protocols
-        .mediator
-        .account_get(atm, &accept_temp_profile, None)
+    let Some(accept_temp_profile_info) = atm
+        .mediator()
+        .account_get(&accept_temp_profile, None)
         .await?
     else {
         state.invite_popup.messages.push(Line::from(Span::styled(
@@ -220,9 +215,9 @@ pub async fn send_invitation_accept(
         accept_temp_profile_acl_flags.get_access_list_mode().0
     {
         // Add the invite DID to this profile's ACL
-        match protocols
-            .mediator
-            .access_list_add(atm, &accept_temp_profile, None, &[&digest(&invite_did)])
+        match atm
+            .mediator()
+            .access_list_add(&accept_temp_profile, None, &[&digest(&invite_did)])
             .await
         {
             Ok(_) => {}
@@ -430,8 +425,6 @@ pub async fn create_invitation(
     state_tx: &UnboundedSender<State>,
     atm: &ATM,
 ) -> anyhow::Result<()> {
-    let protocols = Protocols::default();
-
     state.invite_popup.show_invite_popup = true;
     state.invite_popup.invite_error = None;
     state.invite_popup.messages.clear();
@@ -476,8 +469,7 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Ensure Mediator ACL set up is correctly setup
-                        let Some(profile_info) =
-                            protocols.mediator.account_get(atm, &profile, None).await?
+                        let Some(profile_info) = atm.mediator().account_get(&profile, None).await?
                         else {
                             state.invite_popup.messages.push(Line::from(Span::styled(
                                 "Failed to get profile info from mediator",
@@ -504,9 +496,8 @@ pub async fn create_invitation(
                                     true,
                                     false,
                                 )?;
-                                protocols
-                                    .mediator
-                                    .acls_set(atm, &profile, &digest(&profile.inner.did), &new_acl)
+                                atm.mediator()
+                                    .acls_set(&profile, &digest(&profile.inner.did), &new_acl)
                                     .await?;
                             } else {
                                 state.invite_popup.messages.push(Line::from(Span::styled(
@@ -527,11 +518,7 @@ pub async fn create_invitation(
                         state_tx.send(state.clone())?;
 
                         // Get the OOB Invite itself
-                        match protocols
-                            .oob_discovery
-                            .create_invite(atm, &profile, None)
-                            .await
-                        {
+                        match atm.oob_discovery().create_invite(&profile, None).await {
                             Ok(invite) => {
                                 state.invite_popup.messages.push(Line::from(Span::styled(
                                     "OOB Invite Link successfully created",

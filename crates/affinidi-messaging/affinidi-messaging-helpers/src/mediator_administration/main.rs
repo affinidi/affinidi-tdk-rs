@@ -5,10 +5,7 @@ use affinidi_messaging_sdk::{
     ATM,
     config::ATMConfig,
     profiles::ATMProfile,
-    protocols::{
-        Protocols,
-        mediator::acls::{AccessListModeType, MediatorACLSet},
-    },
+    protocols::mediator::acls::{AccessListModeType, MediatorACLSet},
 };
 use affinidi_tdk::{
     common::{
@@ -232,7 +229,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tdk = Arc::new(TDKSharedState::default().await);
     tdk.secrets_resolver.insert_vec(&admin.secrets).await;
     let atm = ATM::new(config, tdk).await?;
-    let protocols = Protocols::new();
 
     // Create the admin profile and enable it
     let admin_profile = ATMProfile::from_tdk_profile(&atm, &admin).await?;
@@ -242,7 +238,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("{}", style("Fetching Mediator Configuration...").blue());
     let shared_config: HashMap<String, Value> =
-        serde_json::from_value(protocols.mediator.get_config(&atm, &admin).await?)?;
+        serde_json::from_value(atm.mediator().get_config(&admin).await?)?;
     let mut mediator_config = SharedConfig::new(shared_config)?;
     println!(
         "{}{}{}{}{}",
@@ -269,11 +265,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!();
         match selection {
             0 => {
-                account_management_menu(&atm, &admin, &protocols, &theme, &mediator_config).await?;
+                account_management_menu(&atm, &admin, &theme, &mediator_config).await?;
             }
             1 => {
-                administration_accounts_menu(&atm, &admin, &protocols, &theme, &mediator_config)
-                    .await;
+                administration_accounts_menu(&atm, &admin, &theme, &mediator_config).await;
             }
             2 => {
                 println!("Quitting");

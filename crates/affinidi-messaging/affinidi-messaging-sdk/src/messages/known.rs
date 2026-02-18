@@ -1,8 +1,7 @@
 //! Helper functions to determine message type
 
-use std::str::FromStr;
-
 use crate::errors::ATMError;
+use std::str::FromStr;
 
 pub enum MessageType {
     AffinidiAuthenticate,            // Affinidi Messaging Authentication Response
@@ -18,6 +17,8 @@ pub enum MessageType {
     MessagePickupLiveDeliveryChange, // Message Pickup 3.0 Live-delivery-change (Streaming enabled)
     ProblemReport,                   // Problem Report Protocol
     TrustPing,                       // Trust Ping Protocol
+    DiscoverFeaturesQueries,         // Discover Features 2.0 Protocol - Queries
+    DiscoverFeaturesDisclose,        // Discover Features 2.0 Protocol - Disclose
     Other(String),                   // Other message type
 }
 
@@ -51,6 +52,12 @@ impl FromStr for MessageType {
             }
             "https://didcomm.org/routing/2.0/forward" => Ok(Self::ForwardRequest),
             "https://didcomm.org/report-problem/2.0/problem-report" => Ok(Self::ProblemReport),
+            "https://didcomm.org/discover-features/2.0/queries" => {
+                Ok(Self::DiscoverFeaturesQueries)
+            }
+            "https://didcomm.org/discover-features/2.0/disclose" => {
+                Ok(Self::DiscoverFeaturesDisclose)
+            }
             _ => Ok(Self::Other(s.to_string())),
         }
     }

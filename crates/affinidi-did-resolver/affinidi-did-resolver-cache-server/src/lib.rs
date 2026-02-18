@@ -1,5 +1,3 @@
-use std::{fmt::Debug, sync::Arc};
-
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use axum::{
     extract::{FromRef, FromRequestParts},
@@ -8,6 +6,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use session::SessionError;
 use statistics::Statistics;
+use std::{fmt::Debug, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) mod common;

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.11.6"
+version = "0.11.7"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -14,10 +14,10 @@ repository.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk.workspace = true
-affinidi-messaging-sdk.workspace = true
-affinidi-messaging-didcomm.workspace = true
-affinidi-did-resolver-cache-sdk.workspace = true
+affinidi-tdk = "0.4"
+affinidi-messaging-sdk = "0.14"
+affinidi-messaging-didcomm = "0.11"
+affinidi-did-resolver-cache-sdk = "0.7"
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
@@ -30,7 +30,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 image = "0.25"
 log = "0.4"
 qrcode = "0.14"
-rand = "0.9"
+rand = "0.10"
 ratatui = "0.29"
 ratatui-image = { version = "8", features = ["crossterm", "image-defaults"] }
 reqwest = { version = "0.13", features = ["rustls", "json"] }

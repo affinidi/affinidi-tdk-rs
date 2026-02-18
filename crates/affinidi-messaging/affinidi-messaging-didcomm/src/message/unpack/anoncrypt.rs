@@ -1,3 +1,12 @@
+use crate::{
+    UnpackOptions,
+    algorithms::AnonCryptAlg,
+    document::did_or_url,
+    envelope::{Envelope, MetaEnvelope, ParsedEnvelope},
+    error::{ErrorKind, Result, ResultExt, err_msg},
+    jwe,
+    utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
+};
 use affinidi_secrets_resolver::SecretsResolver;
 use askar_crypto::{
     alg::{
@@ -10,16 +19,7 @@ use askar_crypto::{
     kdf::ecdh_es::EcdhEs,
 };
 use std::str::FromStr;
-
-use crate::{
-    UnpackOptions,
-    algorithms::AnonCryptAlg,
-    document::did_or_url,
-    envelope::{Envelope, MetaEnvelope, ParsedEnvelope},
-    error::{ErrorKind, Result, ResultExt, err_msg},
-    jwe,
-    utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
-};
+use tracing::debug;
 
 pub(crate) async fn _try_unpack_anoncrypt<T>(
     jwe: &ParsedEnvelope,
@@ -32,10 +32,17 @@ where
 {
     let jwe = match jwe {
         ParsedEnvelope::Jwe(jwe) => jwe,
-        _ => return Ok(None),
+        _ => {
+            debug!("Message is not JWE, therefore not ANONCRYPT");
+            return Ok(None);
+        }
     };
 
     if jwe.protected.alg != jwe::Algorithm::EcdhEsA256kw {
+        debug!(
+            "Expected EcdhEsA256kw algo, instead this message is using {:#?}",
+            jwe.protected.alg
+        );
         return Ok(None);
     }
 

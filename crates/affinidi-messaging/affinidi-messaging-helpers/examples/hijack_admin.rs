@@ -14,10 +14,9 @@
  *
  * */
 
-use affinidi_did_authentication::AuthorizationTokens;
 use affinidi_messaging_didcomm::Message;
-use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile, protocols::Protocols};
-use affinidi_tdk::{TDK, common::config::TDKConfig};
+use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile};
+use affinidi_tdk::{TDK, common::config::TDKConfig, did_authentication::AuthorizationTokens};
 use clap::Parser;
 use serde_json::json;
 use sha256::digest;
@@ -71,7 +70,6 @@ async fn main() -> Result<(), ATMError> {
 
     let environment = &tdk.get_shared_state().environment;
     let atm = tdk.atm.clone().unwrap();
-    let protocols = Protocols::new();
 
     // Add and activate the admin profile
     let tdk_admin = if let Some(admin) = &environment.admin_did {
@@ -88,7 +86,7 @@ async fn main() -> Result<(), ATMError> {
     info!("Admin profile active");
 
     // Check if actually admin?
-    match protocols.mediator.account_get(&atm, &atm_admin, None).await {
+    match atm.mediator().account_get(&atm_admin, None).await {
         Ok(Some(account)) => {
             if account._type.is_admin() {
                 info!("Verified Admin account - OK");
@@ -126,11 +124,7 @@ async fn main() -> Result<(), ATMError> {
     info!("Mallory profile active");
 
     // Check if actually not-admin?
-    match protocols
-        .mediator
-        .account_get(&atm, &atm_mallory, None)
-        .await
-    {
+    match atm.mediator().account_get(&atm_mallory, None).await {
         Ok(Some(account)) => {
             if !account._type.is_admin() {
                 info!("Verified Non-Admin account - OK");
@@ -161,11 +155,7 @@ async fn main() -> Result<(), ATMError> {
 
     // Try and do an admin function with Mallory
     info!("Trying to access an admin function with Mallory");
-    match protocols
-        .mediator
-        .accounts_list(&atm, &atm_mallory, None, None)
-        .await
-    {
+    match atm.mediator().accounts_list(&atm_mallory, None, None).await {
         Ok(_) => {
             warn!("Mallory was able to access an admin function - NOT OK");
         }
@@ -225,11 +215,7 @@ async fn main() -> Result<(), ATMError> {
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;
 
     // Lets check if Mallory is an admin?
-    match protocols
-        .mediator
-        .account_get(&atm, &atm_mallory, None)
-        .await
-    {
+    match atm.mediator().account_get(&atm_mallory, None).await {
         Ok(Some(account)) => {
             if account._type.is_admin() {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");
@@ -290,11 +276,7 @@ async fn main() -> Result<(), ATMError> {
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;
 
     // Lets check if Mallory is an admin?
-    match protocols
-        .mediator
-        .account_get(&atm, &atm_mallory, None)
-        .await
-    {
+    match atm.mediator().account_get(&atm_mallory, None).await {
         Ok(Some(account)) => {
             if account._type.is_admin() {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");
@@ -364,11 +346,7 @@ async fn main() -> Result<(), ATMError> {
     }
 
     // Lets check if Mallory is an admin?
-    match protocols
-        .mediator
-        .account_get(&atm, &atm_mallory, None)
-        .await
-    {
+    match atm.mediator().account_get(&atm_mallory, None).await {
         Ok(Some(account)) => {
             if account._type.is_admin() {
                 warn!("Mallory is now an ADMIN level account - NOT OK!!!!");

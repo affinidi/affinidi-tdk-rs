@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.4.2"
+version = "0.4.3"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -20,16 +20,16 @@ did-peer = []
 data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 
 [dependencies]
-affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-did-common.workspace = true
-affinidi-messaging-sdk = { workspace = true, optional = true }
-affinidi-messaging-didcomm.workspace = true
-affinidi-did-authentication.workspace = true
-affinidi-tdk-common.workspace = true
-affinidi-secrets-resolver.workspace = true
-affinidi-crypto.workspace = true
-affinidi-meeting-place = { workspace = true, optional = true }
-affinidi-data-integrity = { workspace = true, optional = true }
+affinidi-did-resolver-cache-sdk = "0.7"
+affinidi-did-common = "0.3"
+affinidi-messaging-sdk = { version = "0.14", optional = true }
+affinidi-messaging-didcomm = "0.11"
+affinidi-did-authentication = "0.2"
+affinidi-tdk-common = "0.3"
+affinidi-secrets-resolver = "0.5"
+affinidi-crypto = "0.1"
+affinidi-meeting-place = { version = "0.2", optional = true }
+affinidi-data-integrity = { version = "0.3", optional = true }
 
 # External Crates
 clap = { version = "4.5", features = ["derive"] }

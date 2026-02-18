@@ -20,8 +20,8 @@ p384 = ["affinidi-crypto/p384"]
 k256 = ["affinidi-crypto/k256"]
 
 [dependencies]
-affinidi-crypto.workspace = true
-affinidi-encoding.workspace = true
+affinidi-crypto = "0.1"
+affinidi-encoding = "0.1"
 
 # External Crates
 base64 = "0.22"

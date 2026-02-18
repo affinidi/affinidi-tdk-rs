@@ -1,3 +1,189 @@
+//! # Affinidi Trusted Messaging SDK
+//!
+//! The Affinidi Trusted Messaging (ATM) SDK provides a high-level interface for
+//! [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) messaging
+//! through a mediator service. It handles message encryption, signing, routing,
+//! and transport so you can focus on building your application.
+//!
+//! ## Key Concepts
+//!
+//! - **[`ATM`]** - The main entry point. Holds configuration, profiles, and manages
+//!   background tasks (e.g. message deletion).
+//! - **[`profiles::ATMProfile`]** - Represents a DID identity with an associated
+//!   mediator. Each profile can independently send and receive messages.
+//! - **Mediator** - A service that stores and forwards DIDComm messages on behalf
+//!   of your profile. Discovered automatically from the mediator's DID Document.
+//! - **[`protocols::Protocols`]** - Pre-built DIDComm protocol implementations
+//!   (Trust Ping, Message Pickup 3.0, Routing 2.0, etc.).
+//! - **Transports** - The SDK supports both REST (HTTPS) and WebSocket (WSS)
+//!   transports. REST is used for authentication and bulk operations; WebSocket
+//!   enables low-latency sending and live message streaming.
+//!
+//! ## Getting Started
+//!
+//! ### 1. Initialize the TDK shared state
+//!
+//! The SDK builds on top of `affinidi-tdk-common` which manages DID resolution
+//! and secrets. You need a [`TDKSharedState`] instance first:
+//!
+//! ```rust,ignore
+//! use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
+//! use std::sync::Arc;
+//!
+//! // Load environment configuration (DIDs, secrets, mediator endpoints)
+//! let mut environment = TDKEnvironments::fetch_from_file(
+//!     Some("environments.json"),
+//!     "default",
+//! )?;
+//!
+//! let tdk = Arc::new(TDKSharedState::default().await);
+//! ```
+//!
+//! ### 2. Build an ATM configuration and create the SDK instance
+//!
+//! Use [`config::ATMConfig::builder()`] to configure the SDK, then pass it to
+//! [`ATM::new()`]:
+//!
+//! ```rust,ignore
+//! use affinidi_messaging_sdk::{ATM, config::ATMConfig};
+//!
+//! let config = ATMConfig::builder()
+//!     // Add custom SSL/TLS certificates if the mediator uses self-signed certs
+//!     .with_ssl_certificates(&mut environment.ssl_certificates)
+//!     // Optional: tune the per-profile message fetch cache
+//!     .with_fetch_cache_limit_count(100)
+//!     .with_fetch_cache_limit_bytes(10 * 1024 * 1024)
+//!     .build()?;
+//!
+//! let atm = ATM::new(config, tdk).await?;
+//! ```
+//!
+//! ### 3. Register a profile
+//!
+//! A profile ties a DID to a mediator. Add it to both the TDK (for secrets/DID
+//! resolution) and the ATM SDK:
+//!
+//! ```rust,ignore
+//! use affinidi_messaging_sdk::profiles::ATMProfile;
+//!
+//! // Get a profile from your environment configuration
+//! let alice_tdk = environment.profiles.get("Alice").unwrap();
+//! tdk.add_profile(alice_tdk).await;
+//!
+//! // Convert and register with ATM (live_stream=false means no WebSocket yet)
+//! let alice = atm
+//!     .profile_add(
+//!         &ATMProfile::from_tdk_profile(&atm, alice_tdk).await?,
+//!         false,
+//!     )
+//!     .await?;
+//! ```
+//!
+//! ### 4. Send a message (REST)
+//!
+//! The simplest way to verify connectivity is a DIDComm Trust Ping:
+//!
+//! ```rust,ignore
+//! // Send a signed trust-ping, requesting a pong response
+//! let ping = atm
+//!     .trust_ping()
+//!     .send_ping(
+//!         &alice,       // sender profile
+//!         &target_did,  // recipient DID
+//!         true,         // signed
+//!         true,         // request pong response
+//!         false,        // don't block waiting for response
+//!     )
+//!     .await?;
+//! ```
+//!
+//! ### 5. Retrieve and unpack messages
+//!
+//! After sending a message that produces a response, fetch and decrypt it:
+//!
+//! ```rust,ignore
+//! use affinidi_messaging_sdk::messages::GetMessagesRequest;
+//!
+//! let response = atm
+//!     .get_messages(
+//!         &alice,
+//!         &GetMessagesRequest {
+//!             message_ids: vec![msg_id],
+//!             delete: true, // delete after retrieval
+//!         },
+//!     )
+//!     .await?;
+//!
+//! for msg in response.success {
+//!     let (message, metadata) = atm.unpack(&msg.msg.unwrap()).await?;
+//!     println!("Received: {:?}", message);
+//! }
+//! ```
+//!
+//! ### 6. Upgrade to WebSocket for live streaming
+//!
+//! For lower latency and push-based message delivery, enable the WebSocket
+//! transport on a profile:
+//!
+//! ```rust,ignore
+//! use std::time::Duration;
+//!
+//! // Open a WebSocket connection to the mediator
+//! atm.profile_enable_websocket(&alice).await?;
+//!
+//! // Send a ping (now routed over WebSocket automatically)
+//! let ping = atm
+//!     .trust_ping()
+//!     .send_ping(&alice, &target_did, true, true, false)
+//!     .await?;
+//!
+//! // Wait for the pong via the live stream
+//! let pong = atm
+//!     .message_pickup()
+//!     .live_stream_get(
+//!         &alice,
+//!         &ping.message_id,
+//!         Duration::from_secs(10),
+//!         true, // auto-delete
+//!     )
+//!     .await?;
+//! ```
+//!
+//! ### 7. Graceful shutdown
+//!
+//! Always shut down cleanly to close WebSocket connections and stop background
+//! tasks:
+//!
+//! ```rust,ignore
+//! atm.graceful_shutdown().await;
+//! ```
+//!
+//! ## Module Overview
+//!
+//! | Module | Description |
+//! |--------|-------------|
+//! | [`config`] | SDK configuration via the builder pattern ([`config::ATMConfig`]) |
+//! | [`profiles`] | DID profile and mediator management ([`profiles::ATMProfile`]) |
+//! | [`messages`] | Pack, unpack, send, list, get, fetch, and delete DIDComm messages |
+//! | [`protocols`] | Higher-level DIDComm protocol implementations (Trust Ping, Message Pickup, Routing) |
+//! | [`transports`] | REST and WebSocket transport layer |
+//! | [`errors`] | Error types ([`errors::ATMError`]) |
+//! | [`delete_handler`] | Background message deletion task |
+//! | [`public`] | Public utility functions (e.g. well-known DID resolution) |
+//!
+//! ## Debug Logging
+//!
+//! Enable SDK debug logs via the `RUST_LOG` environment variable:
+//!
+//! ```bash
+//! export RUST_LOG=none,affinidi_messaging_sdk=debug
+//! ```
+
+use crate::protocols::{
+    discover_features::DiscoverfeaturesOps, mediator::administration::MediatorOps,
+    message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
+    trust_ping::TrustPingOps,
+};
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
 use delete_handler::DeletionHandlerCommands;
@@ -115,5 +301,35 @@ impl ATM {
     /// Get the TDK Shared State
     pub fn get_tdk(&self) -> &TDKSharedState {
         &self.inner.tdk_common
+    }
+
+    /// Access Trust Ping protocol methods
+    pub fn trust_ping(&self) -> TrustPingOps<'_> {
+        TrustPingOps { atm: self }
+    }
+
+    /// Access Message Pickup 3.0 protocol methods
+    pub fn message_pickup(&self) -> MessagePickupOps<'_> {
+        MessagePickupOps { atm: self }
+    }
+
+    /// Access Routing protocol methods
+    pub fn routing(&self) -> RoutingOps<'_> {
+        RoutingOps { atm: self }
+    }
+
+    /// Access Mediator administration protocol methods
+    pub fn mediator(&self) -> MediatorOps<'_> {
+        MediatorOps { atm: self }
+    }
+
+    /// Access OOB Discovery protocol methods
+    pub fn oob_discovery(&self) -> OOBDiscoveryOps<'_> {
+        OOBDiscoveryOps { atm: self }
+    }
+
+    /// Access Discover Features protocol methods
+    pub fn discover_features(&self) -> DiscoverfeaturesOps<'_> {
+        DiscoverfeaturesOps { atm: self }
     }
 }

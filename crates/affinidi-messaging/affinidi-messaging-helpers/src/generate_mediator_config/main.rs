@@ -7,14 +7,20 @@ use console::{Term, style};
 use ring::signature::Ed25519KeyPair;
 use serde_json::{Value, json};
 use std::error::Error;
+use std::fs::File;
+use std::io::Write;
 
 /// Setups the environment for Affinidi Messaging
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Path to the environments file (defaults to environments.json)
+    /// Host (domain) that will be used in the generated documents
     #[arg(long)]
     host: Option<String>,
+
+    /// Whether to generate files
+    #[arg(long)]
+    generate_files: Option<bool>,
 
     #[arg(long, short)]
     secure_connection: Option<bool>,
@@ -138,6 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let args: Args = Args::parse();
     let host = args.host.unwrap_or("localhost%3A7037".to_string());
+    let generate_files = args.generate_files.unwrap_or(false);
     let secure_connection = args.secure_connection.unwrap_or(true);
     let api_prefix = args.api_prefix.unwrap_or("".to_string());
 
@@ -199,5 +206,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         style("DID, DID Doc, and secrets completed. Use the values to setup your self-hosted mediator.").green(),
     );
 
+    if generate_files {
+        let mut jwt_authorization_secret_file = File::create("jwt_authorization_secret.txt")?;
+        jwt_authorization_secret_file.write_all(jwt_secret.as_bytes())?;
+
+        // DID Document
+        let mut did_doc_file = File::create("mediator_did.json")?;
+        did_doc_file.write_all(did_doc.as_bytes())?;
+
+        // DID Secrets
+        let mut secrets_file = File::create("secrets.json")?;
+        secrets_file.write_all(secrets_string.as_bytes())?;
+    }
     Ok(())
 }

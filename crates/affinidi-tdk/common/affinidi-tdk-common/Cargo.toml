@@ -17,11 +17,11 @@ default = ["messaging"]
 messaging = []
 
 [dependencies]
-affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-did-authentication.workspace = true
-affinidi-did-common.workspace = true
-affinidi-secrets-resolver.workspace = true
-affinidi-data-integrity.workspace = true
+affinidi-did-resolver-cache-sdk = "0.7"
+affinidi-did-authentication = "0.2"
+affinidi-did-common = "0.3"
+affinidi-secrets-resolver = "0.5"
+affinidi-data-integrity = "0.3"
 
 ahash = "0.8"
 base64 = "0.22"

@@ -13,10 +13,10 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-affinidi-messaging-sdk.workspace = true
+affinidi-messaging-sdk = "0.14"
 axum = { version = "0.8", features = ["ws"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
-rand = "0.9"
+rand = "0.10"
 # Redis can only be updated when deadpool-redis supports the new version
 redis = { version = "0.32", features = [
   "tokio-rustls-comp",

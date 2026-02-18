@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.11.6"
+version = "0.11.10"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -30,15 +30,15 @@ path = "src/generate_webvh_did/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { workspace = true, features = [
+affinidi-did-resolver-cache-sdk = { version = "0.7", features = [
   "did_example",
 ] }
-affinidi-did-common.workspace = true
-affinidi-messaging-didcomm.workspace = true
-affinidi-messaging-sdk.workspace = true
-affinidi-tdk.workspace = true
-didwebvh-rs = "0.1.16"
+affinidi-did-common = "0.3"
+affinidi-messaging-didcomm = "0.11"
+affinidi-messaging-sdk = "0.14"
+affinidi-tdk = "0.4"
 
+didwebvh-rs = "0.1.16"
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
@@ -56,7 +56,7 @@ serde_json = "1.0"
 sha256 = "1.6"
 time = "0.3"
 tokio = { version = "1.49", features = ["full"] }
-toml = "0.9"
+toml = "1.0"
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
@@ -64,9 +64,5 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
+uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 url = "2.5"
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
-
-[dev-dependencies]
-affinidi-tdk.workspace = true
-affinidi-did-authentication.workspace = true

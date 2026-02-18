@@ -1,6 +1,6 @@
 [package]
 name = 'affinidi-messaging-didcomm'
-version = "0.11.6"
+version = "0.11.7"
 description = 'DIDComm for Rust, integrates into Affinidi Messaging. See Affinidi Messaging for a complete communications solution.'
 authors = [
   'Vyacheslav Gudkov <vyacheslav.gudkov@dsr-corporation.com>',
@@ -15,10 +15,10 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-crypto.workspace = true
-affinidi-secrets-resolver.workspace = true
-affinidi-did-resolver-cache-sdk.workspace = true
-affinidi-did-common.workspace = true
+affinidi-crypto = "0.1"
+affinidi-secrets-resolver = "0.5"
+affinidi-did-resolver-cache-sdk = "0.7"
+affinidi-did-common = "0.3"
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }
@@ -36,7 +36,7 @@ thiserror = "2.0"
 varint = "0.9"
 tokio = { version = "1.49", features = ["rt", "macros"] }
 tracing = { version = "0.1", features = ["valuable"] }
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
+uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_futures"] }
@@ -48,4 +48,3 @@ testvectors = ["lazy_static"]
 
 [lints]
 workspace = true
-

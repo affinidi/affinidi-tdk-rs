@@ -4,7 +4,7 @@
 
 use super::{
     acls::{AccessListModeType, MediatorACLSet},
-    administration::Mediator,
+    administration::{Mediator, MediatorOps},
 };
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
@@ -686,5 +686,94 @@ impl Mediator {
                 "Mediator Access List Get could not be parsed. Reason: {err}"
             ))
         })
+    }
+}
+
+impl<'a> MediatorOps<'a> {
+    /// Get the ACL's set for a list of DIDs
+    /// See [`Mediator::acls_get`] for full documentation
+    pub async fn acls_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        dids: &Vec<String>,
+    ) -> Result<MediatorACLGetResponse, ATMError> {
+        Mediator::default().acls_get(self.atm, profile, dids).await
+    }
+
+    /// Set the ACL's for a DID
+    /// See [`Mediator::acls_set`] for full documentation
+    pub async fn acls_set(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: &str,
+        acls: &MediatorACLSet,
+    ) -> Result<MediatorACLSetResponse, ATMError> {
+        Mediator::default()
+            .acls_set(self.atm, profile, did_hash, acls)
+            .await
+    }
+
+    /// Access List List: Lists hash of DID's in the Access Control List for a given DID
+    /// See [`Mediator::access_list_list`] for full documentation
+    pub async fn access_list_list(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<&str>,
+        cursor: Option<u64>,
+    ) -> Result<MediatorAccessListListResponse, ATMError> {
+        Mediator::default()
+            .access_list_list(self.atm, profile, did_hash, cursor)
+            .await
+    }
+
+    /// Access List Add: Adds one or more DIDs to a Access Control List for a given DID
+    /// See [`Mediator::access_list_add`] for full documentation
+    pub async fn access_list_add(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<&str>,
+        hashes: &[&str],
+    ) -> Result<MediatorAccessListAddResponse, ATMError> {
+        Mediator::default()
+            .access_list_add(self.atm, profile, did_hash, hashes)
+            .await
+    }
+
+    /// Access List Remove: Removes one or more DIDs from a Access Control List for a given DID
+    /// See [`Mediator::access_list_remove`] for full documentation
+    pub async fn access_list_remove(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<&str>,
+        hashes: &[&str],
+    ) -> Result<usize, ATMError> {
+        Mediator::default()
+            .access_list_remove(self.atm, profile, did_hash, hashes)
+            .await
+    }
+
+    /// Access List Clear: Clears Access Control List for a given DID
+    /// See [`Mediator::access_list_clear`] for full documentation
+    pub async fn access_list_clear(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<&str>,
+    ) -> Result<(), ATMError> {
+        Mediator::default()
+            .access_list_clear(self.atm, profile, did_hash)
+            .await
+    }
+
+    /// Access List Get: Searches for one or more DID's in the Access Control List for a given DID
+    /// See [`Mediator::access_list_get`] for full documentation
+    pub async fn access_list_get(
+        &self,
+        profile: &Arc<ATMProfile>,
+        did_hash: Option<&str>,
+        hashes: &[&str],
+    ) -> Result<MediatorAccessListGetResponse, ATMError> {
+        Mediator::default()
+            .access_list_get(self.atm, profile, did_hash, hashes)
+            .await
     }
 }

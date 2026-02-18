@@ -1,7 +1,10 @@
-use crate::{errors::ATMError, transports::websockets::WebSocketResponses};
+use crate::{
+    errors::ATMError, protocols::discover_features::DiscoverFeatures,
+    transports::websockets::WebSocketResponses,
+};
 use rustls::pki_types::CertificateDer;
-use std::{fs::File, io::BufReader};
-use tokio::sync::broadcast::Sender;
+use std::{fs::File, io::BufReader, sync::Arc};
+use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
 
 /// Configuration for the Affinidi Trusted Messaging (ATM) Service
@@ -20,6 +23,12 @@ pub struct ATMConfig {
 
     /// If you want to aggregate inbound messages from the SDK to a channel to be used by the client
     pub(crate) inbound_message_channel: Option<Sender<WebSocketResponses>>,
+
+    /// Should we auto unpack forwarded messages?
+    pub(crate) unpack_forwards: bool,
+
+    /// Can configure any protocol discoverable information here
+    pub(crate) discover_features: Arc<RwLock<DiscoverFeatures>>,
 }
 
 impl ATMConfig {
@@ -52,6 +61,8 @@ pub struct ATMConfigBuilder {
     fetch_cache_limit_count: u32,
     fetch_cache_limit_bytes: u64,
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
+    unpack_forwards: bool,
+    discover_features: DiscoverFeatures,
 }
 
 impl Default for ATMConfigBuilder {
@@ -61,6 +72,8 @@ impl Default for ATMConfigBuilder {
             fetch_cache_limit_count: 100,
             fetch_cache_limit_bytes: 1024 * 1024 * 10, // Defaults to 10MB Cache
             inbound_message_channel: None,
+            unpack_forwards: true,
+            discover_features: DiscoverFeatures::default(),
         }
     }
 }
@@ -102,6 +115,23 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// When unpacking a message, if it is of type forward, try and unpack the forwarded message
+    /// and return the innermost message instead of the forward message
+    /// Default: true (will unpack the forward message)
+    pub fn with_unpack_forwards(mut self, unpack_forwards: bool) -> Self {
+        self.unpack_forwards = unpack_forwards;
+        self
+    }
+
+    /// You can specificy protocol information that can be discovered by others using the Dicover
+    /// Features Protocol here. This is useful for things like indicating support for certain
+    /// message types, transports, etc.
+    /// Default: None (No discoverable information)
+    pub fn with_discovery_features(mut self, features: DiscoverFeatures) -> Self {
+        self.discover_features = features;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -135,6 +165,8 @@ impl ATMConfigBuilder {
             fetch_cache_limit_count: self.fetch_cache_limit_count,
             fetch_cache_limit_bytes: self.fetch_cache_limit_bytes,
             inbound_message_channel: self.inbound_message_channel,
+            unpack_forwards: self.unpack_forwards,
+            discover_features: Arc::new(RwLock::new(self.discover_features)),
         })
     }
 }

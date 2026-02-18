@@ -1,9 +1,7 @@
 //! Example using OOB Discovery to create and retrieve an invitation
 //! Does not show the next steps of creating the connection, this is outside of the scope of this example
 
-use affinidi_messaging_sdk::{
-    ATM, config::ATMConfig, errors::ATMError, profiles::ATMProfile, protocols::Protocols,
-};
+use affinidi_messaging_sdk::{ATM, config::ATMConfig, errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::common::{TDKSharedState, environments::TDKEnvironments};
 use clap::Parser;
 use std::{env, sync::Arc};
@@ -64,17 +62,13 @@ async fn main() -> Result<(), ATMError> {
 
     // Create a new ATM Client
     let atm = ATM::new(config.build()?, tdk).await?;
-    let protocols = Protocols::new();
 
     debug!("Enabling Alice's Profile");
     let alice = atm
         .profile_add(&ATMProfile::from_tdk_profile(&atm, alice).await?, true)
         .await?;
 
-    let oob_id = protocols
-        .oob_discovery
-        .create_invite(&atm, &alice, None)
-        .await?;
+    let oob_id = atm.oob_discovery().create_invite(&alice, None).await?;
 
     println!("oob_id = {}", oob_id);
     println!();
@@ -88,7 +82,7 @@ async fn main() -> Result<(), ATMError> {
 
     let url = [&endpoint, "/oob?_oobid=", &oob_id].concat();
     println!("Attempting to retrieve an invitation: {}", url);
-    let invitation = protocols.oob_discovery.retrieve_invite(&atm, &url).await?;
+    let invitation = atm.oob_discovery().retrieve_invite(&url).await?;
 
     println!(
         "Received invitation:\n{}",
@@ -96,10 +90,7 @@ async fn main() -> Result<(), ATMError> {
     );
 
     println!();
-    let del_response = protocols
-        .oob_discovery
-        .delete_invite(&atm, &alice, &oob_id)
-        .await?;
+    let del_response = atm.oob_discovery().delete_invite(&alice, &oob_id).await?;
 
     println!("Delete response: deleted? {}", del_response);
 
