@@ -1,4 +1,3 @@
-use affinidi_did_common::Document;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
 use affinidi_messaging_sdk::messages::SuccessResponse;
 use axum::{Json, extract::State};
@@ -32,20 +31,22 @@ pub async fn well_known_did_fetch_handler(
 }
 
 /// Handles resolution of the well-known DID for the mediator when self hosting a did:web DID
-pub async fn well_known_web_did_handler(
+pub async fn well_known_did_doc_handler(
     State(state): State<SharedData>,
-) -> Result<Json<Document>, AppError> {
-    let _span = span!(Level::DEBUG, "well_known_web_did_handler");
+) -> Result<String, AppError> {
+    let _span = span!(Level::DEBUG, "well_known_did_doc_handler");
     async move {
-        match state.config.mediator_did_doc {
-            Some(doc) => Ok(Json(doc)),
-            _ => Err(MediatorError::ConfigError(
-                48,
-                "NA".to_string(),
-                "No Mediator DID Document is configured".to_string(),
-            )
-            .into()),
-        }
+        state.config.mediator_did_doc
+            .as_ref()
+            .filter(|doc| !doc.is_empty())
+            .map(|doc| doc.clone())
+            .ok_or_else(|| {
+                MediatorError::ConfigError(
+                    48,
+                    "NA".to_string(),
+                    "No Mediator DID Document is configured".to_string(),
+                ).into()
+            })
     }
     .instrument(_span)
     .await

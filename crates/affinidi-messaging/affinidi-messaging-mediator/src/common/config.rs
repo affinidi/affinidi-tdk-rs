@@ -7,6 +7,7 @@ use affinidi_messaging_mediator_common::{
     database::config::{DatabaseConfig, DatabaseConfigRaw},
     errors::MediatorError,
 };
+use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::{
     MessageExpiryCleanupConfig, MessageExpiryCleanupConfigRaw,
 };
@@ -473,7 +474,7 @@ pub struct Config {
     pub listen_address: String,
     pub mediator_did: String,
     pub mediator_did_hash: String,
-    pub mediator_did_doc: Option<Document>,
+    pub mediator_did_doc: Option<String>,
     pub admin_did: String,
     pub api_prefix: String,
     pub streaming_enabled: bool,
@@ -602,18 +603,53 @@ impl TryFrom<ConfigRaw> for Config {
 
         config.mediator_did_hash = digest(&config.mediator_did);
 
+        // Initialise a mutable did document for later use on validation and resolver loading
+        let mut did_document: Option<Document> = None;
+
         // Are we self-hosting our own did:web Document?
         if let Some(path) = raw.server.did_web_self_hosted {
-            let content = read_document(&path, &aws_config).await?;
-            let doc: Document = serde_json::from_str(&content).map_err(|err| {
-                eprintln!("Could not parse DID Document. Reason: {err}");
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    format!("Could not parse DID Document. Reason: {err}"),
-                )
-            })?;
-            config.mediator_did_doc = Some(doc);
+            let document_json = read_document(&path, &aws_config).await?;
+
+            // Validate and parse as LogEntry (webvh format) first, then fall back to direct Document
+            let parsed_document = match LogEntry::deserialize_string(&document_json, None) {
+                Ok(log_entry) => {
+                    // Extract the did_document from the log_entry
+                    let did_doc = log_entry.get_did_document().map_err(|err| {
+                        eprintln!("Couldn't extract DID Document from LogEntry: {err}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Couldn't extract DID Document from LogEntry: {err}"),
+                        )
+                    })?;
+
+                    // Convert Value to Document
+                    serde_json::from_value(did_doc).map_err(|err| {
+                        eprintln!("Couldn't convert DID Document value to Document struct. Reason: {err}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Couldn't convert DID Document value to Document struct. Reason: {err}"),
+                        )
+                    })?
+                }
+                Err(_log_entry_err) => {
+                    // Try parsing as a direct Document struct
+                    serde_json::from_str::<Document>(&document_json).map_err(|err| {
+                        eprintln!("Couldn't parse content as LogEntry or Document. Reason: {err}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Couldn't parse content as LogEntry or Document. Reason: {err}"),
+                        )
+                    })?
+                }
+            };
+
+            // Store the raw document string (JSON or JSONL format)
+            config.mediator_did_doc = Some(document_json);
+            // Store the parsed Document for later use
+            did_document = Some(parsed_document);
         }
 
         // Ensure that the security JWT expiry times are valid
@@ -648,9 +684,9 @@ impl TryFrom<ConfigRaw> for Config {
             })?;
 
         // Load the Local DID Document if self hosted
-        if let Some(mediator_doc) = &config.mediator_did_doc {
+        if let Some(mediator_doc) = did_document {
             did_resolver
-                .add_did_document(&config.mediator_did, mediator_doc.clone())
+                .add_did_document(&config.mediator_did, mediator_doc)
                 .await;
         }
 
