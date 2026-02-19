@@ -63,24 +63,28 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
             get(well_known_did_fetch::well_known_did_fetch_handler),
         );
 
-    if shared_data.config.mediator_did_doc.is_some() {
-        app = app.route(
-            "/.well-known/did.json",
+    let has_prefix = api_prefix.is_empty() || api_prefix == "/";
+
+    app = if shared_data.config.mediator_did_doc.is_some() {
+        let well_known_prefix = if has_prefix { "/.well-known" } else { "" };
+        app.route(
+            &format!("{}/did.json", well_known_prefix),
             get(well_known_did_fetch::well_known_did_doc_handler),
         )
         .route(
-            "/.well-known/did.jsonl",
+            &format!("{}/did.jsonl", well_known_prefix),
             get(well_known_did_fetch::well_known_did_doc_handler),
-        );
-    }
-
-    let mut router = Router::new();
-    router = if api_prefix.is_empty() || api_prefix == "/" {
-        router.merge(app)
+        )
     } else {
-        router.nest(api_prefix, app)
+        app
     };
-    router.with_state(shared_data.to_owned())
+
+    (if has_prefix {
+        Router::new().merge(app)
+    } else {
+        Router::new().nest(api_prefix, app)
+    })
+    .with_state(shared_data.to_owned())
 }
 
 pub async fn health_checker_handler(State(state): State<SharedData>) -> impl IntoResponse {
