@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.6.4"
+version = "0.7.0"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -14,7 +14,7 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { version = "0.7", features = ["network"] }
+affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 
 # External Crates
