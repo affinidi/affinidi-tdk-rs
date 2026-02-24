@@ -1,11 +1,12 @@
-use affinidi_tdk::secrets_resolver::secrets::Secret;
 use std::sync::Arc;
+
+use affinidi_tdk::secrets_resolver::secrets::Secret;
 use clap::Parser;
-use didwebvh_rs::DIDWebVHState;
-use didwebvh_rs::log_entry::LogEntryMethods;
-use didwebvh_rs::parameters::Parameters as WebVHParameters;
-use didwebvh_rs::url::WebVHURL;
-use serde_json::{Value, json};
+use didwebvh_rs::{
+    log_entry::LogEntryMethods, parameters::Parameters as WebVHParameters, url::WebVHURL,
+    DIDWebVHState,
+};
+use serde_json::{json, Value};
 use url::Url;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -29,7 +30,7 @@ struct Args {
     #[arg(long, short = 'e')]
     service_endpoint: Option<String>,
 
-    /// Use secure connection (https/wss)
+    /// Allow the DID to be moved to a different domain (portable DID)
     #[arg(long, short = 'r', default_value_t = true, action = clap::ArgAction::Set)]
     portable: bool,
 }
@@ -88,33 +89,21 @@ fn create_service_endpoints(
         http_scheme, base_domain, api_prefix
     );
 
-    let mut services = Vec::new();
-
-    // DIDComm Messaging service with HTTP and WebSocket endpoints
-
-    services.push(json!({
-        "id": format!("{}#service", did),
-        "type": "DIDCommMessaging",
-        "serviceEndpoint": json!([
-            {
-                "uri": base_http_url,
-                "accept": ["didcomm/v2"]
-            },
-            {
-                "uri": base_ws_url,
-                "accept": ["didcomm/v2"]
-            }
-        ]),
-    }));
-
-    // Authentication service
-    services.push(json!({
-        "id": format!("{}#auth", did),
-        "type": "Authentication",
-        "serviceEndpoint": auth_url,
-    }));
-
-    Ok(services)
+    Ok(vec![
+        json!({
+            "id": format!("{}#service", did),
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": [
+                { "uri": base_http_url, "accept": ["didcomm/v2"] },
+                { "uri": base_ws_url,  "accept": ["didcomm/v2"] }
+            ]
+        }),
+        json!({
+            "id": format!("{}#auth", did),
+            "type": "Authentication",
+            "serviceEndpoint": auth_url
+        }),
+    ])
 }
 
 /// Determine the hosting path for the DID document based on WebVH URL rules
@@ -151,7 +140,7 @@ fn setup_did_webvh(
 
     println!("Creating DID with ID: {}", did_id);
 
-    // Create keys
+    // Create keys and pre-compute public key multibase values
     let Keys {
         mut signing_ed25519,
         mut signing_p256,
@@ -160,84 +149,48 @@ fn setup_did_webvh(
         mut key_agreement_secp256k1,
     } = create_keys()?;
 
-    // Build DID document
-    let mut did_document = json!({
+    let pub_key_0 = signing_ed25519.get_public_keymultibase()?;
+    let pub_key_1 = signing_p256.get_public_keymultibase()?;
+    let pub_key_2 = key_agreement_ed25519.get_public_keymultibase()?;
+    let pub_key_3 = key_agreement_p256.get_public_keymultibase()?;
+    let pub_key_4 = key_agreement_secp256k1.get_public_keymultibase()?;
+
+    // Build DID document in one shot
+    let did_document = json!({
         "@context": [
             "https://www.w3.org/ns/did/v1",
             "https://www.w3.org/ns/cid/v1"
         ],
         "id": &did_id,
         "verificationMethod": [
-            {
-                "id": format!("{did_id}#key-0"),
-                "type": "Multikey",
-                "controller": &did_id,
-                "publicKeyMultibase": &signing_ed25519.get_public_keymultibase().unwrap()
-            },
-            {
-                "id": format!("{did_id}#key-1"),
-                "type": "Multikey",
-                "controller": &did_id,
-                "publicKeyMultibase": &signing_p256.get_public_keymultibase().unwrap()
-            }
+            { "id": format!("{did_id}#key-0"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_0 },
+            { "id": format!("{did_id}#key-1"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_1 },
+            { "id": format!("{did_id}#key-2"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_2 },
+            { "id": format!("{did_id}#key-3"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_3 },
+            { "id": format!("{did_id}#key-4"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_4 }
         ],
-        "authentication": [format!("{did_id}#key-0"), format!("{did_id}#key-1")],
+        "authentication":  [format!("{did_id}#key-0"), format!("{did_id}#key-1")],
         "assertionMethod": [format!("{did_id}#key-0"), format!("{did_id}#key-1")],
+        "keyAgreement":    [format!("{did_id}#key-2"), format!("{did_id}#key-3"), format!("{did_id}#key-4")],
     });
 
-    // Add X25519 key agreement method
-    did_document["verificationMethod"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id": format!("{did_id}#key-2"),
-            "type": "Multikey",
-            "controller": &did_id,
-            "publicKeyMultibase": &key_agreement_ed25519.get_public_keymultibase().unwrap()
-        }));
-    // Add P256 key agreement method
-    did_document["verificationMethod"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id": format!("{did_id}#key-3"),
-            "type": "Multikey",
-            "controller": &did_id,
-            "publicKeyMultibase": &key_agreement_p256.get_public_keymultibase().unwrap()
-        }));
-    // Add Secp256k1 key agreement method
-    did_document["verificationMethod"]
-        .as_array_mut()
-        .unwrap()
-        .push(json!({
-            "id": format!("{did_id}#key-4"),
-            "type": "Multikey",
-            "controller": &did_id,
-            "publicKeyMultibase": &key_agreement_secp256k1.get_public_keymultibase().unwrap()
-        }));
-    did_document["keyAgreement"] = json!([format!("{did_id}#key-2"), format!("{did_id}#key-3"), format!("{did_id}#key-4")]);
-    
 
     // Add service endpoints
-    let services = create_service_endpoints(&did_id, url, secure, api_prefix, service_endpoint)?;
-    did_document["service"] = serde_json::to_value(services)?;
+    let mut did_document = did_document;
+    did_document["service"] =
+        serde_json::to_value(create_service_endpoints(&did_id, url, secure, api_prefix, service_endpoint)?)?;
 
     // Generate update keys and parameters for WebVH
     let mut update_secret = Secret::generate_ed25519(None, None);
-    update_secret.id = [
-        "did:key:",
-        &update_secret.get_public_keymultibase()?,
-        "#",
-        &update_secret.get_public_keymultibase()?,
-    ]
-    .concat();
+    let update_pubkey = update_secret.get_public_keymultibase()?;
+    update_secret.id = format!("did:key:{0}#{0}", update_pubkey);
+
     let next_update_secret = Secret::generate_ed25519(None, None);
 
-    // Build parameters
     let parameters = WebVHParameters {
-        update_keys: Some(Arc::new(vec![update_secret.get_public_keymultibase().unwrap()])),
+        update_keys: Some(Arc::new(vec![update_pubkey])),
         portable: Some(portable),
-        next_key_hashes: Some(Arc::new(vec![next_update_secret.get_public_keymultibase().unwrap()])),
+        next_key_hashes: Some(Arc::new(vec![next_update_secret.get_public_keymultibase()?])),
         ..Default::default()
     };
 
@@ -248,7 +201,10 @@ fn setup_did_webvh(
         .map_err(|e| format!("Failed to create DID log entry: {e}"))?;
 
     let scid = did_state.scid.clone();
-    let log_entry_state = did_state.log_entries.last().unwrap();
+    let log_entry_state = did_state
+        .log_entries
+        .last()
+        .ok_or("No log entries were created")?;
 
     let fallback_did = format!("did:webvh:{scid}:{}", webvh_url.domain);
     let final_did = match log_entry_state.log_entry.get_did_document() {
@@ -271,7 +227,13 @@ fn setup_did_webvh(
 
     Ok((
         final_did,
-        vec![signing_ed25519, signing_p256, key_agreement_ed25519, key_agreement_p256, key_agreement_secp256k1],
+        vec![
+            signing_ed25519,
+            signing_p256,
+            key_agreement_ed25519,
+            key_agreement_p256,
+            key_agreement_secp256k1,
+        ],
         log_string,
     ))
 }
