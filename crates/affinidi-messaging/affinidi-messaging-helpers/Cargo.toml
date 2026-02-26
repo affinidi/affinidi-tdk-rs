@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.11.10"
+version = "0.12.0"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -26,13 +26,13 @@ path = "src/generate_mediator_config/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { version = "0.7", features = [
+affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
   "did_example",
 ] }
 affinidi-did-common = "0.3"
-affinidi-messaging-didcomm = "0.11"
-affinidi-messaging-sdk = "0.14"
-affinidi-tdk = "0.4"
+affinidi-messaging-didcomm = "0.12"
+affinidi-messaging-sdk = "0.15"
+affinidi-tdk = "0.5"
 
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"

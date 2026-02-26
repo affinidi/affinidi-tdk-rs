@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.11.3"
+version = "0.12.0"
 description = "Affinidi Messaging Mediator Processors"
 edition.workspace = true
 authors.workspace = true
@@ -20,7 +20,7 @@ name = "message_expiry_cleanup"
 path = "src/message_expiry_cleanup/main.rs"
 
 [dependencies]
-affinidi-messaging-mediator-common = "0.11"
+affinidi-messaging-mediator-common = "0.12"
 clap = { version = "4.5", features = ["derive"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 serde = { version = "1.0", features = ["derive", "rc"] }
