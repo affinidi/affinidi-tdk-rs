@@ -13,10 +13,10 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-messaging-didcomm = "0.12"
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
-affinidi-secrets-resolver = "0.5"
+affinidi-messaging-didcomm = { version = "0.12", path = "../../../affinidi-messaging/affinidi-messaging-didcomm" }
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../../../affinidi-did-resolver/affinidi-did-common" }
+affinidi-secrets-resolver = { version = "0.5", path = "../affinidi-secrets-resolver" }
 
 base64 = "0.22"
 chrono = "0.4"

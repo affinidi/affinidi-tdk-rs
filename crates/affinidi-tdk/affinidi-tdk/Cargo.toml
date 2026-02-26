@@ -20,16 +20,16 @@ did-peer = []
 data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 
 [dependencies]
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
-affinidi-messaging-sdk = { version = "0.15", optional = true }
-affinidi-messaging-didcomm = "0.12"
-affinidi-did-authentication = "0.3"
-affinidi-tdk-common = "0.4"
-affinidi-secrets-resolver = "0.5"
-affinidi-crypto = "0.1"
-affinidi-meeting-place = { version = "0.3", optional = true }
-affinidi-data-integrity = { version = "0.3", optional = true }
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../../affinidi-did-resolver/affinidi-did-common" }
+affinidi-messaging-sdk = { version = "0.15", optional = true, path = "../../affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { version = "0.12", path = "../../affinidi-messaging/affinidi-messaging-didcomm" }
+affinidi-did-authentication = { version = "0.3", path = "../common/affinidi-did-authentication" }
+affinidi-tdk-common = { version = "0.4", path = "../common/affinidi-tdk-common" }
+affinidi-secrets-resolver = { version = "0.5", path = "../common/affinidi-secrets-resolver" }
+affinidi-crypto = { version = "0.1", path = "../common/affinidi-crypto" }
+affinidi-meeting-place = { version = "0.3", optional = true, path = "../../affinidi-meeting-place" }
+affinidi-data-integrity = { version = "0.3", optional = true, path = "../common/affinidi-data-integrity" }
 
 # External Crates
 clap = { version = "4.5", features = ["derive"] }

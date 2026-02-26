@@ -13,7 +13,7 @@ readme = "README.md"
 rust-version.workspace = true
 
 [dependencies]
-affinidi-did-common = "0.3"
+affinidi-did-common = { version = "0.3", path = "../affinidi-did-common" }
 thiserror = "2.0"
 
 [dev-dependencies]

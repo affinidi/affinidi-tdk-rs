@@ -18,13 +18,13 @@ path = "src/main.rs"
 
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = "0.15"
-affinidi-messaging-didcomm = "0.12"
-affinidi-messaging-mediator-processors = "0.12"
-affinidi-messaging-mediator-common = "0.12"
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
-affinidi-secrets-resolver = "0.5"
+affinidi-messaging-sdk = { version = "0.15", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { version = "0.12", path = "../affinidi-messaging-didcomm" }
+affinidi-messaging-mediator-processors = { version = "0.12", path = "affinidi-messaging-mediator-processors" }
+affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messaging-mediator-common" }
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../../affinidi-did-resolver/affinidi-did-common" }
+affinidi-secrets-resolver = { version = "0.5", path = "../../affinidi-tdk/common/affinidi-secrets-resolver" }
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

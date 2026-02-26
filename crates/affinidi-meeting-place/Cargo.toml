@@ -13,11 +13,11 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-did-authentication = "0.3"
-affinidi-tdk-common = "0.4"
-affinidi-messaging-didcomm = "0.12"
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
+affinidi-did-authentication = { version = "0.3", path = "../affinidi-tdk/common/affinidi-did-authentication" }
+affinidi-tdk-common = { version = "0.4", path = "../affinidi-tdk/common/affinidi-tdk-common" }
+affinidi-messaging-didcomm = { version = "0.12", path = "../affinidi-messaging/affinidi-messaging-didcomm" }
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../affinidi-did-resolver/affinidi-did-common" }
 
 base64 = "0.22"
 chrono = "0.4"
@@ -29,7 +29,7 @@ tracing = "0.1"
 uuid = { version = "1.21", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-affinidi-secrets-resolver = "0.5"
+affinidi-secrets-resolver = { version = "0.5", path = "../affinidi-tdk/common/affinidi-secrets-resolver" }
 
 clap = { version = "4.5", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = [

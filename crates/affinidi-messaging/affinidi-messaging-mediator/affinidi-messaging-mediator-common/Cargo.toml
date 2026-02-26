@@ -13,7 +13,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-affinidi-messaging-sdk = "0.15"
+affinidi-messaging-sdk = { version = "0.15", path = "../../affinidi-messaging-sdk" }
 axum = { version = "0.8", features = ["ws"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 rand = "0.10"

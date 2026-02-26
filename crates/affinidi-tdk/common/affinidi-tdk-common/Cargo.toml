@@ -17,11 +17,11 @@ default = ["messaging"]
 messaging = []
 
 [dependencies]
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-authentication = "0.3"
-affinidi-did-common = "0.3"
-affinidi-secrets-resolver = "0.5"
-affinidi-data-integrity = "0.3"
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-authentication = { version = "0.3", path = "../affinidi-did-authentication" }
+affinidi-did-common = { version = "0.3", path = "../../../affinidi-did-resolver/affinidi-did-common" }
+affinidi-secrets-resolver = { version = "0.5", path = "../affinidi-secrets-resolver" }
+affinidi-data-integrity = { version = "0.3", path = "../affinidi-data-integrity" }
 
 ahash = "0.8"
 base64 = "0.22"

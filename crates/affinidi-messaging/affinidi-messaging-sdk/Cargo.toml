@@ -14,10 +14,10 @@ repository.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk-common = "0.4"
-affinidi-messaging-didcomm = "0.12"
-affinidi-did-authentication = "0.3"
-affinidi-did-common = "0.3"
+affinidi-tdk-common = { version = "0.4", path = "../../affinidi-tdk/common/affinidi-tdk-common" }
+affinidi-messaging-didcomm = { version = "0.12", path = "../affinidi-messaging-didcomm" }
+affinidi-did-authentication = { version = "0.3", path = "../../affinidi-tdk/common/affinidi-did-authentication" }
+affinidi-did-common = { version = "0.3", path = "../../affinidi-did-resolver/affinidi-did-common" }
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

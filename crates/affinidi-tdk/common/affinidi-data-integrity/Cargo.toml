@@ -13,9 +13,9 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-crypto = "0.1"
-affinidi-secrets-resolver = "0.5"
-affinidi-did-common = "0.3"
+affinidi-crypto = { version = "0.1", path = "../affinidi-crypto" }
+affinidi-secrets-resolver = { version = "0.5", path = "../affinidi-secrets-resolver" }
+affinidi-did-common = { version = "0.3", path = "../../../affinidi-did-resolver/affinidi-did-common" }
 
 chrono = { version = "0.4", features = ["serde"] }
 ed25519-dalek = "2.2"

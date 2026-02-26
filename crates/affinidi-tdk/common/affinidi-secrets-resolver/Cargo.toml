@@ -20,8 +20,8 @@ p384 = ["affinidi-crypto/p384"]
 ed25519 = ["affinidi-crypto/ed25519"]
 
 [dependencies]
-affinidi-crypto = "0.1"
-affinidi-encoding = "0.1"
+affinidi-crypto = { version = "0.1", path = "../affinidi-crypto" }
+affinidi-encoding = { version = "0.1", path = "../affinidi-encoding" }
 ahash = "0.8"
 base58 = "0.2"
 base64 = "0.22"

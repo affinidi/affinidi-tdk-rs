@@ -20,8 +20,8 @@ p384 = ["affinidi-crypto/p384"]
 k256 = ["affinidi-crypto/k256"]
 
 [dependencies]
-affinidi-crypto = "0.1"
-affinidi-encoding = "0.1"
+affinidi-crypto = { version = "0.1", path = "../../affinidi-tdk/common/affinidi-crypto" }
+affinidi-encoding = { version = "0.1", path = "../../affinidi-tdk/common/affinidi-encoding" }
 
 # External Crates
 base64 = "0.22"

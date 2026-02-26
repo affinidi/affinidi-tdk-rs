@@ -15,10 +15,10 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-crypto = "0.1"
-affinidi-secrets-resolver = "0.5"
-affinidi-did-resolver-cache-sdk = "0.8"
-affinidi-did-common = "0.3"
+affinidi-crypto = { version = "0.1", path = "../../affinidi-tdk/common/affinidi-crypto" }
+affinidi-secrets-resolver = { version = "0.5", path = "../../affinidi-tdk/common/affinidi-secrets-resolver" }
+affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../../affinidi-did-resolver/affinidi-did-common" }
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

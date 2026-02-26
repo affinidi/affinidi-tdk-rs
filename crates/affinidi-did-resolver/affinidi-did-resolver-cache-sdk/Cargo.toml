@@ -36,10 +36,10 @@ did-scid = ["dep:did-scid"]
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-common = "0.3"
+affinidi-did-common = { version = "0.3", path = "../affinidi-did-common" }
 affinidi-did-resolver-traits = { version = "0.1", path = "../affinidi-did-resolver-traits" }
-did-example = { version = "0.5", optional = true }
-did-scid = { version = "0.1", optional = true }
+did-example = { version = "0.5", optional = true, path = "../affinidi-did-resolver-methods/did-example" }
+did-scid = { version = "0.1", optional = true, path = "../affinidi-did-resolver-methods/did-scid" }
 
 # External Crates
 ahash = "0.8"
@@ -75,8 +75,8 @@ wasm-bindgen-futures = "0.4"
 web-socket = { version = "0.7", optional = true }
 
 [dev-dependencies]
-affinidi-crypto = "0.1"
-affinidi-secrets-resolver = "0.5"
+affinidi-crypto = { version = "0.1", path = "../../affinidi-tdk/common/affinidi-crypto" }
+affinidi-secrets-resolver = { version = "0.5", path = "../../affinidi-tdk/common/affinidi-secrets-resolver" }
 url = "2.5"
 clap = { version = "4.5", features = ["derive"] }
 num-format = "0.4"

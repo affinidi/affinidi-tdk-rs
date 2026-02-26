@@ -14,8 +14,8 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
-affinidi-did-common = "0.3"
+affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"], path = "../affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { version = "0.3", path = "../affinidi-did-common" }
 
 # External Crates
 ahash = "0.8"
@@ -36,7 +36,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-affinidi-secrets-resolver = "0.5"
+affinidi-secrets-resolver = { version = "0.5", path = "../../affinidi-tdk/common/affinidi-secrets-resolver" }
 
 [lints]
 workspace = true
