@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.14.5"
+version = "0.15.0"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -14,9 +14,9 @@ repository.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk-common = "0.3"
-affinidi-messaging-didcomm = "0.11"
-affinidi-did-authentication = "0.2"
+affinidi-tdk-common = "0.4"
+affinidi-messaging-didcomm = "0.12"
+affinidi-did-authentication = "0.3"
 affinidi-did-common = "0.3"
 
 # External Crates
