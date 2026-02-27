@@ -1,13 +1,20 @@
 use std::sync::Arc;
 
-use affinidi_tdk::secrets_resolver::secrets::Secret;
+use affinidi_tdk::{
+    secrets_resolver::secrets::Secret,
+    dids::{DID, KeyType, PeerKeyRole},
+};
 use clap::Parser;
 use didwebvh_rs::{
     log_entry::LogEntryMethods, parameters::Parameters as WebVHParameters, url::WebVHURL,
     DIDWebVHState,
 };
+use ring::signature::Ed25519KeyPair;
 use serde_json::{json, Value};
 use url::Url;
+use base64::prelude::*;
+use std::fs::File;
+use std::io::Write;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -33,6 +40,22 @@ struct Args {
     /// Allow the DID to be moved to a different domain (portable DID)
     #[arg(long, short = 'r', default_value_t = true, action = clap::ArgAction::Set)]
     portable: bool,
+
+    /// Convert the webvh log entry into a did:web compatible DID and DID document
+    #[arg(long, default_value_t = false)]
+    use_web: bool,
+
+    /// Generate JWT secret for Mediator configuration
+    #[arg(long, default_value_t = false)]
+    with_jwt: bool,
+
+    /// Generate Mediator Admin did:peer DID and secrets
+    #[arg(long, default_value_t = false)]
+    with_admin: bool,
+
+    /// Generate output files for the DID document and secrets
+    #[arg(long, default_value_t = false)]
+    generate_files: bool,
 }
 
 struct Keys {
@@ -106,26 +129,45 @@ fn create_service_endpoints(
     ])
 }
 
-/// Determine the hosting path for the DID document based on WebVH URL rules
-fn get_did_hosting_path(url: &str) -> String {
+/// Determine the hosting path for the did:web DID document
+fn get_did_hosting_path(url: &str, use_web: bool) -> String {
     let trimmed_url = url.replace("%3A", ":").trim_end_matches('/').to_string();
+    let diddoc_file = if use_web { "did.json" } else { "did.jsonl" };
     if trimmed_url.contains('/') {
         // URL has a path, no .well-known
-        format!("https://{}/did.jsonl", trimmed_url)
+        format!("https://{}/{}", trimmed_url, diddoc_file)
     } else {
         // Base domain only, use .well-known
-        format!("https://{}/.well-known/did.jsonl", trimmed_url)
+        format!("https://{}/.well-known/{}", trimmed_url, diddoc_file)
     }
 }
 
-/// Setup did:webvh DID and document
+/// Generate JWT secret for Mediator configuration
+fn generate_jwt_secret() -> String {
+    BASE64_URL_SAFE_NO_PAD
+        .encode(Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new()).unwrap())
+}
+
+/// Generate a did:peer DID for the mediator admin, along with its secrets
+fn generate_mediator_admin() -> (String, Vec<Secret>) {
+    
+    let (did, secrets) = DID::generate_did_peer(vec![(PeerKeyRole::Verification, KeyType::Ed25519), (PeerKeyRole::Encryption, KeyType::X25519)], None).unwrap();
+
+    (did, secrets)
+}
+
+
+/// Setup did:webvh DID and document.
+/// When `use_web` is true, also returns a `(web_did, web_did_doc_json)` tuple.
 fn setup_did_webvh(
     url: &str,
     secure: bool,
     portable: bool,
     api_prefix: &str,
     service_endpoint: Option<&str>,
+    use_web: bool,
 ) -> Result<(String, Vec<Secret>, String)> {
+    
     println!("Setting up did:webvh...");
 
     // Build initial DID with placeholder SCID
@@ -207,7 +249,7 @@ fn setup_did_webvh(
         .ok_or("No log entries were created")?;
 
     let fallback_did = format!("did:webvh:{scid}:{}", webvh_url.domain);
-    let final_did = match log_entry_state.log_entry.get_did_document() {
+    let mut final_did = match log_entry_state.log_entry.get_did_document() {
         Ok(doc) => doc
             .get("id")
             .and_then(|id| id.as_str())
@@ -216,7 +258,16 @@ fn setup_did_webvh(
         Err(_) => fallback_did,
     };
 
-    let log_string = serde_json::to_string(&log_entry_state.log_entry)?;
+    let mut diddoc_string = serde_json::to_string(&log_entry_state.log_entry)?;
+
+    // Optionally convert to did:web
+    if use_web {
+        final_did = DIDWebVHState::convert_webvh_id_to_web_id(&final_did);
+        let web_did_doc = did_state
+            .to_web_did()
+            .map_err(|e| format!("Failed to convert to did:web: {e}"))?;
+        diddoc_string = serde_json::to_string_pretty(&web_did_doc)?;
+    }
 
     // Modify secrets to match key IDs
     signing_ed25519.id = format!("{}#key-0", final_did);
@@ -234,7 +285,7 @@ fn setup_did_webvh(
             key_agreement_p256,
             key_agreement_secp256k1,
         ],
-        log_string,
+        diddoc_string,
     ))
 }
 
@@ -250,7 +301,8 @@ async fn main() -> Result<()> {
     if url.is_empty() {
         return Err("URL cannot be empty".into());
     }
-    println!("DID Method: did:webvh");
+    let did_method = if args.use_web { "did:web" } else { "did:webvh" };
+    println!("DID Method: {}", did_method);
     println!("URL: {}", url);
     println!("Secure: {}", args.secure);
     if !args.api_prefix.is_empty() {
@@ -259,16 +311,28 @@ async fn main() -> Result<()> {
     if let Some(ref endpoint) = args.service_endpoint {
         println!("Service Endpoint: {}", endpoint);
     }
+    if args.use_web {
+        println!("Mode: Converting webvh log entry to did:web DID document");
+    }
     println!();
 
     // Generate DID and document
-    let (did, secrets, log_entry) = setup_did_webvh(
+    let (did_value, secrets, did_doc) = setup_did_webvh(
         url,
         args.secure,
         args.portable,
         &args.api_prefix,
         args.service_endpoint.as_deref(),
+        args.use_web,
     )?;
+
+    let jwt_secret = args.with_jwt
+        .then(generate_jwt_secret)
+        .unwrap_or_default();
+
+    let (admin_did, admin_secrets) = args.with_admin
+        .then(generate_mediator_admin)
+        .unwrap_or_default();
 
     // Format secrets as JSON
     let secrets_json = serde_json::to_string_pretty(&secrets)?;
@@ -280,16 +344,46 @@ async fn main() -> Result<()> {
     println!();
 
     println!("DID:");
-    println!("{}", did);
+    println!("{}", did_value);
     println!();
 
     println!("DID Document:");
-    println!("{}", &log_entry);
+    println!("{}", &did_doc);
     println!();
 
     println!("DID Secrets:");
     println!("{}", secrets_json);
     println!();
+    if !jwt_secret.is_empty() {
+        println!();
+        println!("JWT Secret:");
+        println!("{}", jwt_secret);
+    }
+
+    println!();
+    if !admin_did.is_empty() {
+        println!("Mediator Admin DID:");
+        println!("{}", admin_did);
+        println!();
+
+        let admin_secrets_json = serde_json::to_string_pretty(&admin_secrets)?;
+        println!("Mediator Admin Secrets:");
+        println!("{}", admin_secrets_json);
+        println!();
+    }
+
+    if args.generate_files {
+        let mut jwt_authorization_secret_file = File::create("jwt_authorization_secret.txt")?;
+        jwt_authorization_secret_file.write_all(jwt_secret.as_bytes())?;
+
+        // DID Document
+        let mut did_doc_file = File::create("mediator_did.json")?;
+        did_doc_file.write_all(did_doc.as_bytes())?;
+
+        // DID Secrets
+        let mut secrets_file = File::create("secrets.json")?;
+        secrets_file.write_all(secrets_json.as_bytes())?;
+    }
 
     println!("=========================================================================");
     println!("Next Steps");
@@ -297,7 +391,7 @@ async fn main() -> Result<()> {
     println!();
 
     println!("1. Host the DID document at:");
-    println!("   {}", get_did_hosting_path(url));
+    println!("   {}", get_did_hosting_path(url, args.use_web));
     println!();
     println!("2. Ensure the file is publicly accessible via HTTPS");
     println!();
