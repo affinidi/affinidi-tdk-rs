@@ -66,13 +66,9 @@ fn eddsa_rdfc_2022_reference() {
     );
 
     // Verify round-trip through verify_data_with_public_key
-    let validated = verify_data_with_public_key(
-        &input_doc,
-        Some(context),
-        &proof,
-        secret.get_public_bytes(),
-    )
-    .expect("Couldn't validate doc");
+    let validated =
+        verify_data_with_public_key(&input_doc, Some(context), &proof, secret.get_public_bytes())
+            .expect("Couldn't validate doc");
 
     assert!(validated.verified);
 }

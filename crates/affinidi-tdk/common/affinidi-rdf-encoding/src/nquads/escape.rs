@@ -61,8 +61,9 @@ pub fn unescape_nquads(s: &str) -> Result<String, String> {
                             return Err(format!("invalid low surrogate: \\u{low_hex}"));
                         }
                         let combined = 0x10000 + ((cp - 0xD800) << 10) + (low_cp - 0xDC00);
-                        let c = char::from_u32(combined)
-                            .ok_or_else(|| format!("invalid surrogate pair: \\u{hex}\\u{low_hex}"))?;
+                        let c = char::from_u32(combined).ok_or_else(|| {
+                            format!("invalid surrogate pair: \\u{hex}\\u{low_hex}")
+                        })?;
                         out.push(c);
                     } else {
                         let c = char::from_u32(cp)

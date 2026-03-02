@@ -90,9 +90,7 @@ fn bench_nquads_parse(c: &mut Criterion) {
 <did:example:abcdefgh> <https://www.w3.org/ns/credentials/examples#alumniOf> \"The School of Examples\" .
 <urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://www.w3.org/ns/credentials/examples#AlumniCredential> .
 ";
-    c.bench_function("nquads_parse", |b| {
-        b.iter(|| nquads::parse(input).unwrap())
-    });
+    c.bench_function("nquads_parse", |b| b.iter(|| nquads::parse(input).unwrap()));
 }
 
 fn bench_nquads_serialize(c: &mut Criterion) {

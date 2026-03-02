@@ -246,9 +246,10 @@ fn hashing_eddsa_rdfc(
         DataIntegrityError::RdfEncodingError(format!("Failed to hash document: {e}"))
     })?;
 
-    let proof_hash = affinidi_rdf_encoding::expand_canonicalize_and_hash(proof_config).map_err(
-        |e| DataIntegrityError::RdfEncodingError(format!("Failed to hash proof config: {e}")),
-    )?;
+    let proof_hash =
+        affinidi_rdf_encoding::expand_canonicalize_and_hash(proof_config).map_err(|e| {
+            DataIntegrityError::RdfEncodingError(format!("Failed to hash proof config: {e}"))
+        })?;
 
     Ok([proof_hash.as_slice(), doc_hash.as_slice()].concat())
 }

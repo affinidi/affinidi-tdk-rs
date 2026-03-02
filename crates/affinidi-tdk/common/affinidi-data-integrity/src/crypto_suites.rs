@@ -152,25 +152,33 @@ mod tests {
 
     #[test]
     fn validate_key_type_ed25519_jcs() {
-        assert!(CryptoSuite::EddsaJcs2022
-            .validate_key_type(KeyType::Ed25519)
-            .is_ok());
+        assert!(
+            CryptoSuite::EddsaJcs2022
+                .validate_key_type(KeyType::Ed25519)
+                .is_ok()
+        );
     }
 
     #[test]
     fn validate_key_type_ed25519_rdfc() {
-        assert!(CryptoSuite::EddsaRdfc2022
-            .validate_key_type(KeyType::Ed25519)
-            .is_ok());
+        assert!(
+            CryptoSuite::EddsaRdfc2022
+                .validate_key_type(KeyType::Ed25519)
+                .is_ok()
+        );
     }
 
     #[test]
     fn validate_key_type_bad() {
-        assert!(CryptoSuite::EddsaJcs2022
-            .validate_key_type(KeyType::P521)
-            .is_err());
-        assert!(CryptoSuite::EddsaRdfc2022
-            .validate_key_type(KeyType::P521)
-            .is_err());
+        assert!(
+            CryptoSuite::EddsaJcs2022
+                .validate_key_type(KeyType::P521)
+                .is_err()
+        );
+        assert!(
+            CryptoSuite::EddsaRdfc2022
+                .validate_key_type(KeyType::P521)
+                .is_err()
+        );
     }
 }

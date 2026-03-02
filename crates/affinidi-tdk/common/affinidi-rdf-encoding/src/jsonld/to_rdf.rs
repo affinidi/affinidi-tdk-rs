@@ -132,10 +132,7 @@ fn value_to_object(
 }
 
 /// Convert a @value object to an RDF Literal.
-fn value_object_to_literal(
-    val: &Value,
-    obj: &serde_json::Map<String, Value>,
-) -> Result<Literal> {
+fn value_object_to_literal(val: &Value, obj: &serde_json::Map<String, Value>) -> Result<Literal> {
     let string_value = match val {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
@@ -159,21 +156,12 @@ fn value_object_to_literal(
 
     // Determine default datatype from the value type
     match val {
-        Value::Bool(_) => Ok(Literal::typed(
-            string_value,
-            NamedNode::new(xsd::BOOLEAN),
-        )),
+        Value::Bool(_) => Ok(Literal::typed(string_value, NamedNode::new(xsd::BOOLEAN))),
         Value::Number(n) => {
             if n.is_f64() && n.to_string().contains('.') {
-                Ok(Literal::typed(
-                    string_value,
-                    NamedNode::new(xsd::DOUBLE),
-                ))
+                Ok(Literal::typed(string_value, NamedNode::new(xsd::DOUBLE)))
             } else {
-                Ok(Literal::typed(
-                    string_value,
-                    NamedNode::new(xsd::INTEGER),
-                ))
+                Ok(Literal::typed(string_value, NamedNode::new(xsd::INTEGER)))
             }
         }
         _ => Ok(Literal::new(string_value)),

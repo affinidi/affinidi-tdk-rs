@@ -48,14 +48,16 @@ fn b1_credential_canonicalization() {
 <urn:uuid:58172aac-d8ba-11ed-83dd-0b3aef56cc33> <https://www.w3.org/2018/credentials#validFrom> \"2023-01-01T00:00:00Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
 ";
 
-    assert_eq!(canonical, expected_nquads, "Credential canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}");
+    assert_eq!(
+        canonical, expected_nquads,
+        "Credential canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}"
+    );
 
     // Step 3: Verify SHA-256 hash
     let hash = Sha256::digest(canonical.as_bytes());
     let hash_hex = hex_encode(&hash);
     assert_eq!(
-        hash_hex,
-        "517744132ae165a5349155bef0bb0cf2258fff99dfe1dbd914b938d775a36017",
+        hash_hex, "517744132ae165a5349155bef0bb0cf2258fff99dfe1dbd914b938d775a36017",
         "Credential hash mismatch"
     );
 }
@@ -93,13 +95,15 @@ _:c14n0 <https://w3id.org/security#proofPurpose> <https://w3id.org/security#asse
 _:c14n0 <https://w3id.org/security#verificationMethod> <did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2#z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2> .
 ";
 
-    assert_eq!(canonical, expected_nquads, "Proof options canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}");
+    assert_eq!(
+        canonical, expected_nquads,
+        "Proof options canonical N-Quads mismatch.\nGot:\n{canonical}\nExpected:\n{expected_nquads}"
+    );
 
     let hash = Sha256::digest(canonical.as_bytes());
     let hash_hex = hex_encode(&hash);
     assert_eq!(
-        hash_hex,
-        "bea7b7acfbad0126b135104024a5f1733e705108f42d59668b05c0c50004c6b0",
+        hash_hex, "bea7b7acfbad0126b135104024a5f1733e705108f42d59668b05c0c50004c6b0",
         "Proof options hash mismatch"
     );
 }
@@ -110,8 +114,7 @@ _:c14n0 <https://w3id.org/security#verificationMethod> <did:key:z6MkrJVnaZkeFzdQ
 #[test]
 fn b1_combined_hash() {
     let proof_hash_hex = "bea7b7acfbad0126b135104024a5f1733e705108f42d59668b05c0c50004c6b0";
-    let credential_hash_hex =
-        "517744132ae165a5349155bef0bb0cf2258fff99dfe1dbd914b938d775a36017";
+    let credential_hash_hex = "517744132ae165a5349155bef0bb0cf2258fff99dfe1dbd914b938d775a36017";
 
     let combined = format!("{proof_hash_hex}{credential_hash_hex}");
     assert_eq!(

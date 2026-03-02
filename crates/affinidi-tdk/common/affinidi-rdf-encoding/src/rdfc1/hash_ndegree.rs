@@ -45,10 +45,7 @@ pub fn hash_ndegree_quads(
                 issuer,
                 first_degree_hashes,
             );
-            hash_to_related
-                .entry(hash)
-                .or_default()
-                .push(related_id);
+            hash_to_related.entry(hash).or_default().push(related_id);
         }
     }
 
@@ -137,10 +134,7 @@ pub fn hash_ndegree_quads(
 }
 
 /// Extract related blank nodes from a quad (blank nodes other than the target).
-fn related_blank_nodes<'a>(
-    quad: &'a Quad,
-    target_id: &str,
-) -> Vec<(String, Position, &'a str)> {
+fn related_blank_nodes<'a>(quad: &'a Quad, target_id: &str) -> Vec<(String, Position, &'a str)> {
     let mut related = Vec::new();
 
     if let Subject::Blank(b) = &quad.subject

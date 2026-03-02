@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::error::{RdfError, Result};
 use super::bundled::get_bundled_context;
+use crate::error::{RdfError, Result};
 
 /// A processed JSON-LD context that maps terms to IRIs and type/container info.
 #[derive(Clone, Debug, Default)]
@@ -67,9 +67,9 @@ impl Context {
             RdfError::context(format!("unknown context URL (no bundled context): {url}"))
         })?;
         // The bundled doc has {"@context": ...}, extract the inner value
-        let inner = context_doc
-            .get("@context")
-            .ok_or_else(|| RdfError::context(format!("context document missing @context key: {url}")))?;
+        let inner = context_doc.get("@context").ok_or_else(|| {
+            RdfError::context(format!("context document missing @context key: {url}"))
+        })?;
         self.process_context_object(inner)
     }
 
@@ -136,7 +136,11 @@ impl Context {
             }
             // If it has a colon but prefix isn't in context, it may be an
             // unknown IRI scheme — return as-is rather than vocab-expanding.
-            if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+            if !prefix.is_empty()
+                && prefix
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+            {
                 return Some(value.to_string());
             }
         }
@@ -183,23 +187,17 @@ fn create_term_definition(
         }
         Value::Object(obj) => {
             // Expanded term definition
-            let id = obj
-                .get("@id")
-                .and_then(|v| v.as_str())
-                .unwrap_or(term);
+            let id = obj.get("@id").and_then(|v| v.as_str()).unwrap_or(term);
 
             let resolved_iri = resolve_iri(id, ctx);
 
-            let type_mapping = obj
-                .get("@type")
-                .and_then(|v| v.as_str())
-                .map(|t| {
-                    if t.starts_with('@') {
-                        t.to_string()
-                    } else {
-                        resolve_iri(t, ctx)
-                    }
-                });
+            let type_mapping = obj.get("@type").and_then(|v| v.as_str()).map(|t| {
+                if t.starts_with('@') {
+                    t.to_string()
+                } else {
+                    resolve_iri(t, ctx)
+                }
+            });
 
             let container = obj.get("@container").and_then(|v| match v.as_str() {
                 Some("@set") => Some(ContainerType::Set),
@@ -264,7 +262,11 @@ fn resolve_iri(value: &str, ctx: &Context) -> String {
             return format!("{}{suffix}", def.iri);
         }
         // Unknown scheme — treat as absolute IRI
-        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        if !prefix.is_empty()
+            && prefix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        {
             return value.to_string();
         }
     }
@@ -284,14 +286,19 @@ fn is_absolute_iri(value: &str) -> bool {
         // A scheme starts with a letter and contains only letters, digits, +, -, .
         if !scheme.is_empty()
             && scheme.chars().next().unwrap().is_ascii_alphabetic()
-            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
         {
             // Check for known IRI schemes or "://"
             if value[colon_pos..].starts_with("://") {
                 return true;
             }
             // urn:, did:, etc.
-            return matches!(scheme, "urn" | "did" | "tel" | "mailto" | "data" | "blob" | "cid" | "mid" | "tag");
+            return matches!(
+                scheme,
+                "urn" | "did" | "tel" | "mailto" | "data" | "blob" | "cid" | "mid" | "tag"
+            );
         }
     }
     false

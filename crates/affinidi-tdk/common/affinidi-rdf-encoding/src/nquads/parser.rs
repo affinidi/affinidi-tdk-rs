@@ -1,6 +1,6 @@
+use super::escape::unescape_nquads;
 use crate::error::{RdfError, Result};
 use crate::model::*;
-use super::escape::unescape_nquads;
 
 /// Parse an N-Quads document into a Dataset.
 pub fn parse(input: &str) -> Result<Dataset> {
@@ -244,9 +244,8 @@ impl<'a> Cursor<'a> {
         }
 
         // Unescape the raw string
-        let value = unescape_nquads(&raw).map_err(|e| {
-            RdfError::parse(format!("line {}: {e}", self.line_num))
-        })?;
+        let value = unescape_nquads(&raw)
+            .map_err(|e| RdfError::parse(format!("line {}: {e}", self.line_num)))?;
 
         // Check for language tag or datatype
         match self.peek() {

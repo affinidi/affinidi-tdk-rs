@@ -1,5 +1,5 @@
-use crate::model::{GraphLabel, Object, Quad, Subject, xsd};
 use super::escape::escape_nquads;
+use crate::model::{GraphLabel, Object, Quad, Subject, xsd};
 
 /// Serialize a single quad to an N-Quads line (without trailing newline).
 pub fn serialize_quad(quad: &Quad) -> String {

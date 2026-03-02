@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::{RdfError, Result};
 use super::context::Context;
+use crate::error::{RdfError, Result};
 
 /// Expand a JSON-LD document to its expanded form.
 ///
@@ -172,11 +172,8 @@ fn build_type_scoped_context(
     let type_value = if let Some(v) = map.get("@type") {
         Some(v)
     } else {
-        map.get("type").filter(|_| {
-            context
-                .get_term("type")
-                .is_some_and(|td| td.iri == "@type")
-        })
+        map.get("type")
+            .filter(|_| context.get_term("type").is_some_and(|td| td.iri == "@type"))
     };
 
     let type_value = match type_value {

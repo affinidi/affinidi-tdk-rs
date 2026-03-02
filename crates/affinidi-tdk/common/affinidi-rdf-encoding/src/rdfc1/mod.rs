@@ -8,9 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use sha2::{Digest, Sha256};
 
 use crate::error::Result;
-use crate::model::{
-    BlankNode, Dataset, GraphLabel, Object, Quad, Subject,
-};
+use crate::model::{BlankNode, Dataset, GraphLabel, Object, Quad, Subject};
 use crate::nquads;
 
 use hash_first_degree::{hash_first_degree_quads, hex_encode};
@@ -26,10 +24,7 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
     let mut blank_node_to_quads: HashMap<String, Vec<&Quad>> = HashMap::new();
     for quad in quads {
         for bn_id in quad_blank_node_ids(quad) {
-            blank_node_to_quads
-                .entry(bn_id)
-                .or_default()
-                .push(quad);
+            blank_node_to_quads.entry(bn_id).or_default().push(quad);
         }
     }
 
@@ -156,28 +151,18 @@ fn quad_blank_node_ids(quad: &Quad) -> Vec<String> {
 /// Relabel blank nodes in a quad using the canonical issuer.
 fn relabel_quad(quad: &Quad, issuer: &IdentifierIssuer) -> Quad {
     let subject = match &quad.subject {
-        Subject::Blank(b) => {
-            Subject::Blank(BlankNode::new(
-                issuer.get(&b.id).unwrap_or(&b.id),
-            ))
-        }
+        Subject::Blank(b) => Subject::Blank(BlankNode::new(issuer.get(&b.id).unwrap_or(&b.id))),
         other => other.clone(),
     };
 
     let object = match &quad.object {
-        Object::Blank(b) => {
-            Object::Blank(BlankNode::new(
-                issuer.get(&b.id).unwrap_or(&b.id),
-            ))
-        }
+        Object::Blank(b) => Object::Blank(BlankNode::new(issuer.get(&b.id).unwrap_or(&b.id))),
         other => other.clone(),
     };
 
     let graph = match &quad.graph {
         GraphLabel::Blank(b) => {
-            GraphLabel::Blank(BlankNode::new(
-                issuer.get(&b.id).unwrap_or(&b.id),
-            ))
+            GraphLabel::Blank(BlankNode::new(issuer.get(&b.id).unwrap_or(&b.id)))
         }
         other => other.clone(),
     };

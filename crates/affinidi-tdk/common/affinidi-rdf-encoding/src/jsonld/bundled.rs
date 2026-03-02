@@ -1,5 +1,5 @@
-use std::sync::LazyLock;
 use serde_json::Value;
+use std::sync::LazyLock;
 
 static CREDENTIALS_V2: LazyLock<Value> = LazyLock::new(|| {
     serde_json::from_str(include_str!("contexts/credentials-v2.jsonld"))

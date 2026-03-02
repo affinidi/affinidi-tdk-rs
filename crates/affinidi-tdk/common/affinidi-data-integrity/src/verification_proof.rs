@@ -85,9 +85,7 @@ where
     let hash_data = match &proof.cryptosuite {
         CryptoSuite::EddsaJcs2022 => {
             let jcs_doc = to_string(&signed_doc).map_err(|e| {
-                DataIntegrityError::InputDataError(format!(
-                    "Failed to canonicalize document: {e}"
-                ))
+                DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
             })?;
             debug!("JCS String: {}", jcs_doc);
 
