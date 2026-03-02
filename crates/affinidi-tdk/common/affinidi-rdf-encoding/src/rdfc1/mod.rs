@@ -24,7 +24,10 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
     let mut blank_node_to_quads: HashMap<String, Vec<&Quad>> = HashMap::new();
     for quad in quads {
         for bn_id in quad_blank_node_ids(quad) {
-            blank_node_to_quads.entry(bn_id).or_default().push(quad);
+            blank_node_to_quads
+                .entry(bn_id.to_string())
+                .or_default()
+                .push(quad);
         }
     }
 
@@ -43,6 +46,12 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
             .or_default()
             .push(bn_id.clone());
     }
+
+    // Build reverse map: blank_node_id -> first-degree hash (O(1) lookups)
+    let blank_node_to_hash: HashMap<String, String> = hash_to_blank_nodes
+        .iter()
+        .flat_map(|(hash, bn_ids)| bn_ids.iter().map(move |id| (id.clone(), hash.clone())))
+        .collect();
 
     // Step 3: Issue canonical IDs for unique first-degree hashes
     let mut canonical_issuer = IdentifierIssuer::new("c14n");
@@ -80,7 +89,7 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
                 &blank_node_to_quads,
                 &canonical_issuer,
                 &temp_issuer,
-                &hash_to_blank_nodes,
+                &blank_node_to_hash,
             )?;
             hash_path_list.push((hash, result_issuer));
         }
@@ -133,17 +142,17 @@ fn serialize_sorted(quads: &[Quad]) -> String {
     lines.join("")
 }
 
-/// Collect all blank node IDs referenced by a quad.
-fn quad_blank_node_ids(quad: &Quad) -> Vec<String> {
+/// Collect all blank node IDs referenced by a quad (as references to avoid cloning).
+fn quad_blank_node_ids(quad: &Quad) -> Vec<&str> {
     let mut ids = Vec::new();
     if let Subject::Blank(b) = &quad.subject {
-        ids.push(b.id.clone());
+        ids.push(b.id.as_str());
     }
     if let Object::Blank(b) = &quad.object {
-        ids.push(b.id.clone());
+        ids.push(b.id.as_str());
     }
     if let GraphLabel::Blank(b) = &quad.graph {
-        ids.push(b.id.clone());
+        ids.push(b.id.as_str());
     }
     ids
 }

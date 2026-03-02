@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::DataIntegrityError;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub enum CryptoSuite {
     /// EDDSA JCS 2022 spec
     /// https://www.w3.org/TR/vc-di-eddsa/
@@ -61,7 +61,7 @@ impl CryptoSuite {
                 KeyType::Ed25519 => Ok(()),
                 _ => Err(DataIntegrityError::InputDataError(format!(
                     "Unsupported key type {key_type:?} for cryptosuite {}",
-                    String::try_from(self.clone()).unwrap_or_default()
+                    String::try_from(*self).unwrap_or_default()
                 ))),
             },
         }

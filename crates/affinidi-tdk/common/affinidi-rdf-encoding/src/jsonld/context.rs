@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde_json::Value;
 
@@ -8,7 +9,7 @@ use crate::error::{RdfError, Result};
 /// A processed JSON-LD context that maps terms to IRIs and type/container info.
 #[derive(Clone, Debug, Default)]
 pub struct Context {
-    pub terms: HashMap<String, TermDefinition>,
+    pub terms: Rc<HashMap<String, TermDefinition>>,
     pub vocab: Option<String>,
     pub base: Option<String>,
     pub default_language: Option<String>,
@@ -48,7 +49,7 @@ impl Context {
             }
             Value::Null => {
                 // Reset context
-                self.terms.clear();
+                self.terms = Rc::new(HashMap::new());
                 self.vocab = None;
                 self.base = None;
                 self.default_language = None;
@@ -98,13 +99,19 @@ impl Context {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Process term definitions
-        for (key, value) in obj {
-            if key.starts_with('@') {
-                continue; // Skip keywords
-            }
-            let term_def = create_term_definition(key, value, is_protected, self)?;
-            self.terms.insert(key.clone(), term_def);
+        // Process term definitions — collect first, then insert to avoid borrow conflict
+        let new_terms: Vec<(String, TermDefinition)> = obj
+            .iter()
+            .filter(|(key, _)| !key.starts_with('@'))
+            .map(|(key, value)| {
+                let term_def = create_term_definition(key, value, is_protected, self)?;
+                Ok((key.clone(), term_def))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let terms = Rc::make_mut(&mut self.terms);
+        for (key, term_def) in new_terms {
+            terms.insert(key, term_def);
         }
 
         Ok(())

@@ -74,6 +74,90 @@ pub fn serialize_quad(quad: &Quad) -> String {
     out
 }
 
+/// Serialize a quad with blank node substitution for first-degree hashing.
+///
+/// Blank nodes matching `target_blank_node` become `_:a`, all others become `_:z`.
+/// This avoids allocating a cloned Quad with substituted labels.
+pub fn serialize_quad_substituted(quad: &Quad, target_blank_node: &str) -> String {
+    let mut out = String::with_capacity(128);
+
+    // Subject
+    match &quad.subject {
+        Subject::Named(n) => {
+            out.push('<');
+            out.push_str(&n.iri);
+            out.push('>');
+        }
+        Subject::Blank(b) => {
+            if b.id == target_blank_node {
+                out.push_str("_:a");
+            } else {
+                out.push_str("_:z");
+            }
+        }
+    }
+
+    out.push(' ');
+
+    // Predicate
+    out.push('<');
+    out.push_str(&quad.predicate.iri);
+    out.push('>');
+
+    out.push(' ');
+
+    // Object
+    match &quad.object {
+        Object::Named(n) => {
+            out.push('<');
+            out.push_str(&n.iri);
+            out.push('>');
+        }
+        Object::Blank(b) => {
+            if b.id == target_blank_node {
+                out.push_str("_:a");
+            } else {
+                out.push_str("_:z");
+            }
+        }
+        Object::Literal(lit) => {
+            out.push('"');
+            out.push_str(&escape_nquads(&lit.value));
+            out.push('"');
+            if let Some(ref lang) = lit.language {
+                out.push('@');
+                out.push_str(lang);
+            } else if lit.datatype.iri != xsd::STRING {
+                out.push_str("^^<");
+                out.push_str(&lit.datatype.iri);
+                out.push('>');
+            }
+        }
+    }
+
+    out.push(' ');
+
+    // Graph (optional)
+    match &quad.graph {
+        GraphLabel::Named(n) => {
+            out.push('<');
+            out.push_str(&n.iri);
+            out.push_str("> ");
+        }
+        GraphLabel::Blank(b) => {
+            if b.id == target_blank_node {
+                out.push_str("_:a ");
+            } else {
+                out.push_str("_:z ");
+            }
+        }
+        GraphLabel::Default => {}
+    }
+
+    out.push('.');
+    out
+}
+
 /// Serialize a dataset to N-Quads format (one line per quad, newline-terminated).
 pub fn serialize_dataset(quads: &[Quad]) -> String {
     let mut out = String::new();

@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::model::{GraphLabel, Object, Quad, Subject};
+use crate::model::Quad;
 use crate::nquads;
 
 /// Compute the first-degree hash for a blank node.
@@ -14,8 +14,7 @@ pub fn hash_first_degree_quads(blank_node_id: &str, quads: &[&Quad]) -> String {
     let mut nquad_lines: Vec<String> = Vec::with_capacity(quads.len());
 
     for quad in quads {
-        let substituted = substitute_blank_nodes(quad, blank_node_id);
-        let line = nquads::serialize_quad(&substituted);
+        let line = nquads::serialize_quad_substituted(quad, blank_node_id);
         nquad_lines.push(line);
     }
 
@@ -30,58 +29,16 @@ pub fn hash_first_degree_quads(blank_node_id: &str, quads: &[&Quad]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Substitute blank nodes in a quad:
-/// - The target blank node becomes `_:a`
-/// - All other blank nodes become `_:z`
-fn substitute_blank_nodes(quad: &Quad, target_id: &str) -> Quad {
-    let subject = match &quad.subject {
-        Subject::Blank(b) => {
-            if b.id == target_id {
-                Subject::Blank(crate::model::BlankNode::new("a"))
-            } else {
-                Subject::Blank(crate::model::BlankNode::new("z"))
-            }
-        }
-        other => other.clone(),
-    };
-
-    let object = match &quad.object {
-        Object::Blank(b) => {
-            if b.id == target_id {
-                Object::Blank(crate::model::BlankNode::new("a"))
-            } else {
-                Object::Blank(crate::model::BlankNode::new("z"))
-            }
-        }
-        other => other.clone(),
-    };
-
-    let graph = match &quad.graph {
-        GraphLabel::Blank(b) => {
-            if b.id == target_id {
-                GraphLabel::Blank(crate::model::BlankNode::new("a"))
-            } else {
-                GraphLabel::Blank(crate::model::BlankNode::new("z"))
-            }
-        }
-        other => other.clone(),
-    };
-
-    Quad {
-        subject,
-        predicate: quad.predicate.clone(),
-        object,
-        graph,
-    }
-}
-
-/// Encode bytes as lowercase hex string.
+/// Encode bytes as lowercase hex string using a compile-time lookup table.
 mod hex {
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
         let bytes = bytes.as_ref();
         let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            s.push_str(&format!("{b:02x}"));
+        for &b in bytes {
+            s.push(HEX_DIGITS[(b >> 4) as usize] as char);
+            s.push(HEX_DIGITS[(b & 0x0f) as usize] as char);
         }
         s
     }
@@ -117,8 +74,8 @@ mod tests {
             BlankNode::new("b1"),
             GraphLabel::Default,
         );
-        let substituted = substitute_blank_nodes(&quad, "b0");
-        assert_eq!(substituted.subject, Subject::Blank(BlankNode::new("a")));
-        assert_eq!(substituted.object, Object::Blank(BlankNode::new("z")));
+        let serialized = nquads::serialize_quad_substituted(&quad, "b0");
+        // Target blank node "b0" in subject becomes "_:a", other "b1" in object becomes "_:z"
+        assert_eq!(serialized, "_:a <http://example.org/p> _:z .");
     }
 }

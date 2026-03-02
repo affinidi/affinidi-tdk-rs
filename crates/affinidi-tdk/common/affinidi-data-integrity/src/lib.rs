@@ -75,7 +75,7 @@ impl DataIntegrityProof {
         crypto_suite.validate_key_type(secret.get_key_type())?;
         debug!(
             "CryptoSuite: {}",
-            <CryptoSuite as TryInto<String>>::try_into(crypto_suite.clone()).unwrap()
+            <CryptoSuite as TryInto<String>>::try_into(crypto_suite).unwrap()
         );
 
         // Step 1: Serialize the data document to a canonical JSON string
@@ -98,7 +98,7 @@ impl DataIntegrityProof {
         // Create a Proof Options struct
         let mut proof_options = DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
-            cryptosuite: crypto_suite.clone(),
+            cryptosuite: crypto_suite,
             created,
             verification_method: secret.id.clone(),
             proof_purpose: "assertionMethod".to_string(),
@@ -152,7 +152,7 @@ impl DataIntegrityProof {
         crypto_suite.validate_key_type(secret.get_key_type())?;
         debug!(
             "CryptoSuite: {}",
-            <CryptoSuite as TryInto<String>>::try_into(crypto_suite.clone()).unwrap()
+            <CryptoSuite as TryInto<String>>::try_into(crypto_suite).unwrap()
         );
 
         // Extract @context from document (required for JSON-LD)
@@ -192,7 +192,7 @@ impl DataIntegrityProof {
         // Create proof options (without proof_value)
         let mut proof_options = DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
-            cryptosuite: crypto_suite.clone(),
+            cryptosuite: crypto_suite,
             created,
             verification_method: secret.id.clone(),
             proof_purpose: "assertionMethod".to_string(),

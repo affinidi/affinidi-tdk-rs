@@ -1,5 +1,11 @@
 # Affinidi Data Integrity Changelog
 
+## 2nd March 2026 Release 0.4.1
+
+- **PERFORMANCE:** ~40% faster RDFC sign/verify operations (~330 µs → ~199 µs sign,
+  ~343 µs → ~212 µs verify) via optimizations in `affinidi-rdf-encoding`
+- **IMPROVEMENT:** Derive `Copy` on `CryptoSuite` enum, eliminating unnecessary clones
+
 ## 2nd March 2026 Release 0.4.0
 
 - **FEATURE:** Added `eddsa-rdfc-2022` cryptosuite support (RDF Dataset Canonicalization)

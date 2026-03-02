@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sha2::{Digest, Sha256};
 
 use super::hash_first_degree::hex_encode;
@@ -17,7 +19,7 @@ pub fn hash_related_blank_node(
     predicate_iri: &str,
     canonical_issuer: &IdentifierIssuer,
     temp_issuer: &IdentifierIssuer,
-    first_degree_hashes: &std::collections::BTreeMap<String, Vec<String>>,
+    blank_node_to_hash: &HashMap<String, String>,
 ) -> String {
     // Build the identifier to use for the related node
     let identifier = if let Some(canonical) = canonical_issuer.get(related_id) {
@@ -25,8 +27,11 @@ pub fn hash_related_blank_node(
     } else if let Some(temp) = temp_issuer.get(related_id) {
         temp.to_string()
     } else {
-        // Use the first-degree hash
-        find_hash_for_blank_node(related_id, first_degree_hashes)
+        // Use the first-degree hash via O(1) reverse lookup
+        blank_node_to_hash
+            .get(related_id)
+            .cloned()
+            .unwrap_or_default()
     };
 
     let mut input = String::new();
@@ -41,20 +46,6 @@ pub fn hash_related_blank_node(
 
     let hash = Sha256::digest(input.as_bytes());
     hex_encode(hash)
-}
-
-/// Find the first-degree hash for a blank node by scanning the hash-to-nodes map.
-fn find_hash_for_blank_node(
-    node_id: &str,
-    first_degree_hashes: &std::collections::BTreeMap<String, Vec<String>>,
-) -> String {
-    for (hash, nodes) in first_degree_hashes {
-        if nodes.contains(&node_id.to_string()) {
-            return hash.clone();
-        }
-    }
-    // Shouldn't happen if the algorithm is correct
-    String::new()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

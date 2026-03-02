@@ -156,8 +156,8 @@ Rust 1.90, `--release`):
 
 | Operation | JCS | RDFC | Ratio |
 |---|---|---|---|
-| **Sign** | ~46 µs | ~330 µs | ~7x slower |
-| **Verify** | ~61 µs | ~350 µs | ~6x slower |
+| **Sign** | ~46 µs | ~199 µs | ~4.3x slower |
+| **Verify** | ~61 µs | ~212 µs | ~3.5x slower |
 
 The Ed25519 cryptographic operations are identical for both suites. The
 performance difference is entirely in the transformation step — JCS runs a

@@ -23,7 +23,7 @@ pub fn hash_ndegree_quads(
     blank_node_to_quads: &HashMap<String, Vec<&Quad>>,
     canonical_issuer: &IdentifierIssuer,
     issuer: &IdentifierIssuer,
-    first_degree_hashes: &BTreeMap<String, Vec<String>>,
+    blank_node_to_hash: &HashMap<String, String>,
 ) -> Result<(String, IdentifierIssuer)> {
     // Create a hash-to-related-blank-nodes map
     let mut hash_to_related: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -43,7 +43,7 @@ pub fn hash_ndegree_quads(
                 predicate,
                 canonical_issuer,
                 issuer,
-                first_degree_hashes,
+                blank_node_to_hash,
             );
             hash_to_related.entry(hash).or_default().push(related_id);
         }
@@ -91,7 +91,7 @@ pub fn hash_ndegree_quads(
                         blank_node_to_quads,
                         canonical_issuer,
                         &path_issuer,
-                        first_degree_hashes,
+                        blank_node_to_hash,
                     )?;
                     path_issuer = result_issuer;
                     path.push_str(path_issuer.get(related).unwrap_or(""));
