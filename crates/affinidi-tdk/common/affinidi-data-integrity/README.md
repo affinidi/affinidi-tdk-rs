@@ -135,6 +135,43 @@ let result = verify_data_with_public_key(
 assert!(result.verified);
 ```
 
+## Choosing a Cryptosuite
+
+**Prefer `eddsa-jcs-2022` (JCS) unless you specifically need RDFC.** JCS is
+significantly faster because it canonicalizes JSON directly, while RDFC must
+expand JSON-LD into RDF and run the full RDFC-1.0 canonicalization algorithm.
+Both produce equally valid W3C Data Integrity proofs with the same Ed25519
+security.
+
+Use `eddsa-rdfc-2022` (RDFC) when:
+- Interoperating with systems that require RDFC proofs
+- Working with JSON-LD documents where semantic equivalence across different
+  JSON serializations matters (e.g. key ordering, `@context` aliasing)
+- A specification or verifier explicitly mandates RDFC
+
+## Performance
+
+Benchmarks run on the W3C vc-di-eddsa B.1 Alumni Credential (Apple M4 Pro,
+Rust 1.90, `--release`):
+
+| Operation | JCS | RDFC | Ratio |
+|---|---|---|---|
+| **Sign** | ~46 µs | ~330 µs | ~7x slower |
+| **Verify** | ~61 µs | ~350 µs | ~6x slower |
+
+The Ed25519 cryptographic operations are identical for both suites. The
+performance difference is entirely in the transformation step — JCS runs a
+single-pass JSON canonicalization, while RDFC performs JSON-LD expansion, RDF
+conversion, and RDFC-1.0 dataset canonicalization.
+
+To reproduce these benchmarks:
+
+```sh
+cargo bench -p affinidi-data-integrity --bench proof_benchmarks
+```
+
+HTML reports are generated in `target/criterion/` for detailed analysis.
+
 ## Support & Feedback
 
 If you face any issues or have suggestions, please don't hesitate to contact us
