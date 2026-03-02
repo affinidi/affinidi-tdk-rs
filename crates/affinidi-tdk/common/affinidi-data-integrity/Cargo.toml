@@ -14,6 +14,7 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-crypto = "0.1"
+affinidi-rdf-encoding = { version = "0.1", path = "../affinidi-rdf-encoding" }
 affinidi-secrets-resolver = "0.5"
 affinidi-did-common = "0.3"
 

@@ -26,6 +26,8 @@ pub enum DataIntegrityError {
     SecretsError(String),
     #[error("Verification Error: {0}")]
     VerificationError(String),
+    #[error("RDF Encoding Error: {0}")]
+    RdfEncodingError(String),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,7 +54,7 @@ pub struct DataIntegrityProof {
 }
 
 impl DataIntegrityProof {
-    /// Creates a signature for the given data using the specified key.
+    /// Creates a JCS (JSON Canonicalization Scheme) signature for the given data.
     /// data_doc: Serializable Struct
     /// context: Optional context for the proof
     /// secret: Secret containing the private key to sign with
@@ -69,7 +71,8 @@ impl DataIntegrityProof {
         S: Serialize,
     {
         // Initialise as required
-        let crypto_suite: CryptoSuite = secret.get_key_type().try_into()?;
+        let crypto_suite = CryptoSuite::EddsaJcs2022;
+        crypto_suite.validate_key_type(secret.get_key_type())?;
         debug!(
             "CryptoSuite: {}",
             <CryptoSuite as TryInto<String>>::try_into(crypto_suite.clone()).unwrap()
@@ -131,6 +134,95 @@ impl DataIntegrityProof {
 
         Ok(proof_options)
     }
+
+    /// Creates an RDFC (RDF Dataset Canonicalization) signature for the given JSON-LD data.
+    /// data_doc: JSON-LD document (must contain `@context`)
+    /// context: Optional context override for the proof; if None, uses the document's `@context`
+    /// secret: Secret containing the private key to sign with
+    /// created: Optional timestamp for the proof creation ("2023-02-24T23:36:38Z")
+    ///
+    /// Returns a Result containing a proof if successful
+    pub fn sign_rdfc_data(
+        data_doc: &serde_json::Value,
+        context: Option<Vec<String>>,
+        secret: &Secret,
+        created: Option<String>,
+    ) -> Result<DataIntegrityProof, DataIntegrityError> {
+        let crypto_suite = CryptoSuite::EddsaRdfc2022;
+        crypto_suite.validate_key_type(secret.get_key_type())?;
+        debug!(
+            "CryptoSuite: {}",
+            <CryptoSuite as TryInto<String>>::try_into(crypto_suite.clone()).unwrap()
+        );
+
+        // Extract @context from document (required for JSON-LD)
+        let doc_context = data_doc
+            .get("@context")
+            .ok_or_else(|| {
+                DataIntegrityError::InputDataError(
+                    "Document must contain @context for RDFC signing".to_string(),
+                )
+            })?
+            .clone();
+
+        // Use provided context or extract from document
+        let proof_context = if let Some(ctx) = context {
+            ctx
+        } else {
+            match &doc_context {
+                serde_json::Value::Array(arr) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect(),
+                serde_json::Value::String(s) => vec![s.clone()],
+                _ => {
+                    return Err(DataIntegrityError::InputDataError(
+                        "Invalid @context format in document".to_string(),
+                    ));
+                }
+            }
+        };
+
+        let created = if created.is_some() {
+            created
+        } else {
+            Some(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        };
+
+        // Create proof options (without proof_value)
+        let mut proof_options = DataIntegrityProof {
+            type_: "DataIntegrityProof".to_string(),
+            cryptosuite: crypto_suite.clone(),
+            created,
+            verification_method: secret.id.clone(),
+            proof_purpose: "assertionMethod".to_string(),
+            proof_value: None,
+            context: Some(proof_context),
+        };
+
+        // Serialize proof options to Value for RDFC pipeline
+        let proof_value = serde_json::to_value(&proof_options).map_err(|e| {
+            DataIntegrityError::InputDataError(format!("Failed to serialize proof options: {e}"))
+        })?;
+
+        let hash_data = hashing_eddsa_rdfc(data_doc, &proof_value)?;
+
+        // Sign the final hash
+        let signed = crypto_suite.sign(secret, hash_data.as_slice())?;
+        debug!(
+            "signature data = {}",
+            signed
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<String>>()
+                .join("")
+        );
+
+        // Encode using base58btc
+        proof_options.proof_value = Some(multibase::encode(Base::Base58Btc, &signed).to_string());
+
+        Ok(proof_options)
+    }
 }
 
 /// Hashing Algorithm for EDDSA JCS
@@ -140,6 +232,25 @@ fn hashing_eddsa_jcs(transformed_document: &str, canonical_proof_config: &str) -
         Sha256::digest(transformed_document),
     ]
     .concat()
+}
+
+/// Hashing Algorithm for EDDSA RDFC
+/// Runs both document and proof config through the RDFC pipeline
+/// (JSON-LD expansion → RDF Dataset → RDFC-1.0 canonicalization → SHA-256)
+/// and concatenates the two 32-byte hashes.
+fn hashing_eddsa_rdfc(
+    document: &serde_json::Value,
+    proof_config: &serde_json::Value,
+) -> Result<Vec<u8>, DataIntegrityError> {
+    let doc_hash = affinidi_rdf_encoding::expand_canonicalize_and_hash(document).map_err(|e| {
+        DataIntegrityError::RdfEncodingError(format!("Failed to hash document: {e}"))
+    })?;
+
+    let proof_hash = affinidi_rdf_encoding::expand_canonicalize_and_hash(proof_config).map_err(
+        |e| DataIntegrityError::RdfEncodingError(format!("Failed to hash proof config: {e}")),
+    )?;
+
+    Ok([proof_hash.as_slice(), doc_hash.as_slice()].concat())
 }
 
 #[cfg(test)]
@@ -194,31 +305,4 @@ mod tests {
             "Signing failed"
         );
     }
-
-    /*
-    #[test]
-    fn test_sign_jcs_proof_only_good() {
-        let generic_doc =
-            json!({"test": "test_data", "@context": ["context1", "context2", "context3"]});
-
-        let context: Vec<String> = generic_doc
-            .get("@context")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| c.as_str().unwrap().to_string())
-            .collect();
-
-        let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
-        let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
-        let secret =
-            Secret::from_multibase(&format!("did:key:{pub_key}#{pub_key}"), pub_key, pri_key)
-                .expect("Couldn't create test key data");
-
-        assert!(
-            DataIntegrityProof::sign_jcs_proof_only(&generic_doc, Some(context), &secret).is_ok(),
-            "Signing failed"
-        );
-    }*/
 }
