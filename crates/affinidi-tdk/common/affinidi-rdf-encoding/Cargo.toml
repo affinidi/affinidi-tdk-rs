@@ -1,0 +1,30 @@
+[package]
+name = "affinidi-rdf-encoding"
+description = "RDF Dataset Canonicalization (RDFC-1.0) and JSON-LD expansion for W3C Verifiable Credentials"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "canonicalize"
+harness = false

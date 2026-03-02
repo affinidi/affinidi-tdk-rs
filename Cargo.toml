@@ -15,6 +15,7 @@ members = [
 
   "crates/affinidi-tdk/common/affinidi-tdk-common",
   "crates/affinidi-tdk/common/affinidi-data-integrity",
+  "crates/affinidi-tdk/common/affinidi-rdf-encoding",
   "crates/affinidi-tdk/common/affinidi-did-authentication",
 
   "crates/affinidi-messaging/affinidi-messaging-sdk",
