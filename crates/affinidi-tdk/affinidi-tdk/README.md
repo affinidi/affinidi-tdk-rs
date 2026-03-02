@@ -21,6 +21,7 @@ The following features are enabled for the TDK Crate
 - default (Includes all crates by default)
   - messaging: Affinidi Messaging SDK Crates
   - did-peer: Peer DID Method support
+  - data-integrity: W3C Data Integrity proof verification
 
 To disable default, you can use the following:
 

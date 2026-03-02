@@ -53,3 +53,8 @@ lto = true
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
+
+# Patch crates.io with local paths for workspace members that have been bumped
+# but not yet published. Remove entries after publishing to crates.io.
+[patch.crates-io]
+affinidi-tdk-common = { path = "crates/affinidi-tdk/common/affinidi-tdk-common" }
