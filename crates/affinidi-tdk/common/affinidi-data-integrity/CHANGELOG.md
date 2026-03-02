@@ -1,5 +1,15 @@
 # Affinidi Data Integrity Changelog
 
+## 2nd March 2026 Release 0.4.0
+
+- **FEATURE:** Added `eddsa-rdfc-2022` cryptosuite support (RDF Dataset Canonicalization)
+  - New `sign_rdfc_data()` method for signing JSON-LD documents using RDFC-1.0
+  - Verification auto-dispatches based on `proof.cryptosuite` — no caller changes needed
+  - Validated against W3C vc-di-eddsa B.1 test vectors
+- **BREAKING:** Removed `TryFrom<KeyType> for CryptoSuite` (ambiguous: Ed25519 maps to both suites)
+  - Use `CryptoSuite::validate_key_type()` instead
+- **DEPENDENCY:** Added `affinidi-rdf-encoding` for JSON-LD expansion and RDFC-1.0 canonicalization
+
 ## 1st February 2026 Release 0.3.5
 
 - **CHORE:** Updated to latest dependencies
