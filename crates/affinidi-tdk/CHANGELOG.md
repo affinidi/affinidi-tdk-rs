@@ -4,6 +4,7 @@
 
 - **MAINTENANCE:** Updated `affinidi-data-integrity` dependency from 0.3 to 0.4
   - `affinidi-tdk-common` bumped to 0.4.1
+  - `affinidi-tdk` bumped to 0.5.1
 - **FEATURE:** `data-integrity` feature now documented in `affinidi-tdk` README
   - Includes support for `eddsa-rdfc-2022` cryptosuite added in `affinidi-data-integrity` 0.4
 
