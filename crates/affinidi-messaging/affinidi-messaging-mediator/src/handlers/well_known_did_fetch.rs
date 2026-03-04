@@ -36,7 +36,9 @@ pub async fn well_known_did_doc_handler(
 ) -> Result<String, AppError> {
     let _span = span!(Level::DEBUG, "well_known_did_doc_handler");
     async move {
-        state.config.mediator_did_doc
+        state
+            .config
+            .mediator_did_doc
             .as_ref()
             .filter(|doc| !doc.is_empty())
             .map(|doc| doc.clone())
@@ -45,7 +47,8 @@ pub async fn well_known_did_doc_handler(
                     48,
                     "NA".to_string(),
                     "No Mediator DID Document is configured".to_string(),
-                ).into()
+                )
+                .into()
             })
     }
     .instrument(_span)
