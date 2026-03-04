@@ -30,7 +30,7 @@ impl Database {
                 )
             })?;
 
-        if let Ok(count) = from_redis_value::<i64>(&response[0]) {
+        if let Ok(count) = from_redis_value::<i64>(response[0].clone()) {
             event!(
                 Level::INFO,
                 "clean_start_streaming() cleaned {} sessions",

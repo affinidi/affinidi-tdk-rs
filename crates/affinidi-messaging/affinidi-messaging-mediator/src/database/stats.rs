@@ -97,7 +97,7 @@ impl Database {
                 )
             })?;
 
-        let result: Vec<String> = from_redis_value(&result).map_err(|e| {
+        let result: Vec<String> = from_redis_value(result).map_err(|e| {
             MediatorError::DatabaseError(
                 21,
                 "NA".into(),

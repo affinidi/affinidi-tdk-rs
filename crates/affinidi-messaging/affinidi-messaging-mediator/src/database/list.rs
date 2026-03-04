@@ -94,15 +94,15 @@ impl Database {
             }
 
             let items: Vec<Value> =
-                from_redis_value(&db_response).map_err(|e| _error(e, did_hash, &key))?;
+                from_redis_value(db_response).map_err(|e| _error(e, did_hash, &key))?;
 
             for item in items {
                 // item = Bulk(string(id), Bulk(fields...))
-                let item: Vec<Value> = from_redis_value(&item).unwrap();
+                let item: Vec<Value> = from_redis_value(item).unwrap();
                 let mut msg_element = MessageListElement::default();
 
                 let stream_id: String =
-                    from_redis_value(&item[0]).map_err(|e| _error(e, did_hash, &key))?;
+                    from_redis_value(item[0].clone()).map_err(|e| _error(e, did_hash, &key))?;
                 match folder {
                     Folder::Inbox => {
                         msg_element.receive_id = Some(stream_id.clone());
@@ -120,7 +120,7 @@ impl Database {
                     .unwrap_or(0);
 
                 let fields: Vec<String> =
-                    from_redis_value(&item[1]).map_err(|e| _error(e, did_hash, &key))?;
+                    from_redis_value(item[1].clone()).map_err(|e| _error(e, did_hash, &key))?;
 
                 for (k, v) in fields.iter().tuples() {
                     match k.as_str() {

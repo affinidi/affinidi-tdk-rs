@@ -8,6 +8,42 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 5th March 2026
+
+### Mediator (0.12.1)
+
+- **FEATURE:** Added `did:webvh` support for Mediator DID
+  - Mediator can now use `did:webvh` (or `did:web`) as its DID method
+  - New configuration option `did_webvh` for specifying webvh DID settings
+  - Well-known DID endpoint updated to serve webvh DID documents
+- **CHORE:** Bumped Redis dependencies
+  - `redis` upgraded from `0.32` to `1.0`
+  - `deadpool-redis` upgraded from `0.22` to `0.23`
+  - `tokio` upgraded from `1.49` to `1.50`
+  - Updated `from_redis_value` calls for redis 1.0 API changes
+- **CHORE:** Use path + version dependencies for `mediator-common` and
+  `mediator-processors` to prevent version conflicts
+
+### Mediator-Common (0.12.1)
+
+- **CHORE:** Bumped Redis dependencies
+  - `redis` upgraded from `0.32` to `1.0`
+  - `deadpool-redis` upgraded from `0.22` to `0.23`
+
+### Mediator-Processors (0.12.1)
+
+- **CHORE:** Bumped dependencies
+  - `deadpool-redis` upgraded from `0.22` to `0.23`
+  - `tokio` upgraded from `1.49` to `1.50`
+
+### Helpers
+
+- **FEATURE:** Replaced `generate_mediator_config` with `did:webvh` DID generator
+  - Generates `did:webvh` DIDs for Mediator configuration
+  - Supports portable DIDs, `did:web` conversion, JWT secret generation,
+    and admin `did:peer` generation
+  - Added `didwebvh-rs` and `url` dependencies
+
 ## 16th February 2026
 
 ### SDK (0.14.4)

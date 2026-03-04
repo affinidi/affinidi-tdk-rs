@@ -125,7 +125,7 @@ impl Database {
                 mediator_acl_mode,
             };
             for (index, item) in result.iter().enumerate() {
-                if let Ok(acls_hex) = from_redis_value::<String>(item) {
+                if let Ok(acls_hex) = from_redis_value::<String>(item.clone()) {
                     let acls = MediatorACLSet::from_hex_string(&acls_hex).map_err(|e| {
                         MediatorError::InternalError(26, dids[index].clone(), e.to_string())
                     })?;

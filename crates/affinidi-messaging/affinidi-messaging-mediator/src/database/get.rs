@@ -45,7 +45,7 @@ impl Database {
                 Value::Nil => {
                     return Ok(None);
                 }
-                v => from_redis_value(&v).map_err(|e| {
+                v => from_redis_value(v).map_err(|e| {
                     MediatorError::InternalError(
                         17,
                         did_hash.into(),
