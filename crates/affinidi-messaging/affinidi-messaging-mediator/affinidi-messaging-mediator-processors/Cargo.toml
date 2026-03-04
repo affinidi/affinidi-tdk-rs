@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.12.0"
+version = "0.12.1"
 description = "Affinidi Messaging Mediator Processors"
 edition.workspace = true
 authors.workspace = true
