@@ -149,7 +149,10 @@ async fn generate_status_reply(
         };
 
         for (k, v) in response.into_iter().tuples() {
-            match from_redis_value::<String>(k.clone()).unwrap_or("".into()).as_str() {
+            match from_redis_value::<String>(k.clone())
+                .unwrap_or("".into())
+                .as_str()
+            {
                 "newest_received" => {
                     if let Ok(v) = from_redis_value::<String>(v) {
                         let a: Vec<&str> = v.split('-').collect();
