@@ -40,7 +40,8 @@ pub async fn well_known_did_doc_handler(
             .config
             .mediator_did_doc
             .as_ref()
-            .filter(|doc| !doc.is_empty()).cloned()
+            .filter(|doc| !doc.is_empty())
+            .cloned()
             .ok_or_else(|| {
                 MediatorError::ConfigError(
                     48,
