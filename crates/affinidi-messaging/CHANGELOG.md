@@ -8,6 +8,13 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 5th March 2026
+
+### Mediator Common (0.12.1)
+
+- **CHORE:** Updated `redis` dependency from 0.32 to 1.0
+- **CHORE:** Updated `deadpool-redis` dependency from 0.22 to 0.23
+
 ## 16th February 2026
 
 ### SDK (0.14.4)
