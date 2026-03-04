@@ -1,5 +1,6 @@
 use crate::{
     DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite, hashing_eddsa_jcs,
+    hashing_eddsa_rdfc,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -65,16 +66,6 @@ where
             "Invalid proof type, expected 'DataIntegrityProof'".to_string(),
         ));
     }
-    if proof.cryptosuite != CryptoSuite::EddsaJcs2022 {
-        return Err(DataIntegrityError::InputDataError(
-            "Unsupported cryptosuite, expected 'EddsaJcs2022'".to_string(),
-        ));
-    }
-
-    let jcs_doc = to_string(&signed_doc).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
-    })?;
-    debug!("JCS String: {}", jcs_doc);
 
     // Run proof Configuration
     // Check Dates
@@ -90,13 +81,40 @@ where
         }
     }
 
-    let jcs_proof_config = to_string(&proof).map_err(|e| {
-        DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {e}"))
-    })?;
-    debug!("Proof options (JCS): {}", jcs_proof_config);
+    // Dispatch based on cryptosuite
+    let hash_data = match &proof.cryptosuite {
+        CryptoSuite::EddsaJcs2022 => {
+            let jcs_doc = to_string(&signed_doc).map_err(|e| {
+                DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
+            })?;
+            debug!("JCS String: {}", jcs_doc);
 
-    // Hash the fields and join
-    let hash_data = hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config);
+            let jcs_proof_config = to_string(&proof).map_err(|e| {
+                DataIntegrityError::InputDataError(format!(
+                    "Failed to canonicalize proof config: {e}"
+                ))
+            })?;
+            debug!("Proof options (JCS): {}", jcs_proof_config);
+
+            hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config)
+        }
+        CryptoSuite::EddsaRdfc2022 => {
+            let doc_value = serde_json::to_value(signed_doc).map_err(|e| {
+                DataIntegrityError::InputDataError(format!(
+                    "Failed to serialize document to Value: {e}"
+                ))
+            })?;
+
+            let proof_value_json = serde_json::to_value(&proof).map_err(|e| {
+                DataIntegrityError::InputDataError(format!(
+                    "Failed to serialize proof config to Value: {e}"
+                ))
+            })?;
+
+            hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
+        }
+    };
+
     debug!(
         "Hash data = {}",
         hash_data
@@ -107,8 +125,8 @@ where
     );
 
     // Verify the signature
-    let crypto = CryptoSuite::EddsaJcs2022;
-    crypto
+    proof
+        .cryptosuite
         .verify(
             public_key_bytes,
             hash_data.as_slice(),
