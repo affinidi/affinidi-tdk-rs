@@ -29,11 +29,7 @@ struct Args {
     #[arg(long, short = 's', default_value_t = true, action = clap::ArgAction::Set)]
     secure: bool,
 
-    /// API prefix path (e.g., /mediator/v1)
-    #[arg(long, short = 'p', default_value = "")]
-    api_prefix: String,
-
-    /// Service endpoint URL (if not provided, derived from --url and --api-prefix)
+    /// Service endpoint URL (if not provided, derived from --url)
     #[arg(long, short = 'e')]
     service_endpoint: Option<String>,
 
@@ -88,7 +84,6 @@ fn create_service_endpoints(
     did: &str,
     url: &str,
     secure: bool,
-    api_prefix: &str,
     service_endpoint: Option<&str>,
 ) -> Result<Vec<Value>> {
     let http_scheme = if secure { "https" } else { "http" };
@@ -105,12 +100,9 @@ fn create_service_endpoints(
         .replace("%3A", ":");
 
     // Build all service URLs from the base domain
-    let base_http_url = format!("{}://{}{}", http_scheme, base_domain, api_prefix);
-    let base_ws_url = format!("{}://{}{}/ws", ws_scheme, base_domain, api_prefix);
-    let auth_url = format!(
-        "{}://{}{}/authenticate",
-        http_scheme, base_domain, api_prefix
-    );
+    let base_http_url = format!("{}://{}", http_scheme, base_domain);
+    let base_ws_url = format!("{}://{}/ws", ws_scheme, base_domain);
+    let auth_url = format!("{}://{}/authenticate", http_scheme, base_domain);
 
     Ok(vec![
         json!({
@@ -163,7 +155,6 @@ fn setup_did_webvh(
     url: &str,
     secure: bool,
     portable: bool,
-    api_prefix: &str,
     service_endpoint: Option<&str>,
     use_web: bool,
 ) -> Result<(String, Vec<Secret>, String)> {
@@ -220,7 +211,7 @@ fn setup_did_webvh(
     // Add service endpoints
     let mut did_document = did_document;
     did_document["service"] =
-        serde_json::to_value(create_service_endpoints(&did_id, url, secure, api_prefix, service_endpoint)?)?;
+        serde_json::to_value(create_service_endpoints(&did_id, url, secure, service_endpoint)?)?;
 
     // Generate update keys and parameters for WebVH
     let mut update_secret = Secret::generate_ed25519(None, None);
@@ -305,9 +296,6 @@ async fn main() -> Result<()> {
     println!("DID Method: {}", did_method);
     println!("Host: {}", host);
     println!("Secure: {}", args.secure);
-    if !args.api_prefix.is_empty() {
-        println!("API Prefix: {}", args.api_prefix);
-    }
     if let Some(ref endpoint) = args.service_endpoint {
         println!("Service Endpoint: {}", endpoint);
     }
@@ -321,7 +309,6 @@ async fn main() -> Result<()> {
         host,
         args.secure,
         args.portable,
-        &args.api_prefix,
         args.service_endpoint.as_deref(),
         args.use_web,
     )?;
