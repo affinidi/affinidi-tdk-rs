@@ -45,7 +45,7 @@ impl Database {
 
             let mut messages = GetMessagesResponse::default();
             for item in &results {
-                let sub_item: Vec<String> = match from_redis_value(item) {
+                let sub_item: Vec<String> = match from_redis_value(item.clone()) {
                     Ok(v) => v,
                     Err(e) => {
                         warn!("Error parsing redis value: ({:?}). Reason: {:?}", item, e);
