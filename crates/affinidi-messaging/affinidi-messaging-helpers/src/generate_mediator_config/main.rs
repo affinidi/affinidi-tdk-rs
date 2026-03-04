@@ -1,20 +1,20 @@
 use std::sync::Arc;
 
 use affinidi_tdk::{
-    secrets_resolver::secrets::Secret,
     dids::{DID, KeyType, PeerKeyRole},
+    secrets_resolver::secrets::Secret,
 };
+use base64::prelude::*;
 use clap::Parser;
 use didwebvh_rs::{
-    log_entry::LogEntryMethods, parameters::Parameters as WebVHParameters, url::WebVHURL,
-    DIDWebVHState,
+    DIDWebVHState, log_entry::LogEntryMethods, parameters::Parameters as WebVHParameters,
+    url::WebVHURL,
 };
 use ring::signature::Ed25519KeyPair;
-use serde_json::{json, Value};
-use url::Url;
-use base64::prelude::*;
+use serde_json::{Value, json};
 use std::fs::File;
 use std::io::Write;
+use url::Url;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -67,7 +67,7 @@ fn create_keys() -> Result<Keys> {
     let signing_ed25519 = Secret::generate_ed25519(None, None);
     let signing_p256 = Secret::generate_p256(None, None)?;
     let key_agreement_ed25519 = signing_ed25519.to_x25519()?;
-    let key_agreement_p256   = Secret::generate_p256(None, None)?;
+    let key_agreement_p256 = Secret::generate_p256(None, None)?;
     let key_agreement_secp256k1 = Secret::generate_secp256k1(None, None)?;
 
     Ok(Keys {
@@ -142,12 +142,17 @@ fn generate_jwt_secret() -> String {
 
 /// Generate a did:peer DID for the mediator admin, along with its secrets
 fn generate_mediator_admin() -> (String, Vec<Secret>) {
-    
-    let (did, secrets) = DID::generate_did_peer(vec![(PeerKeyRole::Verification, KeyType::Ed25519), (PeerKeyRole::Encryption, KeyType::X25519)], None).unwrap();
+    let (did, secrets) = DID::generate_did_peer(
+        vec![
+            (PeerKeyRole::Verification, KeyType::Ed25519),
+            (PeerKeyRole::Encryption, KeyType::X25519),
+        ],
+        None,
+    )
+    .unwrap();
 
     (did, secrets)
 }
-
 
 /// Setup did:webvh DID and document.
 /// When `use_web` is true, also returns a `(web_did, web_did_doc_json)` tuple.
@@ -158,7 +163,6 @@ fn setup_did_webvh(
     service_endpoint: Option<&str>,
     use_web: bool,
 ) -> Result<(String, Vec<Secret>, String)> {
-    
     println!("Setting up did:webvh...");
 
     // Build initial DID with placeholder SCID
@@ -207,11 +211,14 @@ fn setup_did_webvh(
         "keyAgreement":    [format!("{did_id}#key-2"), format!("{did_id}#key-3"), format!("{did_id}#key-4")],
     });
 
-
     // Add service endpoints
     let mut did_document = did_document;
-    did_document["service"] =
-        serde_json::to_value(create_service_endpoints(&did_id, url, secure, service_endpoint)?)?;
+    did_document["service"] = serde_json::to_value(create_service_endpoints(
+        &did_id,
+        url,
+        secure,
+        service_endpoint,
+    )?)?;
 
     // Generate update keys and parameters for WebVH
     let mut update_secret = Secret::generate_ed25519(None, None);
@@ -223,7 +230,9 @@ fn setup_did_webvh(
     let parameters = WebVHParameters {
         update_keys: Some(Arc::new(vec![update_pubkey])),
         portable: Some(portable),
-        next_key_hashes: Some(Arc::new(vec![next_update_secret.get_public_keymultibase()?])),
+        next_key_hashes: Some(Arc::new(vec![
+            next_update_secret.get_public_keymultibase()?,
+        ])),
         ..Default::default()
     };
 
@@ -313,11 +322,10 @@ async fn main() -> Result<()> {
         args.use_web,
     )?;
 
-    let jwt_secret = args.with_jwt
-        .then(generate_jwt_secret)
-        .unwrap_or_default();
+    let jwt_secret = args.with_jwt.then(generate_jwt_secret).unwrap_or_default();
 
-    let (admin_did, admin_secrets) = args.with_admin
+    let (admin_did, admin_secrets) = args
+        .with_admin
         .then(generate_mediator_admin)
         .unwrap_or_default();
 

@@ -7,7 +7,6 @@ use affinidi_messaging_mediator_common::{
     database::config::{DatabaseConfig, DatabaseConfigRaw},
     errors::MediatorError,
 };
-use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::{
     MessageExpiryCleanupConfig, MessageExpiryCleanupConfigRaw,
 };
@@ -19,6 +18,7 @@ use aws_config::{self, BehaviorVersion, Region, SdkConfig};
 use aws_sdk_secretsmanager;
 use aws_sdk_ssm::types::ParameterType;
 use base64::prelude::*;
+use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
 use http::{
     HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
@@ -640,7 +640,9 @@ impl TryFrom<ConfigRaw> for Config {
                         MediatorError::ConfigError(
                             12,
                             "NA".into(),
-                            format!("Couldn't parse content as LogEntry or Document. Reason: {err}"),
+                            format!(
+                                "Couldn't parse content as LogEntry or Document. Reason: {err}"
+                            ),
                         )
                     })?
                 }
