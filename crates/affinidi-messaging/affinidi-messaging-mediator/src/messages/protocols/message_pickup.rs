@@ -149,9 +149,9 @@ async fn generate_status_reply(
         };
 
         for (k, v) in response.into_iter().tuples() {
-            match from_redis_value::<String>(&k).unwrap_or("".into()).as_str() {
+            match from_redis_value::<String>(k.clone()).unwrap_or("".into()).as_str() {
                 "newest_received" => {
-                    if let Ok(v) = from_redis_value::<String>(&v) {
+                    if let Ok(v) = from_redis_value::<String>(v) {
                         let a: Vec<&str> = v.split('-').collect();
                         if a.len() != 2 {
                             continue;
@@ -164,7 +164,7 @@ async fn generate_status_reply(
                     }
                 }
                 "oldest_received" => {
-                    if let Ok(v) = from_redis_value::<String>(&v) {
+                    if let Ok(v) = from_redis_value::<String>(v) {
                         let a: Vec<&str> = v.split('-').collect();
                         if a.len() != 2 {
                             continue;
@@ -177,18 +177,18 @@ async fn generate_status_reply(
                     }
                 }
                 "message_count" => {
-                    if let Ok(v) = from_redis_value::<u32>(&v) {
+                    if let Ok(v) = from_redis_value::<u32>(v) {
                         status.message_count = v;
                     }
                 }
                 "queue_count" => continue,
                 "live_delivery" => {
-                    if let Ok(v) = from_redis_value::<bool>(&v) {
+                    if let Ok(v) = from_redis_value::<bool>(v) {
                         status.live_delivery = v;
                     }
                 }
                 "total_bytes" => {
-                    if let Ok(v) = from_redis_value::<u64>(&v) {
+                    if let Ok(v) = from_redis_value::<u64>(v) {
                         status.total_bytes = v;
                     }
                 }

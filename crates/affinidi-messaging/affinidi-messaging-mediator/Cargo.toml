@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.0"
+version = "0.12.1"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -20,8 +20,8 @@ path = "src/main.rs"
 # Affinidi Crates
 affinidi-messaging-sdk = "0.15"
 affinidi-messaging-didcomm = "0.12"
-affinidi-messaging-mediator-processors = "0.12"
-affinidi-messaging-mediator-common = "0.12"
+affinidi-messaging-mediator-processors = { version = "0.12.1", path = "affinidi-messaging-mediator-processors" }
+affinidi-messaging-mediator-common = { version = "0.12.1", path = "affinidi-messaging-mediator-common" }
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
@@ -45,7 +45,6 @@ jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.10"
-# Redis can only be updated when deadpool-redis supports the new version
 redis = { version = "1.0", features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",

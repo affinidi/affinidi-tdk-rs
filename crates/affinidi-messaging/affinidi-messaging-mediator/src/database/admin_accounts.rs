@@ -226,7 +226,7 @@ impl Database {
             let mut new_cursor: u32 = 0;
             let mut admins: Vec<String> = vec![];
             for item in &result {
-                let value: Vec<Value> = from_redis_value(item).unwrap();
+                let value: Vec<Value> = from_redis_value(item.clone()).unwrap();
                 if value.len() != 2 {
                     return Err(MediatorError::DatabaseError(
                         17,
@@ -234,7 +234,7 @@ impl Database {
                         "SSCAN result is not a tuple".to_string(),
                     ));
                 }
-                new_cursor = from_redis_value::<String>(value.first().unwrap())
+                new_cursor = from_redis_value::<String>(value.first().unwrap().clone())
                     .map_err(|err| {
                         MediatorError::DatabaseError(
                             17,
@@ -245,7 +245,7 @@ impl Database {
                     .parse::<u32>()
                     .unwrap();
 
-                admins = from_redis_value(value.last().unwrap()).map_err(|err| {
+                admins = from_redis_value(value.last().unwrap().clone()).map_err(|err| {
                     MediatorError::DatabaseError(
                         17,
                         "NA".to_string(),
