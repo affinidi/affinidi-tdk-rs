@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.12.0"
+version = "0.12.1"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -34,7 +34,7 @@ affinidi-messaging-didcomm = "0.12"
 affinidi-messaging-sdk = "0.15"
 affinidi-tdk = "0.5"
 
-didwebvh-rs = "0.1.16"
+didwebvh-rs = "0.2"
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
@@ -51,7 +51,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 time = "0.3"
-tokio = { version = "1.49", features = ["full"] }
+tokio = { version = "1.50", features = ["full"] }
 toml = "1.0"
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [

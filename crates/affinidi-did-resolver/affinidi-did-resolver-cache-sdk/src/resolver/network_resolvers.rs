@@ -236,7 +236,7 @@ impl AsyncResolver for WebvhResolver {
             let mut method = didwebvh_rs::DIDWebVHState::default();
             let did_str = did.to_string();
 
-            Some(match method.resolve(&did_str, None).await {
+            Some(match method.resolve(&did_str, None, false).await {
                 Ok((log_entry, _)) => {
                     let doc_value = log_entry.get_did_document().map_err(|e| {
                         ResolverError::InvalidDocument(format!(

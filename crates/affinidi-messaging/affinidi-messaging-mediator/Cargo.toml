@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.1"
+version = "0.12.2"
 description = "DIDComm Mediator service for Affinidi Messaging"
 edition.workspace = true
 authors.workspace = true
@@ -27,7 +27,7 @@ affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
 
 # External Crates
-didwebvh-rs = "0.1"
+didwebvh-rs = "0.2"
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
