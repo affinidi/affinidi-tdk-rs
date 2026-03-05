@@ -8,12 +8,17 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
-## 5th March 2026
+## 6th March 2026
 
 ### Mediator (0.12.2)
 
 - **FIX:** DID doc endpoints not returning the correct response type.
   - `well_known_did_doc_handler` returns a plaintext instead of JSON to satisfy the resolver.
+- **CHORE:** Bumped depedencies
+  - `didwebvh-rs` upgraded from `0.1.16` to `0.2.0`
+
+### Helpers (0.12.1)
+
 - **CHORE:** Bumped depedencies
   - `didwebvh-rs` upgraded from `0.1.16` to `0.2.0`
 
