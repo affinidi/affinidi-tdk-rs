@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+### 5th March 2026
+
+#### affinidi-did-resolver-cache-sdk (0.8.1)
+
+- **CHORE:** `didwebvh-rs` upgraded from `0.1.16` to `0.2.0`
+
 ### 16th February 2026
 
 #### affinidi-did-resolver-cache-sdk (0.7.4)
