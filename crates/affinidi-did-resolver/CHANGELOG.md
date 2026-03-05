@@ -2,7 +2,7 @@
 
 ## Changelog history
 
-### 5th March 2026
+### 6th March 2026
 
 #### affinidi-did-resolver-cache-sdk (0.8.1)
 
