@@ -1,39 +1,60 @@
-# Affinidi DID Authentication
+# affinidi-did-authentication
 
-**IMPORTANT:**
-> affinidi-did-authentication crate is provided "as is" without any warranties or guarantees, and by using this framework, users agree to assume all risks associated with its deployment and use including implementing security, and privacy measures in their applications. Affinidi assumes no liability for any issues arising from the use or modification of the project.
+[![Crates.io](https://img.shields.io/crates/v/affinidi-did-authentication.svg)](https://crates.io/crates/affinidi-did-authentication)
+[![Documentation](https://docs.rs/affinidi-did-authentication/badge.svg)](https://docs.rs/affinidi-did-authentication)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-did-authentication)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-## Overview
+Authentication using proof of DID ownership. A client proves it controls a DID
+by encrypting a server-issued challenge with the DID's private keys, enabling
+service-level authentication and authorisation without passwords.
 
-Affinidi DID Authentication enables basic authentication using a DID and proof that you have access to the secrets to encrypt a server challenge. This can be used for services requiring some form of authentication/authorisation mechanism.
+## How It Works
 
-***NOTE: There are two implementations of DID Authentication that differ. As a result this library will detect and handle the two implementations in the interim. Once alignment is complete and refactored into Affinidi Messaging and Meeting Place - then this library will be streamlined.***
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Service
 
-### Library Usage
-
-### Binary Usage
-
-You can run Affinidi DID Authentication as a binary, this allows for simple testing and/or using the binary in other applications.
-
-***NOTE: The Binary for did_auth is located in the [affinidi-tdk](https://github.com/affinidi/affinidi-tdk-rs/crates/affinidi-tdk/examples/did_auth.rs) crate***
-
-There are two operating modes for the binary:
-
-1. Use the environments pre-configured profiles
-2. Manually enter a DID and corresponding Secrets
-
-```bash
-cargo run -- -a did:web:meetingplace.world environment -n Alice
+    Client->>Service: Request challenge (with DID)
+    Service->>Client: Encrypted challenge
+    Client->>Client: Decrypt with DID private key
+    Client->>Service: Return decrypted challenge
+    Service->>Client: Authenticated session
 ```
 
-NOTE: When manually entering a DID, you pass the secrets into STDIN
+## Installation
 
-## Support & Feedback
+```toml
+[dependencies]
+affinidi-did-authentication = "0.3"
+```
 
-If you face any issues or have suggestions, please don't hesitate to contact us using [this link](https://www.affinidi.com/get-in-touch).
+## Usage
 
-### Reporting Technical Issues
+### As a library
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can also create an issue directly in GitHub.
+Integrate DID authentication into your Rust services by using the library API.
 
-If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure to include a **title and clear description**, as much relevant information as possible, and a **code sample** or an **executable test case** demonstrating the expected behavior that is not occurring.
+### As a binary
+
+A test binary is available in the
+[`affinidi-tdk`](../../affinidi-tdk/) crate:
+
+```bash
+# Using an environment profile
+cargo run -- -a did:web:meetingplace.world environment -n Alice
+
+# Manually providing a DID (pass secrets via STDIN)
+cargo run -- -a did:web:example.com manual -d did:peer:2...
+```
+
+## Related Crates
+
+- [`affinidi-secrets-resolver`](../affinidi-secrets-resolver/) — Secret management (dependency)
+- [`affinidi-did-resolver-cache-sdk`](../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution (dependency)
+- [`affinidi-tdk-common`](../affinidi-tdk-common/) — Shared TDK utilities
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

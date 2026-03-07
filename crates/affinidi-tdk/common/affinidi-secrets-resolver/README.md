@@ -1,40 +1,40 @@
-# Affinidi Secrets Manager
+# affinidi-secrets-resolver
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-secrets-resolver.svg)](https://crates.io/crates/affinidi-secrets-resolver)
 [![Documentation](https://docs.rs/affinidi-secrets-resolver/badge.svg)](https://docs.rs/affinidi-secrets-resolver)
 [![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-secrets-resolver)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-**IMPORTANT:**
+DID secret management for the Affinidi Trust Development Kit. Handles storage,
+resolution, and cryptographic operations for DID-associated private keys.
 
-> affinidi-secrets-manager crate is provided "as is" without any warranties or
-> guarantees, and by using this framework, users agree to assume all risks
-> associated with its deployment and use including implementing security, and privacy
-> measures in their applications. Affinidi assumes no liability for any issues
-> arising from the use or modification of the project.
+## Installation
 
-## Overview
+```toml
+[dependencies]
+affinidi-secrets-resolver = "0.5"
+```
 
-Affinidi Secrets Manager handles everything to do with DID Secrets, including
-crypto related functions
+## Feature Flags
 
-## Features
+| Feature | Default | Description |
+|---|---|---|
+| `ed25519` | Yes | Ed25519 and X25519 key support |
+| `p256` | Yes | P-256 (secp256r1) key support |
+| `p384` | Yes | P-384 key support |
+| `k256` | Yes | secp256k1 key support |
 
-- default: Includes all crypto methods
-- p256: P256 (secp256r1)
-- k256: secp256k1
-- ed25519: Ed25519 and X25519 support
+## WASM Support
 
-## Support & Feedback
+This crate supports `wasm32` targets with the `getrandom/wasm_js` feature
+automatically enabled.
 
-If you face any issues or have suggestions, please don't hesitate to contact us
-using [this link](https://www.affinidi.com/get-in-touch).
+## Related Crates
 
-### Reporting Technical Issues
+- [`affinidi-crypto`](../affinidi-crypto/) — Cryptographic primitives (dependency)
+- [`affinidi-encoding`](../affinidi-encoding/) — Multibase encoding (dependency)
+- [`affinidi-did-authentication`](../affinidi-did-authentication/) — DID authentication built on this crate
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can
-also create an issue directly in GitHub.
+## License
 
-If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new).
-Be sure to include a **title and clear description**, as much relevant information
-as possible, and a **code sample** or an **executable test case** demonstrating
-the expected behavior that is not occurring.
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

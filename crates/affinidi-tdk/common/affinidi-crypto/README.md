@@ -1,33 +1,50 @@
-# Affinidi Crypto Library
+# affinidi-crypto
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-crypto.svg)](https://crates.io/crates/affinidi-crypto)
 [![Documentation](https://docs.rs/affinidi-crypto/badge.svg)](https://docs.rs/affinidi-crypto)
 [![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-crypto)
-**IMPORTANT:**
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-> affinidi-crypto crate is provided "as is" without any warranties or guarantees,
-> and by using this framework, users agree to assume all risks associated with its
-> deployment and use including implementing security, and privacy measures in their
-> applications. Affinidi assumes no liability for any issues arising from the use
-> or modification of the project.
+Cryptographic primitives and JWK types for the Affinidi Trust Development Kit.
+Provides key generation, encoding, and conversion utilities across multiple
+elliptic curve families.
 
-## Overview
+## Supported Algorithms
 
-Affinidi Crypto Library provides common elements that assist in developing privacy
-preserving services using decentralized identity technologies.
+| Algorithm | Feature Flag | Curve |
+|---|---|---|
+| Ed25519 / X25519 | `ed25519` | Curve25519 |
+| P-256 (secp256r1) | `p256` | NIST P-256 |
+| P-384 | `p384` | NIST P-384 |
+| secp256k1 | `k256` | secp256k1 |
 
-## Support & Feedback
+All features are enabled by default.
 
-If you face any issues or have suggestions, please don't hesitate to contact us
-using [this link](https://www.affinidi.com/get-in-touch).
+## Installation
 
-### Reporting Technical Issues
+```toml
+[dependencies]
+affinidi-crypto = "0.1"
+```
 
-If you have a technical issue with the Affinidi Crypto GitHub repo, you can
-also create an issue directly in GitHub.
+Or with only specific curves:
 
-If you're unable to find an open issue addressing the problem,
-[open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure
-to include a **title and clear description**, as much relevant information as
-possible, and a **code sample** or an **executable test case** demonstrating the
-expected behavior that is not occurring.
+```toml
+[dependencies]
+affinidi-crypto = { version = "0.1", default-features = false, features = ["ed25519", "p256"] }
+```
+
+## WASM Support
+
+This crate supports `wasm32` targets with the `getrandom/js` feature
+automatically enabled.
+
+## Related Crates
+
+- [`affinidi-encoding`](../affinidi-encoding/) — Multibase/multicodec encoding (dependency)
+- [`affinidi-secrets-resolver`](../affinidi-secrets-resolver/) — Secret management built on this crate
+- [`affinidi-data-integrity`](../affinidi-data-integrity/) — W3C Data Integrity proofs
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

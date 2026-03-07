@@ -1,157 +1,203 @@
-# Affinidi Messaging Framework
+# Affinidi Trust Development Kit (TDK) for Rust
 
-Affinidi Messaging Framework utilises existing open standards and cryptographic
-techniques to provide secure, private, and verifiable digital communication.
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE)
+[![GitHub Issues](https://img.shields.io/github/issues/affinidi/affinidi-tdk-rs)](https://github.com/affinidi/affinidi-tdk-rs/issues)
 
-The Affinidi Messaging Framework offers libraries and tools for implementing the
-[DIDComm Messaging](https://identity.foundation/didcomm-messaging/spec/) protocol,
-which builds upon the decentralized architecture of the
-[Decentralised Identifier (DID)](https://www.w3.org/TR/did-1.0/) standard.
-This framework includes packages designed to enable secure and private messaging,
-as well as capabilities for discovering and establishing connections with individuals,
-businesses, or AI agents.
+A Rust workspace for building secure, privacy-preserving applications using
+decentralised identity technologies. The TDK provides libraries and tools for
+DID resolution, DIDComm messaging, data integrity proofs, cryptographic
+primitives, and more.
 
-## What is DIDComm
+> **Disclaimer:** This project is provided "as is" without warranties or
+> guarantees. By using this framework, users agree to assume all risks
+> associated with its deployment and use, including implementing security and
+> privacy measures in their applications. Affinidi assumes no liability for any
+> issues arising from the use or modification of the project.
 
-The DIDComm Messaging protocol is an open standard for implementing decentralised
-communication. It is built on top of the Decentralised Identifier (DID) design,
-which enables verifiable digital identity and establishes a secure channel for
-communication between parties. It provides end-to-end encryption and message
-verifiability in a decentralised manner without relying on a central system.
+## Workspace Overview
 
-DIDComm Messaging works seamlessly with the Self-Sovereign Identity (SSI) model
-and provides the communication layer in the SSI ecosystem, allowing users complete
-control over their privacy and identity at every stage of digital interactions.
+```mermaid
+graph TD
+    TDK["affinidi-tdk<br/><i>Unified entry point</i>"]
 
-## Why DIDComm Matters
+    subgraph Messaging["Affinidi Messaging"]
+        SDK["messaging-sdk"]
+        DIDCOMM["messaging-didcomm"]
+        MEDIATOR["messaging-mediator"]
+        HELPERS["messaging-helpers"]
+        TEXTCLIENT["messaging-text-client"]
+    end
 
-**Privacy by Design**: Messages are sent with end-to-end encryption by default
-and minimise exposure of metadata, ensuring that only the intended recipient can
-see the content of the message, and the messaging server doesn’t have access to
-it.
+    subgraph Resolver["Affinidi DID Resolver"]
+        CACHESDK["resolver-cache-sdk"]
+        CACHESERVER["resolver-cache-server"]
+        COMMON["did-common"]
+        TRAITS["resolver-traits"]
+        DIDSCID["did-scid"]
+        DIDEXAMPLE["did-example"]
+    end
 
-**Trusted Digital Interaction**: DIDComm uses Decentralised Identifier (DID),
-which enables signing and verifying the authenticity of the content sent by
-another party. DIDComm provides the option to authenticate both parties to verify
-their identity mutually, reducing the risk of fraud, especially when communicating
-with businesses and AI agents.
+    subgraph Common["TDK Common Libraries"]
+        CRYPTO["affinidi-crypto"]
+        ENCODING["affinidi-encoding"]
+        SECRETS["secrets-resolver"]
+        AUTH["did-authentication"]
+        TDKCOMMON["tdk-common"]
+        DI["data-integrity"]
+        RDF["rdf-encoding"]
+    end
 
-**End-to-end Encryption**: It utilises Public Key Cryptography to encrypt the
-message using the recipient’s public key published through DID, ensuring
-only the recipient or the owner of the DID can decrypt and access the content.
+    MP["affinidi-meeting-place"]
 
-**Flexible Implementation**: DIDComm is a highly extensible protocol allowing you
-to implement other use cases beyond the usual chat or messaging app. DIDComm
-provides the flexibility to work as a transport layer for an API platform instead
-of the usual HTTP/S for request and response. DIDComm can also work with other
-open standards like OID4VCI and OID4VP for credential issuance and sharing across
-different platforms.
+    TDK --> SDK
+    TDK --> MP
+    TDK --> DI
+    TDK --> CACHESDK
+    TDK --> DIDCOMM
+    TDK --> AUTH
+    TDK --> SECRETS
+    TDK --> CRYPTO
+    TDK --> TDKCOMMON
+    TDK --> COMMON
 
-**Interoperability**: DIDComm is transport-agnostic, meaning it can work across
-different devices and establish communication over HTTP, WebSockets, Bluetooth,
-and other communication channels. DIDComm does not rely on the transport channel
-to provide the security required for trusted communication.
+    SDK --> DIDCOMM
+    SDK --> CACHESDK
+    MEDIATOR --> SDK
+    HELPERS --> SDK
+    TEXTCLIENT --> SDK
+    MP --> AUTH
+    MP --> TDKCOMMON
 
-> **IMPORTANT:**
-> affinidi-tdk crate is provided "as is" without any warranties or guarantees,
-> and by using this framework, users agree to assume all risks associated with its
-> deployment and use including implementing security, and privacy measures in their
-> applications. Affinidi assumes no liability for any issues arising from the use
-> or modification of the project.
+    CACHESDK --> COMMON
+    CACHESDK --> TRAITS
+    CACHESERVER --> CACHESDK
+    DI --> CRYPTO
+    DI --> RDF
+    SECRETS --> CRYPTO
+    SECRETS --> ENCODING
+    AUTH --> SECRETS
+    TDKCOMMON --> AUTH
+    TDKCOMMON --> DI
+```
 
-## Table of Contents
+## Crate Index
 
-- [Core Concepts](#core-concepts)
-- [Requirements](#requirements)
-- [Overall Crate Structure](#overall-crate-structure)
-- [Support & feedback](#support--feedback)
-- [Contributing](#contributing)
+### [`affinidi-tdk`](./crates/affinidi-tdk/affinidi-tdk/) — Unified Entry Point
 
-## Core Concepts
+A single crate that re-exports the core TDK libraries with feature flags so you
+can depend on one crate and enable only what you need.
 
-- **Decentralised Identifier (DID)** - A globally unique identifier that enables
-  secure interactions. The DID is the cornerstone of Self-Sovereign Identity (SSI),
-  a concept that aims to put individuals or entities in control of their digital
-  identities.
+### [Affinidi Messaging](./crates/affinidi-messaging/)
 
-- **DID Document** - A DID is a URI (Uniform Resource Identifier) that resolves
-  into a DID Document that contains information such as cryptographic public keys,
-  authentication methods, and service endpoints. It allows others to verify
-  signatures, authenticate interactions, and validate data cryptographically.
+Secure, private messaging built on the [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) protocol.
 
-- **Envelope Encryption** - A cryptographic technique that uses multiple layers of
-  encryption to protect the data. A Data Encryption Key (DEK) encrypts the data,
-  and then the Key Encryption Key (KEK) encrypts the DEK. This layered approach
-  enhances security by protecting the data and the key to access it.
+| Crate | Description |
+|---|---|
+| [`affinidi-messaging-sdk`](./crates/affinidi-messaging/affinidi-messaging-sdk/) | SDK for integrating Affinidi Messaging into your application |
+| [`affinidi-messaging-didcomm`](./crates/affinidi-messaging/affinidi-messaging-didcomm/) | DIDComm v2 protocol implementation for Rust |
+| [`affinidi-messaging-mediator`](./crates/affinidi-messaging/affinidi-messaging-mediator/) | Mediator & relay service for message routing |
+| [`affinidi-messaging-helpers`](./crates/affinidi-messaging/affinidi-messaging-helpers/) | Setup tools, environment config, and examples |
+| [`affinidi-messaging-text-client`](./crates/affinidi-messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
-- **Mediator** - A service that handles and routes messages sent between
-  participants (e.g., users, organisations, another mediator, or even AI agents).
+### [Affinidi DID Resolver](./crates/affinidi-did-resolver/)
 
-- **DIDComm Message** - usually called DIDComm Encrypted Message is a JSON Web
-  Message (JWM), a lightweight, secure, and standardised format for structured
-  communication using JSON. It represents headers, message types, routing metadata,
-  and payloads designed to enable secure and interoperable communication across
-  different systems.
+High-performance DID resolution with local and network caching (250k+ resolutions/sec cached).
+
+| Crate | Description |
+|---|---|
+| [`affinidi-did-resolver-cache-sdk`](./crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) | SDK for local and network DID resolution with caching |
+| [`affinidi-did-resolver-cache-server`](./crates/affinidi-did-resolver/affinidi-did-resolver-cache-server/) | Standalone network DID resolution server |
+| [`affinidi-did-common`](./crates/affinidi-did-resolver/affinidi-did-common/) | DID Document types, builders, and common utilities |
+| [`affinidi-did-resolver-traits`](./crates/affinidi-did-resolver/affinidi-did-resolver-traits/) | Pluggable resolver traits for custom DID methods |
+| [`did-scid`](./crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid/) | Self-Certifying Identifier DID method |
+| [`did-example`](./crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example/) | Example DID method for testing |
+
+### [TDK Common Libraries](./crates/affinidi-tdk/common/)
+
+Shared building blocks used across the workspace.
+
+| Crate | Description |
+|---|---|
+| [`affinidi-crypto`](./crates/affinidi-tdk/common/affinidi-crypto/) | Cryptographic primitives — key generation, JWK, Ed25519, P-256, secp256k1 |
+| [`affinidi-encoding`](./crates/affinidi-tdk/common/affinidi-encoding/) | Multibase and multicodec encoding utilities |
+| [`affinidi-secrets-resolver`](./crates/affinidi-tdk/common/affinidi-secrets-resolver/) | DID secret management and key resolution |
+| [`affinidi-did-authentication`](./crates/affinidi-tdk/common/affinidi-did-authentication/) | Authentication via DID ownership proofs |
+| [`affinidi-tdk-common`](./crates/affinidi-tdk/common/affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
+| [`affinidi-data-integrity`](./crates/affinidi-tdk/common/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
+| [`affinidi-rdf-encoding`](./crates/affinidi-tdk/common/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
+
+### [Affinidi Meeting Place](./crates/affinidi-meeting-place/)
+
+Discover and connect with others using DIDs and DIDComm in a secure and private way.
 
 ## Requirements
 
-- Rust (1.85.0) 2024 Edition
+- **Rust** 1.90.0+ (2024 Edition)
+- **Redis** 8.0+ (required for the messaging mediator)
+- **Docker** (recommended for running Redis)
 
-- Redis 8.0
+## Quick Start
 
-## Overall Crate Structure
+Add the unified TDK crate to your project:
 
-Affinidi Messaging consists of different crates, each providing various libraries
-and tools that form the framework. Each crate has embedded sub-crates that provide
-different capabilities to support and run the main crate.
+```toml
+[dependencies]
+affinidi-tdk = "0.5"
+```
 
-### Affinidi Messaging
+Or depend on individual crates for finer control:
 
-A messaging framework built on DIDComm protocol that facilitates confidential and
-secure exchanges between senders and recipients.
+```toml
+[dependencies]
+affinidi-did-resolver-cache-sdk = "0.8"
+affinidi-messaging-sdk = "0.15"
+affinidi-data-integrity = "0.4"
+```
 
-[Set up Affinidi Messaging](./crates/affinidi-messaging/) and host your mediator
-to enable secure and private communication within your network.
+### Resolve a DID
 
-### Affinidi DID Resolver
+```rust
+use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, DIDCacheClient};
 
-A high-performance service that resolves and caches the DID document for a certain
-period, for faster resolution of DID documents and processing of messages.
+let config = ClientConfigBuilder::default().build();
+let resolver = DIDCacheClient::new(config).await?;
+let result = resolver.resolve("did:key:z6Mkr...").await?;
+println!("DID Document: {:#?}", result.doc);
+```
 
-### Affinidi Meeting Place
+### Send a DIDComm Message
 
-Affinidi Meeting Place provides a safe and secure method for discovering and
-connecting with others using decentralised identifiers (DIDs) and the DIDComm
-Messaging protocol.
+```rust
+use affinidi_messaging_sdk::{ATM, config::Config};
 
-### Affinidi TDK
+let config = Config::builder()
+    .with_my_did("did:peer:2...")
+    .with_atm_did("did:peer:2...")
+    .build()?;
+let mut atm = ATM::new(config, vec![]).await?;
+atm.send_ping("did:peer:2...", true, true).await?;
+```
 
-The Affinidi Trust Development Kit (TDK) provides common elements for developing
-privacy-preserving services using decentralised identity technologies.
-
-## Support & feedback
+## Support & Feedback
 
 If you face any issues or have suggestions, please don't hesitate to contact us
-'using [this link](https://share.hsforms.com/1i-4HKZRXSsmENzXtPdIG4g8oa2v).
+using [this link](https://share.hsforms.com/1i-4HKZRXSsmENzXtPdIG4g8oa2v).
 
-### Reporting technical issues
+### Reporting Technical Issues
 
-If you have a technical issue with Affinidi Messaging's codebase, you can also
-create an issue directly in GitHub.
-
-1. Ensure the bug was not already reported by searching on GitHub under
-   [Issues](https://github.com/affinidi/affinidi-tdk-rs/issues).
-
-2. If you're unable to find an open issue addressing the problem,
-   [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new).
-   Be sure to include a **title and clear description**, as much relevant
-   information as possible,
-   and a **code sample** or an **executable test case** demonstrating the expected
-   behaviour that is not occurring.
+If you have a technical issue, you can
+[open an issue](https://github.com/affinidi/affinidi-tdk-rs/issues/new) directly
+in GitHub. Please include a **title and clear description**, as much relevant
+information as possible, and a **code sample** or **executable test case**
+demonstrating the expected behaviour.
 
 ## Contributing
 
-Want to contribute?
-
-Head over to our [CONTRIBUTING](https://github.com/affinidi/affinidi-tdk-rs/blob/main/CONTRIBUTING.md)
+Want to contribute? Head over to our
+[CONTRIBUTING](https://github.com/affinidi/affinidi-tdk-rs/blob/main/CONTRIBUTING.md)
 guidelines.
+
+## License
+
+This project is licensed under the [Apache-2.0](LICENSE) license.

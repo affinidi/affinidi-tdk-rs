@@ -1,18 +1,65 @@
-# Affinidi Trust Development Kit
+# Affinidi Trust Development Kit (TDK)
 
-**IMPORTANT:**
-> affinidi-tdk crate is provided "as is" without any warranties or guarantees, and by using this framework, users agree to assume all risks associated with its deployment and use including implementing security, and privacy measures in their applications. Affinidi assumes no liability for any issues arising from the use or modification of the project.
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-## Overview
+The Affinidi TDK provides common libraries for building privacy-preserving
+services using decentralised identity technologies. This directory contains the
+unified `affinidi-tdk` crate and shared common libraries.
 
-Affinidi Trust Development Kit (TDK) provides common elements that assist in developing privacy preserving services using decentralized identity technologies.
+> **Disclaimer:** This project is provided "as is" without warranties or
+> guarantees. Users assume all risks associated with its deployment and use.
 
-## Support & Feedback
+## Crates
 
-If you face any issues or have suggestions, please don't hesitate to contact us using [this link](https://www.affinidi.com/get-in-touch).
+### [`affinidi-tdk`](./affinidi-tdk/) — Unified Entry Point
 
-### Reporting Technical Issues
+A single dependency that re-exports the core TDK libraries. Use feature flags to
+include only what you need.
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can also create an issue directly in GitHub.
+### Common Libraries
 
-If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure to include a **title and clear description**, as much relevant information as possible, and a **code sample** or an **executable test case** demonstrating the expected behavior that is not occurring.
+| Crate | Description |
+|---|---|
+| [`affinidi-crypto`](./common/affinidi-crypto/) | Cryptographic primitives — key generation, JWK, Ed25519, P-256, P-384, secp256k1 |
+| [`affinidi-encoding`](./common/affinidi-encoding/) | Multibase and multicodec encoding utilities |
+| [`affinidi-secrets-resolver`](./common/affinidi-secrets-resolver/) | DID secret management and key resolution |
+| [`affinidi-did-authentication`](./common/affinidi-did-authentication/) | Authentication via DID ownership proofs |
+| [`affinidi-tdk-common`](./common/affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
+| [`affinidi-data-integrity`](./common/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
+| [`affinidi-rdf-encoding`](./common/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
+
+## Dependency Graph
+
+```mermaid
+graph TD
+    TDK["affinidi-tdk"]
+    TDK --> MSGSDK["messaging-sdk"]
+    TDK --> MP["meeting-place"]
+    TDK --> DI["data-integrity"]
+    TDK --> CACHESDK["resolver-cache-sdk"]
+    TDK --> DIDCOMM["messaging-didcomm"]
+    TDK --> AUTH["did-authentication"]
+    TDK --> SECRETS["secrets-resolver"]
+    TDK --> CRYPTO["affinidi-crypto"]
+    TDK --> TDKC["tdk-common"]
+    TDK --> DIDCOMMON["did-common"]
+
+    DI --> CRYPTO
+    DI --> RDF["rdf-encoding"]
+    SECRETS --> CRYPTO
+    SECRETS --> ENC["affinidi-encoding"]
+    AUTH --> SECRETS
+    TDKC --> AUTH
+    TDKC --> DI
+```
+
+## Related Crates
+
+- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging framework
+- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
+- [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

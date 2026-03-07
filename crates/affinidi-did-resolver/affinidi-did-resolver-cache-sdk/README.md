@@ -1,148 +1,100 @@
-# Affinidi DID Resolver- DID Universal Resolver Cache SDK
+# affinidi-did-resolver-cache-sdk
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-did-resolver-cache-sdk.svg)](https://crates.io/crates/affinidi-did-resolver-cache-sdk)
 [![Documentation](https://docs.rs/affinidi-did-resolver-cache-sdk/badge.svg)](https://docs.rs/affinidi-did-resolver-cache-sdk)
 [![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-Provides local caching for DID resolution and caching of DID Documents
+SDK for resolving [Decentralised Identifiers (DIDs)](https://www.w3.org/TR/did-1.0/)
+with built-in local caching. Operates in **local mode** (resolving happens in
+your process) or **network mode** (requests are forwarded to a remote
+[cache server](../affinidi-did-resolver-cache-server/)).
 
-You can use this SDK in either local (resolving occurs locally) or in network
-(requests are forwarded to a remote server) mode.
+## Installation
+
+```toml
+[dependencies]
+affinidi-did-resolver-cache-sdk = "0.8"
+```
 
 ## Supported DID Methods
 
-- did:key (default)
-- did:ethr (default)
-- did:jwk (disabled as SSI library is using local references)
-- did:pkh (default)
-- did:peer (default)
-- did:web (default)
-- did:webvh (did-methods)
-- did:cheqd (did-methods)
-- did:scid (did-methods)
-- did:example (did-example)
-  - NOTE: This is enabled using Rust feature `did:example`
-  - NOTE: did:example must be manually loaded into the resolver as the DID DOC is
-    NOT deterministic!
-
-## Prerequisites
-
-Rust version 1.88
-
-NOTE: For network mode, you will need access to a running a DID Universal Resolver
-Cache!
+| Method | Default | Feature Flag |
+|---|---|---|
+| `did:key` | Yes | — |
+| `did:peer` | Yes | — |
+| `did:web` | Yes | — |
+| `did:ethr` | Yes | — |
+| `did:pkh` | Yes | — |
+| `did:webvh` | Yes | `did-methods` |
+| `did:cheqd` | Yes | `did-methods` |
+| `did:scid` | Yes | `did-methods` |
+| `did:example` | No | `did_example` (must be manually loaded) |
 
 ## Feature Flags
 
-- `default`: `local` and `did-methods` enabled
-  - Disable default using the `--no-default-features` flag
-- `local`: Does nothing reserved for future use
-- `network`: Enable network for the resolver to use a network-cache service
-- `did-methods`: Includes `did-webvh` alongside the default methods
-- `did-webvh`: WebVH DID Method support
-- `did-cheqd`: Cheqd's Blockchain based DID Method support
-- `did-scid`: Self Certifying Identifier DID Method support
-- `did-example`: Example DID Method which allows for easy testing of DID Documents
-- `did-jwk`: Currently Broken due to local references
+| Feature | Default | Description |
+|---|---|---|
+| `local` | Yes | Reserved for future local-only features |
+| `did-methods` | Yes | Includes `did-webvh`, `did-cheqd`, `did-scid` |
+| `network` | No | Enable network mode for remote cache server |
+| `did-webvh` | — | WebVH DID method support |
+| `did-cheqd` | — | Cheqd blockchain DID method support |
+| `did-scid` | — | Self-Certifying Identifier DID method |
+| `did_example` | — | Example DID method for testing |
 
-## Local Mode
+## Usage
 
-A local cache is operated and all DID resolving is handled from the client itself.
-
-When handling DID methods that require network access (e.g did:web), then the
-client will call those network services.
-
-### Example Local mode with defaults
+### Local Mode (default)
 
 ```rust
-    use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, errors::DIDCacheError,
-      DIDCacheClient};
+use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, DIDCacheClient};
 
-    // Create a new local client configuration, use default values
-    let local_config = ClientConfigBuilder::default().build();
-    let local_resolver = DIDCacheClient::new(local_config).await?;
-    let doc = local_resolver.resolve("did:key:...").await?;
+let config = ClientConfigBuilder::default().build();
+let resolver = DIDCacheClient::new(config).await?;
 
-    match local_resolver.resolve(peer_did).await {
-        Ok(request) => {
-            println!(
-                "Resolved DID ({}) did_hash({}) Document:\n{:#?}\n",
-                request.did, request.did_hash, request.doc
-            );
-        }
-        Err(e) => {
-            println!("Error: {:?}", e);
-        }
-    }
+match resolver.resolve("did:key:z6Mkr...").await {
+    Ok(result) => println!("Document: {:#?}", result.doc),
+    Err(e) => println!("Error: {:?}", e),
+}
 ```
 
-## Network Mode
+### Network Mode
 
-NOTE: When in network mode, the SDK will still cache locally to save on remote calls!
-
-All DID resolving is handled remotely, just the DID Document is returned and cached
-locally.
-
-You will need to enable the crate feature `network` to use Network Mode.
-
-### Example Network mode with optional settings
+Enable the `network` feature, then point to a running cache server:
 
 ```rust
-    use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, errors::DIDCacheError,
-      DIDCacheClient};
-
-    // create a network client configuration, set the service address.
-    let network_config = ClientConfigBuilder::default()
-        .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
-        .with_cache_ttl(60) // Change the cache TTL to 60 seconds
-        .with_network_timeout(20_000) // Change the network timeout to 20 seconds
-        .build();
-    let network_resolver = DIDCacheClient::new(network_config).await?;
-
-    match local_resolver.resolve("did:key:...").await {
-        Ok((request) => {
-            println!(
-                "Resolved DID ({}) did_hash({}) Document:\n{:#?}\n",
-                request.did, request.did_hash, request.doc
-            );
-        }
-        Err(e) => {
-            println!("Error: {:?}", e);
-        }
-    }
+let config = ClientConfigBuilder::default()
+    .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
+    .with_cache_ttl(60)            // Cache TTL in seconds
+    .with_network_timeout(20_000)  // Timeout in milliseconds
+    .build();
+let resolver = DIDCacheClient::new(config).await?;
 ```
 
-## Running benchmark suite for testing
+Network mode still caches locally to reduce remote calls.
 
-A reference benchmark example is included that can be used to measure performance.
-To run this use the following:
-
-`cargo run --features network --example benchmark -- -g 1000 -r 10000 -n ws://127.0.0.1:8080/did/v1/ws`
-
-Run the above from the $affinidi-did-resolver/affinidi-did-resolver-cache-sdk directory
+## Benchmarks
 
 ```bash
-Affinidi DID Cache SDK
-
-Usage: benchmark [OPTIONS] --generate-count <GENERATE_COUNT> --resolve-count <RESOLVE_COUNT>
-
-Options:
--n, --network-address <NETWORK_ADDRESS>
-        network address if running in network mode (ws://127.0.0.1:8080/did/v1/ws)
--g, --generate-count <GENERATE_COUNT>
-        Number of keys to generate
--r, --resolve-count <RESOLVE_COUNT>
-        Number of DIDs to resolve
--h, --help
-        Print help
--V, --version
-        Print version
+cargo run --features network --example benchmark -- \
+  -g 1000 -r 10000 -n ws://127.0.0.1:8080/did/v1/ws
 ```
 
-## Running tests
+## Running Tests
 
-You must enable the `network` feature when running integration tests
+Integration tests require the `network` feature:
 
 ```bash
 cargo test --features network
 ```
+
+## Related Crates
+
+- [`affinidi-did-resolver-cache-server`](../affinidi-did-resolver-cache-server/) — Remote cache server
+- [`affinidi-did-common`](../affinidi-did-common/) — DID Document types (dependency)
+- [`affinidi-did-resolver-traits`](../affinidi-did-resolver-traits/) — Pluggable resolver traits (dependency)
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

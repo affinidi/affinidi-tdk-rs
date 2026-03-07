@@ -1,84 +1,93 @@
 # Affinidi Messaging
 
-A secure, private, and trusted messaging service built on the DIDComm v2 protocol,
-which leverages the decentralized architecture of Decentralized Identifiers (DIDs)
-to enable privacy-preserving and authenticated digital communication.
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-In accordance with the Decentralized Identifier (DID) framework, it utilises
-public key cryptography to digitally sign and encrypt messages, ensuring their
-secure and confidential transmission exclusively to the intended recipient. This
-approach establishes communication that is both verifiable and trustworthy.
+Secure, private, and trusted messaging built on the
+[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) protocol.
+Affinidi Messaging leverages
+[Decentralised Identifiers (DIDs)](https://www.w3.org/TR/did-1.0/) to provide
+end-to-end encrypted, authenticated digital communication.
 
-The Affinidi Messaging was created using [Rust](https://www.rust-lang.org/) language
-and works with different in-memory data storage systems like Redis.
+> **Disclaimer:** This project is provided "as is" without warranties or
+> guarantees. Users assume all risks associated with its deployment and use.
 
-> **IMPORTANT:**
-> Affinidi Messaging is provided "as is" without any warranties or guarantees,
-> and by using this framework, users agree to assume all risks associated with its
-> deployment and use including implementing security, and privacy measures in their
-> applications. Affinidi assumes no liability for any issues arising from the use
-> or modification of the project.
+## Architecture
 
-## Crate Structure
+```mermaid
+graph LR
+    A["Alice<br/>(SDK Client)"] -->|DIDComm| M["Mediator<br/>(Relay Service)"]
+    M -->|DIDComm| B["Bob<br/>(SDK Client)"]
+    M ---|Storage| R[(Redis)]
+    A -.->|Resolve DIDs| DR["DID Resolver"]
+    B -.->|Resolve DIDs| DR
+```
 
-The `affinidi-messaging` crate includes the following sub-crates:
+Messages are end-to-end encrypted using the recipient's DID public keys. The
+mediator routes and stores messages but **cannot** read their content.
 
-- **affinidi-messaging-didcomm** - Affinidi Messaging DIDComm implementation, a
-  modified version of [didcomm-rust](https://github.com/sicpa-dlab/didcomm-rust)
-  project.
+## Crates
 
-- **affinidi-messaging-helpers** - contains tools to help set up and manage Mediator
-  service, including running examples for Affinidi Messaging.
+| Crate | Description |
+|---|---|
+| [`affinidi-messaging-sdk`](./affinidi-messaging-sdk/) | SDK for integrating messaging into your application |
+| [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2 protocol implementation |
+| [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service for message handling |
+| [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
+| [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
-- **affinidi-messaging-mediator** - the Mediator backend service for message
-  handling and relaying.
+**Dependencies:**
+[affinidi-did-resolver](../affinidi-did-resolver/) for DID Document resolution.
 
-- **affinidi-messaging-sdk** - a Software Development Kit (SDK) to simplify the
-  implementation of Affinidi Messaging into your application.
+## Getting Started
 
-- **affinidi-messaging-text-client** - A terminal-based DIDComm chat client useful
-  for interacting with mediators.
+### Prerequisites
 
-Affinidi Messaging also depends on [affinidi-did-resolver](../affinidi-did-resolver/)
-which resolve and cache DID Documents from the list of supported DID methods.
+- Rust 1.90.0+ (2024 Edition)
+- Docker (for Redis)
+- Redis 8.0+
 
-## Running Affinidi Messaging - Mediator Service
+### 1. Start Redis
 
-Set up and manage the mediator service in your local environment.
+```bash
+docker run --name=redis-local --publish=6379:6379 --hostname=redis \
+  --restart=on-failure --detach redis:latest
+```
 
-1. Run the Redis docker container using the command below:
+### 2. Configure the Mediator
 
-   ```bash
-   docker run --name=redis-local --publish=6379:6379 --hostname=redis --restart=on-failure
-   --detach redis:latest
-   ```
+Run from the `affinidi-messaging` directory:
 
-   The latest supported version of Redis is version 8.0.
+```bash
+cargo run --bin setup_environment
+```
 
-2. Run `setup_environment` to configure the mediator with all the required
-   information to run locally.
+This generates:
+- Mediator DID and secrets
+- Administration DID and secrets
+- SSL certificates for local development
+- Optionally, test user DIDs
 
-   You must run the following from the top-level directory of `affinidi-messaging`.
+### 3. Start the Mediator
 
-   ```bash
-   cargo run --bin setup_environment
-   ```
+```bash
+cd affinidi-messaging-mediator
+export REDIS_URL=redis://@localhost:6379
+cargo run
+```
 
-   This will generate:
-   - Mediator DID and secrets.
-   - Administration DID and secrets.
-   - SSL Certificates for local development/testing.
-   - Optionally, different users with their DIDs for testing.
+### 4. Run Examples
 
-3. Start `affinidi-messaging-mediator` service via:
+Go to [affinidi-messaging-helpers](./affinidi-messaging-helpers/) to explore
+available examples including trust pings, sending/receiving messages, and message
+pickup.
 
-   ```bash
-   cd affinidi-messaging-mediator
-   export REDIS_URL=redis://@localhost:6379
-   cargo run
-   ```
+## Related Crates
 
-## Running Affinidi Messaging Examples
+- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
+- [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
 
-Go to the [affinidi-messaging-helpers](./affinidi-messaging-helpers/) crate to run
-the available sample codes and learn more about Affinidi Messaging.
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

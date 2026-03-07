@@ -1,28 +1,45 @@
-# Affinidi DID Resolver - DID Universal Resolver Cache
+# affinidi-did-resolver-cache-server
 
-Provides local caching for DID resolution and caching of DID Documents
+[![Crates.io](https://img.shields.io/crates/v/affinidi-did-resolver-cache-server.svg)](https://crates.io/crates/affinidi-did-resolver-cache-server)
+[![Documentation](https://docs.rs/affinidi-did-resolver-cache-server/badge.svg)](https://docs.rs/affinidi-did-resolver-cache-server)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver/affinidi-did-resolver-cache-server)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-This crate provides both a production running cache service and a SDK Library for client access to the ATN DID Universal Resolver.
+A standalone network service for resolving and caching DID Documents at scale.
+Uses WebSockets for transport and operates a service-wide cache backed by a pool
+of parallel resolvers.
 
-Clients are acting as a DID Document cache locally, all resolving is handled separately.
-Benefit of using this crate is that all DID resolver methods can be shifted to a single service so that changes can be more easily deployed.
+## Architecture
 
-## Prerequisites
+```mermaid
+graph LR
+    C1["Client 1"] -->|WebSocket| S["Cache Server"]
+    C2["Client 2"] -->|WebSocket| S
+    C3["Client N"] -->|WebSocket| S
+    S -->|cache miss| R["Resolver Pool"]
+    R --> M1["did:web"]
+    R --> M2["did:ethr"]
+    R --> M3["did:key"]
+    R --> M4["..."]
+```
 
-Rust version 1.79
+Requests from clients can be multiplexed and may be responded to out of order.
+The client SDK handles matching results to requests.
 
-## DID Universal Resolver Cache Service
+## Running
 
-To run the resolver as a standalone network service, modify the `./conf/cache-conf.toml` configuration file, or set the ENV variables.
+1. Configure via `./conf/cache-conf.toml` or environment variables.
+2. Start the server:
 
-`cargo run` will start the service, running in a production environment is beyond the scope of this crate.
+```bash
+cargo run
+```
 
-The service uses WebSockets for transport, operates a single service wide cache that if a DID lookup results in a hit miss, gets handed to a pool of resolvers for parallel resolving. Requests from clients can be multiplexed and may be responded to out of order, the client side is responsible for matching result to each request.
+## Related Crates
 
-## Client DID Document Cache
+- [`affinidi-did-resolver-cache-sdk`](../affinidi-did-resolver-cache-sdk/) — Client SDK (use `network` feature to connect)
+- [`affinidi-did-common`](../affinidi-did-common/) — DID Document types (dependency)
 
-The client side runs a local in-memory cache of DID Documents, if not known locally it will pass the request to the DID Universal Resolver Service and wait for a response.
+## License
 
-This implementation is thread-safe and can be cloned into multiple threads.
-
-To use ATN DID Universal Resolver Cache in other services, add this crate to your project Cargo.toml and utilize example code similar to:
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
