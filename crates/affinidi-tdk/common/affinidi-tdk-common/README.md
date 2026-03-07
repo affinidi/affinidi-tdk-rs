@@ -1,18 +1,41 @@
-# Affinidi TDK Common
+# affinidi-tdk-common
 
-**IMPORTANT:**
-> affinidi-tdk-common crate is provided "as is" without any warranties or guarantees, and by using this framework, users agree to assume all risks associated with its deployment and use including implementing security, and privacy measures in their applications. Affinidi assumes no liability for any issues arising from the use or modification of the project.
+[![Crates.io](https://img.shields.io/crates/v/affinidi-tdk-common.svg)](https://crates.io/crates/affinidi-tdk-common)
+[![Documentation](https://docs.rs/affinidi-tdk-common/badge.svg)](https://docs.rs/affinidi-tdk-common)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/common/affinidi-tdk-common)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-## Overview
+Shared structs and utilities used across the Affinidi Trust Development Kit.
+Provides common configuration, TLS setup, caching, keyring integration, and
+cross-crate types.
 
-Affinidi [TDK](https://docs.affinidi.com/dev-tools/affinidi-tdk/) provides common structs and routines required across Affinidi libraries.
+## Installation
 
-## Support & Feedback
+```toml
+[dependencies]
+affinidi-tdk-common = "0.4"
+```
 
-If you face any issues or have suggestions, please don't hesitate to contact us using [this link](https://www.affinidi.com/get-in-touch).
+## Feature Flags
 
-### Reporting Technical Issues
+| Feature | Default | Description |
+|---|---|---|
+| `messaging` | Yes | Includes messaging-related types |
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can also create an issue directly in GitHub.
+## Key Dependencies
 
-If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure to include a **title and clear description**, as much relevant information as possible, and a **code sample** or an **executable test case** demonstrating the expected behavior that is not occurring.
+This crate aggregates several TDK libraries:
+
+- [`affinidi-did-resolver-cache-sdk`](../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution
+- [`affinidi-did-authentication`](../affinidi-did-authentication/) — DID authentication
+- [`affinidi-data-integrity`](../affinidi-data-integrity/) — Data integrity proofs
+- [`affinidi-secrets-resolver`](../affinidi-secrets-resolver/) — Secret management
+
+## Related Crates
+
+- [`affinidi-tdk`](../../affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-meeting-place`](../../../affinidi-meeting-place/) — Meeting Place SDK
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

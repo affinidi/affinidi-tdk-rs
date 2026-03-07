@@ -1,46 +1,60 @@
-# Affinidi Trust Development Kit
+# affinidi-tdk
 
-**IMPORTANT:**
+[![Crates.io](https://img.shields.io/crates/v/affinidi-tdk.svg)](https://crates.io/crates/affinidi-tdk)
+[![Documentation](https://docs.rs/affinidi-tdk/badge.svg)](https://docs.rs/affinidi-tdk)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-tdk/affinidi-tdk)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-> affinidi-tdk crate is provided "as is" without any warranties or guarantees, and
-> by using this framework, users agree to assume all risks associated with its deployment
-> and use including implementing security, and privacy measures in their applications.
-> Affinidi assumes no liability for any issues arising from the use or modification
-> of the project.
+The unified entry point for the Affinidi Trust Development Kit. Depend on this
+single crate and enable feature flags to pull in only the libraries you need.
 
-## Overview
+> **Disclaimer:** This project is provided "as is" without warranties or
+> guarantees. Users assume all risks associated with its deployment and use.
 
-Affinidi [Trust Development Kit](https://docs.affinidi.com/dev-tools/affinidi-tdk/)
-simplifies development of privacy preserving solutions using decentralised
-identity and data sharing technologies.
+## Installation
 
-## Features
+```toml
+[dependencies]
+affinidi-tdk = "0.5"
+```
 
-The following features are enabled for the TDK Crate
+## Feature Flags
 
-- default (Includes all crates by default)
-  - messaging: Affinidi Messaging SDK Crates
-  - did-peer: Peer DID Method support
-  - data-integrity: W3C Data Integrity proof verification
+| Feature | Default | Description |
+|---|---|---|
+| `messaging` | Yes | Affinidi Messaging SDK |
+| `meeting-place` | Yes | Affinidi Meeting Place SDK |
+| `did-peer` | Yes | Peer DID method support |
+| `data-integrity` | Yes | W3C Data Integrity proof support |
 
-To disable default, you can use the following:
+Disable defaults with `default-features = false` in your `Cargo.toml` or
+`--no-default-features` on the command line, then enable only what you need:
 
-1. To disable from the command line use the option `--no-default-features`
-2. In Cargo.toml of a crate, use the `default-features = false` option on the crate
-   dependency
+```toml
+[dependencies]
+affinidi-tdk = { version = "0.5", default-features = false, features = ["data-integrity"] }
+```
 
-## Support & Feedback
+## Re-exported Crates
 
-If you face any issues or have suggestions, please don't hesitate to contact us
-using [this link](https://www.affinidi.com/get-in-touch).
+This crate re-exports the following libraries:
 
-### Reporting Technical Issues
+- [`affinidi-did-resolver-cache-sdk`](../../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution and caching
+- [`affinidi-did-common`](../../../affinidi-did-resolver/affinidi-did-common/) — DID Document types
+- [`affinidi-messaging-didcomm`](../../../affinidi-messaging/affinidi-messaging-didcomm/) — DIDComm protocol
+- [`affinidi-messaging-sdk`](../../../affinidi-messaging/affinidi-messaging-sdk/) — Messaging SDK *(feature: `messaging`)*
+- [`affinidi-meeting-place`](../../../affinidi-meeting-place/) — Meeting Place SDK *(feature: `meeting-place`)*
+- [`affinidi-data-integrity`](../common/affinidi-data-integrity/) — Data Integrity proofs *(feature: `data-integrity`)*
+- [`affinidi-did-authentication`](../common/affinidi-did-authentication/) — DID authentication
+- [`affinidi-tdk-common`](../common/affinidi-tdk-common/) — Shared utilities
+- [`affinidi-secrets-resolver`](../common/affinidi-secrets-resolver/) — Secret management
+- [`affinidi-crypto`](../common/affinidi-crypto/) — Cryptographic primitives
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can also
-create an issue directly in GitHub.
+## Related Crates
 
-If you're unable to find an open issue addressing the problem,
-[open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure
-to include a **title and clear description**, as much relevant information as possible,
-and a **code sample** or an **executable test case** demonstrating the expected
-behavior that is not occurring.
+- [`affinidi-messaging`](../../../affinidi-messaging/) — Full messaging framework
+- [`affinidi-did-resolver`](../../../affinidi-did-resolver/) — DID resolution
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

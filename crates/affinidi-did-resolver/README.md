@@ -1,51 +1,100 @@
 # Affinidi DID Resolver
 
-Library of useful Decentralized Identifier (DID) libraries.
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-did-resolver)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-This resolver running locally will exceed 250k DID Resolutions per second in full
-cache mode.
+High-performance [Decentralised Identifier (DID)](https://www.w3.org/TR/did-1.0/)
+resolution with local and network caching. Exceeds **250k resolutions/sec** in
+full cache mode, and **500k+ resolutions/sec** for computational DIDs like
+`did:key`.
 
-Bypassing the cache for simple computational DIDs like did:key for example, it can
-exceed 500K resolutions/second.
+> **Disclaimer:** This project is provided "as is" without warranties or
+> guarantees. Users assume all risks associated with its deployment and use.
 
-The main goal is to cache network bound DID resolutions like did:web or did:ethr
-etc.
+## Architecture
 
-> **IMPORTANT:**
-> Affinidi DID Resolver is provided "as is" without any warranties or guarantees,
-> and by using this framework, users agree to assume all risks associated with its
-> deployment and use including implementing security, and privacy measures in their
-> applications. Affinidi assumes no liability for any issues arising from the use
-> or modification of the project.
+```mermaid
+graph TD
+    APP["Your Application"] --> SDK["resolver-cache-sdk<br/><i>Local cache + resolving</i>"]
+    SDK -->|cache miss| METHODS["DID Method Resolvers"]
+    SDK -.->|optional network mode| SERVER["resolver-cache-server<br/><i>Remote cache service</i>"]
+    SERVER --> METHODS
 
-## Crate Structure
+    subgraph Methods
+        METHODS --> KEY["did:key"]
+        METHODS --> PEER["did:peer"]
+        METHODS --> WEB["did:web"]
+        METHODS --> WEBVH["did:webvh"]
+        METHODS --> CHEQD["did:cheqd"]
+        METHODS --> SCID["did:scid"]
+        METHODS --> ETH["did:ethr"]
+        METHODS --> PKH["did:pkh"]
+    end
+```
 
-- affinidi-did-common
-  - Common DID Document structure and related methods.
+## Crates
 
-- affinidi-did-resolver-cache-sdk
-  - Developer friendly crate to instantiate either a local or network DID resolver
-    with caching.
-  - List of supported DID Methods is listed in the SDK README.
+| Crate | Description |
+|---|---|
+| [`affinidi-did-resolver-cache-sdk`](./affinidi-did-resolver-cache-sdk/) | SDK for local and network DID resolution with caching |
+| [`affinidi-did-resolver-cache-server`](./affinidi-did-resolver-cache-server/) | Standalone network resolution server |
+| [`affinidi-did-common`](./affinidi-did-common/) | DID Document types, builders, and common utilities |
+| [`affinidi-did-resolver-traits`](./affinidi-did-resolver-traits/) | Pluggable traits for custom DID method resolvers |
+| [`did-scid`](./affinidi-did-resolver-methods/did-scid/) | Self-Certifying Identifier DID method |
+| [`did-example`](./affinidi-did-resolver-methods/did-example/) | Example DID method for testing |
 
-- affinidi-did-resolver-cache-server
+## Quick Start
 
-  Remote server that resolves and caches DID Documents at scale.
+### Resolve DIDs locally (default)
 
-- affinidi-did-resolver-methods
+```rust
+use affinidi_did_resolver_cache_sdk::{config::ClientConfigBuilder, DIDCacheClient};
 
-  Individual custom DID Method implementations reside here.
+let config = ClientConfigBuilder::default().build();
+let resolver = DIDCacheClient::new(config).await?;
 
-## Getting Started
+let result = resolver.resolve("did:key:z6Mkr...").await?;
+println!("Document: {:#?}", result.doc);
+```
 
-### I want to start resolving DID's
+### Resolve DIDs via a network server
 
-1. Read the affinidi-did-resolver-cache-sdk documentation, and get started with
-   the example code.
+Enable the `network` feature and point to a running cache server:
 
-### I want to run a production network server for scale and offloading DID method
+```rust
+let config = ClientConfigBuilder::default()
+    .with_network_mode("ws://127.0.0.1:8080/did/v1/ws")
+    .build();
+let resolver = DIDCacheClient::new(config).await?;
+```
 
-resolving?
+### Run the cache server
 
-1. Read the affinidi-did-resolver-cache-server documentation, fire it up as a
-   service where ever you like.
+```bash
+cd affinidi-did-resolver-cache-server
+cargo run
+```
+
+## Supported DID Methods
+
+| Method | Default | Feature Flag |
+|---|---|---|
+| `did:key` | Yes | — |
+| `did:peer` | Yes | — |
+| `did:web` | Yes | — |
+| `did:ethr` | Yes | — |
+| `did:pkh` | Yes | — |
+| `did:webvh` | Yes | `did-methods` |
+| `did:cheqd` | Yes | `did-methods` |
+| `did:scid` | Yes | `did-methods` |
+| `did:example` | No | `did_example` |
+
+## Related Crates
+
+- [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
+- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging (depends on this resolver)
+- [`affinidi-crypto`](../affinidi-tdk/common/affinidi-crypto/) — Cryptographic primitives
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

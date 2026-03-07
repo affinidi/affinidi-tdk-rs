@@ -1,39 +1,65 @@
-# Affinidi Messaging Helpers
+# affinidi-messaging-helpers
 
-Tools to help with setting up, managing and running examples for Affinidi Messaging.
+[![Crates.io](https://img.shields.io/crates/v/affinidi-messaging-helpers.svg)](https://crates.io/crates/affinidi-messaging-helpers)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-helpers)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-This crate contains the following helpers:
+Setup tools, environment configuration, and example runners for
+[Affinidi Messaging](../).
 
-  1. `setup-environment` - Configures the initial environment for either local or remote mediators.
+## Tools
 
-## Debug Logging
+| Binary | Description |
+|---|---|
+| `setup_environment` | Configure the initial environment for local or remote mediators |
+| `mediator_administration` | Add, remove, and list mediator admin accounts |
+| `generate_mediator_config` | Generate mediator configuration files |
 
-To enable logging at the `DEBUG` level just for this crate:
+## Getting Started
+
+### Configure Your Environment
 
 ```bash
-export RUST_LOG=none,affinidi_messaging_helpers=debug,affinidi_messaging_sdk=info
+cargo run --bin setup_environment
 ```
 
-## Set Profile When Running Examples
+This creates a `conf/profiles.json` file with your environment profiles.
 
-You can have multiple environment profiles to switch between different mediators easily.
+### Set the Active Profile
 
-The configuration file for profiles is generated from the `setup-environment` helper. It stores the profile information in `affinidi-messaging-helpers/conf/profiles.json` file.
-
-To set the profile, you can either set an environment variable or specify a profile at run-time.
-
-Using environment variable:
+Using an environment variable:
 
 ```bash
 export TDK_ENVIRONMENT=local
-
 cargo run --example mediator_ping
 ```
 
-Using run-time option:
+Or at run-time:
 
 ```bash
 cargo run --example mediator_ping -- -e local
 ```
 
-Go to the [examples folder](./examples/) to explore and run other examples.
+## Debug Logging
+
+```bash
+export RUST_LOG=none,affinidi_messaging_helpers=debug,affinidi_messaging_sdk=info
+```
+
+## Examples
+
+Explore the [examples folder](./examples/) for available examples, including:
+
+- `mediator_ping` — Send a trust ping to the mediator
+- Sending and receiving messages
+- Message pickup
+
+## Related Crates
+
+- [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
+- [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
+- [`affinidi-tdk`](../../affinidi-tdk/affinidi-tdk/) — Unified TDK entry point (dependency)
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

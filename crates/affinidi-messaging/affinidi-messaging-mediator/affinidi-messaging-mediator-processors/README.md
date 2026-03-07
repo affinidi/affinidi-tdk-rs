@@ -1,24 +1,36 @@
-# Affinidi Messaging Processor
+# affinidi-messaging-mediator-processors
 
-Tasks that can be run as a parallel task within the Mediator, or run externally as a stand-alone service.
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-This provides scalability by being able to distribute heavy tasks away from the core Mediator functionality
+Scalable processors for the Affinidi Messaging Mediator. Each processor can run
+as a parallel task within the mediator or as a standalone service for horizontal
+scaling.
 
 ## Processors
 
 ### Message Expiry Cleanup
 
-Cleans up expired messages by removing them from the database based on expiry headers
+Removes expired messages from the database based on expiry headers.
 
 ### Forwarding
 
-Handles the routing/forwarding of a DIDComm message to a 3rd party Mediator/DIDComm-Agent **This is a work in progress**
+Routes DIDComm messages to third-party mediators or DIDComm agents.
+*(Work in progress)*
 
 ## Crate Layout
 
-As each processor can be either a binary or a library, the file layout can be confusing.
+```
+src/lib/              Shared library interfaces
+  src/lib/<processor>  Processor-specific library code
+src/<processor>/       Binary entry point for standalone mode
+conf/<processor>.toml  Configuration for each processor
+```
 
-* src/lib - Contains the shared code for the library interfaces for each processor
-  * src/lib/`processor` - contains specific code for each processor
-* src/`processor` - contains the binary code to launch the processor as a standalone binary executable
-* conf/`processor`.toml - contains the configuration for each processor
+## Related Crates
+
+- [`affinidi-messaging-mediator`](../) — Parent mediator service
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)

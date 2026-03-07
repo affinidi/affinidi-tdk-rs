@@ -1,18 +1,44 @@
-# Affinidi Meeting Place
+# affinidi-meeting-place
 
-**IMPORTANT:**
-> affinidi-meeting-place crate is provided "as is" without any warranties or guarantees, and by using this framework, users agree to assume all risks associated with its deployment and use including implementing security, and privacy measures in their applications. Affinidi assumes no liability for any issues arising from the use or modification of the project.
+[![Crates.io](https://img.shields.io/crates/v/affinidi-meeting-place.svg)](https://crates.io/crates/affinidi-meeting-place)
+[![Documentation](https://docs.rs/affinidi-meeting-place/badge.svg)](https://docs.rs/affinidi-meeting-place)
+[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-meeting-place)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-## Overview
+SDK for [Affinidi Meeting Place](https://meetingplace.world) — discover and
+connect with others in a secure and private way using
+[Decentralised Identifiers (DIDs)](https://www.w3.org/TR/did-1.0/) and the
+[DIDComm](https://identity.foundation/didcomm-messaging/spec/) protocol.
 
-Affinidi [Meeting Place](https://meetingplace.world) provides a safe and secure method to discover and connect with other using decentralised identifiers (DIDs) and DIDComm protocol.
+## How It Works
 
-## Support & Feedback
+```mermaid
+sequenceDiagram
+    participant Alice
+    participant MeetingPlace
+    participant Bob
 
-If you face any issues or have suggestions, please don't hesitate to contact us using [this link](https://www.affinidi.com/get-in-touch).
+    Alice->>MeetingPlace: Publish discoverable profile (DID)
+    Bob->>MeetingPlace: Search for Alice
+    MeetingPlace->>Bob: Return Alice's DID
+    Bob->>Alice: Initiate DIDComm connection
+    Alice->>Bob: Establish private channel
+```
 
-### Reporting Technical Issues
+## Installation
 
-If you have a technical issue with the Affinidi Messaging GitHub repo, you can also create an issue directly in GitHub.
+```toml
+[dependencies]
+affinidi-meeting-place = "0.3"
+```
 
-If you're unable to find an open issue addressing the problem, [open a new one](https://github.com/affinidi/affinidi-tdk-rs/issues/new). Be sure to include a **title and clear description**, as much relevant information as possible, and a **code sample** or an **executable test case** demonstrating the expected behavior that is not occurring.
+## Related Crates
+
+- [`affinidi-did-authentication`](../affinidi-tdk/common/affinidi-did-authentication/) — DID authentication (dependency)
+- [`affinidi-tdk-common`](../affinidi-tdk/common/affinidi-tdk-common/) — Shared utilities (dependency)
+- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging framework
+- [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution
+
+## License
+
+[Apache-2.0](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
