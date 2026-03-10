@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use tracing::warn;
 
 use crate::error::DIDCommServiceError;
-use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::handler::extractor::Extensions;
+use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::middleware::{MiddlewareHandler, Next};
 use crate::response::DIDCommResponse;
 

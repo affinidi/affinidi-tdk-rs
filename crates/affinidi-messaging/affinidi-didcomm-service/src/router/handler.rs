@@ -1,12 +1,11 @@
 use std::future::Future;
-use std::pin::Pin;
 
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
-use crate::handler::{FromMessageParts, HandlerContext, MessageParts};
 use crate::handler::extractor::Extensions;
+use crate::handler::{FromMessageParts, HandlerContext, MessageParts};
 use crate::response::DIDCommResponse;
 
 #[async_trait]
@@ -20,7 +19,6 @@ pub trait MessageHandler: Send + Sync + 'static {
     ) -> Result<Option<DIDCommResponse>, DIDCommServiceError>;
 }
 
-type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type HandlerResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
 
 macro_rules! impl_handler {
