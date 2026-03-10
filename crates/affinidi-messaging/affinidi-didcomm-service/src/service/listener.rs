@@ -12,6 +12,8 @@ use crate::config::ListenerConfig;
 use crate::crypto::MessageCryptoProvider;
 use crate::error::DIDCommServiceError;
 use crate::handler::{DIDCommHandler, HandlerContext};
+use crate::response::DIDCommResponse;
+use crate::transport;
 use crate::utils::{get_parent_thread_id, get_thread_id};
 
 pub(crate) struct Listener {
@@ -152,18 +154,40 @@ impl Listener {
             };
 
             let handler = self.handler.clone();
+            let crypto_provider = self.crypto_provider.clone();
             let profile_alias = ctx.profile.inner.alias.clone();
             tokio::spawn(async move {
-                let result = handler.handle(ctx, message, meta).await;
-                if let Err(e) = result {
-                    error!(
-                        "[profile = {}] Error handling message: {}",
-                        profile_alias, e
-                    );
+                match handler.handle(ctx.clone(), message, meta).await {
+                    Ok(Some(response)) => {
+                        if let Err(e) =
+                            Self::send_response(&ctx, response, crypto_provider.as_ref()).await
+                        {
+                            error!(
+                                "[profile = {}] Failed to send response: {}",
+                                profile_alias, e
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        error!(
+                            "[profile = {}] Error handling message: {}",
+                            profile_alias, e
+                        );
+                    }
                 }
             });
         }
 
         Ok(())
+    }
+
+    async fn send_response(
+        ctx: &HandlerContext,
+        response: DIDCommResponse,
+        crypto: &dyn MessageCryptoProvider,
+    ) -> Result<(), DIDCommServiceError> {
+        let message = response.into_message(ctx);
+        transport::send_response(ctx, message, crypto).await
     }
 }

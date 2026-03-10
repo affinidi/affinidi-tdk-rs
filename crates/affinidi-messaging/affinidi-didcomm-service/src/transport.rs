@@ -8,7 +8,7 @@ use crate::handler::HandlerContext;
 use crate::problem_report::{ProblemReport, ServiceProblemReport};
 use crate::utils::new_message_id;
 
-const PROBLEM_REPORT_TYPE: &str = "https://didcomm.org/report-problem/2.0/problem-report";
+pub const PROBLEM_REPORT_TYPE: &str = "https://didcomm.org/report-problem/2.0/problem-report";
 
 pub fn build_response(ctx: &HandlerContext, response_type: String, body: Value) -> Message {
     let mut builder = Message::build(new_message_id(), response_type, body)

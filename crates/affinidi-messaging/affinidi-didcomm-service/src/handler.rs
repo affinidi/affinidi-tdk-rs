@@ -5,6 +5,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
+use crate::response::DIDCommResponse;
 
 #[derive(Clone)]
 pub struct HandlerContext {
@@ -23,5 +24,5 @@ pub trait DIDCommHandler: Send + Sync + 'static {
         ctx: HandlerContext,
         message: Message,
         meta: UnpackMetadata,
-    ) -> Result<Option<Message>, DIDCommServiceError>;
+    ) -> Result<Option<DIDCommResponse>, DIDCommServiceError>;
 }

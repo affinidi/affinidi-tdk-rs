@@ -9,6 +9,7 @@ use tracing::warn;
 
 use crate::error::DIDCommServiceError;
 use crate::handler::{DIDCommHandler, HandlerContext};
+use crate::response::DIDCommResponse;
 
 pub use handler::{MessageHandler, handler_fn};
 use route::Route;
@@ -63,7 +64,7 @@ impl DIDCommHandler for Router {
         ctx: HandlerContext,
         message: Message,
         meta: UnpackMetadata,
-    ) -> Result<Option<Message>, DIDCommServiceError> {
+    ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
         let message_type = &message.type_;
 
         if let Some(handler) = self.find_handler(message_type) {

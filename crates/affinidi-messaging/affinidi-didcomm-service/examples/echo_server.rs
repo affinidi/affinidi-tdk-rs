@@ -2,8 +2,9 @@ use std::env;
 
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_didcomm_service::{
-    DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext, ListenerConfig,
-    RestartPolicy, RetryConfig, Router, build_response, handler_fn, send_response,
+    DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext,
+    ListenerConfig, ProblemReport, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
+    handler_fn,
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
@@ -18,7 +19,7 @@ async fn echo_handler(
     ctx: HandlerContext,
     message: Message,
     _meta: UnpackMetadata,
-) -> Result<Option<Message>, DIDCommServiceError> {
+) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     info!(
         "Echo: from={} type={} body={:?}",
         ctx.sender_did, message.type_, message.body
@@ -29,22 +30,17 @@ async fn echo_handler(
         "original_type": message.type_,
     });
 
-    let response = build_response(&ctx, ECHO_RESPONSE_TYPE.to_string(), response_body);
-    send_response(
-        &ctx,
-        response,
-        &affinidi_didcomm_service::DefaultCryptoProvider,
-    )
-    .await?;
-
-    Ok(None)
+    Ok(Some(DIDCommResponse::new(
+        ECHO_RESPONSE_TYPE,
+        response_body,
+    )))
 }
 
 async fn problem_report_handler(
     ctx: HandlerContext,
     message: Message,
     _meta: UnpackMetadata,
-) -> Result<Option<Message>, DIDCommServiceError> {
+) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!("Problem report from {}: {:?}", ctx.sender_did, message.body);
     Ok(None)
 }
@@ -53,12 +49,14 @@ async fn fallback_handler(
     ctx: HandlerContext,
     message: Message,
     _meta: UnpackMetadata,
-) -> Result<Option<Message>, DIDCommServiceError> {
+) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!(
         "Unhandled message type '{}' from {}",
         message.type_, ctx.sender_did
     );
-    Ok(None)
+    Ok(Some(DIDCommResponse::problem_report(
+        ProblemReport::bad_request(format!("Unsupported message type: {}", message.type_)),
+    )))
 }
 
 fn generate_did_peer() -> Result<(String, Vec<Secret>), Box<dyn std::error::Error>> {
