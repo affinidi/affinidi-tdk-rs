@@ -20,6 +20,7 @@ members = [
 
   "crates/affinidi-messaging/affinidi-messaging-sdk",
   "crates/affinidi-messaging/affinidi-messaging-helpers",
+  "crates/affinidi-messaging/affinidi-didcomm-service",
   "crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common",
   "crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors",
   "crates/affinidi-messaging/affinidi-messaging-mediator",
