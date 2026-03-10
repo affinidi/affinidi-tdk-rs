@@ -10,6 +10,10 @@ use crate::handler::HandlerContext;
 use crate::response::DIDCommResponse;
 use crate::router::MessageHandler;
 
+mod policy;
+
+pub use policy::MessagePolicy;
+
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type MiddlewareResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
 

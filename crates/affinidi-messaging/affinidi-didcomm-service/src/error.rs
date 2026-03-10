@@ -1,6 +1,24 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+pub enum PolicyViolation {
+    #[error("Message must be encrypted")]
+    NotEncrypted,
+
+    #[error("Message must be authenticated")]
+    NotAuthenticated,
+
+    #[error("Message must provide non-repudiation (signed)")]
+    NoNonRepudiation,
+
+    #[error("Anonymous sender not allowed")]
+    AnonymousSender,
+
+    #[error("Message must have a sender DID")]
+    MissingSenderDid,
+}
+
+#[derive(Debug, Error)]
 pub enum DIDCommServiceError {
     #[error("ATM error: {0}")]
     ATM(#[from] affinidi_messaging_sdk::errors::ATMError),
@@ -28,6 +46,9 @@ pub enum DIDCommServiceError {
 
     #[error("Handler error: {0}")]
     Handler(String),
+
+    #[error("Policy violation: {0}")]
+    Policy(#[from] PolicyViolation),
 
     #[error("Transport error: {0}")]
     Transport(String),

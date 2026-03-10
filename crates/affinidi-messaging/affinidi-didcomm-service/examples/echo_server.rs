@@ -3,8 +3,8 @@ use std::env;
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_didcomm_service::{
     DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext,
-    ListenerConfig, Next, ProblemReport, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
-    handler_fn, middleware_fn,
+    ListenerConfig, MessagePolicy, Next, ProblemReport, RestartPolicy, RetryConfig, Router,
+    ServiceProblemReport, handler_fn, middleware_fn,
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
@@ -154,6 +154,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handler_fn(problem_report_handler),
         )
         .fallback(handler_fn(fallback_handler))
+        .layer(
+            MessagePolicy::new()
+                .require_encrypted(true)
+                .require_authenticated(true)
+                .allow_anonymous_sender(false),
+        )
         .layer(middleware_fn(logging_middleware));
 
     let _service = DIDCommService::start(config, router, shutdown).await?;
