@@ -79,7 +79,7 @@ impl DIDCommResponse {
         }
 
         if let Some(pthid) = self.pthid.or_else(|| ctx.parent_thread_id.clone()) {
-            builder = builder.header("pthid".into(), Value::String(pthid));
+            builder = builder.pthid(pthid);
         }
 
         builder.finalize()
