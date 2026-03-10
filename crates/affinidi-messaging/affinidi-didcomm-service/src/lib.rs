@@ -2,6 +2,7 @@ pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod handler;
+pub mod middleware;
 pub mod problem_report;
 pub mod response;
 pub mod router;
@@ -13,6 +14,7 @@ pub use config::{DIDCommServiceConfig, ListenerConfig, RestartPolicy, RetryConfi
 pub use crypto::{DefaultCryptoProvider, MessageCryptoProvider};
 pub use error::DIDCommServiceError;
 pub use handler::{DIDCommHandler, HandlerContext};
+pub use middleware::{MiddlewareHandler, Next, middleware_fn};
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;
 pub use router::{MessageHandler, Router, handler_fn};

@@ -3,8 +3,8 @@ use std::env;
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_didcomm_service::{
     DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext,
-    ListenerConfig, ProblemReport, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
-    handler_fn,
+    ListenerConfig, Next, ProblemReport, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
+    handler_fn, middleware_fn,
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
@@ -14,6 +14,24 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const ECHO_RESPONSE_TYPE: &str = "https://example.com/protocols/echo/1.0/response";
+
+async fn logging_middleware(
+    ctx: HandlerContext,
+    message: Message,
+    meta: UnpackMetadata,
+    next: Next,
+) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
+    info!(
+        ">> Incoming: type={} from={}",
+        message.type_, ctx.sender_did
+    );
+    let result = next.run(ctx, message, meta).await;
+    info!(
+        "<< Result: has_response={}",
+        result.as_ref().map_or(false, |r| r.is_some())
+    );
+    result
+}
 
 async fn echo_handler(
     ctx: HandlerContext,
@@ -135,7 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "https://didcomm.org/report-problem/2.0/problem-report",
             handler_fn(problem_report_handler),
         )
-        .fallback(handler_fn(fallback_handler));
+        .fallback(handler_fn(fallback_handler))
+        .layer(middleware_fn(logging_middleware));
 
     let _service = DIDCommService::start(config, router, shutdown).await?;
 
