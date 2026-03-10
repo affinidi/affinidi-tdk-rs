@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
 
+#[derive(Clone)]
 pub struct HandlerContext {
     pub atm: ATM,
     pub profile: Arc<ATMProfile>,
@@ -19,7 +20,7 @@ pub struct HandlerContext {
 pub trait DIDCommHandler: Send + Sync + 'static {
     async fn handle(
         &self,
-        ctx: &HandlerContext,
+        ctx: HandlerContext,
         message: Message,
         meta: UnpackMetadata,
     ) -> Result<Option<Message>, DIDCommServiceError>;

@@ -152,12 +152,13 @@ impl Listener {
             };
 
             let handler = self.handler.clone();
+            let profile_alias = ctx.profile.inner.alias.clone();
             tokio::spawn(async move {
-                let result = handler.handle(&ctx, message, meta).await;
+                let result = handler.handle(ctx, message, meta).await;
                 if let Err(e) = result {
                     error!(
                         "[profile = {}] Error handling message: {}",
-                        ctx.profile.inner.alias, e
+                        profile_alias, e
                     );
                 }
             });

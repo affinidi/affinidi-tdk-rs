@@ -2,60 +2,63 @@ use std::env;
 
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_didcomm_service::{
-    DIDCommHandler, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext,
-    ListenerConfig, RestartPolicy, RetryConfig, build_response, send_response,
+    DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext, ListenerConfig,
+    RestartPolicy, RetryConfig, Router, build_response, handler_fn, send_response,
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::profiles::TDKProfile;
-use async_trait::async_trait;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const ECHO_RESPONSE_TYPE: &str = "https://example.com/protocols/echo/1.0/response";
 
-struct EchoHandler;
+async fn echo_handler(
+    ctx: HandlerContext,
+    message: Message,
+    _meta: UnpackMetadata,
+) -> Result<Option<Message>, DIDCommServiceError> {
+    info!(
+        "Echo: from={} type={} body={:?}",
+        ctx.sender_did, message.type_, message.body
+    );
 
-#[async_trait]
-impl DIDCommHandler for EchoHandler {
-    async fn handle(
-        &self,
-        ctx: &HandlerContext,
-        message: Message,
-        _meta: UnpackMetadata,
-    ) -> Result<Option<Message>, DIDCommServiceError> {
-        // should be a part of ctx
-        let mediator_did = env::var("MEDIATOR_DID").unwrap();
-        info!(
-            "Received message from {} (type: {}) (body: {:?})",
-            ctx.sender_did, message.type_, message.body
-        );
+    let response_body = json!({
+        "echo": message.body,
+        "original_type": message.type_,
+    });
 
-        let response_body = json!({
-            "echo": message.body,
-            "original_type": message.type_,
-        });
+    let response = build_response(&ctx, ECHO_RESPONSE_TYPE.to_string(), response_body);
+    send_response(
+        &ctx,
+        response,
+        &affinidi_didcomm_service::DefaultCryptoProvider,
+    )
+    .await?;
 
-        if message.type_ == "https://didcomm.org/report-problem/2.0/problem-report" {
-            warn!("Message is a problem");
-            return Ok(None);
-        }
+    Ok(None)
+}
 
-        if ctx.sender_did == mediator_did {
-            return Ok(None);
-        }
+async fn problem_report_handler(
+    ctx: HandlerContext,
+    message: Message,
+    _meta: UnpackMetadata,
+) -> Result<Option<Message>, DIDCommServiceError> {
+    warn!("Problem report from {}: {:?}", ctx.sender_did, message.body);
+    Ok(None)
+}
 
-        let response = build_response(ctx, ECHO_RESPONSE_TYPE.to_string(), response_body);
-        send_response(
-            ctx,
-            response,
-            &affinidi_didcomm_service::DefaultCryptoProvider,
-        )
-        .await?;
-
-        Ok(None)
-    }
+async fn fallback_handler(
+    ctx: HandlerContext,
+    message: Message,
+    _meta: UnpackMetadata,
+) -> Result<Option<Message>, DIDCommServiceError> {
+    warn!(
+        "Unhandled message type '{}' from {}",
+        message.type_, ctx.sender_did
+    );
+    Ok(None)
 }
 
 fn generate_did_peer() -> Result<(String, Vec<Secret>), Box<dyn std::error::Error>> {
@@ -125,7 +128,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         did, mediator_did
     );
 
-    let _service = DIDCommService::start(config, EchoHandler, shutdown).await?;
+    let router = Router::new()
+        .route_regex(
+            r"https://example\.com/protocols/echo/.+",
+            handler_fn(echo_handler),
+        )
+        .route(
+            "https://didcomm.org/report-problem/2.0/problem-report",
+            handler_fn(problem_report_handler),
+        )
+        .fallback(handler_fn(fallback_handler));
+
+    let _service = DIDCommService::start(config, router, shutdown).await?;
 
     tokio::signal::ctrl_c().await.ok();
 
