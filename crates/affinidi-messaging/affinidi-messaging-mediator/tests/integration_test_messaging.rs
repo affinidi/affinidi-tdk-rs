@@ -1,6 +1,6 @@
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
-use affinidi_messaging_mediator::server::start;
+use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_mediator::{didcomm_compat, server::start};
 use affinidi_messaging_sdk::{
     config::ATMConfig,
     errors::ATMError,
@@ -477,14 +477,12 @@ async fn _authenticate<S>(
 where
     S: SecretsResolver,
 {
-    let (auth_msg, _) = auth_response
-        .pack_encrypted(
+    let (auth_msg, _) = didcomm_compat::pack_encrypted(
+            &auth_response,
             atm_did,
-            Some(actor_did),
             Some(actor_did),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .map_err(|e| {

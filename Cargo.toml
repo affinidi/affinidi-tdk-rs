@@ -7,10 +7,12 @@ members = [
   "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid",
   "crates/affinidi-did-resolver/affinidi-did-resolver-traits",
 
+  "crates/affinidi-tdk/common/affinidi-cesr",
   "crates/affinidi-tdk/common/affinidi-encoding",
   "crates/affinidi-tdk/common/affinidi-crypto",
   "crates/affinidi-tdk/common/affinidi-secrets-resolver",
 
+  "crates/affinidi-messaging/affinidi-messaging-core",
   "crates/affinidi-messaging/affinidi-messaging-didcomm",
 
   "crates/affinidi-tdk/common/affinidi-tdk-common",
@@ -25,6 +27,9 @@ members = [
   "crates/affinidi-messaging/affinidi-messaging-mediator",
 
   "crates/affinidi-tdk/affinidi-tdk",
+
+  "crates/affinidi-tsp",
+  "crates/affinidi-messaging/affinidi-messaging-didcomm",
 
   "crates/affinidi-meeting-place",
 
@@ -53,4 +58,23 @@ lto = true
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
+
+# Redirect crates.io deps to local workspace crates so all members use the same instances
+[patch.crates-io]
+affinidi-secrets-resolver = { path = "crates/affinidi-tdk/common/affinidi-secrets-resolver" }
+affinidi-did-resolver-cache-sdk = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { path = "crates/affinidi-did-resolver/affinidi-did-common" }
+affinidi-crypto = { path = "crates/affinidi-tdk/common/affinidi-crypto" }
+affinidi-encoding = { path = "crates/affinidi-tdk/common/affinidi-encoding" }
+affinidi-did-resolver-traits = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-traits" }
+affinidi-data-integrity = { path = "crates/affinidi-tdk/common/affinidi-data-integrity" }
+did-example = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example" }
+did-scid = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid" }
+affinidi-messaging-didcomm = { path = "crates/affinidi-messaging/affinidi-messaging-didcomm", version = "0.13" }
+affinidi-messaging-sdk = { path = "crates/affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-did-authentication = { path = "crates/affinidi-tdk/common/affinidi-did-authentication" }
+affinidi-tdk-common = { path = "crates/affinidi-tdk/common/affinidi-tdk-common" }
+affinidi-meeting-place = { path = "crates/affinidi-meeting-place" }
+affinidi-rdf-encoding = { path = "crates/affinidi-tdk/common/affinidi-rdf-encoding" }
+affinidi-messaging-mediator-common = { path = "crates/affinidi-messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 

@@ -1,4 +1,8 @@
+#[cfg(not(any(feature = "didcomm", feature = "tsp")))]
+compile_error!("At least one of the `didcomm` or `tsp` features must be enabled");
+
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::extract::{FromRef, FromRequestParts};
 use chrono::{DateTime, Utc};
@@ -10,6 +14,8 @@ use tasks::websocket_streaming::StreamingTask;
 
 pub mod common;
 pub mod database;
+#[cfg(feature = "didcomm")]
+pub mod didcomm_compat;
 pub mod handlers;
 pub mod messages;
 pub mod server;
@@ -22,6 +28,7 @@ pub struct SharedData {
     pub did_resolver: DIDCacheClient,
     pub database: Database,
     pub streaming_task: Option<StreamingTask>,
+    #[cfg(feature = "didcomm")]
     pub discover_features: Arc<DiscoverFeatures>,
 }
 

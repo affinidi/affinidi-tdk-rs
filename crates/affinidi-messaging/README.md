@@ -4,8 +4,9 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
 Secure, private, and trusted messaging built on the
-[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) protocol.
-Affinidi Messaging leverages
+[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) and
+[Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/)
+protocols. Affinidi Messaging leverages
 [Decentralised Identifiers (DIDs)](https://www.w3.org/TR/did-1.0/) to provide
 end-to-end encrypted, authenticated digital communication.
 
@@ -31,8 +32,9 @@ mediator routes and stores messages but **cannot** read their content.
 | Crate | Description |
 |---|---|
 | [`affinidi-messaging-sdk`](./affinidi-messaging-sdk/) | SDK for integrating messaging into your application |
-| [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2 protocol implementation |
-| [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service for message handling |
+| [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation |
+| [`affinidi-messaging-core`](./affinidi-messaging-core/) | Protocol-agnostic messaging traits |
+| [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP support via feature flags) |
 | [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
 | [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 

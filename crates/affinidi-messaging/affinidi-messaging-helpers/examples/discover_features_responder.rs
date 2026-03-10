@@ -139,8 +139,8 @@ async fn main() -> Result<(), ATMError> {
             continue;
         };
 
-        if msg.type_ != QUERIES_TYPE {
-            debug!("Ignoring non-query message: {}", msg.type_);
+        if msg.typ != QUERIES_TYPE {
+            debug!("Ignoring non-query message: {}", msg.typ);
             continue;
         }
 
@@ -165,7 +165,7 @@ async fn main() -> Result<(), ATMError> {
 
         // Pack the disclosure for the querier
         let (packed_msg, _) = atm
-            .pack_encrypted(&disclosure_msg, &from_did, Some(my_did), Some(my_did), None)
+            .pack_encrypted(&disclosure_msg, &from_did, Some(my_did), Some(my_did))
             .await?;
 
         // Send the disclosure back

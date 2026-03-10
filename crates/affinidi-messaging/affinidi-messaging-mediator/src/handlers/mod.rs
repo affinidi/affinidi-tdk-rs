@@ -9,20 +9,21 @@ use axum::{
 };
 use http::StatusCode;
 
+#[cfg(feature = "didcomm")]
 pub mod authenticate;
 pub mod inbox_fetch;
 pub mod message_delete;
+#[cfg(feature = "didcomm")]
 pub mod message_inbound;
 pub mod message_list;
 pub mod message_outbound;
+#[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
 pub mod websocket;
 pub mod well_known_did_fetch;
 
 pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router {
     let mut app = Router::new()
-        // Inbound message handling from ATM clients
-        .route("/inbound", post(message_inbound::message_inbound_handler))
         // Outbound message handling to ATM clients
         .route(
             "/outbound",
@@ -36,32 +37,37 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
         )
         // Delete/remove messages stored in ATM
         .route("/delete", delete(message_delete::message_delete_handler))
-        // Authentication step 1/2 - Client requests challenge from server
-        .route(
-            "/authenticate/challenge",
-            post(authenticate::authentication_challenge),
-        )
-        // Authentication step 2/2 - Client sends encrypted challenge to server
-        .route("/authenticate", post(authenticate::authentication_response))
-        .route(
-            "/authenticate/refresh",
-            post(authenticate::authentication_refresh),
-        )
         // Websocket endpoint for ATM clients
         .route("/ws", get(websocket::websocket_handler))
-        // Out Of Band Discovery Routes
-        // POST   :: /oob - Client can post a plaintext DIDComm message here to create a shortened OOB URL
-        // GET    :: /oob?<id> - Unauthenticated endpoint to retrieve an OOB Invitation request
-        // DELETE :: /oob?<id> - Remove the Invitation URL
-        .route("/oob", post(oob_discovery::oob_invite_handler))
-        .route("/oob", get(oob_discovery::oobid_handler))
-        .route("/oob", delete(oob_discovery::delete_oobid_handler))
         // Helps to test if you are who you think you are
         .route("/whoami", get(whoami_handler))
         .route(
             "/.well-known/did",
             get(well_known_did_fetch::well_known_did_fetch_handler),
         );
+
+    // DIDComm-specific routes
+    #[cfg(feature = "didcomm")]
+    {
+        app = app
+            // Inbound message handling from ATM clients
+            .route("/inbound", post(message_inbound::message_inbound_handler))
+            // Authentication step 1/2 - Client requests challenge from server
+            .route(
+                "/authenticate/challenge",
+                post(authenticate::authentication_challenge),
+            )
+            // Authentication step 2/2 - Client sends encrypted challenge to server
+            .route("/authenticate", post(authenticate::authentication_response))
+            .route(
+                "/authenticate/refresh",
+                post(authenticate::authentication_refresh),
+            )
+            // Out Of Band Discovery Routes
+            .route("/oob", post(oob_discovery::oob_invite_handler))
+            .route("/oob", get(oob_discovery::oobid_handler))
+            .route("/oob", delete(oob_discovery::delete_oobid_handler));
+    }
 
     let has_prefix = api_prefix.is_empty() || api_prefix == "/";
 

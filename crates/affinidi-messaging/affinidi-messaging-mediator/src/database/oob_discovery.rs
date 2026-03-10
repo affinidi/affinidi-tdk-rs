@@ -10,7 +10,7 @@
 */
 
 use super::Database;
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use base64::prelude::*;
 use sha256::digest;

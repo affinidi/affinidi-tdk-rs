@@ -90,15 +90,23 @@ can depend on one crate and enable only what you need.
 
 ### [Affinidi Messaging](./crates/affinidi-messaging/)
 
-Secure, private messaging built on the [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) protocol.
+Secure, private messaging built on [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) and [TSP](https://trustoverip.github.io/tswg-tsp-specification/).
 
 | Crate | Description |
 |---|---|
 | [`affinidi-messaging-sdk`](./crates/affinidi-messaging/affinidi-messaging-sdk/) | SDK for integrating Affinidi Messaging into your application |
-| [`affinidi-messaging-didcomm`](./crates/affinidi-messaging/affinidi-messaging-didcomm/) | DIDComm v2 protocol implementation for Rust |
-| [`affinidi-messaging-mediator`](./crates/affinidi-messaging/affinidi-messaging-mediator/) | Mediator & relay service for message routing |
+| [`affinidi-messaging-didcomm`](./crates/affinidi-messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation for Rust |
+| [`affinidi-messaging-core`](./crates/affinidi-messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits |
+| [`affinidi-messaging-mediator`](./crates/affinidi-messaging/affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP via feature flags) |
 | [`affinidi-messaging-helpers`](./crates/affinidi-messaging/affinidi-messaging-helpers/) | Setup tools, environment config, and examples |
 | [`affinidi-messaging-text-client`](./crates/affinidi-messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
+
+### [Trust Spanning Protocol](./crates/affinidi-tsp/)
+
+| Crate | Description |
+|---|---|
+| [`affinidi-tsp`](./crates/affinidi-tsp/) | TSP implementation with HPKE-Auth encryption and CESR encoding |
+| [`affinidi-cesr`](./crates/affinidi-tdk/common/affinidi-cesr/) | CESR codec for binary message encoding |
 
 ### [Affinidi DID Resolver](./crates/affinidi-did-resolver/)
 

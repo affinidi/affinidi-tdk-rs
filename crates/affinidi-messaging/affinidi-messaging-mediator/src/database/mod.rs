@@ -11,6 +11,7 @@ pub mod handlers;
 pub(crate) mod initialization;
 pub mod list;
 pub(crate) mod messages;
+#[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
 pub mod session;
 pub mod stats;

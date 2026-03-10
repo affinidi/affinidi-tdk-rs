@@ -1,22 +1,64 @@
 use crate::{
     SharedData,
     database::session::Session,
-    messages::{MessageHandler, store::store_message},
+    messages::store::store_message,
 };
-use affinidi_messaging_didcomm::{Message, UnpackMetadata, UnpackOptions, envelope::MetaEnvelope};
+#[cfg(feature = "didcomm")]
+use crate::messages::MessageHandler;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_didcomm::message::Message;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
+#[cfg(feature = "didcomm")]
+use crate::didcomm_compat::{self, MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
 };
 use http::StatusCode;
+#[cfg(feature = "didcomm")]
 use sha256::digest;
+#[cfg(feature = "didcomm")]
 use std::time::SystemTime;
 use tracing::{Instrument, debug, span};
 
 use super::{ProcessMessageResponse, WrapperType};
 
 pub(crate) async fn handle_inbound(
+    state: &SharedData,
+    session: &Session,
+    message: &str,
+) -> Result<InboundMessageResponse, MediatorError> {
+    // Try DIDComm first if enabled
+    #[cfg(feature = "didcomm")]
+    {
+        return handle_inbound_didcomm(state, session, message).await;
+    }
+
+    // If only TSP is enabled, we don't support text-based inbound yet
+    #[cfg(not(feature = "didcomm"))]
+    {
+        Err(MediatorError::MediatorError(
+            37,
+            session.session_id.to_string(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "protocol.unsupported".into(),
+                "No protocol handler available for this message format".into(),
+                vec![],
+                None,
+            )),
+            StatusCode::BAD_REQUEST.as_u16(),
+            "No protocol handler available for this message format".to_string(),
+        ))
+    }
+}
+
+#[cfg(feature = "didcomm")]
+async fn handle_inbound_didcomm(
     state: &SharedData,
     session: &Session,
     message: &str,
@@ -53,17 +95,10 @@ pub(crate) async fn handle_inbound(
             Some(to_did) => {
                 if to_did == &state.config.mediator_did {
                     // Message is to the mediator
-                    let (msg, metadata) = match Message::unpack(
-                        &mut envelope,
+                    let (msg, metadata) = match didcomm_compat::unpack(
+                        message,
                         &state.did_resolver,
                         &*state.config.security.mediator_secrets,
-                        &UnpackOptions {
-                            crypto_operations_limit_per_message: state
-                                .config
-                                .limits
-                                .crypto_operations_per_message,
-                            ..UnpackOptions::default()
-                        },
                     )
                     .await
                     {
@@ -268,6 +303,7 @@ pub(crate) async fn handle_inbound(
 }
 
 /// Ensure the Session DID and the message signing DID match
+#[cfg(feature = "didcomm")]
 fn check_session_signing_match(
     session: &Session,
     msg_id: &str,

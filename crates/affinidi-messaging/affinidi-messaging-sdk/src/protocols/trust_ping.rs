@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::SystemTime};
 
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::message::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha256::digest;
@@ -70,15 +70,9 @@ impl TrustPing {
             debug!("Ping message: {:#?}", msg);
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    to_did,
-                    from_did,
-                    from_did,
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, to_did, from_did)
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -128,7 +122,7 @@ impl TrustPing {
         };
 
         let mut msg = Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/trust-ping/2.0/ping".to_owned(),
             json!(TrustPingBody {
                 response_requested: expect_pong
@@ -169,7 +163,7 @@ impl TrustPing {
         };
 
         let mut msg = Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/trust-ping/2.0/ping-response".to_owned(),
             serde_json::Value::Null,
         )

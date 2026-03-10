@@ -1,5 +1,11 @@
 # Affinidi DID Authentication
 
+## 10th March 2026 (0.2.4)
+
+- **MIGRATION:** Migrated to new `affinidi-messaging-didcomm` 0.13.0
+  - Pack/unpack functions updated to use bridge helpers
+  - Import paths changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
+
 ## 15th December 2025 (0.2.3)
 
 - **FEATURE:** Added support for custom authentication handlers via `CustomAuthHandlers`

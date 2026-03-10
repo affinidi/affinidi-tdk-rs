@@ -2,7 +2,8 @@
 //! Must be a administrator to use this protocol
 use std::time::SystemTime;
 
-use affinidi_messaging_didcomm::{Message, UnpackMetadata};
+use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -286,7 +287,7 @@ fn _generate_response_message(
 
     // Build the message
     let response = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/mediator/1.0/admin-management".to_owned(),
         value.to_owned(),
     )

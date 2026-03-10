@@ -4,7 +4,7 @@
  * NOTE: All messages generated from this protocol are ephemeral and are not stored in the database
  * They are fire and forget messages
  */
-use affinidi_messaging_didcomm::{Attachment, Message};
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::{
@@ -215,7 +215,7 @@ async fn generate_status_reply(
 
         // Build the message
         let status_msg = Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/messagepickup/3.0/status".to_owned(),
             json!(status),
         )
@@ -411,7 +411,7 @@ pub(crate) async fn delivery_request(
 
         if !messages.success.is_empty() {
             let response_msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/messagepickup/3.0/delivery".to_string(),
                 json!({"recipient_did": recipient_did}),
             )
@@ -733,7 +733,7 @@ fn _validate_msg(
     };
 
     // Check for extra-header `return_route`
-    if let Some(header) = msg.extra_headers.get("return_route") {
+    if let Some(header) = msg.extra.get("return_route") {
         if header.as_str() != Some("all") {
             debug!(
                 "return_route: extra-header exists. Expected (all) but received ({})",

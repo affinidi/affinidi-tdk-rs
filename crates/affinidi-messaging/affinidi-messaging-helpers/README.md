@@ -53,6 +53,9 @@ Explore the [examples folder](./examples/) for available examples, including:
 - `mediator_ping` — Send a trust ping to the mediator
 - Sending and receiving messages
 - Message pickup
+- `protocol_comparison` — Benchmark comparing TSP vs DIDComm message packing
+- `unified_messaging` — Demonstrates messaging-core trait abstraction across
+  protocols
 
 ## Related Crates
 

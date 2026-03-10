@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+## 10th March 2026
+
+### 0.12.2
+
+- **CHORE:** Updated import paths (`affinidi_didcomm` → `affinidi_messaging_didcomm`)
+
 ## 5th March 2026
 
 ### 0.12.1

@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use affinidi_messaging_didcomm::MessageBuilder;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::ATM;
 use serde_json::json;
 use tracing::warn;
@@ -42,9 +42,9 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
 
     // Create the message
     let id = Uuid::new_v4().to_string();
-    let msg = MessageBuilder::new(
+    let msg = Message::build(
         id.clone(),
-        "https://affinidi.com/atm/client-actions/chat-message".into(),
+        "https://affinidi.com/atm/client-actions/chat-message".to_string(),
         json!({"text": chat_msg}),
     )
     .from(our_did.to_string())
@@ -59,8 +59,8 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
     .finalize();
 
     // Pack the message
-    let (packed, packed_meta) = match atm
-        .pack_encrypted(&msg, remote_did, Some(our_did), Some(our_did), None)
+    let (packed, _packed_meta) = match atm
+        .pack_encrypted(&msg, remote_did, Some(our_did), Some(our_did))
         .await
     {
         Ok(packed) => packed,
@@ -74,32 +74,6 @@ pub(crate) async fn send_message(state: &mut State, atm: &ATM, chat_msg: &str) {
         warn!("Couldn't get mutable chat({})", &chat.name);
         return;
     };
-
-    if let Some(forwarded) = packed_meta.messaging_service
-        && forwarded.routing_keys.contains(&mediator_did.to_string())
-    {
-        // Already forwarded
-        match atm
-            .send_message(&our_profile, &packed, &id, false, false)
-            .await
-        {
-            Ok(_) => {
-                // Update the chat with the new message
-                mut_chat.messages.push(ChatMessage::new(
-                    ChatMessageType::Outbound,
-                    chat_msg.to_string(),
-                ));
-            }
-            Err(e) => {
-                mut_chat.messages.push(ChatMessage::new(
-                    ChatMessageType::Error,
-                    chat_msg.to_string(),
-                ));
-                warn!("Failed to send message: {}", e);
-            }
-        }
-        return;
-    }
 
     // Forward wrap and send the message
     match atm

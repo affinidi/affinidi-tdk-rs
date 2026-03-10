@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-mediator"
 version = "0.12.2"
-description = "DIDComm Mediator service for Affinidi Messaging"
+description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -16,10 +16,22 @@ repository.workspace = true
 name = "mediator"
 path = "src/main.rs"
 
+[features]
+default = ["didcomm"]
+didcomm = [
+    "dep:affinidi-messaging-didcomm",
+    "dep:affinidi-encoding",
+]
+tsp = [
+    "dep:affinidi-tsp",
+]
+
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = "0.15"
-affinidi-messaging-didcomm = "0.12"
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", optional = true }
+affinidi-tsp = { path = "../../affinidi-tsp", optional = true }
+affinidi-encoding = { version = "0.1", optional = true }
 affinidi-messaging-mediator-processors = { version = "0.12.1", path = "affinidi-messaging-mediator-processors" }
 affinidi-messaging-mediator-common = { version = "0.12.1", path = "affinidi-messaging-mediator-common" }
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }

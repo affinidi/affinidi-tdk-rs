@@ -4,7 +4,7 @@
 
 use std::time::SystemTime;
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use serde_json::json;
@@ -35,18 +35,18 @@ pub(crate) fn generate_error_response(
         .as_secs();
 
     // Build the message
-    let error_msg = Message::build(
-        Uuid::new_v4().into(),
+    let mut error_msg = Message::build(
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/report-problem/2.0/problem-report".to_owned(),
         json!(problem),
     )
     .pthid(thid.to_owned())
     .to(session.did.clone())
-    .header("ack".into(), json!([thid.to_owned()]))
     .from(state.config.mediator_did.clone())
     .created_time(now)
     .expires_time(now + 300)
     .finalize();
+    error_msg.extra.insert("ack".into(), json!([thid.to_owned()]));
 
     Ok(ProcessMessageResponse {
         store_message,

@@ -1,5 +1,5 @@
 use crate::{SharedData, database::session::Session};
-use affinidi_messaging_didcomm::UnpackMetadata;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     Folder, GenericDataStruct, MessageList,

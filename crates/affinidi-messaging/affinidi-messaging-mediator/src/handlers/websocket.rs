@@ -4,7 +4,10 @@ use crate::{
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };
-use affinidi_messaging_didcomm::{Message as DidcommMessage, PackEncryptedOptions};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_didcomm::message::Message as DidcommMessage;
+#[cfg(feature = "didcomm")]
+use crate::didcomm_compat;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
@@ -138,6 +141,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                             debug!("Error processing message: {:?}", e);
 
                                             // Send a problem report to the sender
+                                            #[cfg(feature = "didcomm")]
                                             match e {
                                                 MediatorError::MediatorError(_, _, msg_id, problem_report, _, log_message) => {
                                                     match  _package_problem_report(&state, &session, msg_id, *problem_report).await {
@@ -156,6 +160,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                                     warn!("Error processing message: {:?}", e);
                                                 }
                                             }
+                                            #[cfg(not(feature = "didcomm"))]
+                                            warn!("Error processing message: {:?}", e);
 
                                             continue;
                                         }
@@ -212,6 +218,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                 let _ = socket.send(Message::Text(msg.into())).await;
                             },
                             WebSocketCommands::Close => {
+                                #[cfg(feature = "didcomm")]
                                 if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await {
                                    let _ = socket.send(Message::Text(msg.into())).await;
                                 }
@@ -253,6 +260,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 }
 
 /// Generates a problem report for a duplicate websocket connection
+#[cfg(feature = "didcomm")]
 fn _generate_duplicate_connection_problem_report() -> ProblemReport {
     ProblemReport::new(
         ProblemReportSorter::Warning,
@@ -266,6 +274,7 @@ fn _generate_duplicate_connection_problem_report() -> ProblemReport {
 }
 
 /// Takes a problem report and packages it for sending to the recipient
+#[cfg(feature = "didcomm")]
 async fn _package_problem_report(
     state: &SharedData,
     session: &Session,
@@ -290,18 +299,12 @@ async fn _package_problem_report(
         pr_msg = pr_msg.pthid(msg_id);
     }
 
-    let (packed, _) = pr_msg
-        .finalize()
-        .pack_encrypted(
+    let (packed, _) = didcomm_compat::pack_encrypted(
+            &pr_msg.finalize(),
             &session.did,
-            Some(&state.config.mediator_did),
             Some(&state.config.mediator_did),
             &state.did_resolver,
             &*state.config.security.mediator_secrets,
-            &PackEncryptedOptions {
-                to_kids_limit: state.config.limits.to_keys_per_recipient,
-                ..PackEncryptedOptions::default()
-            },
         )
         .await
         .map_err(|err| {

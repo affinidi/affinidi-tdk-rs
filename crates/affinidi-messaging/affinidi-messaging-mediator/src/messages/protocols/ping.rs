@@ -1,6 +1,6 @@
 use std::time::SystemTime;
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
@@ -143,7 +143,7 @@ pub(crate) fn process(
 
         // Build the message (we swap from and to)
         let response_msg = Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/trust-ping/2.0/ping".to_owned(),
             json!({}),
         )

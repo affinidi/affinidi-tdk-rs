@@ -10,7 +10,9 @@ use crate::{
     },
 };
 use affinidi_did_common::{Document, service::Endpoint};
-use affinidi_messaging_didcomm::{AttachmentData, Message, UnpackMetadata, envelope::MetaEnvelope};
+use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
+use crate::didcomm_compat::MetaEnvelope;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -41,7 +43,7 @@ pub(crate) async fn process(
         session_id = session.session_id.as_str()
     );
     async move {
-        let ephemeral = if let Some(ephemeral) = msg.extra_headers.get("ephemeral") {
+        let ephemeral = if let Some(ephemeral) = msg.extra.get("ephemeral") {
             match ephemeral.as_bool() {
                 Some(true) => true,
                 Some(false) => false,
@@ -431,7 +433,7 @@ pub(crate) async fn process(
         }
 
         // Check if a delay has been specified and if so, is it longer than we allow?
-        let delay_milli = if let Some(delay_milli) = msg.extra_headers.get("delay_milli") {
+        let delay_milli = if let Some(delay_milli) = msg.extra.get("delay_milli") {
             debug!("forward delay requested: ({:?})", delay_milli);
             delay_milli.as_i64().unwrap_or(0)
         } else {
@@ -469,9 +471,8 @@ pub(crate) async fn process(
         //if next_did_doc.service
 
         let attachment = attachments.first().unwrap();
-        let data = match attachment.data {
-            AttachmentData::Base64 { ref value } => {
-                match BASE64_URL_SAFE_NO_PAD.decode(&value.base64) {
+        let data = if let Some(ref b64) = attachment.data.base64 {
+                match BASE64_URL_SAFE_NO_PAD.decode(b64) {
                     Ok(data) => match String::from_utf8(data) {
                         Ok(data) => data,
                         Err(e) => {
@@ -510,9 +511,8 @@ pub(crate) async fn process(
                         ));
                     }
                 }
-            }
-            AttachmentData::Json { ref value } => {
-                if value.jws.is_some() {
+        } else if let Some(ref json_val) = attachment.data.json {
+                if attachment.data.jws.is_some() {
                     // TODO: Implement JWS verification
                     return Err(MediatorError::MediatorError(
                         66,
@@ -532,7 +532,7 @@ pub(crate) async fn process(
                             .to_string(),
                     ));
                 } else {
-                    match serde_json::to_string(&value.json) {
+                    match serde_json::to_string(json_val) {
                         Ok(data) => data,
                         Err(e) => {
                             return Err(MediatorError::MediatorError(
@@ -545,20 +545,19 @@ pub(crate) async fn process(
                                     "protocol.forwarding.attachments.json.invalid".into(),
                                     "JSON schema for attachment is incorrect: JSON({1}) Error: {2}"
                                         .into(),
-                                    vec![value.json.to_string(), e.to_string()],
+                                    vec![json_val.to_string(), e.to_string()],
                                     None,
                                 )),
                                 StatusCode::BAD_REQUEST.as_u16(),
                                 format!(
                                     "JSON schema for attachment is incorrect: JSON({}) Error: {}",
-                                    value.json, e
+                                    json_val, e
                                 ),
                             ));
                         }
                     }
                 }
-            }
-            AttachmentData::Links { .. } => {
+        } else if attachment.data.links.is_some() {
                 return Err(MediatorError::MediatorError(
                     66,
                     session.session_id.clone(),
@@ -574,7 +573,22 @@ pub(crate) async fn process(
                     StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     "Feature is not implemented by the mediator: Attachment Links".to_string(),
                 ));
-            }
+        } else {
+                return Err(MediatorError::MediatorError(
+                    67,
+                    session.session_id.clone(),
+                    Some(msg.id.to_string()),
+                    Box::new(ProblemReport::new(
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.forwarding.attachments.unknown".into(),
+                        "Attachment data format is not supported".into(),
+                        vec![],
+                        None,
+                    )),
+                    StatusCode::BAD_REQUEST.as_u16(),
+                    "Attachment data format is not supported".to_string(),
+                ));
         };
 
         let expires_at = if let Some(expires_at) = msg.expires_time {

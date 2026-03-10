@@ -8,6 +8,7 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
 use axum_server::tls_rustls::RustlsConfig;
@@ -128,6 +129,7 @@ pub async fn start() {
         .unwrap();
 
     // Create the Discover Feature Protocol set for the mediator
+    #[cfg(feature = "didcomm")]
     let discover_features = Arc::new(DiscoverFeatures {
         protocols: vec![
             "https://didcomm.org/discover-features/2.0".to_string(),
@@ -151,6 +153,7 @@ pub async fn start() {
         did_resolver,
         database,
         streaming_task,
+        #[cfg(feature = "didcomm")]
         discover_features,
     };
 

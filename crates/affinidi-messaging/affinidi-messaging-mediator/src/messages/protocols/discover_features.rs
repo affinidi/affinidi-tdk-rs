@@ -3,7 +3,7 @@ use crate::{
     database::session::Session,
     messages::{ProcessMessageResponse, WrapperType},
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,

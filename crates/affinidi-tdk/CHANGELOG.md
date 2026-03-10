@@ -1,5 +1,10 @@
 # Affinidi TDK Changelog
 
+## 10th March 2026
+
+- **CHORE:** Updated `affinidi-messaging-didcomm` re-export to 0.13.0
+  - Import path changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
+
 ## 3rd March 2026
 
 - **MAINTENANCE:** Updated `affinidi-data-integrity` dependency from 0.3 to 0.4

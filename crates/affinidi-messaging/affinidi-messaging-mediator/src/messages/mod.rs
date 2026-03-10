@@ -1,35 +1,52 @@
+#[cfg(feature = "didcomm")]
 use self::protocols::ping;
-use crate::{SharedData, database::session::Session, messages::protocols::discover_features};
+use crate::{SharedData, database::session::Session};
+#[cfg(feature = "didcomm")]
+use crate::messages::protocols::discover_features;
+#[cfg(feature = "didcomm")]
 use affinidi_did_common::service::Endpoint;
+#[cfg(feature = "didcomm")]
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{
-    Message, PackEncryptedMetadata, PackEncryptedOptions, UnpackMetadata,
-};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_didcomm::message::Message;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::{PackEncryptedMetadata, UnpackMetadata};
+#[cfg(feature = "didcomm")]
+use crate::didcomm_compat;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
     known::MessageType as SDKMessageType,
     problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
 };
+#[cfg(feature = "didcomm")]
 use affinidi_secrets_resolver::SecretsResolver;
+#[cfg(feature = "didcomm")]
 use ahash::AHashSet as HashSet;
 use http::StatusCode;
+#[cfg(feature = "didcomm")]
 use protocols::{
     mediator::{accounts, acls, administration},
     message_pickup, routing,
 };
+#[cfg(feature = "didcomm")]
 use serde_json::Value;
+#[cfg(feature = "didcomm")]
 use std::time::SystemTime;
 
+#[cfg(feature = "didcomm")]
 pub mod error_response;
 pub mod inbound;
+#[cfg(feature = "didcomm")]
 pub mod protocols;
 pub(crate) mod store;
 
+#[cfg(feature = "didcomm")]
 struct MessageType(SDKMessageType);
 
 /// Helps with parsing the message type and handling higher level protocols.
 /// NOTE:
 ///   Not all Message Types need to be handled as a protocol.
+#[cfg(feature = "didcomm")]
 impl MessageType {
     pub(crate) async fn process(
         &self,
@@ -177,6 +194,7 @@ impl MessageType {
 pub enum WrapperType {
     /// to_did, message, expires_at
     Envelope(String, String, u64),
+    #[cfg(feature = "didcomm")]
     Message(Box<Message>),
     #[default]
     None,
@@ -190,6 +208,7 @@ pub(crate) struct ProcessMessageResponse {
 }
 
 /// Options for packing a message
+#[cfg(feature = "didcomm")]
 #[derive(Debug)]
 pub struct PackOptions {
     /// Protects against DoS attacks by limiting the number of keys per recipient
@@ -198,6 +217,7 @@ pub struct PackOptions {
     pub forward: bool,
 }
 
+#[cfg(feature = "didcomm")]
 impl Default for PackOptions {
     fn default() -> Self {
         PackOptions {
@@ -207,6 +227,7 @@ impl Default for PackOptions {
     }
 }
 
+#[cfg(feature = "didcomm")]
 pub(crate) trait MessageHandler {
     /// Processes an incoming message, determines any additional actions to take
     /// Returns a message to store and deliver if necessary
@@ -234,6 +255,7 @@ pub(crate) trait MessageHandler {
         S: SecretsResolver;
 }
 
+#[cfg(feature = "didcomm")]
 impl MessageHandler for Message {
     async fn process(
         &self,
@@ -241,7 +263,7 @@ impl MessageHandler for Message {
         session: &Session,
         metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError> {
-        let msg_type = MessageType(self.type_.as_str().parse::<SDKMessageType>().map_err(
+        let msg_type = MessageType(self.typ.as_str().parse::<SDKMessageType>().map_err(
             |err| {
                 MediatorError::MediatorError(
                     30,
@@ -252,11 +274,11 @@ impl MessageHandler for Message {
                         ProblemReportScope::Protocol,
                         "message.type.incorrect".into(),
                         "Unexpected message type: {1}: Error: {2}".into(),
-                        vec![self.type_.to_string(), err.to_string()],
+                        vec![self.typ.to_string(), err.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Unexpected message type: {} Error: {}", self.type_, err),
+                    format!("Unexpected message type: {} Error: {}", self.typ, err),
                 )
             },
         )?);
@@ -361,18 +383,12 @@ impl MessageHandler for Message {
 
         if metadata.encrypted {
             // Respond with an encrypted message
-            let a = match self
-                .pack_encrypted(
+            let a = match didcomm_compat::pack_encrypted(
+                    self,
                     to_did,
                     self.from.as_deref(),
-                    Some(mediator_did),
                     did_resolver,
                     secrets_resolver,
-                    &PackEncryptedOptions {
-                        to_kids_limit: pack_options.to_keys_per_recipient_limit,
-                        forward: forward_loopback,
-                        ..PackEncryptedOptions::default()
-                    },
                 )
                 .await
             {

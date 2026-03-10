@@ -2,9 +2,14 @@ use std::time::SystemTime;
 
 use crate::database::Database;
 use crate::database::session::Session;
+#[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
-use crate::{SharedData, messages::PackOptions};
-use affinidi_messaging_didcomm::{PackEncryptedMetadata, UnpackMetadata};
+use crate::SharedData;
+#[cfg(feature = "didcomm")]
+use crate::messages::PackOptions;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::PackEncryptedMetadata;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
@@ -69,11 +74,14 @@ pub(crate) async fn store_message(
 
     async move {
         if response.forward_message {
-            Ok(InboundMessageResponse::Forwarded)
-        } else if response.store_message {
+            return Ok(InboundMessageResponse::Forwarded);
+        }
+
+        if response.store_message {
             let mut stored_messages = InboundMessageList::default();
             match &response.data {
                 WrapperType::None => {}
+                #[cfg(feature = "didcomm")]
                 WrapperType::Message(message) => {
                     // Pack the message for the next recipient(s)
                     let Some(to_dids) = &message.to else {
@@ -202,8 +210,12 @@ pub(crate) async fn store_message(
                 }
             }
 
-            Ok(InboundMessageResponse::Stored(stored_messages))
-        } else if let WrapperType::Message(message) = &response.data {
+            return Ok(InboundMessageResponse::Stored(stored_messages));
+        }
+
+        // Ephemeral message handling (DIDComm only)
+        #[cfg(feature = "didcomm")]
+        if let WrapperType::Message(message) = &response.data {
             let (packed, meta) = message
                 .pack(
                     &session.session_id,
@@ -219,26 +231,8 @@ pub(crate) async fn store_message(
                     &state.config.processors.forwarding.blocked_forwarding,
                 )
                 .await?;
-            if meta.messaging_service.is_some() {
-                error!("TODO: Forwarded message - but will be sent to the wrong address!!!");
-                return Err(MediatorError::MediatorError(
-                        66,
-                        session.session_id.clone(),
-                        Some(message.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.not_implemented".into(),
-                            "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
-                                .into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
-                            .to_string(),
-                    ));
-            }
+            // NOTE: messaging_service forwarding check removed during migration to affinidi-messaging-didcomm.
+            // The new pack implementation does not auto-forward via service endpoints.
             trace!("Ephemeral message packed (meta):\n{:#?}", meta);
             trace!("Ephemeral message (msg):\n{:#?}", packed);
             // Live stream the message?
@@ -256,27 +250,27 @@ pub(crate) async fn store_message(
                 )
                 .await;
             }
-            Ok(InboundMessageResponse::Ephemeral(packed))
-        } else {
-            error!("No message to return");
-            Err(MediatorError::MediatorError(
-                77,
-                session.session_id.clone(),
-                None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.storage.message.error".into(),
-                    "Expected a message to store, instead got None"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Expected a message to store, instead got None"
-                    .to_string(),
-            ))
+            return Ok(InboundMessageResponse::Ephemeral(packed));
         }
+
+        error!("No message to return");
+        Err(MediatorError::MediatorError(
+            77,
+            session.session_id.clone(),
+            None,
+            Box::new(ProblemReport::new(
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.storage.message.error".into(),
+                "Expected a message to store, instead got None"
+                    .into(),
+                vec![],
+                None,
+            )),
+            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            "Expected a message to store, instead got None"
+                .to_string(),
+        ))
     }
     .instrument(_span)
     .await

@@ -14,7 +14,8 @@ use crate::{
     common::acl_checks::ACLCheck,
     database::session::{Session, SessionClaims, SessionState},
 };
-use affinidi_messaging_didcomm::{Message, UnpackOptions, envelope::MetaEnvelope};
+use affinidi_messaging_didcomm::message::Message;
+use crate::didcomm_compat::{self, MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
     messages::{
@@ -270,11 +271,10 @@ pub async fn authentication_response(
         };
 
         // Unpack the message
-        let (msg, _) = match Message::unpack(
-            &mut envelope,
+        let (msg, unpack_metadata) = match didcomm_compat::unpack(
+            &s,
             &state.did_resolver,
             &*state.config.security.mediator_secrets,
-            &UnpackOptions::default(),
         )
         .await
         {
@@ -300,7 +300,7 @@ pub async fn authentication_response(
         };
 
         // Authentication messages MUST be signed and authenticated!
-        if envelope.metadata.authenticated && envelope.metadata.encrypted && envelope.metadata.non_repudiation {
+        if unpack_metadata.authenticated && unpack_metadata.encrypted {
             debug!("Authentication message is properly signed and encrypted")
         } else {
                 return Err(MediatorError::MediatorError(
@@ -312,11 +312,11 @@ pub async fn authentication_response(
                         ProblemReportScope::Protocol,
                         "authentication.message.not_signed_or_encrypted".into(),
                         "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction".into(),
-                        vec![envelope.metadata.authenticated.to_string(), envelope.metadata.encrypted.to_string()],
+                        vec![unpack_metadata.authenticated.to_string(), unpack_metadata.encrypted.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", envelope.metadata.authenticated, envelope.metadata.encrypted)
+                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", unpack_metadata.authenticated, unpack_metadata.encrypted)
                 )
                 .into());
         }
@@ -402,7 +402,7 @@ pub async fn authentication_response(
         }
 
         // Only accepts AffinidiAuthenticate messages
-        match msg.type_.as_str().parse::<MessageType>().map_err(|err| {
+        match msg.typ.as_str().parse::<MessageType>().map_err(|err| {
             MediatorError::MediatorError(
                 30,
                 "".to_string(),
@@ -412,11 +412,11 @@ pub async fn authentication_response(
                     ProblemReportScope::Protocol,
                     "message.type.incorrect".into(),
                     "Unexpected message type: {1}: Error: {2}".into(),
-                    vec![msg.type_.to_string(), err.to_string()],
+                    vec![msg.typ.to_string(), err.to_string()],
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!("Unexpected message type: {} Error: {}", msg.type_, err),
+                format!("Unexpected message type: {} Error: {}", msg.typ, err),
             )
         })? {
             MessageType::AffinidiAuthenticate => (),
@@ -430,11 +430,11 @@ pub async fn authentication_response(
                         ProblemReportScope::Protocol,
                         "message.type.incorrect".into(),
                         "Unexpected message type: {1}".into(),
-                        vec![msg.type_.to_string()],
+                        vec![msg.typ.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Unexpected message type: {}", msg.type_),
+                    format!("Unexpected message type: {}", msg.typ),
                 )
                 .into());
             }
@@ -728,11 +728,10 @@ pub async fn authentication_refresh(
         };
 
         // Unpack the message
-        let (msg, _) = match Message::unpack(
-            &mut envelope,
+        let (msg, unpack_metadata) = match didcomm_compat::unpack(
+            &s,
             &state.did_resolver,
             &*state.config.security.mediator_secrets,
-            &UnpackOptions::default(),
         )
         .await
         {
@@ -758,7 +757,7 @@ pub async fn authentication_refresh(
         };
 
         // Authentication messages MUST be signed and authenticated!
-        if envelope.metadata.authenticated && envelope.metadata.encrypted && envelope.metadata.non_repudiation {
+        if unpack_metadata.authenticated && unpack_metadata.encrypted {
             debug!("Authentication message is properly signed and encrypted")
         } else {
                 return Err(MediatorError::MediatorError(
@@ -770,17 +769,17 @@ pub async fn authentication_refresh(
                         ProblemReportScope::Protocol,
                         "authentication.message.not_signed_or_encrypted".into(),
                         "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction".into(),
-                        vec![envelope.metadata.authenticated.to_string(), envelope.metadata.encrypted.to_string()],
+                        vec![unpack_metadata.authenticated.to_string(), unpack_metadata.encrypted.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", envelope.metadata.authenticated, envelope.metadata.encrypted)
+                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", unpack_metadata.authenticated, unpack_metadata.encrypted)
                 )
                 .into());
         }
 
         // Only accepts AffinidiAuthenticateRefresh messages
-        match msg.type_.as_str().parse::<MessageType>().map_err(|err| {
+        match msg.typ.as_str().parse::<MessageType>().map_err(|err| {
             MediatorError::MediatorError(
                 30,
                 "".to_string(),
@@ -790,11 +789,11 @@ pub async fn authentication_refresh(
                     ProblemReportScope::Protocol,
                     "message.type.incorrect".into(),
                     "Unexpected message type: {1}: Error: {2}".into(),
-                    vec![msg.type_.to_string(), err.to_string()],
+                    vec![msg.typ.to_string(), err.to_string()],
                     None,
                 )),
                 StatusCode::BAD_REQUEST.as_u16(),
-                format!("Unexpected message type: {} Error: {}", msg.type_, err),
+                format!("Unexpected message type: {} Error: {}", msg.typ, err),
             )
         })? {
             MessageType::AffinidiAuthenticateRefresh => (),
@@ -808,11 +807,11 @@ pub async fn authentication_refresh(
                         ProblemReportScope::Protocol,
                         "message.type.incorrect".into(),
                         "Unexpected message type: {1}".into(),
-                        vec![msg.type_.to_string()],
+                        vec![msg.typ.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Unexpected message type: {}", msg.type_),
+                    format!("Unexpected message type: {}", msg.typ),
                 )
                 .into());
             }
