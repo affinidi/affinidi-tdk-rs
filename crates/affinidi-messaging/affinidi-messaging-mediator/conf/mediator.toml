@@ -363,6 +363,40 @@ report_errors = "${PROCESSOR_FORWARDING_REPORT_ERRORS:true}"
 ### Format: ["did_1", "did_2"]
 blocked_forwarding_dids = "${PROCESSOR_FORWARDING_BLOCKED_DIDS:[]}"
 
+### rate_window_seconds: Sliding window in seconds for tracking message rate per remote endpoint
+### Used to decide REST vs WebSocket transport for external forwarding
+### Default: 300 (5 minutes)
+rate_window_seconds = "${PROCESSOR_FORWARDING_RATE_WINDOW:300}"
+
+### ws_threshold_msgs_per_10s: If messages per 10 seconds >= this threshold, prefer WebSocket
+### Default: 1 (1 message per 10 seconds triggers WebSocket preference)
+ws_threshold_msgs_per_10s = "${PROCESSOR_FORWARDING_WS_THRESHOLD:1}"
+
+### ws_idle_timeout_seconds: Seconds of idle time before disconnecting a WebSocket to a remote mediator
+### Default: 60 (1 minute)
+ws_idle_timeout_seconds = "${PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT:60}"
+
+### batch_size: Number of messages to read per batch from the forwarding queue
+### Default: 50
+batch_size = "${PROCESSOR_FORWARDING_BATCH_SIZE:50}"
+
+### max_retries: Maximum number of retry attempts for failed forwarding to a remote mediator
+### Default: 5
+max_retries = "${PROCESSOR_FORWARDING_MAX_RETRIES:5}"
+
+### initial_backoff_ms: Initial backoff delay in milliseconds for retry
+### Default: 1000 (1 second)
+initial_backoff_ms = "${PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS:1000}"
+
+### max_backoff_ms: Maximum backoff delay in milliseconds for retry
+### Default: 60000 (1 minute)
+max_backoff_ms = "${PROCESSOR_FORWARDING_MAX_BACKOFF_MS:60000}"
+
+### consumer_group: Redis consumer group name for forwarding processors
+### All processors sharing the same group name will coordinate message distribution
+### Default: "forwarding"
+consumer_group = "${PROCESSOR_FORWARDING_CONSUMER_GROUP:forwarding}"
+
 [processors.message_expiry_cleanup]
 ### enabled: If true, the message expiry cleanup processor is enabled within the mediator locally
 ### Default: true

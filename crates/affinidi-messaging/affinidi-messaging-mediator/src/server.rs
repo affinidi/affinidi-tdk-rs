@@ -3,7 +3,11 @@ use crate::{
     common::config::init,
     database::Database,
     handlers::{application_routes, health_checker_handler},
-    tasks::{statistics::statistics, websocket_streaming::StreamingTask},
+    tasks::{
+        forwarding_processor::ForwardingProcessor,
+        statistics::statistics,
+        websocket_streaming::StreamingTask,
+    },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
@@ -108,6 +112,18 @@ pub async fn start() {
                 .start()
                 .await
                 .expect("Error starting message expiry cleanup processor");
+        });
+    }
+
+    // Start the forwarding processor if enabled
+    if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
+        let _database = database.clone();
+        let _config = config.processors.forwarding.clone();
+        tokio::spawn(async move {
+            let processor = ForwardingProcessor::new(_config, _database);
+            if let Err(e) = processor.start().await {
+                event!(Level::ERROR, "Forwarding processor error: {}", e);
+            }
         });
     }
 

@@ -1,0 +1,25 @@
+[database]
+database_url = "redis://127.0.0.1/"
+database_pool_size = 10
+database_timeout = 2
+
+[processors.forwarding]
+enabled = true
+# Sliding window in seconds for tracking message rate per endpoint
+rate_window_seconds = 300
+# If rate >= this threshold (msgs per 10 seconds), prefer WebSocket
+ws_threshold_msgs_per_10s = 1
+# Idle timeout before closing WebSocket connections (seconds)
+ws_idle_timeout_seconds = 60
+# Number of messages to read per batch from FORWARD_Q
+batch_size = 50
+# Maximum retry attempts before abandoning a message
+max_retries = 5
+# Initial backoff delay (ms) for retries
+initial_backoff_ms = 1000
+# Maximum backoff delay (ms)
+max_backoff_ms = 60000
+# Redis consumer group name (all processors in same group coordinate)
+consumer_group = "forwarding"
+# Send problem reports to senders on forwarding failure
+report_errors = true

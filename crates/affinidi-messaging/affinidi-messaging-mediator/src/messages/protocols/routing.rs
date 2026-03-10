@@ -1,15 +1,15 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
     SharedData,
-    database::session::Session,
+    database::{forwarding::ForwardQueueEntry, session::Session},
     messages::{
         ProcessMessageResponse, WrapperType,
         error_response::generate_error_response,
         store::{store_forwarded_message, store_message},
     },
 };
-use affinidi_did_common::{Document, service::Endpoint};
+use affinidi_did_common::Document;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use crate::didcomm_compat::MetaEnvelope;
@@ -22,7 +22,7 @@ use base64::prelude::*;
 use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
-use tracing::{Instrument, debug, span, warn};
+use tracing::{Instrument, debug, info, span, warn};
 
 // Reads the body of an incoming forward message
 #[derive(Default, Deserialize)]
@@ -671,15 +671,95 @@ pub(crate) async fn process(
                     debug!("Live streaming message to UUID: {}", stream_uuid);
                 }
         } else {
-            store_forwarded_message(
-                state,
-                session,
-                &data,
-                Some(&from_account.did_hash),
-                &next,
-                Some(expires_at),
-            )
-            .await?;
+            // Determine if the next hop is local or remote by resolving the DID Document
+            let remote_endpoint = if state.config.processors.forwarding.external_forwarding {
+                match state.did_resolver.resolve(&next).await {
+                    Ok(resolve_response) => {
+                        match service_endpoint_for_remote(state, &resolve_response.doc) {
+                            Some(endpoint_url) => {
+                                debug!(
+                                    "Next hop ({}) is remote, endpoint: {}",
+                                    next, endpoint_url
+                                );
+                                Some(endpoint_url)
+                            }
+                            None => {
+                                debug!("Next hop ({}) is local to this mediator", next);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Can't resolve the DID — treat as local (store normally)
+                        warn!(
+                            "Couldn't resolve DID document for {}: {}. Treating as local.",
+                            next, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some(endpoint_url) = remote_endpoint {
+                // Remote destination — enqueue to FORWARD_Q for the forwarding processor
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis();
+
+                // Get the sender's full DID for problem reports
+                let from_did = msg.from.clone().unwrap_or_default();
+
+                let entry = ForwardQueueEntry {
+                    stream_id: String::new(), // Set by Redis on XADD
+                    message: data.clone(),
+                    to_did_hash: next_did_hash.clone(),
+                    from_did_hash: from_account.did_hash.clone(),
+                    from_did,
+                    to_did: next.clone(),
+                    endpoint_url: endpoint_url.clone(),
+                    received_at_ms: now_ms,
+                    delay_milli,
+                    expires_at,
+                    retry_count: 0,
+                };
+
+                state.database.forward_queue_enqueue(&entry).await.map_err(|e| {
+                    MediatorError::MediatorError(
+                        90,
+                        session.session_id.clone(),
+                        Some(msg.id.to_string()),
+                        Box::new(ProblemReport::new(
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.forwarding.enqueue".into(),
+                            "Failed to enqueue message for remote forwarding: {1}".into(),
+                            vec![e.to_string()],
+                            None,
+                        )),
+                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        format!("Failed to enqueue message for remote forwarding: {e}"),
+                    )
+                })?;
+
+                info!(
+                    "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
+                    next_did_hash, from_account.did_hash, endpoint_url
+                );
+            } else {
+                // Local destination — store as before
+                store_forwarded_message(
+                    state,
+                    session,
+                    &data,
+                    Some(&from_account.did_hash),
+                    &next,
+                    Some(expires_at),
+                )
+                .await?;
+            }
         }
 
         Ok(ProcessMessageResponse {
@@ -693,98 +773,39 @@ pub(crate) async fn process(
     .await
 }
 
-/// Determines if the next hop is local to the mediator or remote
-/// The next field of a routing message is a DID
-/// https://identity.foundation/didcomm-messaging/spec/#routing-protocol-20
-/// - next: DID (may include key ID) of the next hop
-/// - next_doc: Resolved DID Document of the next hop
+/// Checks if the next hop's DID Document contains a DIDCommMessaging service
+/// that points to a different mediator (remote endpoint).
 ///
-/*
-{
-    "id": "did:example:123456789abcdefghi#didcomm-1",
-    "type": "DIDCommMessaging",
-    "serviceEndpoint": [{
-        "uri": "https://example.com/path",
-        "accept": [
-            "didcomm/v2",
-            "didcomm/aip2;env=rfc587"
-        ],
-        "routingKeys": ["did:example:somemediator#somekey"]
-    }]
-}
-*/
-fn _service_local(
-    session: &Session,
-    state: &SharedData,
-    next: &str,
-    next_doc: &Document,
-    msg_id: &str,
-) -> Result<bool, MediatorError> {
-    let mut _error = None;
-
-    // If the next hop is the mediator itself, then this is a recursive forward
-    if next == state.config.mediator_did {
-        warn!(
-            "next hop is the mediator itself, but this should have been unpacked. not accepting this message"
-        );
-        return Err(MediatorError::MediatorError(
-            70,
-            session.session_id.clone(),
-            Some(msg_id.to_string()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "protocol.forwarding.next.mediator.self".into(),
-                "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::FORBIDDEN.as_u16(),
-            "Forwarded next hop is the same mediator. Not allowed due to creating loops"
-                .to_string(),
-        ));
-    }
-
-    let local = next_doc
-        .service
-        .iter()
-        .filter(|s| s.type_.contains(&"DIDCommMessaging".to_string()))
-        .any(|s| {
-            // Service Type is DIDCommMessaging
-                    match &s.service_endpoint {
-                        Endpoint::Url(uri) => {
-                            if uri.as_str().eq(&state.config.mediator_did) {
-                                warn!("next hop is the mediator itself, but this should have been unpacked. not accepting this message");
-                                _error = Some(MediatorError::MediatorError(
-                                    70,
-                                    session.session_id.clone(),
-                                    Some(msg_id.to_string()),
-                                    Box::new(ProblemReport::new(
-                                        ProblemReportSorter::Warning,
-                                        ProblemReportScope::Message,
-                                        "protocol.forwarding.next.mediator.self".into(),
-                                        "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
-                                        vec![],
-                                        None,
-                                    )),
-                                    StatusCode::FORBIDDEN.as_u16(),
-                                    "Forwarded next hop is the same mediator. Not allowed due to creating loops"
-                                        .to_string(),
-                                ));
-                                false
-                            } else {
-                                // Next hop is remote to the mediator
-                                false
-                            }
-                        }
-                        Endpoint::Map(_) => {true}
-                    }
+/// Returns `Some(endpoint_url)` if the next hop should be forwarded to a remote mediator,
+/// or `None` if the next hop is local to this mediator.
+///
+/// A DIDCommMessaging service with a `uri` field pointing to this mediator's DID
+/// means the recipient uses this mediator — so it's local.
+/// A `uri` pointing elsewhere (an HTTP/HTTPS URL) means the message should be
+/// forwarded to that remote mediator endpoint.
+fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Option<String> {
+    for service in &next_doc.service {
+        if !service.type_.contains(&"DIDCommMessaging".to_string()) {
+            continue;
         }
-                );
 
-    if let Some(e) = _error {
-        Err(e)
-    } else {
-        Ok(local)
+        let uris = service.service_endpoint.get_uris();
+        for uri in &uris {
+            // Strip surrounding quotes if present (from JSON serialization)
+            let uri_clean = uri.trim_matches('"');
+
+            // If the service endpoint points to this mediator's DID, it's local
+            if uri_clean == state.config.mediator_did {
+                return None;
+            }
+
+            // If the service endpoint is an HTTP(S) URL, it's a remote mediator
+            if uri_clean.starts_with("http://") || uri_clean.starts_with("https://") {
+                return Some(uri_clean.to_string());
+            }
+        }
     }
+
+    // No DIDCommMessaging service found with a remote endpoint — treat as local
+    None
 }

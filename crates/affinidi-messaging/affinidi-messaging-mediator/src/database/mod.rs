@@ -6,6 +6,7 @@ pub mod accounts;
 pub(crate) mod acls;
 pub mod admin_accounts;
 pub mod fetch;
+pub mod forwarding;
 pub mod get;
 pub mod handlers;
 pub(crate) mod initialization;

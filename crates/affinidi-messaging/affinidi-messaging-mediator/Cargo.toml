@@ -85,9 +85,11 @@ tracing-subscriber = { version = "0.3", features = [
   "valuable",
 ] }
 uuid = { version = "1.21", features = ["v4", "fast-rng"] }
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 console = "0.16"
 dialoguer = "0.12"
 lazy_static = "1.5"
-reqwest = { version = "0.13", features = ["rustls", "json"] }
