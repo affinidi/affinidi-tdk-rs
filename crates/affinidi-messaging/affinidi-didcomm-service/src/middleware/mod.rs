@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
 use crate::handler::HandlerContext;
+use crate::handler::extractor::Extensions;
 use crate::response::DIDCommResponse;
 use crate::router::MessageHandler;
 
@@ -20,6 +21,7 @@ type MiddlewareResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
 pub struct Next {
     handler: Arc<dyn MessageHandler>,
     middleware: Arc<[Arc<dyn MiddlewareHandler>]>,
+    extensions: Extensions,
     index: usize,
 }
 
@@ -27,10 +29,12 @@ impl Next {
     pub(crate) fn new(
         handler: Arc<dyn MessageHandler>,
         middleware: Arc<[Arc<dyn MiddlewareHandler>]>,
+        extensions: Extensions,
     ) -> Self {
         Self {
             handler,
             middleware,
+            extensions,
             index: 0,
         }
     }
@@ -46,11 +50,14 @@ impl Next {
             let next = Next {
                 handler: self.handler,
                 middleware: self.middleware,
+                extensions: self.extensions,
                 index: self.index + 1,
             };
             current.handle(ctx, message, meta, next).await
         } else {
-            self.handler.handle(ctx, message, meta).await
+            self.handler
+                .handle(ctx, message, meta, self.extensions)
+                .await
         }
     }
 }

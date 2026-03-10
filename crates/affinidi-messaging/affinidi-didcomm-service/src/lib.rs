@@ -13,7 +13,7 @@ pub mod utils;
 pub use config::{DIDCommServiceConfig, ListenerConfig, RestartPolicy, RetryConfig};
 pub use crypto::{DefaultCryptoProvider, MessageCryptoProvider};
 pub use error::{DIDCommServiceError, PolicyViolation};
-pub use handler::{DIDCommHandler, HandlerContext};
+pub use handler::{DIDCommHandler, Extension, Extensions, FromMessageParts, HandlerContext};
 pub use middleware::{MessagePolicy, MiddlewareHandler, Next, middleware_fn};
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;

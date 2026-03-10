@@ -5,7 +5,8 @@ use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
-use crate::handler::HandlerContext;
+use crate::handler::{FromMessageParts, HandlerContext, MessageParts};
+use crate::handler::extractor::Extensions;
 use crate::response::DIDCommResponse;
 
 #[async_trait]
@@ -15,42 +16,58 @@ pub trait MessageHandler: Send + Sync + 'static {
         ctx: HandlerContext,
         message: Message,
         meta: UnpackMetadata,
+        extensions: Extensions,
     ) -> Result<Option<DIDCommResponse>, DIDCommServiceError>;
 }
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
+type HandlerResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
 
-type HandlerFnType = dyn Fn(
-        HandlerContext,
-        Message,
-        UnpackMetadata,
-    ) -> BoxFuture<Result<Option<DIDCommResponse>, DIDCommServiceError>>
-    + Send
-    + Sync
-    + 'static;
-
-struct FnHandler {
-    f: Box<HandlerFnType>,
+macro_rules! impl_handler {
+    ($($ty:ident),*) => {
+        #[async_trait]
+        impl<F, Fut, $($ty,)*> MessageHandler for HandlerFn<F, ($($ty,)*)>
+        where
+            F: Fn($($ty,)*) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = HandlerResult> + Send + 'static,
+            $($ty: FromMessageParts + 'static,)*
+        {
+            #[allow(unused_variables, unused_mut, non_snake_case)]
+            async fn handle(
+                &self,
+                ctx: HandlerContext,
+                message: Message,
+                meta: UnpackMetadata,
+                extensions: Extensions,
+            ) -> HandlerResult {
+                let mut parts = MessageParts {
+                    ctx,
+                    message: Some(message),
+                    meta: Some(meta),
+                    extensions,
+                };
+                $(let $ty = $ty::from_parts(&mut parts)?;)*
+                (self.f)($($ty,)*).await
+            }
+        }
+    };
 }
 
-#[async_trait]
-impl MessageHandler for FnHandler {
-    async fn handle(
-        &self,
-        ctx: HandlerContext,
-        message: Message,
-        meta: UnpackMetadata,
-    ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
-        (self.f)(ctx, message, meta).await
-    }
+pub struct HandlerFn<F, T> {
+    f: F,
+    _marker: std::marker::PhantomData<fn() -> T>,
 }
 
-pub fn handler_fn<F, Fut>(f: F) -> impl MessageHandler
-where
-    F: Fn(HandlerContext, Message, UnpackMetadata) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<Option<DIDCommResponse>, DIDCommServiceError>> + Send + 'static,
-{
-    FnHandler {
-        f: Box::new(move |ctx, msg, meta| Box::pin(f(ctx, msg, meta))),
+impl_handler!();
+impl_handler!(T1);
+impl_handler!(T1, T2);
+impl_handler!(T1, T2, T3);
+impl_handler!(T1, T2, T3, T4);
+impl_handler!(T1, T2, T3, T4, T5);
+
+pub fn handler_fn<F, T>(f: F) -> HandlerFn<F, T> {
+    HandlerFn {
+        f,
+        _marker: std::marker::PhantomData,
     }
 }

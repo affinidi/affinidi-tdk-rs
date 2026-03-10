@@ -1,19 +1,29 @@
+use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_didcomm_service::{
-    DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, HandlerContext,
-    ListenerConfig, MessagePolicy, Next, ProblemReport, RestartPolicy, RetryConfig, Router,
-    ServiceProblemReport, handler_fn, middleware_fn,
+    DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, Extension,
+    HandlerContext, ListenerConfig, MessagePolicy, Next, ProblemReport, RestartPolicy, RetryConfig,
+    Router, ServiceProblemReport, handler_fn, middleware_fn,
 };
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::profiles::TDKProfile;
 use serde_json::json;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const ECHO_RESPONSE_TYPE: &str = "https://example.com/protocols/echo/1.0/response";
+
+#[derive(Clone)]
+struct AppConfig {
+    server_name: String,
+}
+
+type Db = Arc<RwLock<HashMap<String, u64>>>;
 
 async fn logging_middleware(
     ctx: HandlerContext,
@@ -36,16 +46,26 @@ async fn logging_middleware(
 async fn echo_handler(
     ctx: HandlerContext,
     message: Message,
-    _meta: UnpackMetadata,
+    Extension(config): Extension<AppConfig>,
+    Extension(db): Extension<Db>,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
+    let count = {
+        let mut store = db.write().await;
+        let entry = store.entry(ctx.sender_did.clone()).or_insert(0);
+        *entry += 1;
+        *entry
+    };
+
     info!(
-        "Echo: from={} type={} body={:?}",
-        ctx.sender_did, message.type_, message.body
+        "[{}] Echo #{} from={} type={}",
+        config.server_name, count, ctx.sender_did, message.type_
     );
 
     let response_body = json!({
         "echo": message.body,
         "original_type": message.type_,
+        "server": config.server_name,
+        "message_count": count,
     });
 
     Ok(Some(DIDCommResponse::new(
@@ -57,7 +77,6 @@ async fn echo_handler(
 async fn problem_report_handler(
     ctx: HandlerContext,
     message: Message,
-    _meta: UnpackMetadata,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!("Problem report from {}: {:?}", ctx.sender_did, message.body);
     Ok(None)
@@ -66,7 +85,6 @@ async fn problem_report_handler(
 async fn fallback_handler(
     ctx: HandlerContext,
     message: Message,
-    _meta: UnpackMetadata,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!(
         "Unhandled message type '{}' from {}",
@@ -144,7 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         did, mediator_did
     );
 
+    let app_config = AppConfig {
+        server_name: "echo-server".into(),
+    };
+    let db: Db = Arc::new(RwLock::new(HashMap::new()));
+
     let router = Router::new()
+        .extension(app_config)
+        .extension(db)
         .route_regex(
             r"https://example\.com/protocols/echo/.+",
             handler_fn(echo_handler),

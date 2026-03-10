@@ -9,6 +9,7 @@ use tracing::warn;
 
 use crate::error::DIDCommServiceError;
 use crate::handler::{DIDCommHandler, HandlerContext};
+use crate::handler::extractor::Extensions;
 use crate::middleware::{MiddlewareHandler, Next};
 use crate::response::DIDCommResponse;
 
@@ -19,6 +20,7 @@ pub struct Router {
     routes: Vec<Route>,
     fallback: Option<Arc<dyn MessageHandler>>,
     middleware: Vec<Arc<dyn MiddlewareHandler>>,
+    extensions: Extensions,
 }
 
 impl Router {
@@ -27,6 +29,7 @@ impl Router {
             routes: Vec::new(),
             fallback: None,
             middleware: Vec::new(),
+            extensions: Extensions::default(),
         }
     }
 
@@ -47,6 +50,11 @@ impl Router {
 
     pub fn layer(mut self, middleware: impl MiddlewareHandler) -> Self {
         self.middleware.push(Arc::new(middleware));
+        self
+    }
+
+    pub fn extension<T: Clone + Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.extensions.insert(val);
         self
     }
 
@@ -78,7 +86,7 @@ impl DIDCommHandler for Router {
         if let Some(handler) = self.find_handler(message_type) {
             let handler = handler.clone();
             let middleware: Arc<[Arc<dyn MiddlewareHandler>]> = self.middleware.clone().into();
-            let next = Next::new(handler, middleware);
+            let next = Next::new(handler, middleware, self.extensions.clone());
             next.run(ctx, message, meta).await
         } else {
             warn!("No handler for message type: {}", message_type);
