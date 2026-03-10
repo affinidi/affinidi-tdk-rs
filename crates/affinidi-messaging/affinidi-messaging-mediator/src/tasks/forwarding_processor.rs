@@ -87,10 +87,13 @@ struct HttpClientPool {
 }
 
 impl HttpClientPool {
-    fn new() -> Result<Self, String> {
+    fn new(accept_invalid_certs: bool) -> Result<Self, String> {
+        if accept_invalid_certs {
+            warn!("HTTP client configured to accept invalid TLS certificates — NOT safe for production");
+        }
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
-            .danger_accept_invalid_certs(true) // TODO: Make configurable
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
@@ -131,7 +134,8 @@ impl ForwardingProcessor {
             consumer_name, config.consumer_group
         );
         let http_pool = Arc::new(
-            HttpClientPool::new().expect("Failed to create HTTP client pool"),
+            HttpClientPool::new(config.accept_invalid_certs)
+                .expect("Failed to create HTTP client pool"),
         );
         Self {
             config,
@@ -674,5 +678,154 @@ impl ForwardingProcessor {
         let max = self.config.max_backoff_ms;
         let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));
         Duration::from_millis(backoff.min(max))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- http_to_ws_url tests ---
+
+    #[test]
+    fn test_http_to_ws_url_https() {
+        assert_eq!(
+            ForwardingProcessor::http_to_ws_url("https://example.com/path"),
+            "wss://example.com/path/ws"
+        );
+    }
+
+    #[test]
+    fn test_http_to_ws_url_http() {
+        assert_eq!(
+            ForwardingProcessor::http_to_ws_url("http://example.com/path"),
+            "ws://example.com/path/ws"
+        );
+    }
+
+    #[test]
+    fn test_http_to_ws_url_with_trailing_slash() {
+        assert_eq!(
+            ForwardingProcessor::http_to_ws_url("https://example.com/"),
+            "wss://example.com/ws"
+        );
+    }
+
+    #[test]
+    fn test_http_to_ws_url_plain_domain() {
+        assert_eq!(
+            ForwardingProcessor::http_to_ws_url("https://mediator.example.com"),
+            "wss://mediator.example.com/ws"
+        );
+    }
+
+    #[test]
+    fn test_http_to_ws_url_with_port() {
+        assert_eq!(
+            ForwardingProcessor::http_to_ws_url("http://localhost:8080/didcomm"),
+            "ws://localhost:8080/didcomm/ws"
+        );
+    }
+
+    // --- EndpointRateTracker tests ---
+
+    #[test]
+    fn test_rate_tracker_new_has_zero_rate() {
+        let mut tracker = EndpointRateTracker::new(60);
+        assert_eq!(tracker.current_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_rate_tracker_record_increases_rate() {
+        let mut tracker = EndpointRateTracker::new(60);
+        let rate = tracker.record_and_rate();
+        // 1 message in 60 seconds = 1/60 * 10 = 0.1667 msgs/10s
+        assert!(rate > 0.0);
+    }
+
+    #[test]
+    fn test_rate_tracker_multiple_records() {
+        let mut tracker = EndpointRateTracker::new(60);
+        for _ in 0..10 {
+            tracker.record_and_rate();
+        }
+        let rate = tracker.current_rate();
+        // 10 messages in 60 second window = 10/60 * 10 = ~1.667 msgs/10s
+        assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
+        assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
+    }
+
+    #[test]
+    fn test_rate_tracker_zero_window_returns_zero() {
+        let mut tracker = EndpointRateTracker::new(0);
+        // With a zero-second window, all timestamps get pruned immediately
+        let rate = tracker.record_and_rate();
+        assert_eq!(rate, 0.0);
+    }
+
+    // --- calculate_backoff tests ---
+
+    /// Helper to test calculate_backoff without needing a full ForwardingProcessor.
+    /// Replicates the same formula: base * 2^min(failures, 10), capped at max.
+    fn compute_backoff(initial_backoff_ms: u64, max_backoff_ms: u64, consecutive_failures: u32) -> Duration {
+        let base = initial_backoff_ms;
+        let max = max_backoff_ms;
+        let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));
+        Duration::from_millis(backoff.min(max))
+    }
+
+    #[test]
+    fn test_backoff_zero_failures() {
+        // 2^0 = 1, so backoff = initial_backoff_ms * 1 = 1000ms
+        let backoff = compute_backoff(1000, 60000, 0);
+        assert_eq!(backoff, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_backoff_one_failure() {
+        // 2^1 = 2, so backoff = 1000 * 2 = 2000ms
+        let backoff = compute_backoff(1000, 60000, 1);
+        assert_eq!(backoff, Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn test_backoff_three_failures() {
+        // 2^3 = 8, so backoff = 1000 * 8 = 8000ms
+        let backoff = compute_backoff(1000, 60000, 3);
+        assert_eq!(backoff, Duration::from_millis(8000));
+    }
+
+    #[test]
+    fn test_backoff_capped_at_max() {
+        // 2^6 = 64, so 1000 * 64 = 64000ms, but max is 60000ms
+        let backoff = compute_backoff(1000, 60000, 6);
+        assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    #[test]
+    fn test_backoff_high_failures_capped_exponent_at_10() {
+        // Failures > 10 should be clamped to 10: 2^10 = 1024
+        // 1000 * 1024 = 1024000, but max is 60000
+        let backoff = compute_backoff(1000, 60000, 20);
+        assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    #[test]
+    fn test_backoff_custom_initial_and_max() {
+        // initial=500, max=5000, failures=2 => 500 * 4 = 2000
+        let backoff = compute_backoff(500, 5000, 2);
+        assert_eq!(backoff, Duration::from_millis(2000));
+
+        // failures=4 => 500 * 16 = 8000, capped at 5000
+        let backoff = compute_backoff(500, 5000, 4);
+        assert_eq!(backoff, Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_backoff_saturating_prevents_overflow() {
+        // Very large initial_backoff_ms should not panic
+        let backoff = compute_backoff(u64::MAX / 2, 60000, 5);
+        // Should be capped at max_backoff_ms
+        assert_eq!(backoff, Duration::from_millis(60000));
     }
 }

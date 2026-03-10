@@ -1,8 +1,11 @@
 use crate::{
     SharedData,
-    common::config::init,
+    common::{
+        config::init,
+        rate_limiter::{RateLimitLayer, RateLimiterState},
+    },
     database::Database,
-    handlers::{application_routes, health_checker_handler},
+    handlers::{application_routes, health_checker_handler, readiness_handler},
     tasks::{
         forwarding_processor::ForwardingProcessor,
         statistics::statistics,
@@ -17,6 +20,7 @@ use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
 use axum_server::tls_rustls::RustlsConfig;
 use std::{env, net::SocketAddr, sync::Arc};
+use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, event};
@@ -70,7 +74,7 @@ pub async fn start() {
     };
 
     // Convert from the common generic DatabaseHandler to the Mediator specific Database
-    let database = Database(database);
+    let database = Database::new(database);
 
     database
         .initialize(&config)
@@ -92,26 +96,52 @@ pub async fn start() {
         return;
     }
 
+    // Create a cancellation token for coordinated graceful shutdown
+    let shutdown_token = CancellationToken::new();
+
+    // Spawn signal handler for graceful shutdown
+    let signal_token = shutdown_token.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        event!(Level::INFO, "Shutdown signal received, initiating graceful shutdown...");
+        signal_token.cancel();
+    });
+
     // Start the statistics thread
     let _stats_database = database.clone(); // Clone the database handler for the statistics thread
     let tags = config.tags.clone(); // Clone the tags config for the statistics thread
+    let stats_token = shutdown_token.clone();
 
     tokio::spawn(async move {
-        statistics(_stats_database, tags)
-            .await
-            .expect("Error starting statistics thread");
+        tokio::select! {
+            result = statistics(_stats_database, tags) => {
+                if let Err(e) = result {
+                    event!(Level::ERROR, "Statistics thread error: {}", e);
+                }
+            }
+            _ = stats_token.cancelled() => {
+                event!(Level::INFO, "Statistics thread shutting down");
+            }
+        }
     });
 
     // Start the message expiry cleanup thread if required
     if config.processors.message_expiry_cleanup.enabled {
-        let _database = database.0.clone(); // Clone the database handler for the message expiry cleanup thread
+        let _database = (*database).clone(); // Clone the DatabaseHandler for the message expiry cleanup thread
         let _config = config.processors.message_expiry_cleanup.clone();
+        let cleanup_token = shutdown_token.clone();
         tokio::spawn(async move {
             let _processor = MessageExpiryCleanupProcessor::new(_config, _database);
-            _processor
-                .start()
-                .await
-                .expect("Error starting message expiry cleanup processor");
+            tokio::select! {
+                result = _processor.start() => {
+                    if let Err(e) = result {
+                        event!(Level::ERROR, "Message expiry cleanup error: {}", e);
+                    }
+                }
+                _ = cleanup_token.cancelled() => {
+                    event!(Level::INFO, "Message expiry cleanup shutting down");
+                }
+            }
         });
     }
 
@@ -119,10 +149,18 @@ pub async fn start() {
     if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
         let _database = database.clone();
         let _config = config.processors.forwarding.clone();
+        let fwd_token = shutdown_token.clone();
         tokio::spawn(async move {
             let processor = ForwardingProcessor::new(_config, _database);
-            if let Err(e) = processor.start().await {
-                event!(Level::ERROR, "Forwarding processor error: {}", e);
+            tokio::select! {
+                result = processor.start() => {
+                    if let Err(e) = result {
+                        event!(Level::ERROR, "Forwarding processor error: {}", e);
+                    }
+                }
+                _ = fwd_token.cancelled() => {
+                    event!(Level::INFO, "Forwarding processor shutting down");
+                }
             }
         });
     }
@@ -171,10 +209,25 @@ pub async fn start() {
         streaming_task,
         #[cfg(feature = "didcomm")]
         discover_features,
+        shutdown_token: shutdown_token.clone(),
     };
 
     // build our application routes
     let app: Router = application_routes(&config.api_prefix, &shared_state);
+
+    // Set up per-IP rate limiting
+    let rate_limiter = RateLimiterState::new(
+        config.limits.rate_limit_per_ip,
+        config.limits.rate_limit_burst,
+    );
+    if config.limits.rate_limit_per_ip > 0 {
+        event!(
+            Level::INFO,
+            "Rate limiting enabled: {} req/s per IP, burst: {}",
+            config.limits.rate_limit_per_ip,
+            config.limits.rate_limit_burst,
+        );
+    }
 
     // Add middleware to all routes
     let app = Router::new()
@@ -186,11 +239,19 @@ pub async fn start() {
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(RequestBodyLimitLayer::new(config.limits.http_size as usize))
+        .layer(RateLimitLayer::new(rate_limiter))
         // Add the healthcheck route after the tracing so we don't fill up logs with healthchecks
         .route(
             format!("{}healthchecker", &config.api_prefix).as_str(),
-            get(health_checker_handler).with_state(shared_state),
+            get(health_checker_handler).with_state(shared_state.clone()),
+        )
+        // Deep readiness check for load balancers and orchestrators
+        .route(
+            format!("{}readyz", &config.api_prefix).as_str(),
+            get(readiness_handler).with_state(shared_state),
         );
+
+    let server_shutdown_token = shutdown_token.clone();
 
     if config.security.use_ssl {
         event!(
@@ -213,6 +274,14 @@ pub async fn start() {
         .await
         .expect("bad certificate/key");
 
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            server_shutdown_token.cancelled().await;
+            event!(Level::INFO, "Gracefully shutting down HTTP server...");
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+
         axum_server::bind_rustls(
             config
                 .listen_address
@@ -220,19 +289,57 @@ pub async fn start() {
                 .unwrap(),
             ssl_config,
         )
+        .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
     } else {
         event!(Level::WARN, "**** WARNING: Running without SSL/TLS ****");
+
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            server_shutdown_token.cancelled().await;
+            event!(Level::INFO, "Gracefully shutting down HTTP server...");
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+
         axum_server::bind(
             config
                 .listen_address
                 .parse::<std::net::SocketAddr>()
                 .unwrap(),
         )
+        .handle(handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .unwrap();
+    }
+
+    event!(Level::INFO, "Mediator shutdown complete.");
+}
+
+/// Wait for a shutdown signal (SIGINT or SIGTERM).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }

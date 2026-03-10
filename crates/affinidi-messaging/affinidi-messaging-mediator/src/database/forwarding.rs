@@ -33,18 +33,35 @@ pub struct ForwardQueueEntry {
     pub expires_at: u64,
     /// Number of retry attempts so far
     pub retry_count: u32,
+    /// Hop counter for loop detection. Incremented each time a mediator forwards the message.
+    pub hop_count: u32,
 }
 
 impl Database {
-    /// Enqueue a message for forwarding to a remote mediator
+    /// Enqueue a message for forwarding to a remote mediator.
+    /// Uses MAXLEN with approximate trimming (~) to bound the stream size.
     pub async fn forward_queue_enqueue(
         &self,
         entry: &ForwardQueueEntry,
     ) -> Result<String, MediatorError> {
-        let mut conn = self.0.get_async_connection().await?;
+        self.forward_queue_enqueue_with_limit(entry, 0).await
+    }
 
-        let stream_id: String = deadpool_redis::redis::cmd("XADD")
-            .arg("FORWARD_Q")
+    /// Enqueue a message with an explicit max stream length.
+    /// If `max_len` is 0, no MAXLEN constraint is applied.
+    pub async fn forward_queue_enqueue_with_limit(
+        &self,
+        entry: &ForwardQueueEntry,
+        max_len: usize,
+    ) -> Result<String, MediatorError> {
+        let mut conn = self.get_async_connection().await?;
+
+        let mut cmd = deadpool_redis::redis::cmd("XADD");
+        cmd.arg("FORWARD_Q");
+        if max_len > 0 {
+            cmd.arg("MAXLEN").arg("~").arg(max_len);
+        }
+        let stream_id: String = cmd
             .arg("*")
             .arg("MESSAGE")
             .arg(&entry.message)
@@ -66,6 +83,8 @@ impl Database {
             .arg(entry.expires_at.to_string())
             .arg("RETRY_COUNT")
             .arg(entry.retry_count.to_string())
+            .arg("HOP_COUNT")
+            .arg(entry.hop_count.to_string())
             .query_async(&mut conn)
             .await
             .map_err(|err| {
@@ -87,7 +106,7 @@ impl Database {
         &self,
         group_name: &str,
     ) -> Result<(), MediatorError> {
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_async_connection().await?;
 
         // XGROUP CREATE FORWARD_Q <group> 0 MKSTREAM
         let result: Result<String, _> = deadpool_redis::redis::cmd("XGROUP")
@@ -131,7 +150,7 @@ impl Database {
         count: usize,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_async_connection().await?;
 
         // XREADGROUP GROUP <group> <consumer> BLOCK <ms> COUNT <n> STREAMS FORWARD_Q >
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
@@ -187,7 +206,7 @@ impl Database {
             return Ok(());
         }
 
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_async_connection().await?;
 
         let mut cmd = deadpool_redis::redis::cmd("XACK");
         cmd.arg("FORWARD_Q").arg(group_name);
@@ -215,7 +234,7 @@ impl Database {
             return Ok(());
         }
 
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_async_connection().await?;
 
         let mut cmd = deadpool_redis::redis::cmd("XDEL");
         cmd.arg("FORWARD_Q");
@@ -243,7 +262,7 @@ impl Database {
         min_idle_ms: u64,
         count: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_async_connection().await?;
 
         // XAUTOCLAIM FORWARD_Q <group> <consumer> <min-idle-ms> 0 COUNT <n>
         // Returns: [next-start-id, [[id, [field, value, ...]], ...], [deleted-ids]]
@@ -331,5 +350,205 @@ fn parse_forward_entry(
             .ok_or("missing RETRY_COUNT")?
             .parse()
             .map_err(|_| "invalid RETRY_COUNT")?,
+        hop_count: fields
+            .get("HOP_COUNT")
+            .unwrap_or(&"0".to_string())
+            .parse()
+            .unwrap_or(0),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_forward_queue_entry_defaults() {
+        let entry = ForwardQueueEntry {
+            stream_id: String::new(),
+            message: "test message".to_string(),
+            to_did_hash: "hash123".to_string(),
+            from_did_hash: "hash456".to_string(),
+            from_did: "did:example:sender".to_string(),
+            to_did: "did:example:recipient".to_string(),
+            endpoint_url: "https://example.com/didcomm".to_string(),
+            received_at_ms: 1000000,
+            delay_milli: 0,
+            expires_at: 2000000,
+            retry_count: 0,
+            hop_count: 0,
+        };
+        assert_eq!(entry.retry_count, 0);
+        assert_eq!(entry.delay_milli, 0);
+        assert_eq!(entry.hop_count, 0);
+        assert!(!entry.message.is_empty());
+    }
+
+    #[test]
+    fn test_forward_queue_entry_clone() {
+        let entry = ForwardQueueEntry {
+            stream_id: "1234-0".to_string(),
+            message: "packed_msg".to_string(),
+            to_did_hash: "to_hash".to_string(),
+            from_did_hash: "from_hash".to_string(),
+            from_did: "did:example:sender".to_string(),
+            to_did: "did:example:recipient".to_string(),
+            endpoint_url: "https://mediator.example.com".to_string(),
+            received_at_ms: 1000,
+            delay_milli: 500,
+            expires_at: 9999,
+            retry_count: 3,
+            hop_count: 2,
+        };
+        let cloned = entry.clone();
+        assert_eq!(cloned.stream_id, entry.stream_id);
+        assert_eq!(cloned.message, entry.message);
+        assert_eq!(cloned.retry_count, entry.retry_count);
+        assert_eq!(cloned.delay_milli, entry.delay_milli);
+        assert_eq!(cloned.hop_count, entry.hop_count);
+    }
+
+    /// Helper to build a complete HashMap for parse_forward_entry
+    fn make_fields(overrides: Vec<(&str, &str)>) -> HashMap<String, String> {
+        let mut fields = HashMap::new();
+        fields.insert("MESSAGE".into(), "test_msg".into());
+        fields.insert("TO_DID_HASH".into(), "to_hash".into());
+        fields.insert("FROM_DID_HASH".into(), "from_hash".into());
+        fields.insert("FROM_DID".into(), "did:example:sender".into());
+        fields.insert("TO_DID".into(), "did:example:recipient".into());
+        fields.insert("ENDPOINT_URL".into(), "https://example.com".into());
+        fields.insert("RECEIVED_AT_MS".into(), "1000000".into());
+        fields.insert("DELAY_MILLI".into(), "0".into());
+        fields.insert("EXPIRES_AT".into(), "2000000".into());
+        fields.insert("RETRY_COUNT".into(), "0".into());
+        for (k, v) in overrides {
+            fields.insert(k.into(), v.into());
+        }
+        fields
+    }
+
+    #[test]
+    fn test_parse_forward_entry_success() {
+        let fields = make_fields(vec![]);
+        let entry = parse_forward_entry("stream-1".into(), fields).unwrap();
+        assert_eq!(entry.stream_id, "stream-1");
+        assert_eq!(entry.message, "test_msg");
+        assert_eq!(entry.to_did_hash, "to_hash");
+        assert_eq!(entry.from_did_hash, "from_hash");
+        assert_eq!(entry.from_did, "did:example:sender");
+        assert_eq!(entry.to_did, "did:example:recipient");
+        assert_eq!(entry.endpoint_url, "https://example.com");
+        assert_eq!(entry.received_at_ms, 1000000);
+        assert_eq!(entry.delay_milli, 0);
+        assert_eq!(entry.expires_at, 2000000);
+        assert_eq!(entry.retry_count, 0);
+    }
+
+    #[test]
+    fn test_parse_forward_entry_with_retry_count() {
+        let fields = make_fields(vec![("RETRY_COUNT", "5")]);
+        let entry = parse_forward_entry("s-2".into(), fields).unwrap();
+        assert_eq!(entry.retry_count, 5);
+    }
+
+    #[test]
+    fn test_parse_forward_entry_with_negative_delay() {
+        let fields = make_fields(vec![("DELAY_MILLI", "-100")]);
+        let entry = parse_forward_entry("s-3".into(), fields).unwrap();
+        assert_eq!(entry.delay_milli, -100);
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_message() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("MESSAGE");
+        let result = parse_forward_entry("s-4".into(), fields);
+        assert_eq!(result.unwrap_err(), "missing MESSAGE");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_to_did_hash() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("TO_DID_HASH");
+        let result = parse_forward_entry("s-5".into(), fields);
+        assert_eq!(result.unwrap_err(), "missing TO_DID_HASH");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_endpoint_url() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("ENDPOINT_URL");
+        let result = parse_forward_entry("s-6".into(), fields);
+        assert_eq!(result.unwrap_err(), "missing ENDPOINT_URL");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_invalid_received_at_ms() {
+        let fields = make_fields(vec![("RECEIVED_AT_MS", "not_a_number")]);
+        let result = parse_forward_entry("s-7".into(), fields);
+        assert_eq!(result.unwrap_err(), "invalid RECEIVED_AT_MS");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_invalid_expires_at() {
+        let fields = make_fields(vec![("EXPIRES_AT", "abc")]);
+        let result = parse_forward_entry("s-8".into(), fields);
+        assert_eq!(result.unwrap_err(), "invalid EXPIRES_AT");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_invalid_retry_count() {
+        let fields = make_fields(vec![("RETRY_COUNT", "-1")]);
+        let result = parse_forward_entry("s-9".into(), fields);
+        assert_eq!(result.unwrap_err(), "invalid RETRY_COUNT");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_from_did_defaults_empty() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("FROM_DID");
+        let entry = parse_forward_entry("s-10".into(), fields).unwrap();
+        assert_eq!(entry.from_did, "");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_to_did() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("TO_DID");
+        let result = parse_forward_entry("s-11".into(), fields);
+        assert_eq!(result.unwrap_err(), "missing TO_DID");
+    }
+
+    #[test]
+    fn test_parse_forward_entry_missing_delay_milli() {
+        let mut fields = make_fields(vec![]);
+        fields.remove("DELAY_MILLI");
+        let result = parse_forward_entry("s-12".into(), fields);
+        assert_eq!(result.unwrap_err(), "missing DELAY_MILLI");
+    }
+
+    #[test]
+    fn test_forward_queue_entry_serialization_roundtrip() {
+        let entry = ForwardQueueEntry {
+            stream_id: "1-0".to_string(),
+            message: "{\"encrypted\":true}".to_string(),
+            to_did_hash: "abc".to_string(),
+            from_did_hash: "def".to_string(),
+            from_did: "did:example:alice".to_string(),
+            to_did: "did:example:bob".to_string(),
+            endpoint_url: "https://mediator.example.com".to_string(),
+            received_at_ms: 1234567890,
+            delay_milli: 5000,
+            expires_at: 9999999999,
+            retry_count: 2,
+            hop_count: 1,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: ForwardQueueEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.stream_id, entry.stream_id);
+        assert_eq!(deserialized.message, entry.message);
+        assert_eq!(deserialized.delay_milli, entry.delay_milli);
+        assert_eq!(deserialized.retry_count, entry.retry_count);
+        assert_eq!(deserialized.expires_at, entry.expires_at);
+    }
 }

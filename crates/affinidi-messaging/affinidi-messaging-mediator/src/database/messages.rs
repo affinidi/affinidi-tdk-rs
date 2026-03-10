@@ -48,7 +48,7 @@ impl Database {
         let _span = span!(Level::DEBUG, "purge_messages", did_hash = did_hash, folder = ?folder);
 
         async move {
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_async_connection().await?;
 
             // Grab a message from the Stream
             let key = if folder == &Folder::Inbox {
@@ -96,7 +96,7 @@ impl Database {
             };
 
             // Delete the message
-            self.0
+            self.handler
                 .delete_message(Some(&session.session_id), did_hash, message_hash, None)
                 .await?;
 
@@ -117,7 +117,7 @@ impl Database {
         key: &str,
         id: &str,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_async_connection().await?;
 
         deadpool_redis::redis::Cmd::xdel(key, &[id])
             .exec_async(&mut con)
@@ -134,7 +134,7 @@ impl Database {
         did_hash: &str,
         folder: &Folder,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_async_connection().await?;
 
         let key = if folder == &Folder::Inbox {
             ["RECEIVE_Q:", did_hash].concat()

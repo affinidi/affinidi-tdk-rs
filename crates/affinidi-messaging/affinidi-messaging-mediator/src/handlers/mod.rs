@@ -107,6 +107,144 @@ pub async fn health_checker_handler(State(state): State<SharedData>) -> impl Int
     Json(response_json)
 }
 
+/// Deep readiness check that verifies the mediator can serve traffic.
+/// Checks Redis connectivity, queue health, and shutdown state.
+pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResponse {
+    let mut checks: Vec<serde_json::Value> = Vec::new();
+    let mut all_ok = true;
+
+    // Check if shutdown has been initiated
+    if state.shutdown_token.is_cancelled() {
+        all_ok = false;
+        checks.push(serde_json::json!({
+            "name": "shutdown",
+            "status": "fail",
+            "message": "Shutdown in progress"
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "shutdown",
+            "status": "pass"
+        }));
+    }
+
+    // Check Redis circuit breaker state
+    let cb_state = state.database.circuit_breaker_state();
+    if cb_state != "closed" {
+        all_ok = false;
+        checks.push(serde_json::json!({
+            "name": "redis_circuit_breaker",
+            "status": "fail",
+            "state": cb_state,
+            "message": "Redis circuit breaker is not closed"
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "redis_circuit_breaker",
+            "status": "pass",
+            "state": cb_state
+        }));
+    }
+
+    // Check Redis connectivity
+    match state.database.get_db_metadata().await {
+        Ok(_) => {
+            checks.push(serde_json::json!({
+                "name": "redis",
+                "status": "pass"
+            }));
+        }
+        Err(e) => {
+            all_ok = false;
+            checks.push(serde_json::json!({
+                "name": "redis",
+                "status": "fail",
+                "message": format!("Redis check failed: {e}")
+            }));
+        }
+    }
+
+    // Check FORWARD_Q length
+    match state.database.get_forward_tasks_len().await {
+        Ok(len) => {
+            let queue_status = if len >= state.config.limits.forward_task_queue {
+                all_ok = false;
+                "warn"
+            } else {
+                "pass"
+            };
+            checks.push(serde_json::json!({
+                "name": "forward_queue",
+                "status": queue_status,
+                "length": len,
+                "limit": state.config.limits.forward_task_queue
+            }));
+        }
+        Err(e) => {
+            all_ok = false;
+            checks.push(serde_json::json!({
+                "name": "forward_queue",
+                "status": "fail",
+                "message": format!("Queue check failed: {e}")
+            }));
+        }
+    }
+
+    let status_code = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let response = serde_json::json!({
+        "status": if all_ok { "ready" } else { "not_ready" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": (chrono::Utc::now() - state.service_start_timestamp).num_seconds(),
+        "checks": checks,
+    });
+
+    (status_code, Json(response))
+}
+
+/// Determine the current load state of the mediator.
+/// Used for load shedding decisions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoadState {
+    /// Normal operation
+    Normal,
+    /// Elevated load — non-essential operations may be deferred
+    Elevated,
+    /// Critical load — only essential operations allowed
+    Critical,
+}
+
+impl LoadState {
+    pub async fn current(state: &SharedData) -> Self {
+        // Check circuit breaker
+        if state.database.circuit_breaker_state() != "closed" {
+            return LoadState::Critical;
+        }
+
+        // Check shutdown
+        if state.shutdown_token.is_cancelled() {
+            return LoadState::Critical;
+        }
+
+        // Check queue depth
+        if let Ok(queue_len) = state.database.get_forward_tasks_len().await {
+            let limit = state.config.limits.forward_task_queue;
+            if queue_len >= limit {
+                return LoadState::Critical;
+            }
+            if queue_len >= limit * 80 / 100 {
+                return LoadState::Elevated;
+            }
+        }
+
+        LoadState::Normal
+    }
+}
+
 /// Handler that returns the DID registered for this session
 pub async fn whoami_handler(
     session: Session,

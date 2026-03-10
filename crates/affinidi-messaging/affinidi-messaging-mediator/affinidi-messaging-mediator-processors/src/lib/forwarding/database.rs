@@ -33,6 +33,8 @@ pub struct ForwardQueueEntry {
     pub expires_at: u64,
     /// Number of retry attempts so far
     pub retry_count: u32,
+    /// Hop counter for loop detection. Incremented each time a mediator forwards the message.
+    pub hop_count: u32,
 }
 
 impl ForwardingProcessor {
@@ -229,6 +231,8 @@ impl ForwardingProcessor {
             .arg(entry.expires_at.to_string())
             .arg("RETRY_COUNT")
             .arg(entry.retry_count.to_string())
+            .arg("HOP_COUNT")
+            .arg(entry.hop_count.to_string())
             .query_async(&mut conn)
             .await
             .map_err(|err| {
@@ -325,5 +329,10 @@ fn parse_forward_entry(
             .ok_or("missing RETRY_COUNT")?
             .parse()
             .map_err(|_| "invalid RETRY_COUNT")?,
+        hop_count: fields
+            .get("HOP_COUNT")
+            .unwrap_or(&"0".to_string())
+            .parse()
+            .unwrap_or(0),
     })
 }
