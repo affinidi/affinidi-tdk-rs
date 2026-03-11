@@ -1,11 +1,13 @@
-use std::{slice, time::SystemTime};
+use std::slice;
+
+use crate::common::time::unix_timestamp_secs;
 
 use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
-    messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    messages::problem_report::{ProblemReportScope, ProblemReportSorter},
     protocols::mediator::{
         accounts::AccountType, acls::MediatorACLSet, acls_handler::MediatorACLRequest,
     },
@@ -29,47 +31,37 @@ pub(crate) async fn process(
         if session.account_type == AccountType::Admin
             || session.account_type == AccountType::RootAdmin
         {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
             if let Some(created_time) = msg.created_time {
                 if (created_time + state.config.security.admin_messages_expiry) <= now
                     || created_time > now
                 {
                     warn!("ADMIN related message has an invalid created_time header.");
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem_with_log(
                         31,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "message.expired".into(),
-                            "Message was created too long ago for admin requests: {1}".into(),
-                            vec![created_time.to_string()],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "Message was created too long ago for admin requests".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "message.expired",
+                        "Message was created too long ago for admin requests: {1}",
+                        vec![created_time.to_string()],
+                        StatusCode::BAD_REQUEST,
+                        "Message was created too long ago for admin requests",
                     ));
                 }
             } else {
                 warn!("ADMIN related message has no created_time header. Required.");
-                return Err(MediatorError::MediatorError(
-                    31,
-                    session.session_id.to_string(),
+                return Err(MediatorError::problem(
+                    91,
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "message.expired".into(),
-                        "Message missing created_time header".into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Message missing created_time header".to_string(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.created_time.missing",
+                    "Admin messages must include a created_time header",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
                 ));
             }
         }
@@ -79,20 +71,16 @@ pub(crate) async fn process(
             Ok(request) => request,
             Err(err) => {
                 warn!("Error parsing Mediator ACL request. Reason: {}", err);
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem(
                     82,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.mediator.acls.parse".into(),
-                        "Message body couldn't be parsed correctly".into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Message body couldn't be parsed correctly".to_string(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.mediator.acls.parse",
+                    "Message body couldn't be parsed correctly",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
                 ));
             }
         };
@@ -108,20 +96,16 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to view ACLs for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
@@ -138,19 +122,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error getting ACLs. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -165,20 +146,16 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to modify ACLs for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
@@ -191,19 +168,16 @@ pub(crate) async fn process(
                         Ok(None) => state.config.security.global_acl_default.clone(),
                         Err(e) => {
                             warn!("Error getting ACLs. Reason: {}", e);
-                            return Err(MediatorError::MediatorError(
+                            return Err(MediatorError::problem_with_log(
                                 14,
-                                session.session_id.to_string(),
+                                &session.session_id,
                                 Some(msg.id.to_string()),
-                                Box::new(ProblemReport::new(
-                                    ProblemReportSorter::Error,
-                                    ProblemReportScope::Protocol,
-                                    "me.res.storage.error".into(),
-                                    "Database transaction error: {1}".into(),
-                                    vec![e.to_string()],
-                                    None,
-                                )),
-                                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "me.res.storage.error",
+                                "Database transaction error: {1}",
+                                vec![e.to_string()],
+                                StatusCode::SERVICE_UNAVAILABLE,
                                 format!("Database transaction error: {e}"),
                             ));
                         }
@@ -220,20 +194,17 @@ pub(crate) async fn process(
                             i += 1;
                         }
 
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem_with_log(
                             80,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "protocol.acls.change.denied".into(),
-                                format!("A non-admin account tried to change ACL Flags but self-change is not allowed:{s}"),
-                                errors,
-                                None,
-                            )),
-                            StatusCode::FORBIDDEN.as_u16(),
-                            "A non-admin account tried to change ACL Flags but self-change is not allowed".to_string(),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "protocol.acls.change.denied",
+                            &format!("A non-admin account tried to change ACL Flags but self-change is not allowed:{s}"),
+                            errors,
+                            StatusCode::FORBIDDEN,
+                            "A non-admin account tried to change ACL Flags but self-change is not allowed",
                         ));
                     }
                 }
@@ -251,19 +222,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error setting ACLs. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -278,20 +246,16 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("List Access List from DID ({}) failed. ", session.did_hash);
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to view access list for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
@@ -308,19 +272,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error Listing Access List. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -335,57 +296,45 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("Add Access List from DID ({}) failed. ", session.did_hash);
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to modify access list for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
                 // Check if self_change is allowed
                 if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Self-manage access list is not enabled for this account",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
                 if hashes.is_empty() || hashes.len() > 100 {
-                    return Err(MediatorError::MediatorError(
-                        82,
-                        session.session_id.to_string(),
+                    return Err(MediatorError::problem(
+                        93,
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "protocol.mediator.access_list.limit".into(),
-                            "Error Adding to Access List: limits exceeded (must be 0 < count <= 100)".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "Error Adding to Access List: limits exceeded (must be 0 < count <= 100)".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "protocol.mediator.access_list.limit",
+                        "Access list batch must contain 1-100 entries",
+                        vec![],
+                        StatusCode::BAD_REQUEST,
                     ));
                 }
 
@@ -402,19 +351,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error Add to Access List. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -432,57 +378,45 @@ pub(crate) async fn process(
                         "Remove Access List from DID ({}) failed. ",
                         session.did_hash
                     );
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to modify access list for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
                 // Check if self_change is allowed
                 if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Self-manage access list is not enabled for this account",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
                 if hashes.is_empty() || hashes.len() > 100 {
-                    return Err(MediatorError::MediatorError(
-                        82,
-                        session.session_id.to_string(),
+                    return Err(MediatorError::problem(
+                        93,
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "protocol.mediator.access_list.limit".into(),
-                            "Error Removing from Access List: limits exceeded (must be 0 < count <= 100)".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "Error Removing from Access List: limits exceeded (must be 0 < count <= 100)".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "protocol.mediator.access_list.limit",
+                        "Access list batch must contain 1-100 entries",
+                        vec![],
+                        StatusCode::BAD_REQUEST,
                     ));
                 }
 
@@ -495,19 +429,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error Remove from Access List. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -522,39 +453,31 @@ pub(crate) async fn process(
                     &metadata.sign_from,
                 ) {
                     warn!("Clear Access List for DID ({}) failed. ", session.did_hash);
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to clear access list for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
                 // Check if self_change is allowed
                 if !session.acls.get_self_manage_list() && session.account_type == AccountType::Standard {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Self-manage access list is not enabled for this account",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
@@ -567,19 +490,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error Clearing Access List. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -597,20 +517,16 @@ pub(crate) async fn process(
                         "Get from Access List for DID ({}) failed. ",
                         session.did_hash
                     );
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         45,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.permission".into(),
-                            "DID does not have permission to access the requested resource".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::FORBIDDEN.as_u16(),
-                        "DID does not have permission to access the requested resource".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.permission",
+                        "Not authorized to view access list for this DID",
+                        vec![],
+                        StatusCode::FORBIDDEN,
                     ));
                 }
 
@@ -623,19 +539,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error Getting from Access List. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -705,10 +618,7 @@ fn _generate_response_message(
     from: &str,
     value: &Value,
 ) -> Result<ProcessMessageResponse, MediatorError> {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = unix_timestamp_secs();
 
     // Build the message
     let response = Message::build(

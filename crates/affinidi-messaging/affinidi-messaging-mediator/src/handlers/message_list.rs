@@ -3,7 +3,7 @@ use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     Folder, GenericDataStruct, MessageList,
-    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    problem_report::{ProblemReportScope, ProblemReportSorter},
 };
 use axum::{
     Json,
@@ -43,20 +43,12 @@ pub async fn message_list_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::MediatorError(
-                40,
-                session.session_id,
-                None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.local".into(),
-                    "DID isn't local to the mediator".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID isn't local to the mediator".to_string(),
+            return Err(MediatorError::problem(
+                40, session.session_id, None,
+                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                "authorization.local",
+                "DID isn't local to the mediator",
+                vec![], StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -70,20 +62,12 @@ pub async fn message_list_handler(
             .unwrap_u8()
             == 0
         {
-            return Err(MediatorError::MediatorError(
-                45,
-                session.session_id,
-                None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.permission".into(),
-                    "DID doesn't have permission to access the requested resource".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID doesn't have permission to access the requested resource".to_string(),
+            return Err(MediatorError::problem(
+                45, session.session_id, None,
+                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                "authorization.permission",
+                "DID hash does not match authenticated session",
+                vec![], StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -102,10 +86,10 @@ pub async fn message_list_handler(
         Ok((
             StatusCode::OK,
             Json(SuccessResponse {
-                sessionId: session.session_id,
-                httpCode: StatusCode::OK.as_u16(),
-                errorCode: 0,
-                errorCodeStr: "NA".to_string(),
+                session_id: session.session_id,
+                http_code: StatusCode::OK.as_u16(),
+                error_code: 0,
+                error_code_str: "NA".to_string(),
                 message: "Success".to_string(),
                 data: Some(messages),
             }),

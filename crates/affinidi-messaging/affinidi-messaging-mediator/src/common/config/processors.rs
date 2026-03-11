@@ -5,7 +5,7 @@ use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::{
 use ahash::AHashSet as HashSet;
 use serde::{Deserialize, Serialize};
 
-/// ProcessorsConfig Struct contains configuration specific to different processors
+/// Processor configuration for the mediator
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProcessorsConfig {
     pub forwarding: ForwardingConfig,
@@ -18,7 +18,7 @@ pub(crate) struct ProcessorsConfigRaw {
     pub message_expiry_cleanup: MessageExpiryCleanupConfigRaw,
 }
 
-/// ForwardingConfig Struct contains configuration specific to DIDComm Routing/Forwarding
+/// DIDComm routing and forwarding configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ForwardingConfig {
     pub enabled: bool,
@@ -116,22 +116,65 @@ impl std::convert::TryFrom<ForwardingConfigRaw> for ForwardingConfig {
     type Error = MediatorError;
 
     fn try_from(raw: ForwardingConfigRaw) -> Result<Self, Self::Error> {
+        let warn_default = |field: &str, default: &str| {
+            eprintln!("WARN: Could not parse processors.forwarding.{field} config value, using default: {default}");
+        };
+
         Ok(ForwardingConfig {
-            enabled: raw.enabled.parse().unwrap_or(true),
-            future_time_limit: raw.future_time_limit.parse().unwrap_or(86400),
-            external_forwarding: raw.external_forwarding.parse().unwrap_or(true),
-            report_errors: raw.report_errors.parse().unwrap_or(true),
+            enabled: raw.enabled.parse().unwrap_or_else(|_| {
+                warn_default("enabled", "true");
+                true
+            }),
+            future_time_limit: raw.future_time_limit.parse().unwrap_or_else(|_| {
+                warn_default("future_time_limit", "86400");
+                86400
+            }),
+            external_forwarding: raw.external_forwarding.parse().unwrap_or_else(|_| {
+                warn_default("external_forwarding", "true");
+                true
+            }),
+            report_errors: raw.report_errors.parse().unwrap_or_else(|_| {
+                warn_default("report_errors", "true");
+                true
+            }),
             blocked_forwarding: HashSet::new(),
-            rate_window_seconds: raw.rate_window_seconds.parse().unwrap_or(300),
-            ws_threshold_msgs_per_10s: raw.ws_threshold_msgs_per_10s.parse().unwrap_or(1),
-            ws_idle_timeout_seconds: raw.ws_idle_timeout_seconds.parse().unwrap_or(60),
-            batch_size: raw.batch_size.parse().unwrap_or(50),
-            max_retries: raw.max_retries.parse().unwrap_or(5),
-            initial_backoff_ms: raw.initial_backoff_ms.parse().unwrap_or(1000),
-            max_backoff_ms: raw.max_backoff_ms.parse().unwrap_or(60000),
+            rate_window_seconds: raw.rate_window_seconds.parse().unwrap_or_else(|_| {
+                warn_default("rate_window_seconds", "300");
+                300
+            }),
+            ws_threshold_msgs_per_10s: raw.ws_threshold_msgs_per_10s.parse().unwrap_or_else(|_| {
+                warn_default("ws_threshold_msgs_per_10s", "1");
+                1
+            }),
+            ws_idle_timeout_seconds: raw.ws_idle_timeout_seconds.parse().unwrap_or_else(|_| {
+                warn_default("ws_idle_timeout_seconds", "60");
+                60
+            }),
+            batch_size: raw.batch_size.parse().unwrap_or_else(|_| {
+                warn_default("batch_size", "50");
+                50
+            }),
+            max_retries: raw.max_retries.parse().unwrap_or_else(|_| {
+                warn_default("max_retries", "5");
+                5
+            }),
+            initial_backoff_ms: raw.initial_backoff_ms.parse().unwrap_or_else(|_| {
+                warn_default("initial_backoff_ms", "1000");
+                1000
+            }),
+            max_backoff_ms: raw.max_backoff_ms.parse().unwrap_or_else(|_| {
+                warn_default("max_backoff_ms", "60000");
+                60000
+            }),
             consumer_group: raw.consumer_group,
-            accept_invalid_certs: raw.accept_invalid_certs.parse().unwrap_or(false),
-            max_hops: raw.max_hops.parse().unwrap_or(10),
+            accept_invalid_certs: raw.accept_invalid_certs.parse().unwrap_or_else(|_| {
+                warn_default("accept_invalid_certs", "false");
+                false
+            }),
+            max_hops: raw.max_hops.parse().unwrap_or_else(|_| {
+                warn_default("max_hops", "10");
+                10
+            }),
         })
     }
 }

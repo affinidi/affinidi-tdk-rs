@@ -26,7 +26,7 @@ impl Database {
             range = format!("{:?}", range)
         );
         async move {
-            let mut conn = self.0.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
             let key = match folder {
                 Folder::Inbox => format!("RECEIVE_Q:{did_hash}"),
@@ -98,7 +98,7 @@ impl Database {
 
             for item in items {
                 // item = Bulk(string(id), Bulk(fields...))
-                let item: Vec<Value> = from_redis_value(item).unwrap();
+                let item: Vec<Value> = from_redis_value(item).map_err(|e| _error(e, did_hash, &key))?;
                 let mut msg_element = MessageListElement::default();
 
                 let stream_id: String =

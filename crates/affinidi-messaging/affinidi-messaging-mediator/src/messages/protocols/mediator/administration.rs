@@ -1,12 +1,11 @@
 //! Adds and removed administration accounts from the mediator
 //! Must be a administrator to use this protocol
-use std::time::SystemTime;
-
+use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
-    messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    messages::problem_report::{ProblemReportScope, ProblemReportSorter},
     protocols::mediator::administration::MediatorAdminRequest,
 };
 use http::StatusCode;
@@ -31,48 +30,38 @@ pub(crate) async fn process(
 
     async move {
         // Check if message is valid from an expiry perspective
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_timestamp_secs();
 
         if let Some(created_time) = msg.created_time {
             if (created_time + state.config.security.admin_messages_expiry) <= now
                 || created_time > now
             {
                 warn!("ADMIN related message has an invalid created_time header.");
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     31,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "message.expired".into(),
-                        "Message was created too long ago for admin requests: {1}".into(),
-                        vec![created_time.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Message was created too long ago for admin requests".to_string(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.expired",
+                    "Message was created too long ago for admin requests: {1}",
+                    vec![created_time.to_string()],
+                    StatusCode::BAD_REQUEST,
+                    "Message was created too long ago for admin requests",
                 ));
             }
         } else {
             warn!("ADMIN related message has no created_time header. Required.");
-            return Err(MediatorError::MediatorError(
-                31,
-                session.session_id.to_string(),
+            return Err(MediatorError::problem(
+                91,
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "message.expired".into(),
-                    "Message missing created_time header".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Message missing created_time header".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.created_time.missing",
+                "Admin messages must include a created_time header",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         }
 
@@ -85,20 +74,16 @@ pub(crate) async fn process(
                 && !check_admin_signature(session, &metadata.sign_from))
         {
             warn!("DID ({}) is not an admin account", session.did_hash);
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 45,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.permission".into(),
-                    "DID does not have permission to access the requested resource".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID does not have permission to access the requested resource".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.permission",
+                "Admin access required for administration operations",
+                vec![],
+                StatusCode::FORBIDDEN,
             ));
         }
 
@@ -110,20 +95,16 @@ pub(crate) async fn process(
                     "Error parsing Mediator Administration request. Reason: {}",
                     err
                 );
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem(
                     83,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.mediator.administration.parse".into(),
-                        "Message body couldn't be parsed correctly".into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Message body couldn't be parsed correctly".to_string(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.mediator.administration.parse",
+                    "Message body couldn't be parsed correctly",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
                 ));
             }
         };
@@ -140,19 +121,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error listing admin accounts. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -172,19 +150,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error adding admin accounts. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -210,20 +185,16 @@ pub(crate) async fn process(
                     })
                     .collect();
                 if attr.is_empty() {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         84,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "protocol.mediator.administration.strip.missing".into(),
-                            "Missing admin DID to strip admin type from".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "Missing admin DID to strip admin type from".to_string(),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.mediator.administration.strip.missing",
+                        "Missing admin DID to strip admin type from",
+                        vec![],
+                        StatusCode::BAD_REQUEST,
                     ));
                 }
                 match state.database.strip_admin_accounts(attr).await {
@@ -235,19 +206,16 @@ pub(crate) async fn process(
                     ),
                     Err(e) => {
                         warn!("Error removing admin accounts. Reason: {}", e);
-                        Err(MediatorError::MediatorError(
+                        Err(MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         ))
                     }
@@ -280,10 +248,7 @@ fn _generate_response_message(
     from: &str,
     value: &Value,
 ) -> Result<ProcessMessageResponse, MediatorError> {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = unix_timestamp_secs();
 
     // Build the message
     let response = Message::build(

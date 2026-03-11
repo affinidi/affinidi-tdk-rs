@@ -14,7 +14,7 @@ use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use base64::prelude::*;
 use sha256::digest;
-use std::time::SystemTime;
+use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, Level, debug, error, info, span};
 
 // const HASH_KEY: &str = "OOB_INVITES";
@@ -34,12 +34,9 @@ impl Database {
         let _span = span!(Level::DEBUG, "oob_discovery_store", did_hash = did_hash);
 
         async move {
-            let mut conn = self.0.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
 
             // Setup the expiry in the database
             let expire_at = if let Some(expiry) = invite.expires_time {
@@ -114,7 +111,7 @@ impl Database {
         let _span = span!(Level::DEBUG, "oob_discovery_get", oob_id = oob_id);
 
         async move {
-            let mut conn = self.0.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
             let key = Database::to_cache_key(oob_id);
             let invitation: Option<(String, String)> = match deadpool_redis::redis::pipe()
@@ -164,7 +161,7 @@ impl Database {
         let _span = span!(Level::DEBUG, "oob_discovery_delete", oob_id = oob_id);
 
         async move {
-            let mut conn = self.0.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
             let key = Database::to_cache_key(oob_id);
             let result: bool = match deadpool_redis::redis::cmd("DEL")

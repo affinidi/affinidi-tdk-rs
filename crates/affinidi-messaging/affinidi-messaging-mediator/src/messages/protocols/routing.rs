@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 
 use crate::{
     SharedData,
@@ -91,10 +91,10 @@ pub(crate) async fn process(
                     ProblemReportSorter::Warning,
                     ProblemReportScope::Message,
                     "protocol.forwarding.parse",
-                    "Couldn't parse forwarding message body. Reason: {1}",
+                    "Failed to parse forwarding message body. Reason: {1}",
                     vec![e.to_string()],
                     StatusCode::BAD_REQUEST,
-                    format!("Couldn't parse forwarding message body. Reason: {e}"),
+                    format!("Failed to parse forwarding message body. Reason: {e}"),
                 ));
             }
         };
@@ -416,7 +416,22 @@ pub(crate) async fn process(
         // First step is to determine if the next hop is local to the mediator or remote?
         //if next_did_doc.service
 
-        let attachment = attachments.first().unwrap();
+        let attachment = match attachments.first() {
+            Some(a) => a,
+            None => {
+                return Err(MediatorError::problem(
+                    59,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.missing",
+                    "Forward message has empty attachments list",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        };
         let data = if let Some(ref b64) = attachment.data.base64 {
                 match BASE64_URL_SAFE_NO_PAD.decode(b64) {
                     Ok(data) => match String::from_utf8(data) {
@@ -429,10 +444,10 @@ pub(crate) async fn process(
                                 ProblemReportSorter::Warning,
                                 ProblemReportScope::Message,
                                 "protocol.forwarding.attachments.base64",
-                                "Couldn't parse base64 attachment. Error: {1}",
+                                "Failed to decode base64 attachment. Reason: {1}",
                                 vec![e.to_string()],
                                 StatusCode::BAD_REQUEST,
-                                format!("Couldn't parse base64 attachment. Error: {e}"),
+                                format!("Failed to decode base64 attachment. Reason: {e}"),
                             ));
                         }
                     },
@@ -444,10 +459,10 @@ pub(crate) async fn process(
                             ProblemReportSorter::Warning,
                             ProblemReportScope::Message,
                             "protocol.forwarding.attachments.base64",
-                            "Couldn't decode base64 attachment. Error: {1}",
+                            "Failed to decode base64 attachment. Reason: {1}",
                             vec![e.to_string()],
                             StatusCode::BAD_REQUEST,
-                            format!("Couldn't decode base64 attachment. Error: {e}"),
+                            format!("Failed to decode base64 attachment. Reason: {e}"),
                         ));
                     }
                 }
@@ -476,12 +491,12 @@ pub(crate) async fn process(
                                 ProblemReportSorter::Warning,
                                 ProblemReportScope::Message,
                                 "protocol.forwarding.attachments.json.invalid",
-                                "JSON schema for attachment is incorrect: JSON({1}) Error: {2}",
-                                vec![json_val.to_string(), e.to_string()],
+                                "Invalid attachment JSON schema. Reason: {1}",
+                                vec![e.to_string()],
                                 StatusCode::BAD_REQUEST,
                                 format!(
-                                    "JSON schema for attachment is incorrect: JSON({}) Error: {}",
-                                    json_val, e
+                                    "Invalid attachment JSON schema. Reason: {}",
+                                    e
                                 ),
                             ));
                         }
@@ -514,10 +529,7 @@ pub(crate) async fn process(
         };
 
         let expires_at = if let Some(expires_at) = msg.expires_time {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
 
             if expires_at > now + state.config.limits.message_expiry_seconds {
                 now + state.config.limits.message_expiry_seconds
@@ -525,10 +537,7 @@ pub(crate) async fn process(
                 expires_at
             }
         } else {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
+            unix_timestamp_secs()
                 + state.config.limits.message_expiry_seconds
         };
 
@@ -565,12 +574,7 @@ pub(crate) async fn process(
             ));
         }
 
-        debug!(" *************************************** ");
-        debug!(" TO: {}", next);
-        debug!(" FROM: {:?}", msg.from);
-        debug!(" Forwarded message:\n{}", data);
-        debug!(" Ephemeral: {}", ephemeral);
-        debug!(" *************************************** ");
+        debug!("Forwarded message: to_did_hash={}, ephemeral={}", next_did_hash, ephemeral);
 
         if ephemeral {
             // Live stream the message?
@@ -628,6 +632,7 @@ pub(crate) async fn process(
                     .unwrap_or(0) as u32;
 
                 if hop_count >= state.config.processors.forwarding.max_hops {
+                    metrics::counter!(crate::common::metrics::names::FORWARD_LOOP_DETECTED_TOTAL).increment(1);
                     return Err(MediatorError::problem_with_log(
                         94,
                         &session.session_id,
@@ -645,10 +650,7 @@ pub(crate) async fn process(
                     ));
                 }
 
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis();
+                let now_ms = unix_timestamp_millis();
 
                 // Get the sender's full DID for problem reports
                 let from_did = msg.from.clone().unwrap_or_default();
@@ -686,6 +688,7 @@ pub(crate) async fn process(
                     )
                 })?;
 
+                metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
                 info!(
                     "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
                     next_did_hash, from_account.did_hash, endpoint_url

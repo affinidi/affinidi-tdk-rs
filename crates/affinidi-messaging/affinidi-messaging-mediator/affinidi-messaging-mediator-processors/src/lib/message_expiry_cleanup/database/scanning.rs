@@ -9,8 +9,6 @@
  * Where SECONDS is the number of seconds since the Unix epoch
  */
 
-use std::time::SystemTime;
-
 use affinidi_messaging_mediator_common::errors::ProcessorError;
 
 use crate::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
@@ -18,10 +16,7 @@ use crate::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
 impl MessageExpiryCleanupProcessor {
     pub(crate) async fn timeslot_scan(&self) -> Result<Vec<String>, ProcessorError> {
         // Get the current EPOCH time in seconds
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = crate::unix_epoch_now().as_secs();
 
         let mut conn = self.database.get_async_connection().await?;
 

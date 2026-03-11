@@ -7,9 +7,11 @@
  */
 
 use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::ProcessorError};
+use lru::LruCache;
 use std::{
     collections::HashMap,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    num::NonZeroUsize,
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -70,7 +72,7 @@ pub struct ForwardingProcessor {
     pub(crate) config: ForwardingProcessorConfig,
     pub(crate) database: DatabaseHandler,
     pub(crate) consumer_name: String,
-    endpoints: HashMap<String, EndpointState>,
+    endpoints: LruCache<String, EndpointState>,
     http_client: reqwest::Client,
 }
 
@@ -89,11 +91,14 @@ impl ForwardingProcessor {
             .build()
             .expect("Failed to create HTTP client");
 
+        let max_endpoints = NonZeroUsize::new(config.max_endpoints)
+            .unwrap_or(NonZeroUsize::new(1000).unwrap());
+
         Self {
             config,
             database,
             consumer_name,
-            endpoints: HashMap::new(),
+            endpoints: LruCache::new(max_endpoints),
             http_client,
         }
     }
@@ -139,10 +144,7 @@ impl ForwardingProcessor {
     }
 
     async fn process_endpoint_batch(&mut self, endpoint_url: &str, messages: Vec<ForwardQueueEntry>) {
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now_secs = crate::unix_epoch_now().as_secs();
 
         let (active, expired): (Vec<_>, Vec<_>) = messages
             .into_iter()
@@ -164,10 +166,7 @@ impl ForwardingProcessor {
             return;
         }
 
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let now_ms = crate::unix_epoch_now().as_millis();
 
         let (ready, _delayed): (Vec<_>, Vec<_>) = active.into_iter().partition(|msg| {
             let deliver_at_ms = if msg.delay_milli > 0 {
@@ -182,14 +181,15 @@ impl ForwardingProcessor {
             return;
         }
 
-        // Update rate tracker
-        let state = self.endpoints.entry(endpoint_url.to_string()).or_insert_with(|| {
-            EndpointState {
+        // Update rate tracker (get_or_insert into LRU cache)
+        if self.endpoints.get(endpoint_url).is_none() {
+            self.endpoints.put(endpoint_url.to_string(), EndpointState {
                 rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
                 last_activity: Instant::now(),
                 consecutive_failures: 0,
-            }
-        });
+            });
+        }
+        let state = self.endpoints.get_mut(endpoint_url).expect("just inserted");
         for _ in 0..ready.len() {
             state.rate_tracker.record_and_rate();
         }
@@ -310,10 +310,7 @@ impl ForwardingProcessor {
     }
 
     async fn send_problem_report(&self, msg: &ForwardQueueEntry, endpoint_url: &str) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = crate::unix_epoch_now().as_secs();
 
         let report_msg = serde_json::json!({
             "type": "https://didcomm.org/report-problem/2.0/problem-report",
@@ -360,5 +357,134 @@ impl ForwardingProcessor {
 impl EndpointState {
     fn current_rate_value(&mut self) -> f64 {
         self.rate_tracker.current_rate()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- EndpointRateTracker tests ---
+
+    #[test]
+    fn test_rate_tracker_new_has_zero_rate() {
+        let mut tracker = EndpointRateTracker::new(60);
+        assert_eq!(tracker.current_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_rate_tracker_record_increases_rate() {
+        let mut tracker = EndpointRateTracker::new(60);
+        let rate = tracker.record_and_rate();
+        // 1 message in 60 seconds = 1/60 * 10 = ~0.167 msgs/10s
+        assert!(rate > 0.0);
+    }
+
+    #[test]
+    fn test_rate_tracker_multiple_records() {
+        let mut tracker = EndpointRateTracker::new(60);
+        for _ in 0..10 {
+            tracker.record_and_rate();
+        }
+        let rate = tracker.current_rate();
+        // 10 messages in 60 second window = 10/60 * 10 = ~1.667 msgs/10s
+        assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
+        assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
+    }
+
+    #[test]
+    fn test_rate_tracker_zero_window_returns_zero() {
+        let mut tracker = EndpointRateTracker::new(0);
+        let rate = tracker.record_and_rate();
+        assert_eq!(rate, 0.0);
+    }
+
+    // --- EndpointState tests ---
+
+    #[test]
+    fn test_endpoint_state_current_rate_value() {
+        let mut state = EndpointState {
+            rate_tracker: EndpointRateTracker::new(60),
+            last_activity: Instant::now(),
+            consecutive_failures: 0,
+        };
+        assert_eq!(state.current_rate_value(), 0.0);
+        state.rate_tracker.record_and_rate();
+        assert!(state.current_rate_value() > 0.0);
+    }
+
+    // --- calculate_backoff tests ---
+
+    /// Replicates the backoff formula to test without needing a full ForwardingProcessor.
+    fn compute_backoff(initial_backoff_ms: u64, max_backoff_ms: u64, consecutive_failures: u32) -> Duration {
+        let base = initial_backoff_ms;
+        let max = max_backoff_ms;
+        let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));
+        Duration::from_millis(backoff.min(max))
+    }
+
+    #[test]
+    fn test_backoff_zero_failures() {
+        let backoff = compute_backoff(1000, 60000, 0);
+        assert_eq!(backoff, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn test_backoff_one_failure() {
+        let backoff = compute_backoff(1000, 60000, 1);
+        assert_eq!(backoff, Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn test_backoff_three_failures() {
+        let backoff = compute_backoff(1000, 60000, 3);
+        assert_eq!(backoff, Duration::from_millis(8000));
+    }
+
+    #[test]
+    fn test_backoff_capped_at_max() {
+        // 2^6 = 64, 1000 * 64 = 64000, capped at 60000
+        let backoff = compute_backoff(1000, 60000, 6);
+        assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    #[test]
+    fn test_backoff_high_failures_capped_exponent_at_10() {
+        // failures > 10 clamped to 10: 2^10 = 1024, 1000 * 1024 = 1024000, capped at 60000
+        let backoff = compute_backoff(1000, 60000, 20);
+        assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    #[test]
+    fn test_backoff_custom_initial_and_max() {
+        let backoff = compute_backoff(500, 5000, 2);
+        assert_eq!(backoff, Duration::from_millis(2000));
+
+        let backoff = compute_backoff(500, 5000, 4);
+        assert_eq!(backoff, Duration::from_millis(5000));
+    }
+
+    #[test]
+    fn test_backoff_saturating_prevents_overflow() {
+        let backoff = compute_backoff(u64::MAX / 2, 60000, 5);
+        assert_eq!(backoff, Duration::from_millis(60000));
+    }
+
+    // --- ForwardingProcessorConfig default tests ---
+
+    #[test]
+    fn test_default_config_values() {
+        let config = ForwardingProcessorConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.rate_window_seconds, 300);
+        assert_eq!(config.ws_threshold_msgs_per_10s, 1);
+        assert_eq!(config.ws_idle_timeout_seconds, 60);
+        assert_eq!(config.batch_size, 50);
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.initial_backoff_ms, 1000);
+        assert_eq!(config.max_backoff_ms, 60000);
+        assert_eq!(config.consumer_group, "forwarding");
+        assert!(config.report_errors);
+        assert_eq!(config.max_endpoints, 1000);
     }
 }

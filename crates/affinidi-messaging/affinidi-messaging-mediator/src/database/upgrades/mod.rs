@@ -13,7 +13,7 @@ impl Database {
         &self,
         version: &str,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
         deadpool_redis::redis::Cmd::hset("GLOBAL", "SCHEMA_VERSION", version)
             .exec_async(&mut con)
             .await

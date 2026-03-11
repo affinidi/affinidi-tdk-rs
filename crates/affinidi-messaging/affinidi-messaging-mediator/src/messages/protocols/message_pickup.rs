@@ -9,7 +9,7 @@ use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::{
         fetch::FetchOptions,
-        problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+        problem_report::{ProblemReportScope, ProblemReportSorter},
     },
     protocols::message_pickup::{
         MessagePickupDeliveryRequest, MessagePickupLiveDelivery, MessagePickupMessagesReceived,
@@ -22,7 +22,7 @@ use itertools::Itertools;
 use redis::{Value, from_redis_value};
 use serde_json::json;
 use sha256::digest;
-use std::time::SystemTime;
+use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
 
@@ -63,20 +63,17 @@ pub(crate) async fn status_request(
                         "recipient_did: ({}) doesn't match session.did!",
                         recipient_did
                     );
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem_with_log(
                         52,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.clone()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "authorization.did.session_mismatch".into(),
-                            "recipient_did ({1}) doesn't match this sessions DID".into(),
-                            vec![recipient_did.to_string()],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "recipient_did doesn't match session.did".to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "authorization.did.session_mismatch",
+                        "Recipient DID ({1}) does not match session DID",
+                        vec![recipient_did.to_string()],
+                        StatusCode::BAD_REQUEST,
+                        "recipient_did doesn't match session.did",
                     ));
                 } else {
                     digest(recipient_did)
@@ -117,7 +114,7 @@ async fn generate_status_reply(
     let _span = span!(tracing::Level::DEBUG, "generate_status_reply",);
 
     async move {
-        let mut conn = state.database.0.get_async_connection().await?;
+        let mut conn = state.database.get_connection().await?;
 
         let response: Vec<Value> = deadpool_redis::redis::cmd("FCALL")
             .arg("get_status_reply")
@@ -126,19 +123,16 @@ async fn generate_status_reply(
             .query_async(&mut conn)
             .await
             .map_err(|e| {
-                MediatorError::MediatorError(
+                MediatorError::problem_with_log(
                     14,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(thid.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.error".into(),
-                        "Database transaction error: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.error",
+                    "Database transaction error: {1}",
+                    vec![e.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
                     format!("Database transaction error: {e}"),
                 )
             })?;
@@ -247,7 +241,7 @@ pub(crate) async fn toggle_live_delivery(
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "toggle_live_delivery",);
     async move {
-        _validate_msg(msg, state, session).unwrap();
+        _validate_msg(msg, state, session)?;
 
         // Get or create the thread id for the response
         let thid = if let Some(thid) = &msg.thid {
@@ -262,19 +256,16 @@ pub(crate) async fn toggle_live_delivery(
             match serde_json::from_value::<MessagePickupLiveDelivery>(msg.body.to_owned()) {
                 Ok(body) => body.live_delivery,
                 Err(e) => {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem_with_log(
                         54,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.clone()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "protocol.pickup.parse".into(),
-                            "Couldn't parse live_delivery body. Reason: {1}".into(),
-                            vec![e.to_string()],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.pickup.parse",
+                        "Couldn't parse live_delivery body. Reason: {1}",
+                        vec![e.to_string()],
+                        StatusCode::BAD_REQUEST,
                         format!("Couldn't parse live_delivery body. Reason: {e}"),
                     ));
                 }
@@ -299,19 +290,16 @@ pub(crate) async fn toggle_live_delivery(
                     })
                     .await
                     .map_err(|e| {
-                        MediatorError::MediatorError(
+                        MediatorError::problem_with_log(
                             55,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.clone()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "protocol.pickup.live_streaming".into(),
-                                "Couldn't send START signal to streaming task. Reason: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "protocol.pickup.live_streaming",
+                            "Couldn't send START signal to streaming task. Reason: {1}",
+                            vec![e.to_string()],
+                            StatusCode::INTERNAL_SERVER_ERROR,
                             format!("Couldn't send START signal to streaming task. Reason: {e}"),
                         )
                     })?;
@@ -327,19 +315,16 @@ pub(crate) async fn toggle_live_delivery(
                     })
                     .await
                     .map_err(|e| {
-                        MediatorError::MediatorError(
+                        MediatorError::problem_with_log(
                             55,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.clone()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "protocol.pickup.live_streaming".into(),
-                                "Couldn't send STOP signal to streaming task. Reason: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "protocol.pickup.live_streaming",
+                            "Couldn't send STOP signal to streaming task. Reason: {1}",
+                            vec![e.to_string()],
+                            StatusCode::INTERNAL_SERVER_ERROR,
                             format!("Couldn't send STOP signal to streaming task. Reason: {e}"),
                         )
                     })?;
@@ -368,7 +353,7 @@ pub(crate) async fn delivery_request(
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "delivery_request",);
     async move {
-        _validate_msg(msg, state, session).unwrap();
+        _validate_msg(msg, state, session)?;
         // Get or create the thread id for the response
         let thid = if let Some(thid) = &msg.thid {
             thid.to_owned()
@@ -461,7 +446,7 @@ pub(crate) async fn messages_received(
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(tracing::Level::DEBUG, "messages_received",);
     async move {
-        _validate_msg(msg, state, session).unwrap();
+        _validate_msg(msg, state, session)?;
         // Get or create the thread id for the response
         let thid = if let Some(thid) = &msg.thid {
             thid.to_owned()
@@ -482,8 +467,7 @@ pub(crate) async fn messages_received(
                     debug!("Got message: {:?}", msg);
                     debug!("Deleting message: {}", msg_id);
                     match state
-                        .database
-                        .0
+                        .database.handler
                         .delete_message(
                             Some(&session.session_id),
                             &session.did_hash,
@@ -506,11 +490,8 @@ pub(crate) async fn messages_received(
             }
         }
 
-        Ok(
-            generate_status_reply(state, session, &session.did_hash, &thid, false, None)
+        generate_status_reply(state, session, &session.did_hash, &thid, false, None)
                 .await
-                .unwrap(),
-        )
     }
     .instrument(_span)
     .await
@@ -524,19 +505,16 @@ fn _parse_message_received_body(
         match serde_json::from_value::<MessagePickupMessagesReceived>(msg.body.to_owned()) {
             Ok(body) => body.message_id_list,
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     54,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.clone()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.pickup.parse".into(),
-                        "Couldn't parse messages-received body. Reason: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.pickup.parse",
+                    "Couldn't parse messages-received body. Reason: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
                     format!("Couldn't parse messages-received body. Reason: {e}"),
                 ));
             }
@@ -553,56 +531,47 @@ fn _parse_and_validate_delivery_request_body(
         match serde_json::from_value::<MessagePickupDeliveryRequest>(msg.body.to_owned()) {
             Ok(body) => (body.recipient_did, body.limit),
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     54,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.clone()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.pickup.parse".into(),
-                        "Couldn't parse delivery-request body. Reason: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.pickup.parse",
+                    "Couldn't parse delivery-request body. Reason: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
                     format!("Couldn't parse delivery-request body. Reason: {e}"),
                 ));
             }
         };
 
     if session.did != recipient_did {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             52,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.did.session_mismatch".into(),
-                "recipient_did ({1}) doesn't match this sessions DID".into(),
-                vec![recipient_did.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "recipient_did doesn't match session.did".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.did.session_mismatch",
+            "Recipient DID ({1}) does not match session DID",
+            vec![recipient_did.to_string()],
+            StatusCode::BAD_REQUEST,
+            "recipient_did doesn't match session.did",
         ));
     }
 
     if !(MIN_RETRIEVED_MSGS..=MAX_RETRIEVED_MSGS).contains(&limit) {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             53,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "protocol.pickup.delivery_request.limit".into(),
-                "limit must be between 1 and 100 inclusive. Received limit({1})".into(),
-                vec![limit.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "protocol.pickup.delivery_request.limit",
+            "limit must be between 1 and 100 inclusive. Received limit({1})",
+            vec![limit.to_string()],
+            StatusCode::BAD_REQUEST,
             format!("limit must be between 1 and 100 inclusive. Received limit({limit})"),
         ));
     }
@@ -611,10 +580,7 @@ fn _parse_and_validate_delivery_request_body(
 }
 
 fn _get_time_now() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    unix_timestamp_secs()
 }
 
 fn _validate_msg(
@@ -633,20 +599,17 @@ fn _validate_msg(
             now,
             now - expires
         );
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             31,
-            "".to_string(),
+            "",
             None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "message.expired".into(),
-                "Message has expired: {1}".into(),
-                vec![expires.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Message has expired".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "message.expired",
+            "Message has expired: {1}",
+            vec![expires.to_string()],
+            StatusCode::BAD_REQUEST,
+            "Message has expired",
         ));
     }
 
@@ -655,37 +618,29 @@ fn _validate_msg(
         if let Some(first) = to.first() {
             first.to_owned()
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 51,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.to".into(),
-                    "Invalid to: header, couldn't get first DID from the field.".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Invalid to: header, couldn't get first DID from the field.".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.to",
+                "Invalid to: header, couldn't get first DID from the field.",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         }
     } else {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             51,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "message.to".into(),
-                "Missing to: header in message".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Missing to: header in message".to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.to",
+            "Missing to: header in message",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ));
     };
 
@@ -695,41 +650,33 @@ fn _validate_msg(
             "to: ({}) doesn't match Mediator DID ({})",
             to, state.config.mediator_did
         );
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             51,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "message.to".into(),
-                "Message Pickup messages must be addressed to the Mediator DID. Received to: {1}"
-                    .into(),
-                vec![to.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Message Pickup messages must be addressed to the Mediator DID".to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.to",
+            "Message Pickup messages must be addressed to the Mediator DID. Received to: {1}",
+            vec![to.to_string()],
+            StatusCode::BAD_REQUEST,
+            "Message Pickup messages must be addressed to the Mediator DID",
         ));
     }
 
     // Message can not be anonymous
     if msg.from.is_none() {
-        return Err(MediatorError::MediatorError(
-                50,
-            session.session_id.to_string(),
+        return Err(MediatorError::problem(
+            50,
+            &session.session_id,
             Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.anonymous".into(),
-                    "Message Pickup 3.0 messages-received can not be anonymous as it is needed from to validate permissions".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Message Pickup 3.0 messages-received can not be anonymous as it is needed from to validate permissions".to_string(),
-            ));
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.anonymous",
+            "Message Pickup 3.0 requires a from: header for permission validation",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        ));
     };
 
     // Check for extra-header `return_route`
@@ -739,38 +686,31 @@ fn _validate_msg(
                 "return_route: extra-header exists. Expected (all) but received ({})",
                 header
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 49,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.pickup.return_route".into(),
-                    "return_route header is incorrect. Expected (all) but it contains ({1})".into(),
-                    vec![header.to_string()],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.pickup.return_route",
+                "return_route header is incorrect. Expected (all) but it contains ({1})",
+                vec![header.to_string()],
+                StatusCode::BAD_REQUEST,
                 format!("return_route header is incorrect. Expected (all) but received ({header})"),
             ));
         }
     } else {
         debug!("return_route: extra-header does not exist!");
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             49,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "protocol.pickup.return_route".into(),
-                "return_route header is missing".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "return_route header is missing".to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "protocol.pickup.return_route",
+            "return_route header is missing",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ));
     }
 

@@ -21,11 +21,14 @@ use axum::{
 };
 use http::StatusCode;
 use serde_json::json;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::common::time::unix_timestamp_secs;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::{
     select,
     sync::mpsc::{self, Receiver, Sender},
 };
+use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
 
@@ -47,20 +50,12 @@ pub async fn websocket_handler(
             .instrument(_span)
             .await
     } else {
-        let error: AppError = MediatorError::MediatorError(
-            40,
-            session.session_id,
-            None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.local".into(),
-                "DID isn't local to the mediator".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::FORBIDDEN.as_u16(),
-            "DID isn't local to the mediator".to_string(),
+        let error: AppError = MediatorError::problem(
+            40, session.session_id, None,
+            ProblemReportSorter::Error, ProblemReportScope::Protocol,
+            "authorization.local",
+            "DID isn't local to the mediator",
+            vec![], StatusCode::FORBIDDEN,
         )
         .into();
 
@@ -76,6 +71,17 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         session = session.session_id
     );
     async move {
+        // Enforce connection limit
+        let current = state.active_websocket_count.fetch_add(1, Ordering::Relaxed);
+        if current >= state.config.limits.max_websocket_connections {
+            state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
+            warn!("WebSocket connection limit reached ({}/{})", current, state.config.limits.max_websocket_connections);
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+
+        metrics::gauge!(ACTIVE_WEBSOCKET_CONNECTIONS).increment(1.0);
+
         // Register the transmission channel between websocket_streaming task and this websocket.
         let (tx, mut rx): (Sender<WebSocketCommands>, Receiver<WebSocketCommands>) = mpsc::channel(5);
         if let Some(streaming) = &state.streaming_task {
@@ -99,7 +105,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         info!("Websocket connection established");
 
         // Set a timeout for the websocket connection for when the JWT Auth token expires
-        let epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let epoch = unix_timestamp_secs();
         if session.expires_at <= epoch {
             warn!("JWT access token has expired. Closing Session");
             return;
@@ -107,6 +113,10 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         let auth_timeout = tokio::time::sleep(Duration::from_secs(session.expires_at - epoch));
         tokio::pin!(auth_timeout);
         debug!("WebSocket will timeout in {:?}", auth_timeout);
+
+        // Periodic ping to detect dead connections
+        let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+        ping_interval.reset(); // Skip the immediate first tick
 
         // Flag to prevent double deregistration
         // This can occur because in some situations the streaming-task will send a close message
@@ -121,11 +131,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                 }
                 value = socket.recv() => {
                     match value { Some(msg) => {
-                        debug!("ws: Received message: {:?}", msg);
+                        debug!("WebSocket message received");
                         if let Ok(msg) = msg {
                             match msg {
                                 Message::Text(msg) => {
-                                    debug!("ws: Received text message: {:?}", msg);
+                                    debug!("ws: Received text message");
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
                                         continue;
@@ -138,7 +148,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                             //response
                                         }
                                         Err(e) => {
-                                            debug!("Error processing message: {:?}", e);
+                                            warn!("Failed to process WebSocket message: {}", e);
 
                                             // Send a problem report to the sender
                                             #[cfg(feature = "didcomm")]
@@ -146,9 +156,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                                 MediatorError::MediatorError(_, _, msg_id, problem_report, _, log_message) => {
                                                     match  _package_problem_report(&state, &session, msg_id, *problem_report).await {
                                                         Ok(msg) => {
-                                                            debug!("Sending problem report: {:?}", msg);
+                                                            debug!("Sending problem report to client");
                                                             warn!(log_message);
-                                                            let _ = socket.send(Message::Text(msg.into())).await;
+                                                            if let Err(e) = socket.send(Message::Text(msg.into())).await {
+                                                                warn!("Failed to send message to WebSocket client: {e}");
+                                                            }
                                                         }
                                                         Err(e) => {
                                                             warn!("Error packaging problem report: {:?}", e);
@@ -174,7 +186,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                     // Don't need to do anything
                                 }
                                 Message::Binary(msg) => {
-                                    debug!("ws: Received binary message: {:?}", msg);
+                                    debug!("ws: Received binary message");
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
                                         continue;
@@ -210,17 +222,27 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                         break;
                     }}
                 }
+                _ = ping_interval.tick() => {
+                    if let Err(e) = socket.send(Message::Ping(vec![].into())).await {
+                        debug!("Failed to send WebSocket ping: {e}");
+                        break;
+                    }
+                }
                 value = rx.recv() => {
                     if let Some(msg) = value {
                         match msg {
                             WebSocketCommands::Message(msg) => {
-                                debug!("ws: Received message from streaming task: {:?}", msg);
-                                let _ = socket.send(Message::Text(msg.into())).await;
+                                debug!("ws: Received message from streaming task");
+                                if let Err(e) = socket.send(Message::Text(msg.into())).await {
+                                    warn!("Failed to send message to WebSocket client: {e}");
+                                }
                             },
                             WebSocketCommands::Close => {
                                 #[cfg(feature = "didcomm")]
                                 if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await {
-                                   let _ = socket.send(Message::Text(msg.into())).await;
+                                    if let Err(e) = socket.send(Message::Text(msg.into())).await {
+                                        warn!("Failed to send message to WebSocket client: {e}");
+                                    }
                                 }
                                 debug!("Received close message from streaming task, closing websocket connection");
                                 already_deregistered_flag = true;
@@ -246,8 +268,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
             }
         }
 
+        state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
+        metrics::gauge!(ACTIVE_WEBSOCKET_CONNECTIONS).decrement(1.0);
+
         // We're done, close the connection
-        let _ = socket.send(Message::Close(None)).await;
+        if let Err(e) = socket.send(Message::Close(None)).await {
+            debug!("Failed to send WebSocket close frame: {e}");
+        }
         let _ = state
             .database
             .global_stats_increment_websocket_close()
@@ -288,12 +315,7 @@ async fn _package_problem_report(
     )
     .from(state.config.mediator_did.clone())
     .to(session.did.to_string())
-    .created_time(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-    );
+    .created_time(unix_timestamp_secs());
 
     if let Some(msg_id) = msg_id {
         pr_msg = pr_msg.pthid(msg_id);

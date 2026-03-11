@@ -17,10 +17,11 @@
 
 use crate::{common::config::ForwardingConfig, database::Database, database::forwarding::ForwardQueueEntry};
 use futures_util::{SinkExt, StreamExt};
+use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::tungstenite;
@@ -260,10 +261,7 @@ impl ForwardingProcessor {
         );
 
         // Check if any messages have expired
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now_secs = unix_timestamp_secs();
 
         let (active, expired): (Vec<_>, Vec<_>) = messages
             .into_iter()
@@ -297,10 +295,7 @@ impl ForwardingProcessor {
         // Check if delay_milli requires us to wait
         let mut ready = Vec::new();
         let mut delayed = Vec::new();
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let now_ms = unix_timestamp_millis();
 
         for msg in active {
             let deliver_at_ms = if msg.delay_milli > 0 {
@@ -482,10 +477,7 @@ impl ForwardingProcessor {
 
     /// Send a problem report to the original sender when forwarding has been abandoned
     async fn send_forwarding_failure_report(&self, msg: &ForwardQueueEntry, endpoint_url: &str) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_timestamp_secs();
 
         let problem_body = serde_json::json!({
             "code": "e.p.me.res.forwarding.abandoned",

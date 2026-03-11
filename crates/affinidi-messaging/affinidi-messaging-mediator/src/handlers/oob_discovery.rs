@@ -17,7 +17,7 @@ use crate::{SharedData, database::session::Session};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
-    messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    messages::problem_report::{ProblemReportScope, ProblemReportSorter},
     protocols::{mediator::accounts::AccountType, oob_discovery::OOBInviteResponse},
 };
 use axum::{
@@ -45,20 +45,16 @@ pub async fn oob_invite_handler(
 ) -> Result<(StatusCode, Json<SuccessResponse<OOBInviteResponse>>), AppError> {
     // ACL Check
     if !session.acls.get_create_invites().0 {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             45,
             session.session_id,
             None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.permission".into(),
-                "DID doesn't have permission to access the requested resource".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::FORBIDDEN.as_u16(),
-            "DID doesn't have permission to access the requested resource".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.permission",
+            "Not authorized to create OOB invitations",
+            vec![],
+            StatusCode::FORBIDDEN,
         )
         .into());
     }
@@ -74,55 +70,46 @@ pub async fn oob_invite_handler(
     {
         Ok(oob_id) => oob_id,
         Err(MediatorError::InternalError(code, _, text)) => {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 code,
                 session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.serialize".into(),
-                    "Couldn't serialize DIDComm message envelope. Reason: {1}".into(),
-                    vec![text],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Couldn't serialize DIDComm message envelope".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.serialize",
+                "Couldn't serialize DIDComm message envelope. Reason: {1}",
+                vec![text],
+                StatusCode::BAD_REQUEST,
+                "Couldn't serialize DIDComm message envelope",
             )
             .into());
         }
         Err(MediatorError::DatabaseError(code, _, text)) => {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 code,
                 session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.error".into(),
-                    "Database transaction error: {1}".into(),
-                    vec![text.to_string()],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.error",
+                "Database transaction error: {1}",
+                vec![text.to_string()],
+                StatusCode::SERVICE_UNAVAILABLE,
                 format!("Database transaction error: {text}"),
             )
             .into());
         }
         Err(e) => {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 46,
                 session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "oob.store".into(),
-                    "Couldn't store OOB invite. Reason: {1}".into(),
-                    vec![e.to_string()],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "oob.store",
+                "Couldn't store OOB invite. Reason: {1}",
+                vec![e.to_string()],
+                StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Couldn't store OOB invite. Reason: {e}"),
             )
             .into());
@@ -132,10 +119,10 @@ pub async fn oob_invite_handler(
     Ok((
         StatusCode::OK,
         Json(SuccessResponse {
-            sessionId: session.session_id,
-            httpCode: StatusCode::OK.as_u16(),
-            errorCode: 0,
-            errorCodeStr: "NA".to_string(),
+            session_id: session.session_id,
+            http_code: StatusCode::OK.as_u16(),
+            error_code: 0,
+            error_code_str: "NA".to_string(),
             message: "Success".to_string(),
             data: Some(OOBInviteResponse { _oobid: oob_id }),
         }),
@@ -151,10 +138,10 @@ pub async fn oobid_handler(
         Ok(Some((invite, _))) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
-                sessionId: "NA".into(),
-                httpCode: StatusCode::OK.as_u16(),
-                errorCode: 0,
-                errorCodeStr: "NA".to_string(),
+                session_id: "NA".into(),
+                http_code: StatusCode::OK.as_u16(),
+                error_code: 0,
+                error_code_str: "NA".to_string(),
                 message: "Success".to_string(),
                 data: Some(invite),
             }),
@@ -162,44 +149,38 @@ pub async fn oobid_handler(
         Ok(None) => Ok((
             StatusCode::OK,
             Json(SuccessResponse {
-                sessionId: "NA".into(),
-                httpCode: StatusCode::NOT_FOUND.as_u16(),
-                errorCode: 0,
-                errorCodeStr: "NA".to_string(),
+                session_id: "NA".into(),
+                http_code: StatusCode::NOT_FOUND.as_u16(),
+                error_code: 0,
+                error_code_str: "NA".to_string(),
                 message: "NO CONTENT".to_string(),
                 data: None,
             }),
         )),
-        Err(MediatorError::DatabaseError(code, _, text)) => Err(MediatorError::MediatorError(
+        Err(MediatorError::DatabaseError(code, _, text)) => Err(MediatorError::problem_with_log(
             code,
-            "NA".to_string(),
+            "NA",
             None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "me.res.storage.error".into(),
-                "Database transaction error: {1}".into(),
-                vec![text.to_string()],
-                None,
-            )),
-            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "me.res.storage.error",
+            "Database transaction error: {1}",
+            vec![text.to_string()],
+            StatusCode::SERVICE_UNAVAILABLE,
             format!("Database transaction error: {text}"),
         )
         .into()),
-        Err(e) => Err(MediatorError::MediatorError(
+        Err(e) => Err(MediatorError::problem_with_log(
             87,
-            "NA".to_string(),
+            "NA",
             None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "oob.store".into(),
-                "Couldn't store OOB invite. Reason: {1}".into(),
-                vec![e.to_string()],
-                None,
-            )),
-            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-            format!("Couldn't store OOB invite. Reason: {e}"),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "oob.retrieve",
+            "Couldn't retrieve OOB invite. Reason: {1}",
+            vec![e.to_string()],
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Couldn't retrieve OOB invite. Reason: {e}"),
         )
         .into()),
     }
@@ -220,19 +201,16 @@ pub async fn delete_oobid_handler(
             .oob_discovery_get(&oobid._oobid)
             .await
             .map_err(|e| {
-                MediatorError::MediatorError(
+                MediatorError::problem_with_log(
                     14,
                     session.session_id.clone(),
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.error".into(),
-                        "Database transaction error: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.error",
+                    "Database transaction error: {1}",
+                    vec![e.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
                     format!("Database transaction error: {e}"),
                 )
             })? {
@@ -241,10 +219,10 @@ pub async fn delete_oobid_handler(
                 return Ok((
                     StatusCode::OK,
                     Json(SuccessResponse {
-                        sessionId: "NA".into(),
-                        httpCode: StatusCode::NO_CONTENT.as_u16(),
-                        errorCode: 0,
-                        errorCodeStr: "NA".to_string(),
+                        session_id: "NA".into(),
+                        http_code: StatusCode::NO_CONTENT.as_u16(),
+                        error_code: 0,
+                        error_code_str: "NA".to_string(),
                         message: "NO CONTENT".to_string(),
                         data: None,
                     }),
@@ -258,20 +236,16 @@ pub async fn delete_oobid_handler(
             .unwrap_u8()
             == 0
         {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 45,
                 session.session_id.clone(),
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.permission".into(),
-                    "DID doesn't have permission to access the requested resource".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID doesn't have permission to access the requested resource".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.permission",
+                "Not authorized to delete this OOB invitation",
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -282,10 +256,10 @@ pub async fn delete_oobid_handler(
     Ok((
         StatusCode::OK,
         Json(SuccessResponse {
-            sessionId: session.session_id,
-            httpCode: StatusCode::OK.as_u16(),
-            errorCode: 0,
-            errorCodeStr: "NA".to_string(),
+            session_id: session.session_id,
+            http_code: StatusCode::OK.as_u16(),
+            error_code: 0,
+            error_code_str: "NA".to_string(),
             message: "Success".to_string(),
             data: Some(response.to_string()),
         }),

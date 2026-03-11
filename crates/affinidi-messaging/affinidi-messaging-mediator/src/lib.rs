@@ -12,10 +12,10 @@ use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::extract::{FromRef, FromRequestParts};
 use chrono::{DateTime, Utc};
-use common::{config::Config, jwt_auth::AuthError};
+use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthError};
 use database::Database;
 use http::request::Parts;
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
@@ -44,6 +44,10 @@ pub struct SharedData {
     /// DIDComm Discover Features protocol handler.
     #[cfg(feature = "didcomm")]
     pub discover_features: Arc<DiscoverFeatures>,
+    /// Counter for active WebSocket connections (used for connection limiting).
+    pub active_websocket_count: Arc<AtomicUsize>,
+    /// Per-DID rate limiter for authenticated endpoints.
+    pub did_rate_limiter: DidRateLimiter,
     /// Cancellation token for coordinated graceful shutdown of all background tasks.
     pub shutdown_token: CancellationToken,
 }
@@ -65,6 +69,6 @@ where
     type Rejection = AuthError;
 
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        Ok(Self::from_ref(state)) // <---- added this line
+        Ok(Self::from_ref(state))
     }
 }

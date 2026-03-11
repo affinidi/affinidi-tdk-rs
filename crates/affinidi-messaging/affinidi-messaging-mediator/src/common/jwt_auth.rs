@@ -34,7 +34,8 @@ pub struct TokenPayload {
     pub iss: String,      // Who issued this JWT?
     pub jti: String,      // JWT ID
     pub nbf: u64,         // JWT is not valid before this time
-    pub scp: Vec<String>, // ???
+    /// OAuth2 scopes (reserved for future use)
+    pub scp: Vec<String>,
     pub sub: String,      // subject - who this JWT refers to
 }
 
@@ -74,10 +75,11 @@ impl IntoResponse for AuthError {
             AuthError::Blocked => StatusCode::UNAUTHORIZED,
         };
         let body = Json(json!(ErrorResponse {
-            sessionId: "UNAUTHORIZED".into(),
-            httpCode: status.as_u16(),
-            errorCode: status.as_u16(),
-            errorCodeStr: status.to_string(),
+            session_id: "UNAUTHORIZED".into(),
+            request_id: None::<String>,
+            http_code: status.as_u16(),
+            error_code: status.as_u16(),
+            error_code_str: status.to_string(),
             message: self.to_string(),
         }));
         (status, body).into_response()

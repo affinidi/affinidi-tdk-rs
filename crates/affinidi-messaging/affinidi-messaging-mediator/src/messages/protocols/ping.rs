@@ -1,9 +1,8 @@
-use std::time::SystemTime;
-
+use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
+    ProblemReportScope, ProblemReportSorter,
 };
 use http::StatusCode;
 use serde::Deserialize;
@@ -41,28 +40,22 @@ pub(crate) fn process(
         session_id = session.session_id.as_str()
     )
     .entered();
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = unix_timestamp_secs();
 
     if let Some(expires) = msg.expires_time
         && expires <= now
     {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             31,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.to_string()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "message.expired".into(),
-                "Message has expired: {1}".into(),
-                vec![expires.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Message has expired".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "message.expired",
+            "Message has expired: {1}",
+            vec![expires.to_string()],
+            StatusCode::BAD_REQUEST,
+            "Message has expired",
         ));
     }
 
@@ -70,37 +63,29 @@ pub(crate) fn process(
         if let Some(first) = to.first() {
             first.to_owned()
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 51,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.to".into(),
-                    "Invalid to: header, couldn't get first DID from the field.".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Invalid to: header, couldn't get first DID from the field.".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.to",
+                "Invalid to: header, couldn't get first DID from the field.",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         }
     } else {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             51,
-            session.session_id.to_string(),
+            &session.session_id,
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "message.to".into(),
-                "Missing to: header in message".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Missing to: header in message".to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.to",
+            "Missing to: header in message",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ));
     };
     debug!("To: {}", to);
@@ -122,22 +107,16 @@ pub(crate) fn process(
         let from = if let Some(from) = &msg.from {
             from.to_owned()
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 50,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.anonymous".into(),
-                    "Anonymous Trust-Ping is asking for a response, this is an invalid request!"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Anonymous Trust-Ping is asking for a response, this is an invalid request!"
-                    .to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.anonymous",
+                "Trust-Ping requires a from: header when response_requested is true",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         };
 

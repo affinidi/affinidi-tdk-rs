@@ -148,7 +148,7 @@ mediator_secrets = "${MEDIATOR_SECRETS:file://./conf/secrets.json}"
 ### NOTE: do not use `false` in prod unless TLS is terminated outside of the service
 use_ssl = "${USE_SSL:false}"
 
-### Note: If you comment out the following SSL configs,  will default back to non-TLS mode.
+### Note: If you comment out the following SSL configs, will default back to non-TLS mode.
 ###       Useful if doing testing/debugging without requiring SSL certificate checks
 ### ssl_certificate_file: <path> file that contains the SSL certificate for this service
 ssl_certificate_file = "${SSL_CERTIFICATE_FILE:conf/keys/end.cert}"
@@ -290,7 +290,7 @@ message_size = "${LIMIT_MESSAGE_SIZE:1048576}"
 ### NOTE: -1 means no limit
 queued_send_messages_soft = "${LIMIT_QUEUED_SEND_MESSAGES_SOFT:200}"
 
-### queued_messages_hard: Maximum number of messages that a non-admin account can set the queue_send_messages to (upper bound)
+### queued_send_messages_hard: Maximum number of messages that a non-admin account can set the queue_send_messages to (upper bound)
 ### Default: 1000
 ### NOTE: -1 means no limit
 ### NOTE: Admin accounts can set higher limits beyond the hard limit. Be careful though as this can be used to DoS the mediator
@@ -301,7 +301,7 @@ queued_send_messages_hard = "${LIMIT_QUEUED_SEND_MESSAGES_HARD:1000}"
 ### NOTE: -1 means no limit
 queued_receive_messages_soft = "${LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT:200}"
 
-### queued_messages_hard: Maximum number of messages that a non-admin account can set the queue_receive_messages to (upper bound)
+### queued_receive_messages_hard: Maximum number of messages that a non-admin account can set the queue_receive_messages to (upper bound)
 ### Default: 1000
 ### NOTE: -1 means no limit
 ### NOTE: Admin accounts can set higher limits beyond the hard limit. Be careful though as this can be used to DoS the mediator
@@ -309,7 +309,7 @@ queued_receive_messages_hard = "${LIMIT_QUEUED_RECEIVE_MESSAGES_HARD:1000}"
 
 ### to_keys_per_recipient: Maximum number of keys in a single recipient did
 ### Default: 100
-### NOTE: Protects against a DOS attack where a single message can become a bomb with thousands of recipients and thousands keys of them
+### NOTE: Protects against a DOS attack where a single message can become a bomb with thousands of recipients and thousands of keys
 to_keys_per_recipient = "${LIMIT_TO_KEYS_PER_DID:100}"
 
 ### to_recipients: Maximum number of recipients in a single message
@@ -317,7 +317,7 @@ to_keys_per_recipient = "${LIMIT_TO_KEYS_PER_DID:100}"
 ### NOTE: Protects against a DOS attack where a single message can become a bomb with thousands of recipients
 to_recipients = "${LIMIT_TO_RECIPIENTS:100}"
 
-### ws_size_limit: Maximum size of a websocket request payload in bytes
+### ws_size: Maximum size of a websocket request payload in bytes
 ### Default: 10485760 (10MB)
 ### It is recommended to use infrastructure level limitation instead of application level limitations
 ws_size = "${LIMIT_WS_SIZE:10485760}"
@@ -329,6 +329,29 @@ access_list_limit = "${ACCESS_LIST_LIMIT:1000}"
 ### oob_invite_ttl: Time to live in seconds for OOB invites
 ### Default 86_400
 oob_invite_ttl = "${OOB_INVITE_TTL:86_400}"
+
+### rate_limit_per_ip: Maximum requests per second per IP address
+### Default: 100
+### Set to 0 to disable IP-based rate limiting
+# rate_limit_per_ip = "${LIMIT_RATE_LIMIT_PER_IP:100}"
+
+### rate_limit_burst: Burst size for IP-based rate limiting (additional requests allowed in a burst)
+### Default: 50
+# rate_limit_burst = "${LIMIT_RATE_LIMIT_BURST:50}"
+
+### max_websocket_connections: Maximum number of concurrent WebSocket connections
+### Default: 10000
+### Set to 0 for unlimited connections (not recommended in production)
+# max_websocket_connections = "${LIMIT_MAX_WEBSOCKET_CONNECTIONS:10000}"
+
+### did_rate_limit_per_second: Maximum requests per second per authenticated DID
+### Default: 0 (disabled)
+### Set to 0 to disable per-DID rate limiting
+# did_rate_limit_per_second = "${LIMIT_DID_RATE_LIMIT_PER_SECOND:0}"
+
+### did_rate_limit_burst: Burst size for per-DID rate limiting (additional requests allowed in a burst)
+### Default: 10
+# did_rate_limit_burst = "${LIMIT_DID_RATE_LIMIT_BURST:10}"
 
 ### ****************************************************************************************************************************
 ### Configuration specific to the forwarding processor

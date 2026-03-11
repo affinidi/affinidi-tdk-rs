@@ -32,12 +32,16 @@ pub struct ForwardingProcessorConfig {
     /// Whether to send problem reports to senders on forwarding failure
     #[serde(default = "default_true")]
     pub report_errors: bool,
+    /// Maximum number of tracked endpoint states (LRU eviction when full)
+    #[serde(default = "default_1000_usize")]
+    pub max_endpoints: usize,
 }
 
 fn default_300() -> u64 { 300 }
 fn default_1() -> u64 { 1 }
 fn default_60() -> u64 { 60 }
 fn default_50() -> usize { 50 }
+fn default_1000_usize() -> usize { 1000 }
 fn default_5() -> u32 { 5 }
 fn default_1000() -> u64 { 1000 }
 fn default_60000() -> u64 { 60000 }
@@ -57,6 +61,7 @@ impl Default for ForwardingProcessorConfig {
             max_backoff_ms: 60000,
             consumer_group: "forwarding".to_string(),
             report_errors: true,
+            max_endpoints: 1000,
         }
     }
 }
@@ -82,6 +87,8 @@ pub struct ForwardingProcessorConfigRaw {
     pub consumer_group: String,
     #[serde(default = "default_true_str")]
     pub report_errors: String,
+    #[serde(default = "default_1000_str")]
+    pub max_endpoints: String,
 }
 
 fn default_300_str() -> String { "300".to_string() }
@@ -108,6 +115,7 @@ impl std::convert::TryFrom<ForwardingProcessorConfigRaw> for ForwardingProcessor
             max_backoff_ms: raw.max_backoff_ms.parse().unwrap_or(60000),
             consumer_group: raw.consumer_group,
             report_errors: raw.report_errors.parse().unwrap_or(true),
+            max_endpoints: raw.max_endpoints.parse().unwrap_or(1000),
         })
     }
 }

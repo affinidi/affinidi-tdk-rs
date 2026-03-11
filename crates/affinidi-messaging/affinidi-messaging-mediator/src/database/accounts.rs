@@ -40,7 +40,7 @@ fn _to_account(map: HashMap<String, String>, access_list_count: u32) -> Account 
 impl Database {
     /// Quick and efficient check if an account exists locally in the mediator
     pub(crate) async fn account_exists(&self, did_hash: &str) -> Result<bool, MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         deadpool_redis::redis::cmd("EXISTS")
             .arg(["DID:", did_hash].concat())
@@ -50,7 +50,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("Add failed. Reason: {err}"),
+                    format!("Failed to check account existence. Reason: {err}"),
                 )
             })
     }
@@ -63,7 +63,7 @@ impl Database {
         &self,
         did_hash: &str,
     ) -> Result<Option<Account>, MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         let (details, access_list_count): (HashMap<String, String>, u32) =
             deadpool_redis::redis::pipe()
@@ -76,7 +76,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("Get failed. Reason: {err}"),
+                        format!("Failed to get account details. Reason: {err}"),
                     )
                 })?;
 
@@ -104,7 +104,7 @@ impl Database {
         async move {
             debug!("Adding account to the mediator");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let mut cmd = deadpool_redis::redis::pipe();
             let mut cmd = cmd
@@ -135,7 +135,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("account_add() failed. Reason: {err}"),
+                    format!("Failed to add account. Reason: {err}"),
                 )
             })?;
             debug!("Account added successfully");
@@ -223,7 +223,7 @@ impl Database {
             // Remove from Known DIDs
             // Remove DID Record
             // Remove ACCESS_LIST Set
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             deadpool_redis::redis::pipe()
                 .atomic()
                 .cmd("SREM")
@@ -239,7 +239,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("Error removing DID ({did_hash}) Records. Reason: {err}"),
+                        format!("Failed to remove DID ({did_hash}) records. Reason: {err}"),
                     )
                 })?;
 
@@ -264,7 +264,7 @@ impl Database {
             debug!("Requesting list of accounts from mediator");
             let limit = if limit > 100 { 100 } else { limit };
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let (new_cursor, dids): (u32, Vec<String>) = deadpool_redis::redis::cmd("SSCAN")
                 .arg("KNOWN_DIDS")
@@ -277,7 +277,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("SSCAN cursor ({cursor}) failed. Reason: {err}"),
+                        format!("Failed to scan access list at cursor ({cursor}). Reason: {err}"),
                     )
                 })?;
 
@@ -296,7 +296,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("did_details HGETALL failed. Reason: {err}"),
+                        format!("Failed to get DID details. Reason: {err}"),
                     )
                 })?;
 
@@ -307,7 +307,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("did_access_list SCARD failed. Reason: {err}"),
+                        format!("Failed to get DID access list count. Reason: {err}"),
                     )
                 })?;
 
@@ -345,7 +345,7 @@ impl Database {
         async move {
             debug!("Changing account type");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             deadpool_redis::redis::cmd("HSET")
                 .arg(["DID:", did_hash].concat())
@@ -357,7 +357,7 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("account_change_type() failed. Reason: {err}"),
+                        format!("Failed to change account type. Reason: {err}"),
                     )
                 })?;
             debug!("Account type changed successfully");
@@ -415,7 +415,7 @@ impl Database {
         queue_limit: Option<i32>,
         queue_name: &str,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         match queue_limit {
             None => return Ok(()),
@@ -429,7 +429,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             14,
                             "NA".to_string(),
-                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
+                            format!("Failed to change queue limit ({queue_name}). Reason: {err}"),
                         )
                     })?;
             }
@@ -444,7 +444,7 @@ impl Database {
                         MediatorError::DatabaseError(
                             23,
                             "NA".to_string(),
-                            format!("changing queue_limit ({queue_name}) failed. Reason: {err}"),
+                            format!("Failed to change queue limit ({queue_name}). Reason: {err}"),
                         )
                     })?;
             }

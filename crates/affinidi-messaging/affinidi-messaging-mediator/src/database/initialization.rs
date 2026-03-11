@@ -22,7 +22,7 @@ impl Database {
         self.setup_admin_account(
             &config.mediator_did_hash,
             AccountType::Mediator,
-            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").unwrap(),
+            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").expect("hardcoded ACL ruleset is valid"),
         )
         .await
         .expect("Could not setup mediator account! exiting...");
@@ -39,7 +39,7 @@ impl Database {
     }
 
     async fn _check_schema_version(&self, config: &Config) -> Result<(), MediatorError> {
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         let schema_version: Option<String> =
             deadpool_redis::redis::Cmd::hget("GLOBAL", "SCHEMA_VERSION")
@@ -81,7 +81,7 @@ impl Database {
                     "Database schema version ({}) doesn't match mediator version ({}).",
                     schema_version, mediator_version
                 );
-                if schema_version < Version::parse("0.10.0").unwrap() {
+                if schema_version < Version::parse("0.10.0").expect("hardcoded version string is valid") {
                     // Upgrade the database schema to 0.10.0
                     self.upgrade_0_10_0(&config.security.global_acl_default)
                         .await?;

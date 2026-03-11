@@ -13,14 +13,14 @@ use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use crate::didcomm_compat::{self, MetaEnvelope};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
-    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    problem_report::{ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
 };
 use http::StatusCode;
 #[cfg(feature = "didcomm")]
 use sha256::digest;
 #[cfg(feature = "didcomm")]
-use std::time::SystemTime;
+use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, debug, span};
 
 use super::{ProcessMessageResponse, WrapperType};
@@ -39,20 +39,16 @@ pub(crate) async fn handle_inbound(
     // If only TSP is enabled, we don't support text-based inbound yet
     #[cfg(not(feature = "didcomm"))]
     {
-        Err(MediatorError::MediatorError(
+        Err(MediatorError::problem(
             37,
-            session.session_id.to_string(),
+            &session.session_id,
             None,
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "protocol.unsupported".into(),
-                "No protocol handler available for this message format".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "No protocol handler available for this message format".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "protocol.unsupported",
+            "No protocol handler available for this message format",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ))
     }
 }
@@ -73,19 +69,16 @@ async fn handle_inbound_didcomm(
         let mut envelope = match MetaEnvelope::new(message, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     37,
-                    session.session_id.to_string(),
-                                        None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "message.envelope.read".into(),
-                        "Couldn't read DIDComm envelope: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
+                    &session.session_id,
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.envelope.read",
+                    "Couldn't read DIDComm envelope: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
                     format!("Couldn't read DIDComm envelope: {e}"),
                 ));
             }
@@ -104,19 +97,16 @@ async fn handle_inbound_didcomm(
                     {
                         Ok(ok) => ok,
                         Err(e) => {
-                            return Err(MediatorError::MediatorError(
+                            return Err(MediatorError::problem_with_log(
                                 32,
-                                session.session_id.to_string(),
+                                &session.session_id,
                                 None,
-                                Box::new(ProblemReport::new(
-                                    ProblemReportSorter::Error,
-                                    ProblemReportScope::Protocol,
-                                    "message.unpack".into(),
-                                    "Message unpack failed: envelope {1} Reason: {2}".into(),
-                                    vec![message.to_string(), e.to_string()],
-                                    None,
-                                )),
-                                StatusCode::FORBIDDEN.as_u16(),
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "message.unpack",
+                                "Message unpack failed: envelope {1} Reason: {2}",
+                                vec![message.to_string(), e.to_string()],
+                                StatusCode::FORBIDDEN,
                                 format!("Message unpack failed. Reason: {e}"),
                             ));
                         }
@@ -128,20 +118,16 @@ async fn handle_inbound_didcomm(
                     if metadata.sign_from.is_none()
                         && state.config.security.block_anonymous_outer_envelope
                     {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             50,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.clone()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "message.anonymous".into(),
-                                "Mediator is not allowing anonymous messages".into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::BAD_REQUEST.as_u16(),
-                            "Mediator is not allowing anonymous messages".to_string(),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "message.anonymous",
+                            "Mediator is not allowing anonymous messages",
+                            vec![],
+                            StatusCode::BAD_REQUEST,
                         ));
                     }
 
@@ -157,39 +143,31 @@ async fn handle_inbound_didcomm(
                 } else {
                     // this is a direct delivery method
                     if !state.config.security.local_direct_delivery_allowed {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             71,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             None,
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "direct_delivery.denied".into(),
-                                "Mediator is not accepting direct delivery of DIDComm messages. They must be wrapped in a forwarding envelope".into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::FORBIDDEN.as_u16(),
-                            "Mediator is not accepting direct delivery of DIDComm messages. They must be wrapped in a forwarding envelope".to_string(),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "direct_delivery.denied",
+                            "Mediator is not accepting direct delivery of DIDComm messages. They must be wrapped in a forwarding envelope",
+                            vec![],
+                            StatusCode::FORBIDDEN,
                         ));
                     }
 
                     // Check that the recipient account is local to the mediator
                     if !state.database.account_exists(&digest(to_did)).await? {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             72,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             None,
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "direct_delivery.recipient.unknown".into(),
-                                "Direct Delivery Recipient is not known on this Mediator".into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::FORBIDDEN.as_u16(),
-                            "Direct Delivery Recipient is not known on this Mediator".to_string(),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "direct_delivery.recipient.unknown",
+                            "Direct Delivery Recipient is not known on this Mediator",
+                            vec![],
+                            StatusCode::FORBIDDEN,
                         ));
                     }
 
@@ -206,37 +184,29 @@ async fn handle_inbound_didcomm(
                         };
 
                         if !from_acls.get_send_messages().0 {
-                            return Err(MediatorError::MediatorError(
+                            return Err(MediatorError::problem(
                                 44,
-                                session.session_id.to_string(),
+                                &session.session_id,
                                 None,
-                                Box::new(ProblemReport::new(
                                 ProblemReportSorter::Error,
                                 ProblemReportScope::Protocol,
-                                "direct_delivery.recipient.unknown".into(),
-                                "DID does not have authorization to send messages".into(),
+                                "authorization.send",
+                                "Sender DID is not authorized to send messages through this mediator",
                                 vec![],
-                                None,
-                                )),
-                                StatusCode::FORBIDDEN.as_u16(),
-                                    "DID does not have authorization to send messages".into(),
+                                StatusCode::FORBIDDEN,
                             ));
                         }
                     } else if !state.config.security.local_direct_delivery_allow_anon {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             50,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             None,
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "anonymous".into(),
-                                "DIDComm message appears to be anonymous, yet this transaction will not allow for an anonymous message".into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::FORBIDDEN.as_u16(),
-                            "DIDComm message appears to be anonymous, yet this transaction will not allow for an anonymous message".to_string(),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "message.anonymous",
+                            "Anonymous direct delivery is not allowed by this mediator",
+                            vec![],
+                            StatusCode::FORBIDDEN,
                         ));
                     }
                     if !state
@@ -244,20 +214,16 @@ async fn handle_inbound_didcomm(
                         .access_list_allowed(&digest(to_did), from_hash.as_deref())
                         .await
                     {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             73,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             None,
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "authorization.access_list.denied".into(),
-                                "Delivery blocked due to ACLs (access_list denied)".into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::FORBIDDEN.as_u16(),
-                            "Delivery blocked due to ACLs (access_list denied)".to_string(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.access_list.denied",
+                            "Delivery blocked due to ACLs (access_list denied)",
+                            vec![],
+                            StatusCode::FORBIDDEN,
                         ));
                     }
 
@@ -268,10 +234,7 @@ async fn handle_inbound_didcomm(
                         data: WrapperType::Envelope(
                             to_did.into(),
                             message.into(),
-                            SystemTime::now()
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs()
+                            unix_timestamp_secs()
                                 + state.config.limits.message_expiry_seconds,
                         ),
                     };
@@ -281,20 +244,17 @@ async fn handle_inbound_didcomm(
                     store_message(state, session, &data, &UnpackMetadata::default()).await
                 }
             }
-            _ =>   Err(MediatorError::MediatorError(
+            _ =>   Err(MediatorError::problem_with_log(
                 51,
-                session.session_id.to_string(),
+                &session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "message.to".into(),
-                    "There is no to_did on the envelope! Can't deliver an unknown message. Message: {1}".into(),
-                    vec![message.to_string()],
-                    None,
-                )),
-                StatusCode::UNPROCESSABLE_ENTITY.as_u16(),
-                "There is no to_did on the envelope! Can't deliver an unknown message.".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.to",
+                "There is no to_did on the envelope! Can't deliver an unknown message. Message: {1}",
+                vec![message.to_string()],
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "There is no to_did on the envelope! Can't deliver an unknown message.",
             ))
         }
     }
@@ -316,24 +276,21 @@ fn check_session_signing_match(
         return Ok(());
     }
 
-    Err(MediatorError::MediatorError(
+    Err(MediatorError::problem_with_log(
         52,
-        session.session_id.to_string(),
+        &session.session_id,
         Some(msg_id.to_string()),
-        Box::new(ProblemReport::new(
-            ProblemReportSorter::Error,
-            ProblemReportScope::Protocol,
-            "authorization.did.session_mismatch".into(),
-            "signing DID ({1}) doesn't match this sessions DID".into(),
-            vec![
-                sign_from
-                    .clone()
-                    .unwrap_or("Anonymous".to_string())
-                    .to_string(),
-            ],
-            None,
-        )),
-        StatusCode::BAD_REQUEST.as_u16(),
+        ProblemReportSorter::Error,
+        ProblemReportScope::Protocol,
+        "authorization.did.session_mismatch",
+        "signing DID ({1}) doesn't match this sessions DID",
+        vec![
+            sign_from
+                .clone()
+                .unwrap_or("Anonymous".to_string())
+                .to_string(),
+        ],
+        StatusCode::BAD_REQUEST,
         format!(
             "signing DID ({}) doesn't match this sessions DID",
             sign_from.clone().unwrap_or("Anonymous".to_string())

@@ -29,8 +29,8 @@ impl RateLimiterState {
             return Self { limiter: None };
         }
 
-        let quota = Quota::per_second(NonZeroU32::new(per_second).unwrap())
-            .allow_burst(NonZeroU32::new(burst.max(1)).unwrap());
+        let quota = Quota::per_second(NonZeroU32::new(per_second).expect("per_second checked non-zero above"))
+            .allow_burst(NonZeroU32::new(burst.max(1)).expect("burst.max(1) is always non-zero"));
 
         Self {
             limiter: Some(Arc::new(RateLimiter::keyed(quota))),
@@ -102,6 +102,7 @@ where
         if let Some(ip) = ip {
             if limiter.check_key(&ip).is_err() {
                 warn!("Rate limit exceeded for IP: {}", ip);
+                metrics::counter!(super::metrics::names::RATE_LIMITED_TOTAL).increment(1);
                 return Box::pin(async move {
                     Ok((
                         StatusCode::TOO_MANY_REQUESTS,

@@ -123,11 +123,16 @@ pub struct MPAuthorizationTokens {
     pub refresh_expires_at: String,
 }
 
-/// Refresh tokens response from the authentication service
+/// Refresh tokens response from the authentication service.
+/// Includes rotated refresh token (one-time use).
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthRefreshResponse {
     pub access_token: String,
     pub access_expires_at: u64,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub refresh_expires_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -548,6 +553,11 @@ impl DIDAuthentication {
 
                 tokens.access_token = new_tokens.data.access_token;
                 tokens.access_expires_at = new_tokens.data.access_expires_at;
+                // Update rotated refresh token if provided
+                if !new_tokens.data.refresh_token.is_empty() {
+                    tokens.refresh_token = new_tokens.data.refresh_token;
+                    tokens.refresh_expires_at = new_tokens.data.refresh_expires_at;
+                }
 
                 debug!("JWT successfully refreshed");
                 Ok(())

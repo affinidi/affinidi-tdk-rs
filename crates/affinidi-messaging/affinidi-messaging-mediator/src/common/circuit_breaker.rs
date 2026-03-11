@@ -12,7 +12,6 @@
 //! - HalfOpen → Open: on failure (resets the timer)
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info, warn};
 
 /// Circuit breaker state values
@@ -127,10 +126,7 @@ impl CircuitBreaker {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    super::time::unix_timestamp_secs()
 }
 
 #[cfg(test)]

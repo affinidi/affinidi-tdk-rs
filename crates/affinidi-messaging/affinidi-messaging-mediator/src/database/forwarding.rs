@@ -54,7 +54,7 @@ impl Database {
         entry: &ForwardQueueEntry,
         max_len: usize,
     ) -> Result<String, MediatorError> {
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         let mut cmd = deadpool_redis::redis::cmd("XADD");
         cmd.arg("FORWARD_Q");
@@ -106,7 +106,7 @@ impl Database {
         &self,
         group_name: &str,
     ) -> Result<(), MediatorError> {
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         // XGROUP CREATE FORWARD_Q <group> 0 MKSTREAM
         let result: Result<String, _> = deadpool_redis::redis::cmd("XGROUP")
@@ -150,7 +150,7 @@ impl Database {
         count: usize,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         // XREADGROUP GROUP <group> <consumer> BLOCK <ms> COUNT <n> STREAMS FORWARD_Q >
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
@@ -206,7 +206,7 @@ impl Database {
             return Ok(());
         }
 
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         let mut cmd = deadpool_redis::redis::cmd("XACK");
         cmd.arg("FORWARD_Q").arg(group_name);
@@ -234,7 +234,7 @@ impl Database {
             return Ok(());
         }
 
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         let mut cmd = deadpool_redis::redis::cmd("XDEL");
         cmd.arg("FORWARD_Q");
@@ -262,7 +262,7 @@ impl Database {
         min_idle_ms: u64,
         count: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
-        let mut conn = self.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         // XAUTOCLAIM FORWARD_Q <group> <consumer> <min-idle-ms> 0 COUNT <n>
         // Returns: [next-start-id, [[id, [field, value, ...]], ...], [deleted-ids]]

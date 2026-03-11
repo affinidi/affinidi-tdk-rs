@@ -26,11 +26,11 @@ pub(crate) mod upgrades;
 /// Mediator-specific database wrapper around [`DatabaseHandler`].
 ///
 /// Provides mediator-level operations (sessions, accounts, forwarding, etc.)
-/// while delegating low-level Redis access through `Deref` to `DatabaseHandler`.
+/// while delegating low-level Redis access through `self.handler` to `DatabaseHandler`.
 /// Includes a circuit breaker for Redis connection resilience.
 #[derive(Clone)]
 pub struct Database {
-    handler: DatabaseHandler,
+    pub(crate) handler: DatabaseHandler,
     circuit_breaker: Arc<CircuitBreaker>,
 }
 
@@ -70,13 +70,5 @@ impl Database {
     /// Get the circuit breaker state for health checks
     pub fn circuit_breaker_state(&self) -> &'static str {
         self.circuit_breaker.state_str()
-    }
-}
-
-impl std::ops::Deref for Database {
-    type Target = DatabaseHandler;
-
-    fn deref(&self) -> &DatabaseHandler {
-        &self.handler
     }
 }

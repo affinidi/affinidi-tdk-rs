@@ -77,6 +77,8 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 governor = "0.8"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
 toml = "1"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }

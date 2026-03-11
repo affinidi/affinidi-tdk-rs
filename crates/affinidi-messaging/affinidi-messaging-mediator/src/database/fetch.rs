@@ -18,7 +18,7 @@ impl Database {
     ) -> Result<GetMessagesResponse, MediatorError> {
         let _span = span!(Level::DEBUG, "fetch_messages");
         async move {
-            let mut conn = self.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
             let start_id = options.start_id.as_deref().unwrap_or("-");
 
