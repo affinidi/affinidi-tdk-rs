@@ -23,12 +23,12 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 
 [dependencies]
 # Affinidi crates
-affinidi-cesr = { path = "../affinidi-tdk/common/affinidi-cesr" }
-affinidi-messaging-core = { path = "../affinidi-messaging/affinidi-messaging-core", optional = true }
+affinidi-cesr = { path = "../../affinidi-tdk/common/affinidi-cesr" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", optional = true }
 
 # Optional Affinidi crates (for DID-based VID resolution)
-affinidi-did-resolver-cache-sdk = { path = "../affinidi-did-resolver/affinidi-did-resolver-cache-sdk", optional = true }
-affinidi-did-common = { path = "../affinidi-did-resolver/affinidi-did-common", optional = true }
+affinidi-did-resolver-cache-sdk = { path = "../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk", optional = true }
+affinidi-did-common = { path = "../../affinidi-did-resolver/affinidi-did-common", optional = true }
 
 # Crypto
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }
@@ -48,11 +48,11 @@ url = { version = "2.5", features = ["serde"] }
 thiserror = "2"
 
 # Async (optional, for DID resolution and messaging-core)
-tokio = { version = "1.47", features = ["sync", "macros", "rt-multi-thread"], optional = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"], optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.47", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 hex = "0.4"
 
 [lints]

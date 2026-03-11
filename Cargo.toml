@@ -28,7 +28,7 @@ members = [
 
   "crates/affinidi-tdk/affinidi-tdk",
 
-  "crates/affinidi-tsp",
+  "crates/affinidi-messaging/affinidi-tsp",
   "crates/affinidi-messaging/affinidi-messaging-didcomm",
 
   "crates/affinidi-meeting-place",
@@ -50,6 +50,7 @@ publish = true
 rust-version = "1.90.0"
 
 [workspace.dependencies]
+tokio = "1.50"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

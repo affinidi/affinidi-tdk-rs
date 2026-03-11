@@ -30,7 +30,7 @@ tsp = [
 # Affinidi Crates
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", optional = true }
-affinidi-tsp = { path = "../../affinidi-tsp", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", optional = true }
 affinidi-encoding = { version = "0.1", optional = true }
 affinidi-messaging-mediator-processors = { version = "0.12.1", path = "affinidi-messaging-mediator-processors" }
 affinidi-messaging-mediator-common = { version = "0.12.1", path = "affinidi-messaging-mediator-common" }
