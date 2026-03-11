@@ -24,6 +24,8 @@ graph TD
     subgraph Messaging["Affinidi Messaging"]
         SDK["messaging-sdk"]
         DIDCOMM["messaging-didcomm"]
+        CORE["messaging-core"]
+        TSP["affinidi-tsp"]
         MEDIATOR["messaging-mediator"]
         HELPERS["messaging-helpers"]
         TEXTCLIENT["messaging-text-client"]
@@ -63,8 +65,12 @@ graph TD
 
     SDK --> DIDCOMM
     SDK --> CACHESDK
+    DIDCOMM --> CORE
+    TSP --> CORE
     MEDIATOR --> SDK
+    MEDIATOR --> TSP
     HELPERS --> SDK
+    HELPERS --> TSP
     TEXTCLIENT --> SDK
     MP --> AUTH
     MP --> TDKCOMMON
@@ -101,11 +107,11 @@ Secure, private messaging built on [DIDComm v2](https://identity.foundation/didc
 | [`affinidi-messaging-helpers`](./crates/affinidi-messaging/affinidi-messaging-helpers/) | Setup tools, environment config, and examples |
 | [`affinidi-messaging-text-client`](./crates/affinidi-messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
-### [Trust Spanning Protocol](./crates/affinidi-tsp/)
+### [Trust Spanning Protocol](./crates/affinidi-messaging/affinidi-tsp/)
 
 | Crate | Description |
 |---|---|
-| [`affinidi-tsp`](./crates/affinidi-tsp/) | TSP implementation with HPKE-Auth encryption and CESR encoding |
+| [`affinidi-tsp`](./crates/affinidi-messaging/affinidi-tsp/) | TSP implementation with HPKE-Auth encryption and CESR encoding |
 | [`affinidi-cesr`](./crates/affinidi-tdk/common/affinidi-cesr/) | CESR codec for binary message encoding |
 
 ### [Affinidi DID Resolver](./crates/affinidi-did-resolver/)

@@ -17,8 +17,8 @@ end-to-end encrypted, authenticated digital communication.
 
 ```mermaid
 graph LR
-    A["Alice<br/>(SDK Client)"] -->|DIDComm| M["Mediator<br/>(Relay Service)"]
-    M -->|DIDComm| B["Bob<br/>(SDK Client)"]
+    A["Alice<br/>(SDK Client)"] -->|DIDComm / TSP| M["Mediator<br/>(Relay Service)"]
+    M -->|DIDComm / TSP| B["Bob<br/>(SDK Client)"]
     M ---|Storage| R[(Redis)]
     A -.->|Resolve DIDs| DR["DID Resolver"]
     B -.->|Resolve DIDs| DR
@@ -36,6 +36,7 @@ mediator routes and stores messages but **cannot** read their content.
 | [`affinidi-messaging-core`](./affinidi-messaging-core/) | Protocol-agnostic messaging traits |
 | [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP support via feature flags) |
 | [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
+| [`affinidi-tsp`](./affinidi-tsp/) | Trust Spanning Protocol implementation (HPKE-Auth, CESR) |
 | [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
 **Dependencies:**
@@ -89,6 +90,7 @@ pickup.
 - [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
 - [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
 - [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
+- [`affinidi-cesr`](../affinidi-tdk/common/affinidi-cesr/) — CESR codec used by TSP
 
 ## License
 

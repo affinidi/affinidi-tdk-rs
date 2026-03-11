@@ -34,8 +34,8 @@ cargo build --features "didcomm,tsp"
 
 ```mermaid
 graph TD
-    A["Alice"] -->|DIDComm| MED["Mediator Service"]
-    B["Bob"] -->|DIDComm| MED
+    A["Alice"] -->|DIDComm / TSP| MED["Mediator Service"]
+    B["Bob"] -->|DIDComm / TSP| MED
     MED ---|Message Storage| REDIS[(Redis)]
     MED --- ACL["Access Control<br/>Lists (ACLs)"]
     MED --- PROC["Processors<br/>(Forwarding, Expiry)"]
@@ -142,6 +142,8 @@ examples.
 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Client SDK
 - [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol
+- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
+- [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
 - [`affinidi-did-resolver`](../../affinidi-did-resolver/) — DID resolution
 
 ## License
