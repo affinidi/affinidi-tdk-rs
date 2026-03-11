@@ -65,7 +65,7 @@ did-web = "0.3"
 ssi-dids-core = "0.1"
 did-resolver-cheqd = { version = "1.0", optional = true }
 thiserror = "2.0"
-tokio = { version = "1.50", features = ["full"] }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net", "io-util"] }
 tokio-rustls = { version = "0.26", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

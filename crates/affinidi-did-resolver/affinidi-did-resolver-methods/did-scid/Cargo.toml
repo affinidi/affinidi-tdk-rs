@@ -34,4 +34,4 @@ thiserror = "2.0"
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1.50", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }

@@ -31,7 +31,7 @@ tracing = "0.1"
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
 criterion = { version = "0.8", features = ["html_reports"] }
-tokio = { version = "1.49" }
+tokio = { workspace = true }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",

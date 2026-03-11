@@ -36,7 +36,7 @@ rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-tokio = { version = "1.49", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",
   "fmt",
