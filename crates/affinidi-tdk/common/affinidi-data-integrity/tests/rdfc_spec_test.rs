@@ -7,8 +7,8 @@ use tracing_subscriber::filter;
 
 /// W3C vc-di-eddsa B.1 test vectors for eddsa-rdfc-2022
 /// Uses the same Alumni Credential and key pair as the JCS reference test.
-#[test]
-fn eddsa_rdfc_2022_reference() {
+#[tokio::test]
+async fn eddsa_rdfc_2022_reference() {
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter::EnvFilter::from_default_env())
         .finish();
@@ -52,6 +52,7 @@ fn eddsa_rdfc_2022_reference() {
         &secret,
         Some("2023-02-24T23:36:38Z".to_string()),
     )
+    .await
     .expect("Couldn't sign Document");
 
     // Verify the proof value matches the W3C spec expected output
@@ -74,8 +75,8 @@ fn eddsa_rdfc_2022_reference() {
 }
 
 /// Verify that a JCS-signed document cannot be verified through the RDFC path
-#[test]
-fn jcs_proof_cannot_verify_as_rdfc() {
+#[tokio::test]
+async fn jcs_proof_cannot_verify_as_rdfc() {
     let input_doc = json!({
         "@context": [
             "https://www.w3.org/ns/credentials/v2",
@@ -115,6 +116,7 @@ fn jcs_proof_cannot_verify_as_rdfc() {
         &secret,
         Some("2023-02-24T23:36:38Z".to_string()),
     )
+    .await
     .expect("Couldn't sign Document with JCS");
 
     // Tamper with the cryptosuite to pretend it's RDFC
@@ -135,8 +137,8 @@ fn jcs_proof_cannot_verify_as_rdfc() {
 }
 
 /// Verify that an RDFC-signed document cannot be verified through the JCS path
-#[test]
-fn rdfc_proof_cannot_verify_as_jcs() {
+#[tokio::test]
+async fn rdfc_proof_cannot_verify_as_jcs() {
     let input_doc = json!({
         "@context": [
             "https://www.w3.org/ns/credentials/v2",
@@ -176,6 +178,7 @@ fn rdfc_proof_cannot_verify_as_jcs() {
         &secret,
         Some("2023-02-24T23:36:38Z".to_string()),
     )
+    .await
     .expect("Couldn't sign Document with RDFC");
 
     // Tamper with the cryptosuite to pretend it's JCS

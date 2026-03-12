@@ -5,7 +5,8 @@ use affinidi_secrets_resolver::secrets::Secret;
 use serde_json::json;
 use tracing_subscriber::filter;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -66,6 +67,7 @@ fn main() {
         .expect("Couldn't create Secret");
 
     let proof = DataIntegrityProof::sign_jcs_data(&input_doc, None, &secret, None)
+        .await
         .expect("Couldn't sign Document");
 
     let _ = verify_data_with_public_key(&input_doc, None, &proof, secret.get_public_bytes())

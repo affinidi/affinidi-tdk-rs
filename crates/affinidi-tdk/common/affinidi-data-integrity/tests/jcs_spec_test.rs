@@ -5,8 +5,8 @@ use affinidi_secrets_resolver::secrets::Secret;
 use serde_json::json;
 use tracing_subscriber::filter;
 
-#[test]
-fn eddsa_jcs_2022_reference() {
+#[tokio::test]
+async fn eddsa_jcs_2022_reference() {
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
         // Use a more compact, abbreviated log format
@@ -53,6 +53,7 @@ fn eddsa_jcs_2022_reference() {
         &secret,
         Some("2023-02-24T23:36:38Z".to_string()),
     )
+    .await
     .expect("Couldn't sign Document");
 
     let validated =
