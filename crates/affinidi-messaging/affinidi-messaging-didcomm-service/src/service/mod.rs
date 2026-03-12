@@ -103,7 +103,7 @@ impl DIDCommService {
                     state,
                     restart_count: handle
                         .restart_count
-                        .load(std::sync::atomic::Ordering::Relaxed),
+                        .load(std::sync::atomic::Ordering::Acquire),
                     uptime: handle.started_at.elapsed(),
                 }
             })

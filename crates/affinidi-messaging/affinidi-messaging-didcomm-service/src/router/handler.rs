@@ -8,6 +8,11 @@ use crate::handler::extractor::Extensions;
 use crate::handler::{FromMessageParts, HandlerContext, MessageParts};
 use crate::response::DIDCommResponse;
 
+/// Route-level message handler with automatic argument extraction.
+///
+/// Prefer using `handler_fn` with a plain async function rather than implementing
+/// this trait directly. Arguments are extracted from `MessageParts` — each of
+/// `Message` and `UnpackMetadata` can only be extracted once per invocation.
 #[async_trait]
 pub trait MessageHandler: Send + Sync + 'static {
     async fn handle(

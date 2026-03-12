@@ -15,6 +15,11 @@ use crate::response::DIDCommResponse;
 pub use handler::{MessageHandler, handler_fn};
 use route::Route;
 
+/// Message router that dispatches incoming DIDComm messages to handlers based on message type.
+///
+/// Routes are matched in order — the first matching route wins. If no route matches,
+/// the optional fallback handler is invoked. Middleware layers are applied to every
+/// matched route in the order they were added.
 pub struct Router {
     routes: Vec<Route>,
     fallback: Option<Arc<dyn MessageHandler>>,
@@ -32,14 +37,26 @@ impl Router {
         }
     }
 
-    pub fn route(mut self, pattern: &str, handler: impl MessageHandler) -> Self {
-        self.routes.push(Route::new(pattern, Arc::new(handler)));
-        self
+    /// Add an exact-match route for a message type. Returns an error if the pattern is invalid.
+    pub fn route(
+        mut self,
+        pattern: &str,
+        handler: impl MessageHandler,
+    ) -> Result<Self, DIDCommServiceError> {
+        self.routes
+            .push(Route::new(pattern, Arc::new(handler))?);
+        Ok(self)
     }
 
-    pub fn route_regex(mut self, pattern: &str, handler: impl MessageHandler) -> Self {
-        self.routes.push(Route::regex(pattern, Arc::new(handler)));
-        self
+    /// Add a regex-match route for a message type. Returns an error if the pattern is invalid.
+    pub fn route_regex(
+        mut self,
+        pattern: &str,
+        handler: impl MessageHandler,
+    ) -> Result<Self, DIDCommServiceError> {
+        self.routes
+            .push(Route::regex(pattern, Arc::new(handler))?);
+        Ok(self)
     }
 
     pub fn fallback(mut self, handler: impl MessageHandler) -> Self {

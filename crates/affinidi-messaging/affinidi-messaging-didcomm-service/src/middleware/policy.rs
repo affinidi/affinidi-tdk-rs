@@ -42,11 +42,19 @@ impl MessagePolicy {
 
     pub fn allow_anonymous_sender(mut self, val: bool) -> Self {
         self.allow_anonymous_sender = val;
+        if !val {
+            // Disallowing anonymous senders implies requiring a sender DID
+            self.require_sender_did = true;
+        }
         self
     }
 
     pub fn require_sender_did(mut self, val: bool) -> Self {
         self.require_sender_did = val;
+        if val {
+            // Requiring a sender DID implies disallowing anonymous senders
+            self.allow_anonymous_sender = false;
+        }
         self
     }
 
@@ -93,7 +101,7 @@ impl MiddlewareHandler for MessagePolicy {
             tracing::debug!(
                 "[policy] Rejected message {} from {}: {}",
                 message.id,
-                ctx.sender_did,
+                ctx.sender_did.as_deref().unwrap_or("<anon>"),
                 violation
             );
             return Err(violation.into());
@@ -201,9 +209,27 @@ mod tests {
         let policy = MessagePolicy::new().allow_anonymous_sender(false);
         assert!(
             policy
-                .check(&msg_with_from(None), &meta(false, false, false, false))
+                .check(
+                    &msg_with_from(Some("did:example:sender")),
+                    &meta(false, false, false, false)
+                )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn disallow_anonymous_implies_require_sender_did() {
+        let policy = MessagePolicy::new().allow_anonymous_sender(false);
+        // With no sender DID, MissingSenderDid is checked (require_sender_did was set implicitly)
+        let result = policy.check(&msg_with_from(None), &meta(false, false, false, false));
+        assert!(matches!(result, Err(PolicyViolation::MissingSenderDid)));
+    }
+
+    #[test]
+    fn require_sender_did_implies_disallow_anonymous() {
+        let policy = MessagePolicy::new().require_sender_did(true);
+        let result = policy.check(&msg_with_from(None), &meta(false, false, false, true));
+        assert!(matches!(result, Err(PolicyViolation::AnonymousSender)));
     }
 
     #[test]

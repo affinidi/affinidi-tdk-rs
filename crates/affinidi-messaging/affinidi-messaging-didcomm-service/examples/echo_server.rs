@@ -43,16 +43,23 @@ async fn echo_handler(
     Extension(config): Extension<AppConfig>,
     Extension(db): Extension<Db>,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
+    let sender_key = ctx
+        .sender_did
+        .clone()
+        .unwrap_or_else(|| "<anon>".to_string());
     let count = {
         let mut store = db.write().await;
-        let entry = store.entry(ctx.sender_did.clone()).or_insert(0);
+        let entry = store.entry(sender_key).or_insert(0);
         *entry += 1;
         *entry
     };
 
     info!(
         "[{}] Echo #{} from={} type={}",
-        config.server_name, count, ctx.sender_did, message.type_
+        config.server_name,
+        count,
+        ctx.sender_did.as_deref().unwrap_or("<anon>"),
+        message.type_
     );
 
     let response_body = json!({
@@ -72,7 +79,11 @@ async fn problem_report_handler(
     ctx: HandlerContext,
     message: Message,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
-    warn!("Problem report from {}: {:?}", ctx.sender_did, message.body);
+    warn!(
+        "Problem report from {}: {:?}",
+        ctx.sender_did.as_deref().unwrap_or("<anon>"),
+        message.body
+    );
     Ok(None)
 }
 
@@ -82,7 +93,8 @@ async fn fallback_handler(
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!(
         "Unhandled message type '{}' from {}",
-        message.type_, ctx.sender_did
+        message.type_,
+        ctx.sender_did.as_deref().unwrap_or("<anon>")
     );
     Ok(Some(DIDCommResponse::problem_report(
         ProblemReport::bad_request(format!("Unsupported message type: {}", message.type_)),
@@ -140,7 +152,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             ..Default::default()
         }],
-        retry: RetryConfig::default(),
     };
 
     let shutdown = CancellationToken::new();
@@ -168,11 +179,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route_regex(
             r"https://example\.com/protocols/echo/.+",
             handler_fn(echo_handler),
-        )
+        )?
         .route(
             "https://didcomm.org/report-problem/2.0/problem-report",
             handler_fn(problem_report_handler),
-        )
+        )?
         .fallback(handler_fn(fallback_handler))
         .layer(
             MessagePolicy::new()

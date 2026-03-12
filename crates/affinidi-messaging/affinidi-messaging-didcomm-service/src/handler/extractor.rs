@@ -31,6 +31,10 @@ pub struct MessageParts {
     pub extensions: Extensions,
 }
 
+/// Extract a value from the incoming message parts for use as a handler argument.
+///
+/// `Message` and `UnpackMetadata` are consumed on extraction — requesting the
+/// same type twice in one handler will return an error.
 pub trait FromMessageParts: Sized + Send {
     fn from_parts(parts: &mut MessageParts) -> Result<Self, DIDCommServiceError>;
 }

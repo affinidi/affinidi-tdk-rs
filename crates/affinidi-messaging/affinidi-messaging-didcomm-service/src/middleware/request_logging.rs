@@ -19,7 +19,11 @@ impl MiddlewareHandler for RequestLogging {
     ) -> MiddlewareResult {
         let start = Instant::now();
         let message_type = message.type_.clone();
-        let sender = ctx.sender_did.clone();
+        let sender = ctx
+            .sender_did
+            .as_deref()
+            .unwrap_or("<anon>")
+            .to_string();
         let profile = ctx.profile.inner.alias.clone();
 
         let result = next.run(ctx, message, meta).await;

@@ -64,6 +64,10 @@ impl Next {
     }
 }
 
+/// Middleware that intercepts messages before they reach the route handler.
+///
+/// Call `next.run(ctx, message, meta)` to pass control to the next middleware
+/// or the final handler. Return early to short-circuit the chain.
 #[async_trait]
 pub trait MiddlewareHandler: Send + Sync + 'static {
     async fn handle(

@@ -8,51 +8,50 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::listener::Listener;
+use crate::error::DIDCommServiceError;
 
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
 
 impl Listener {
-    pub(crate) async fn set_acl_mode(&self) {
-        let atm = self.atm();
-        let profile = self.profile();
+    pub(crate) async fn set_acl_mode(&self) -> Result<(), DIDCommServiceError> {
+        let atm = self.atm()?;
+        let profile = self.profile()?;
         let acl_mode = &self.config.acl_mode;
 
-        let account_result = atm.mediator().account_get(profile, None).await;
-
-        let account_info = match account_result {
-            Ok(Some(info)) => info,
-            Ok(None) => {
-                debug!(
-                    "[profile = {}] Failed to get account info",
-                    profile.inner.alias
-                );
-                return;
-            }
-            Err(e) => {
-                debug!(
+        let account_info = atm
+            .mediator()
+            .account_get(profile, None)
+            .await
+            .map_err(|e| {
+                DIDCommServiceError::StartupFailed(format!(
                     "[profile = {}] Failed to get account info: {}",
                     profile.inner.alias, e
-                );
-                return;
-            }
-        };
+                ))
+            })?
+            .ok_or_else(|| {
+                DIDCommServiceError::StartupFailed(format!(
+                    "[profile = {}] No account info returned",
+                    profile.inner.alias
+                ))
+            })?;
 
         let mut acls = MediatorACLSet::from_u64(account_info.acls);
 
         debug!("ACL_MODE: Configured to {:?}", acl_mode);
 
-        if let Err(e) = acls.set_access_list_mode(acl_mode.clone(), true, false) {
-            debug!("Failed to set ACL mode: {}", e);
-            return;
-        }
+        acls.set_access_list_mode(acl_mode.clone(), true, false)
+            .map_err(|e| {
+                DIDCommServiceError::StartupFailed(format!("Failed to set ACL mode: {}", e))
+            })?;
 
-        if let Err(e) = atm
-            .mediator()
+        atm.mediator()
             .acls_set(profile, &digest(&profile.inner.did), &acls)
             .await
-        {
-            debug!("Failed to apply ACL settings: {}", e);
-        }
+            .map_err(|e| {
+                DIDCommServiceError::StartupFailed(format!("Failed to apply ACL settings: {}", e))
+            })?;
+
+        Ok(())
     }
 
     pub(crate) async fn run_periodic_offline_sync(

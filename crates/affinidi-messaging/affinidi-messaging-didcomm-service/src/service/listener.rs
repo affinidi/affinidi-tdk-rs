@@ -5,8 +5,9 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::config::ListenerConfig;
 use crate::crypto::MessageCryptoProvider;
@@ -15,6 +16,8 @@ use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::response::DIDCommResponse;
 use crate::transport;
 use crate::utils::{get_parent_thread_id, get_thread_id};
+
+const ATM_OPERATION_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) struct Listener {
     pub config: ListenerConfig,
@@ -42,12 +45,16 @@ impl Listener {
         }
     }
 
-    pub fn atm(&self) -> &ATM {
-        self.atm.as_ref().expect("Listener not connected")
+    pub(crate) fn atm(&self) -> Result<&ATM, DIDCommServiceError> {
+        self.atm
+            .as_ref()
+            .ok_or_else(|| DIDCommServiceError::Internal("Listener not connected".into()))
     }
 
-    pub fn profile(&self) -> &Arc<ATMProfile> {
-        self.profile.as_ref().expect("Listener not connected")
+    pub(crate) fn profile(&self) -> Result<&Arc<ATMProfile>, DIDCommServiceError> {
+        self.profile
+            .as_ref()
+            .ok_or_else(|| DIDCommServiceError::Internal("Listener not connected".into()))
     }
 
     pub async fn connect(&mut self) -> Result<(), DIDCommServiceError> {
@@ -69,7 +76,7 @@ impl Listener {
         let atm_profile = ATMProfile::from_tdk_profile(&atm, &self.config.profile).await?;
 
         let profile_arc = match tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(ATM_OPERATION_TIMEOUT_SECS),
             atm.profile_add(&atm_profile, false),
         )
         .await
@@ -90,43 +97,86 @@ impl Listener {
     }
 
     pub async fn listen(&self) -> Result<(), DIDCommServiceError> {
-        self.set_acl_mode().await;
+        self.set_acl_mode().await?;
 
-        self.atm()
-            .profile_start_live_streaming(self.profile(), false, true)
-            .await
-            .map_err(|e| DIDCommServiceError::StartupFailed(e.to_string()))?;
+        let atm = self.atm()?;
+        let profile = self.profile()?;
 
+        tokio::time::timeout(
+            Duration::from_secs(ATM_OPERATION_TIMEOUT_SECS),
+            atm.profile_start_live_streaming(profile, false, true),
+        )
+        .await
+        .map_err(DIDCommServiceError::Timeout)?
+        .map_err(|e| DIDCommServiceError::StartupFailed(e.to_string()))?;
+
+        let mut tasks = JoinSet::new();
+
+        // Spawn offline sync as a tracked task
         let shutdown_clone = self.shutdown.clone();
-        let atm_clone = self.atm().clone();
-        let profile_clone = self.profile().clone();
-        tokio::spawn(async move {
+        let atm_clone = atm.clone();
+        let profile_clone = profile.clone();
+        tasks.spawn(async move {
             Listener::run_periodic_offline_sync(&atm_clone, &profile_clone, &shutdown_clone).await;
         });
 
         loop {
+            // Reap completed tasks and log panics
+            while let Some(result) = tasks.try_join_next() {
+                if let Err(e) = result
+                    && e.is_panic()
+                {
+                    warn!(
+                        "[profile = {}] Handler task panicked: {}",
+                        profile.inner.alias, e
+                    );
+                }
+            }
+
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
-                    debug!("[profile = {}] Listener received shutdown signal", self.profile().inner.alias);
-                    return Ok(());
+                    debug!("[profile = {}] Listener received shutdown signal", profile.inner.alias);
+                    break;
                 }
-                result = self.process_next_message() => {
+                result = self.process_next_message(&mut tasks) => {
                     if let Err(e) = result {
                         debug!(
                             "[profile = {}] Error processing message: {}",
-                            self.profile().inner.alias, e
+                            profile.inner.alias, e
                         );
                     }
                 }
             }
         }
+
+        // Drain in-flight tasks on shutdown
+        debug!(
+            "[profile = {}] Waiting for {} in-flight tasks to complete",
+            profile.inner.alias,
+            tasks.len()
+        );
+        while let Some(result) = tasks.join_next().await {
+            if let Err(e) = result
+                && e.is_panic()
+            {
+                warn!(
+                    "[profile = {}] Handler task panicked during shutdown: {}",
+                    profile.inner.alias, e
+                );
+            }
+        }
+
+        Ok(())
     }
 
-    async fn process_next_message(&self) -> Result<(), DIDCommServiceError> {
+    async fn process_next_message(
+        &self,
+        tasks: &mut JoinSet<()>,
+    ) -> Result<(), DIDCommServiceError> {
         let wait_duration = Duration::from_secs(self.config.message_wait_duration_secs);
         let auto_delete = self.config.auto_delete;
-        let atm = self.atm();
-        let profile = self.profile();
+        let atm = self.atm()?;
+        let profile = self.profile()?;
 
         let packed = atm
             .message_pickup()
@@ -140,7 +190,7 @@ impl Listener {
                 .unpack(atm, profile, &packed_message)
                 .await?;
 
-            let sender_did = message.from.clone().unwrap_or_else(|| "anon".into());
+            let sender_did = message.from.clone();
             let thread_id = get_thread_id(&message).or_else(|| Some(message.id.clone()));
             let parent_thread_id = get_parent_thread_id(&message);
 
@@ -156,7 +206,7 @@ impl Listener {
             let handler = self.handler.clone();
             let crypto_provider = self.crypto_provider.clone();
             let profile_alias = ctx.profile.inner.alias.clone();
-            tokio::spawn(async move {
+            tasks.spawn(async move {
                 match handler.handle(ctx.clone(), message, meta).await {
                     Ok(Some(response)) => {
                         if let Err(e) =
@@ -187,7 +237,7 @@ impl Listener {
         response: DIDCommResponse,
         crypto: &dyn MessageCryptoProvider,
     ) -> Result<(), DIDCommServiceError> {
-        let message = response.into_message(ctx);
+        let message = response.into_message(ctx)?;
         transport::send_response(ctx, message, crypto).await
     }
 }

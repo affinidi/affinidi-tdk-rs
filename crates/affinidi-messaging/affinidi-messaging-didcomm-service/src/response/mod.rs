@@ -56,11 +56,19 @@ impl DIDCommResponse {
         self
     }
 
-    pub(crate) fn into_message(self, ctx: &HandlerContext) -> Message {
+    pub(crate) fn into_message(
+        self,
+        ctx: &HandlerContext,
+    ) -> Result<Message, crate::error::DIDCommServiceError> {
         let from = self.from.unwrap_or_else(|| ctx.profile.inner.did.clone());
 
         let to = if self.to.is_empty() {
-            vec![ctx.sender_did.clone()]
+            let sender = ctx.sender_did.as_deref().ok_or_else(|| {
+                crate::error::DIDCommServiceError::Transport(
+                    "Cannot build response: message has no sender DID to reply to".into(),
+                )
+            })?;
+            vec![sender.to_string()]
         } else {
             self.to
         };
@@ -82,7 +90,7 @@ impl DIDCommResponse {
             builder = builder.pthid(pthid);
         }
 
-        builder.finalize()
+        Ok(builder.finalize())
     }
 }
 

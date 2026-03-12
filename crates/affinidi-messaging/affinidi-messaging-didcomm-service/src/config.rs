@@ -7,7 +7,6 @@ use crate::crypto::MessageCryptoProvider;
 
 pub struct DIDCommServiceConfig {
     pub listeners: Vec<ListenerConfig>,
-    pub retry: RetryConfig,
 }
 
 pub struct ListenerConfig {

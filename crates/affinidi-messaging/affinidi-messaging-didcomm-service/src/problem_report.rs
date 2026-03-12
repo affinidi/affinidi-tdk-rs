@@ -21,6 +21,7 @@ pub trait ServiceProblemReport {
     fn internal_error(comment: impl Into<String>) -> Self;
     fn with_args(self, args: Vec<String>) -> Self;
     fn with_escalate_to(self, escalate_to: String) -> Self;
+    /// Serialize this report to a JSON value for use as a DIDComm message body.
     fn to_body(&self) -> serde_json::Value;
 }
 
@@ -56,7 +57,13 @@ impl ServiceProblemReport for ProblemReport {
     }
 
     fn to_body(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or_default()
+        serde_json::to_value(self).unwrap_or_else(|e| {
+            tracing::warn!("Failed to serialize problem report: {}", e);
+            serde_json::json!({
+                "code": "e.p.msg.internal-error",
+                "comment": "Failed to serialize problem report"
+            })
+        })
     }
 }
 

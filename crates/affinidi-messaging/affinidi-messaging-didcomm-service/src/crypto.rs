@@ -4,6 +4,11 @@ use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
 
+/// Pluggable cryptographic operations for packing and unpacking DIDComm messages.
+///
+/// Implement this trait to customize encryption/decryption behavior (e.g., using
+/// a different key agreement algorithm or an external KMS). The default
+/// implementation uses the ATM's built-in pack/unpack.
 #[async_trait]
 pub trait MessageCryptoProvider: Send + Sync + 'static {
     async fn unpack(

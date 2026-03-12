@@ -30,7 +30,7 @@ impl Listener {
                     debug!("[profile = {}] Listener failed: {}", alias, e);
                 }
 
-                let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
 
                 match &restart_policy {
                     crate::config::RestartPolicy::Never => {
@@ -72,7 +72,7 @@ impl Listener {
                 continue;
             }
 
-            let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
 
             match &restart_policy {
                 crate::config::RestartPolicy::Never => {
