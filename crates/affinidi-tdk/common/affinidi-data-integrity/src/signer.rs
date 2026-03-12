@@ -40,12 +40,9 @@ impl Signer for Secret {
     }
 
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
-        let private_bytes: [u8; 32] =
-            self.get_private_bytes()
-                .try_into()
-                .map_err(|_| {
-                    DataIntegrityError::CryptoError("Invalid private key length".to_string())
-                })?;
+        let private_bytes: [u8; 32] = self.get_private_bytes().try_into().map_err(|_| {
+            DataIntegrityError::CryptoError("Invalid private key length".to_string())
+        })?;
         let mut signing_key = SigningKey::from_bytes(&private_bytes);
         Ok(signing_key.sign(data).to_vec())
     }

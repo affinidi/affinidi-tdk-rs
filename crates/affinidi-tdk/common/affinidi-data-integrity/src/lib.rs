@@ -285,7 +285,11 @@ mod tests {
         let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
             .expect("Couldn't create test key data");
 
-        assert!(DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None).await.is_err());
+        assert!(
+            DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -303,7 +307,9 @@ mod tests {
             "context3".to_string(),
         ];
         assert!(
-            DataIntegrityProof::sign_jcs_data(&generic_doc, Some(context), &secret, None).await.is_ok(),
+            DataIntegrityProof::sign_jcs_data(&generic_doc, Some(context), &secret, None)
+                .await
+                .is_ok(),
             "Signing failed"
         );
     }
