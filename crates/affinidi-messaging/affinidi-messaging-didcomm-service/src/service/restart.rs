@@ -118,3 +118,60 @@ fn calculate_backoff(attempt: u32, config: &RetryConfig) -> Duration {
         .min(config.max_delay_secs);
     Duration::from_secs(delay_secs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(initial: u64, max: u64) -> RetryConfig {
+        RetryConfig {
+            max_attempts: 10,
+            initial_delay_secs: initial,
+            max_delay_secs: max,
+        }
+    }
+
+    #[test]
+    fn first_attempt_uses_initial_delay() {
+        let d = calculate_backoff(1, &cfg(2, 60));
+        assert_eq!(d, Duration::from_secs(2));
+    }
+
+    #[test]
+    fn second_attempt_doubles() {
+        let d = calculate_backoff(2, &cfg(2, 60));
+        assert_eq!(d, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn third_attempt_quadruples() {
+        let d = calculate_backoff(3, &cfg(2, 60));
+        assert_eq!(d, Duration::from_secs(8));
+    }
+
+    #[test]
+    fn capped_at_max_delay() {
+        let d = calculate_backoff(10, &cfg(2, 30));
+        assert_eq!(d, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn attempt_zero_same_as_first() {
+        let d = calculate_backoff(0, &cfg(5, 120));
+        assert_eq!(d, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn large_attempt_saturates_not_panics() {
+        let d = calculate_backoff(u32::MAX, &cfg(2, 60));
+        assert_eq!(d, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn default_retry_config_values() {
+        let c = RetryConfig::default();
+        assert_eq!(c.max_attempts, 5);
+        assert_eq!(c.initial_delay_secs, 2);
+        assert_eq!(c.max_delay_secs, 60);
+    }
+}

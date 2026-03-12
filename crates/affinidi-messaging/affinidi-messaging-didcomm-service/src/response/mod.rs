@@ -85,3 +85,76 @@ impl DIDCommResponse {
         builder.finalize()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn new_sets_type_and_body() {
+        let resp = DIDCommResponse::new("test/type", json!({"key": "val"}));
+        assert_eq!(resp.type_, "test/type");
+        assert_eq!(resp.body, json!({"key": "val"}));
+        assert!(resp.to.is_empty());
+        assert!(resp.from.is_none());
+        assert!(resp.thid.is_none());
+        assert!(resp.pthid.is_none());
+    }
+
+    #[test]
+    fn to_adds_recipient() {
+        let resp = DIDCommResponse::new("t", json!({})).to("did:example:alice");
+        assert_eq!(resp.to, vec!["did:example:alice"]);
+    }
+
+    #[test]
+    fn to_many_adds_multiple() {
+        let resp = DIDCommResponse::new("t", json!({})).to_many(vec!["did:a", "did:b"]);
+        assert_eq!(resp.to, vec!["did:a", "did:b"]);
+    }
+
+    #[test]
+    fn to_chains_append() {
+        let resp = DIDCommResponse::new("t", json!({})).to("did:a").to("did:b");
+        assert_eq!(resp.to, vec!["did:a", "did:b"]);
+    }
+
+    #[test]
+    fn from_sets_sender() {
+        let resp = DIDCommResponse::new("t", json!({})).from("did:example:bob");
+        assert_eq!(resp.from, Some("did:example:bob".into()));
+    }
+
+    #[test]
+    fn thid_sets_thread_id() {
+        let resp = DIDCommResponse::new("t", json!({})).thid("thread-1");
+        assert_eq!(resp.thid, Some("thread-1".into()));
+    }
+
+    #[test]
+    fn pthid_sets_parent_thread_id() {
+        let resp = DIDCommResponse::new("t", json!({})).pthid("parent-1");
+        assert_eq!(resp.pthid, Some("parent-1".into()));
+    }
+
+    #[test]
+    fn problem_report_uses_problem_report_type() {
+        let report = ProblemReport::unauthorized("nope");
+        let resp = DIDCommResponse::problem_report(report);
+        assert_eq!(resp.type_, PROBLEM_REPORT_TYPE);
+    }
+
+    #[test]
+    fn builder_chain() {
+        let resp = DIDCommResponse::new("t", json!({}))
+            .to("did:a")
+            .from("did:b")
+            .thid("t1")
+            .pthid("p1");
+        assert_eq!(resp.to, vec!["did:a"]);
+        assert_eq!(resp.from, Some("did:b".into()));
+        assert_eq!(resp.thid, Some("t1".into()));
+        assert_eq!(resp.pthid, Some("p1".into()));
+    }
+}

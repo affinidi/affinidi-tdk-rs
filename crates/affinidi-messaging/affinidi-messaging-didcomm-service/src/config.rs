@@ -63,3 +63,68 @@ impl Default for RetryConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listener_config_defaults() {
+        let lc = ListenerConfig::default();
+        assert!(lc.id.is_empty());
+        assert_eq!(lc.message_wait_duration_secs, 5);
+        assert!(lc.auto_delete);
+        assert!(lc.crypto_provider.is_none());
+        assert!(matches!(lc.restart_policy, RestartPolicy::Never));
+    }
+
+    #[test]
+    fn retry_config_defaults() {
+        let rc = RetryConfig::default();
+        assert_eq!(rc.max_attempts, 5);
+        assert_eq!(rc.initial_delay_secs, 2);
+        assert_eq!(rc.max_delay_secs, 60);
+    }
+
+    #[test]
+    fn restart_policy_default_is_never() {
+        let rp = RestartPolicy::default();
+        assert!(matches!(rp, RestartPolicy::Never));
+    }
+
+    #[test]
+    fn restart_policy_on_failure_variant() {
+        let rp = RestartPolicy::OnFailure {
+            max_retries: Some(3),
+            backoff: RetryConfig::default(),
+        };
+        if let RestartPolicy::OnFailure {
+            max_retries,
+            backoff,
+        } = rp
+        {
+            assert_eq!(max_retries, Some(3));
+            assert_eq!(backoff.max_attempts, 5);
+        } else {
+            panic!("expected OnFailure");
+        }
+    }
+
+    #[test]
+    fn restart_policy_always_variant() {
+        let rp = RestartPolicy::Always {
+            backoff: RetryConfig {
+                max_attempts: 10,
+                initial_delay_secs: 1,
+                max_delay_secs: 30,
+            },
+        };
+        if let RestartPolicy::Always { backoff } = rp {
+            assert_eq!(backoff.max_attempts, 10);
+            assert_eq!(backoff.initial_delay_secs, 1);
+            assert_eq!(backoff.max_delay_secs, 30);
+        } else {
+            panic!("expected Always");
+        }
+    }
+}

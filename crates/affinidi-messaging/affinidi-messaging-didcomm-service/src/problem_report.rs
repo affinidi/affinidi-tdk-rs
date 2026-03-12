@@ -74,3 +74,84 @@ impl FromCode for ProblemReport {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unauthorized_sets_correct_code() {
+        let r = ProblemReport::unauthorized("denied");
+        assert_eq!(r.code, codes::ERROR_UNAUTHORIZED);
+        assert_eq!(r.comment, "denied");
+    }
+
+    #[test]
+    fn bad_request_sets_correct_code() {
+        let r = ProblemReport::bad_request("invalid");
+        assert_eq!(r.code, codes::ERROR_BAD_REQUEST);
+        assert_eq!(r.comment, "invalid");
+    }
+
+    #[test]
+    fn not_found_sets_correct_code() {
+        let r = ProblemReport::not_found("missing");
+        assert_eq!(r.code, codes::ERROR_NOT_FOUND);
+        assert_eq!(r.comment, "missing");
+    }
+
+    #[test]
+    fn conflict_sets_correct_code() {
+        let r = ProblemReport::conflict("duplicate");
+        assert_eq!(r.code, codes::ERROR_CONFLICT);
+        assert_eq!(r.comment, "duplicate");
+    }
+
+    #[test]
+    fn internal_error_sets_correct_code() {
+        let r = ProblemReport::internal_error("oops");
+        assert_eq!(r.code, codes::ERROR_INTERNAL);
+        assert_eq!(r.comment, "oops");
+    }
+
+    #[test]
+    fn with_args_sets_args() {
+        let r = ProblemReport::bad_request("err").with_args(vec!["a".into(), "b".into()]);
+        assert_eq!(r.args, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn with_escalate_to_sets_field() {
+        let r = ProblemReport::bad_request("err").with_escalate_to("admin@example.com".into());
+        assert_eq!(r.escalate_to, Some("admin@example.com".into()));
+    }
+
+    #[test]
+    fn to_body_produces_valid_json() {
+        let r = ProblemReport::unauthorized("nope");
+        let body = r.to_body();
+        assert_eq!(body["code"], codes::ERROR_UNAUTHORIZED);
+        assert_eq!(body["comment"], "nope");
+    }
+
+    #[test]
+    fn to_body_includes_args_when_present() {
+        let r = ProblemReport::bad_request("err").with_args(vec!["x".into()]);
+        let body = r.to_body();
+        assert_eq!(body["args"], serde_json::json!(["x"]));
+    }
+
+    #[test]
+    fn to_body_includes_escalate_to_when_present() {
+        let r = ProblemReport::bad_request("err").with_escalate_to("support@example.com".into());
+        let body = r.to_body();
+        assert_eq!(body["escalate_to"], "support@example.com");
+    }
+
+    #[test]
+    fn default_has_no_args_or_escalate() {
+        let r = ProblemReport::internal_error("fail");
+        assert!(r.args.is_empty());
+        assert!(r.escalate_to.is_none());
+    }
+}

@@ -76,3 +76,38 @@ impl<T: Clone + Send + Sync + 'static> FromMessageParts for Extension<T> {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extensions_insert_and_get() {
+        let mut ext = Extensions::default();
+        ext.insert(42u32);
+        assert_eq!(ext.get::<u32>(), Some(&42));
+    }
+
+    #[test]
+    fn extensions_get_returns_none_for_missing_type() {
+        let ext = Extensions::default();
+        assert!(ext.get::<String>().is_none());
+    }
+
+    #[test]
+    fn extensions_overwrites_same_type() {
+        let mut ext = Extensions::default();
+        ext.insert("first".to_string());
+        ext.insert("second".to_string());
+        assert_eq!(ext.get::<String>(), Some(&"second".to_string()));
+    }
+
+    #[test]
+    fn extensions_different_types_coexist() {
+        let mut ext = Extensions::default();
+        ext.insert(42u32);
+        ext.insert("hello".to_string());
+        assert_eq!(ext.get::<u32>(), Some(&42));
+        assert_eq!(ext.get::<String>(), Some(&"hello".to_string()));
+    }
+}
