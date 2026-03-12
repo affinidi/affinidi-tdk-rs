@@ -33,6 +33,7 @@ mediator routes and stores messages but **cannot** read their content.
 | [`affinidi-messaging-sdk`](./affinidi-messaging-sdk/) | SDK for integrating messaging into your application |
 | [`affinidi-messaging-didcomm`](./affinidi-messaging-didcomm/) | DIDComm v2 protocol implementation |
 | [`affinidi-messaging-mediator`](./affinidi-messaging-mediator/) | Mediator & relay service for message handling |
+| [`affinidi-messaging-didcomm-service`](./affinidi-messaging-didcomm-service/) | Framework for building always-online DIDComm services with mediator connectivity, message routing, middleware, and handler dispatch |
 | [`affinidi-messaging-helpers`](./affinidi-messaging-helpers/) | Setup tools, environment config, and example runners |
 | [`affinidi-messaging-text-client`](./affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
