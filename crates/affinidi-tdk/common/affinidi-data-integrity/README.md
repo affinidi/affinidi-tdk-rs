@@ -24,12 +24,15 @@ canonicalizes JSON directly, while RDFC must expand JSON-LD into RDF.
 
 ```toml
 [dependencies]
-affinidi-data-integrity = "0.4"
+affinidi-data-integrity = "0.5"
 ```
 
 ## Usage
 
 ### Sign a JSON Document (JCS)
+
+Signing methods are `async` and accept any implementation of the `Signer` trait.
+The `Secret` type implements `Signer` directly, so existing code only needs to add `.await`:
 
 ```rust
 use affinidi_data_integrity::DataIntegrityProof;
@@ -49,7 +52,7 @@ let secret = Secret::from_multibase(
 
 let proof = DataIntegrityProof::sign_jcs_data(
     &document, None, &secret, None,
-).expect("Signing failed");
+).await.expect("Signing failed");
 ```
 
 ### Sign a Verifiable Credential (RDFC)
@@ -70,7 +73,34 @@ let credential = json!({
 
 let proof = DataIntegrityProof::sign_rdfc_data(
     &credential, None, &secret, None,
-).expect("Signing failed");
+).await.expect("Signing failed");
+```
+
+### Custom Signer (KMS/HSM)
+
+Implement the `Signer` trait to use external signing backends:
+
+```rust
+use affinidi_data_integrity::signer::Signer;
+use affinidi_secrets_resolver::secrets::KeyType;
+use async_trait::async_trait;
+
+struct MyKmsSigner { /* ... */ }
+
+#[async_trait]
+impl Signer for MyKmsSigner {
+    fn key_type(&self) -> KeyType { KeyType::Ed25519 }
+    fn verification_method(&self) -> &str { "did:key:z6Mk...#z6Mk..." }
+
+    async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
+        // Call your KMS/HSM service here
+        todo!()
+    }
+}
+
+let proof = DataIntegrityProof::sign_jcs_data(
+    &document, None, &my_kms_signer, None,
+).await.expect("Signing failed");
 ```
 
 ### Verify a Proof
