@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use async_trait::async_trait;
-use tracing::warn;
 
 use crate::error::DIDCommServiceError;
 use crate::handler::extractor::Extensions;
@@ -89,7 +88,7 @@ impl DIDCommHandler for Router {
             let next = Next::new(handler, middleware, self.extensions.clone());
             next.run(ctx, message, meta).await
         } else {
-            warn!("No handler for message type: {}", message_type);
+            tracing::debug!("No handler for message type: {}", message_type);
             Ok(None)
         }
     }

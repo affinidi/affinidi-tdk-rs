@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{error, info, warn};
+use tracing::{debug, error};
 
 use crate::config::RetryConfig;
 
@@ -17,17 +17,17 @@ impl Listener {
 
         loop {
             if let Err(e) = self.connect().await {
-                error!("[profile = {}] Failed to connect: {}", alias, e);
+                debug!("[profile = {}] Failed to connect: {}", alias, e);
             } else {
                 let result = self.listen().await;
 
                 if self.shutdown.is_cancelled() {
-                    info!("[profile = {}] Listener shutting down", alias);
+                    debug!("[profile = {}] Listener shutting down", alias);
                     break;
                 }
 
                 if let Err(ref e) = result {
-                    error!("[profile = {}] Listener failed: {}", alias, e);
+                    debug!("[profile = {}] Listener failed: {}", alias, e);
                 }
 
                 let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -53,7 +53,7 @@ impl Listener {
                             break;
                         }
                         let delay = calculate_backoff(count, backoff);
-                        warn!(
+                        debug!(
                             "[profile = {}] Listener failed (attempt {}), restarting in {:?}",
                             alias, count, delay
                         );
@@ -61,7 +61,7 @@ impl Listener {
                     }
                     crate::config::RestartPolicy::Always { backoff } => {
                         let delay = calculate_backoff(count, backoff);
-                        warn!(
+                        debug!(
                             "[profile = {}] Listener stopped (attempt {}), restarting in {:?}",
                             alias, count, delay
                         );
@@ -85,14 +85,14 @@ impl Listener {
                     if let Some(max) = max_retries
                         && count > *max
                     {
-                        error!(
+                        debug!(
                             "[profile = {}] Listener exceeded max retries ({}), stopping",
                             alias, max
                         );
                         break;
                     }
                     let delay = calculate_backoff(count, backoff);
-                    warn!(
+                    debug!(
                         "[profile = {}] Connect failed (attempt {}), retrying in {:?}",
                         alias, count, delay
                     );
@@ -100,7 +100,7 @@ impl Listener {
                 }
                 crate::config::RestartPolicy::Always { backoff } => {
                     let delay = calculate_backoff(count, backoff);
-                    warn!(
+                    debug!(
                         "[profile = {}] Connect failed (attempt {}), retrying in {:?}",
                         alias, count, delay
                     );

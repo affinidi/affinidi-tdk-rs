@@ -1,6 +1,5 @@
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use async_trait::async_trait;
-use tracing::warn;
 
 use super::{MiddlewareHandler, MiddlewareResult, Next};
 use crate::error::PolicyViolation;
@@ -87,10 +86,11 @@ impl MiddlewareHandler for MessagePolicy {
         next: Next,
     ) -> MiddlewareResult {
         if let Err(violation) = self.check(&message, &meta) {
-            // TODO: allow to silence this or change level
-            warn!(
+            tracing::debug!(
                 "[policy] Rejected message {} from {}: {}",
-                message.id, ctx.sender_did, violation
+                message.id,
+                ctx.sender_did,
+                violation
             );
             return Err(violation.into());
         }

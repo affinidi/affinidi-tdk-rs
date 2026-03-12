@@ -5,7 +5,7 @@ use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::debug;
 
 use super::listener::Listener;
 
@@ -22,14 +22,14 @@ impl Listener {
         let account_info = match account_result {
             Ok(Some(info)) => info,
             Ok(None) => {
-                warn!(
+                debug!(
                     "[profile = {}] Failed to get account info",
                     profile.inner.alias
                 );
                 return;
             }
             Err(e) => {
-                warn!(
+                debug!(
                     "[profile = {}] Failed to get account info: {}",
                     profile.inner.alias, e
                 );
@@ -39,10 +39,10 @@ impl Listener {
 
         let mut acls = MediatorACLSet::from_u64(account_info.acls);
 
-        info!("ACL_MODE: Configured to {:?}", acl_mode);
+        debug!("ACL_MODE: Configured to {:?}", acl_mode);
 
         if let Err(e) = acls.set_access_list_mode(acl_mode.clone(), true, false) {
-            warn!("Failed to set ACL mode: {}", e);
+            debug!("Failed to set ACL mode: {}", e);
             return;
         }
 
@@ -51,7 +51,7 @@ impl Listener {
             .acls_set(profile, &digest(&profile.inner.did), &acls)
             .await
         {
-            warn!("Failed to apply ACL settings: {}", e);
+            debug!("Failed to apply ACL settings: {}", e);
         }
     }
 
@@ -64,12 +64,12 @@ impl Listener {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    info!("[profile = {}] Offline sync task shutting down", profile_alias);
+                    debug!("[profile = {}] Offline sync task shutting down", profile_alias);
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(OFFLINE_SYNC_INTERVAL_SECS)) => {
                     if let Err(e) = Listener::sync_offline_messages(atm, profile).await {
-                        warn!(
+                        debug!(
                             "[profile = {}] Offline sync failed: {}",
                             profile_alias, e
                         );
@@ -92,7 +92,7 @@ impl Listener {
             .await?;
 
         let messages_count = status_reply.map(|m| m.message_count).unwrap_or(0);
-        info!(
+        debug!(
             "[profile = {}] Offline messages count: {}",
             profile.inner.alias, messages_count
         );
@@ -120,12 +120,12 @@ impl Listener {
             .await?;
 
         if delete_result.is_some() {
-            info!(
+            debug!(
                 "[profile = {}] Offline messages acknowledged and deleted",
                 profile.inner.alias
             );
         } else {
-            warn!(
+            debug!(
                 "[profile = {}] No status reply for offline messages ack",
                 profile.inner.alias
             );

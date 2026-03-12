@@ -1,6 +1,6 @@
 use affinidi_messaging_didcomm::Message;
 use serde_json::Value;
-use tracing::{error, info};
+use tracing::debug;
 
 use crate::crypto::MessageCryptoProvider;
 use crate::error::DIDCommServiceError;
@@ -59,14 +59,14 @@ pub async fn send_response(
         .await;
 
     if let Err(ref sending_error) = sending_result {
-        error!(
+        debug!(
             "[profile = {}] Failed to send response. Error: {:?}",
             &ctx.profile.inner.alias, sending_error
         );
         return Err(DIDCommServiceError::Transport(sending_error.to_string()));
     }
 
-    info!(
+    debug!(
         "[profile = {}] Response sent successfully",
         &ctx.profile.inner.alias
     );

@@ -12,8 +12,10 @@ use crate::response::DIDCommResponse;
 use crate::router::MessageHandler;
 
 mod policy;
+mod request_logging;
 
 pub use policy::MessagePolicy;
+pub use request_logging::RequestLogging;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 type MiddlewareResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;

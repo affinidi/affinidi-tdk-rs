@@ -14,7 +14,7 @@ pub use config::{DIDCommServiceConfig, ListenerConfig, RestartPolicy, RetryConfi
 pub use crypto::{DefaultCryptoProvider, MessageCryptoProvider};
 pub use error::{DIDCommServiceError, PolicyViolation};
 pub use handler::{DIDCommHandler, Extension, Extensions, FromMessageParts, HandlerContext};
-pub use middleware::{MessagePolicy, MiddlewareHandler, Next, middleware_fn};
+pub use middleware::{MessagePolicy, MiddlewareHandler, Next, RequestLogging, middleware_fn};
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;
 pub use router::{MessageHandler, Router, handler_fn};

@@ -6,7 +6,7 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::debug;
 
 use crate::config::ListenerConfig;
 use crate::crypto::MessageCryptoProvider;
@@ -76,7 +76,7 @@ impl Listener {
         {
             Ok(result) => result?,
             Err(e) => {
-                error!(
+                debug!(
                     "[profile = {}] Timeout adding profile: {}",
                     self.config.profile.alias, e
                 );
@@ -107,12 +107,12 @@ impl Listener {
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
-                    info!("[profile = {}] Listener received shutdown signal", self.profile().inner.alias);
+                    debug!("[profile = {}] Listener received shutdown signal", self.profile().inner.alias);
                     return Ok(());
                 }
                 result = self.process_next_message() => {
                     if let Err(e) = result {
-                        error!(
+                        debug!(
                             "[profile = {}] Error processing message: {}",
                             self.profile().inner.alias, e
                         );
@@ -162,7 +162,7 @@ impl Listener {
                         if let Err(e) =
                             Self::send_response(&ctx, response, crypto_provider.as_ref()).await
                         {
-                            error!(
+                            debug!(
                                 "[profile = {}] Failed to send response: {}",
                                 profile_alias, e
                             );
@@ -170,7 +170,7 @@ impl Listener {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        error!(
+                        debug!(
                             "[profile = {}] Error handling message: {}",
                             profile_alias, e
                         );

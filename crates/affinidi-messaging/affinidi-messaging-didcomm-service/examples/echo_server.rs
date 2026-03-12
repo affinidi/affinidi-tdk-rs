@@ -3,12 +3,12 @@ use std::env;
 use std::sync::Arc;
 
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
+use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_messaging_didcomm_service::{
     DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, Extension,
-    HandlerContext, ListenerConfig, MessagePolicy, Next, ProblemReport, RestartPolicy, RetryConfig,
-    Router, ServiceProblemReport, handler_fn, middleware_fn,
+    HandlerContext, ListenerConfig, MessagePolicy, Next, ProblemReport, RequestLogging,
+    RestartPolicy, RetryConfig, Router, ServiceProblemReport, handler_fn, middleware_fn,
 };
-use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::profiles::TDKProfile;
 use serde_json::json;
@@ -25,21 +25,15 @@ struct AppConfig {
 
 type Db = Arc<RwLock<HashMap<String, u64>>>;
 
-async fn logging_middleware(
+async fn custom_middleware(
     ctx: HandlerContext,
     message: Message,
     meta: UnpackMetadata,
     next: Next,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
-    info!(
-        ">> Incoming: type={} from={}",
-        message.type_, ctx.sender_did
-    );
+    // custom action
     let result = next.run(ctx, message, meta).await;
-    info!(
-        "<< Result: has_response={}",
-        result.as_ref().map_or(false, |r| r.is_some())
-    );
+    // custom action
     result
 }
 
@@ -125,7 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("echo_server=info".parse().unwrap()),
+                .add_directive("echo_server=info".parse().unwrap())
+                .add_directive("didcomm_server::request=info".parse().unwrap()),
         )
         .init();
 
@@ -185,7 +180,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .require_authenticated(true)
                 .allow_anonymous_sender(false),
         )
-        .layer(middleware_fn(logging_middleware));
+        .layer(middleware_fn(custom_middleware))
+        .layer(RequestLogging);
 
     let _service = DIDCommService::start(config, router, shutdown).await?;
 
