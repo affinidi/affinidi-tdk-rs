@@ -1,5 +1,5 @@
 [package]
-name = "affinidi-didcomm-service"
+name = "affinidi-messaging-didcomm-service"
 version = "0.1.0"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
