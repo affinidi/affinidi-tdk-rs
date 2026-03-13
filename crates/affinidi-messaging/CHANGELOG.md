@@ -8,6 +8,19 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 14th March 2026
+
+### DIDComm Service (0.1.0)
+
+- **NEW:** Initial release of `affinidi-messaging-didcomm-service`
+  - Type-based message routing (exact match and regex patterns)
+  - Middleware pipeline with ordered execution
+  - Automatic listener restart with configurable backoff (Never, OnFailure, Always)
+  - Periodic offline message sync with handler dispatch
+  - Structured error types (TransportError, StartupError) preserving source errors
+  - Problem report generation per DIDComm spec
+  - Optional ACL mode configuration
+
 ## 6th March 2026
 
 ### Mediator (0.12.2)
