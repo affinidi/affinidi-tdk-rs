@@ -1,11 +1,15 @@
 use affinidi_messaging_didcomm::Message;
 
-pub fn get_thread_id(msg: &Message) -> Option<String> {
-    msg.thid.clone().or_else(|| Some(msg.id.clone()))
+pub fn get_thread_id(msg: &Message) -> String {
+    msg.thid.clone().unwrap_or_else(|| msg.id.clone())
 }
 
-pub fn get_parent_thread_id(msg: &Message) -> Option<String> {
-    msg.pthid.clone().or_else(|| get_thread_id(msg))
+pub fn get_parent_thread_id(msg: &Message, is_required: bool) -> Option<String> {
+    if !is_required {
+        msg.pthid.clone()
+    } else {
+        Some(msg.pthid.clone().unwrap_or_else(|| get_thread_id(msg)))
+    }
 }
 
 pub fn new_message_id() -> String {
@@ -32,31 +36,31 @@ mod tests {
     #[test]
     fn get_thread_id_returns_thid_when_present() {
         let m = build_msg("id1", Some("thread-1"), None);
-        assert_eq!(get_thread_id(&m), Some("thread-1".into()));
+        assert_eq!(get_thread_id(&m), "thread-1");
     }
 
     #[test]
     fn get_thread_id_falls_back_to_id() {
         let m = build_msg("msg-42", None, None);
-        assert_eq!(get_thread_id(&m), Some("msg-42".into()));
+        assert_eq!(get_thread_id(&m), "msg-42");
     }
 
     #[test]
     fn get_parent_thread_id_returns_pthid_when_present() {
         let m = build_msg("id1", None, Some("parent-1"));
-        assert_eq!(get_parent_thread_id(&m), Some("parent-1".into()));
+        assert_eq!(get_parent_thread_id(&m, false), Some("parent-1".into()));
     }
 
     #[test]
-    fn get_parent_thread_id_falls_back_to_thread_id() {
+    fn get_parent_thread_id_returns_none_without_pthid() {
         let m = build_msg("id1", Some("thread-1"), None);
-        assert_eq!(get_parent_thread_id(&m), Some("thread-1".into()));
+        assert_eq!(get_parent_thread_id(&m, false), None);
     }
 
     #[test]
-    fn get_parent_thread_id_falls_back_to_id() {
-        let m = build_msg("msg-99", None, None);
-        assert_eq!(get_parent_thread_id(&m), Some("msg-99".into()));
+    fn get_parent_thread_id_returns_thid_when_it_is_required() {
+        let m = build_msg("id1", Some("thread-1"), None);
+        assert_eq!(get_parent_thread_id(&m, true), Some("thread-1".into()));
     }
 
     #[test]

@@ -63,11 +63,10 @@ impl DIDCommResponse {
         let from = self.from.unwrap_or_else(|| ctx.profile.inner.did.clone());
 
         let to = if self.to.is_empty() {
-            let sender = ctx.sender_did.as_deref().ok_or_else(|| {
-                crate::error::DIDCommServiceError::Transport(
-                    "Cannot build response: message has no sender DID to reply to".into(),
-                )
-            })?;
+            let sender = ctx
+                .sender_did
+                .as_deref()
+                .ok_or(crate::error::TransportError::MissingSenderDid)?;
             vec![sender.to_string()]
         } else {
             self.to
@@ -75,7 +74,7 @@ impl DIDCommResponse {
 
         let thid = self
             .thid
-            .or_else(|| ctx.thread_id.clone())
+            .or_else(|| Some(ctx.thread_id.clone()))
             .unwrap_or_else(new_message_id);
 
         let mut builder = Message::build(new_message_id(), self.type_, self.body)

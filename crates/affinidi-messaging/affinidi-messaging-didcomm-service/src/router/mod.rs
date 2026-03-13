@@ -10,6 +10,7 @@ use crate::error::DIDCommServiceError;
 use crate::handler::extractor::Extensions;
 use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::middleware::{MiddlewareHandler, Next};
+use crate::problem_report::{ProblemReport, ServiceProblemReport};
 use crate::response::DIDCommResponse;
 
 pub use handler::{MessageHandler, handler_fn};
@@ -103,8 +104,11 @@ impl DIDCommHandler for Router {
             let next = Next::new(handler, middleware, self.extensions.clone());
             next.run(ctx, message, meta).await
         } else {
+            // Default fallback logic - send a PR according to DIDComm protocol
             tracing::debug!("No handler for message type: {}", message_type);
-            Ok(None)
+            Ok(Some(DIDCommResponse::problem_report(
+                ProblemReport::bad_request(format!("Unsupported message type: {}", message_type)),
+            )))
         }
     }
 }

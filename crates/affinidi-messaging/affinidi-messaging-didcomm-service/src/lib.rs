@@ -10,7 +10,7 @@ pub mod transport;
 pub mod utils;
 
 pub use config::{DIDCommServiceConfig, ListenerConfig, RestartPolicy, RetryConfig};
-pub use error::{DIDCommServiceError, PolicyViolation};
+pub use error::{DIDCommServiceError, PolicyViolation, StartupError, TransportError};
 pub use handler::{DIDCommHandler, Extension, Extensions, FromMessageParts, HandlerContext};
 pub use middleware::{MessagePolicy, MiddlewareHandler, Next, RequestLogging, middleware_fn};
 pub use problem_report::{ProblemReport, ServiceProblemReport};

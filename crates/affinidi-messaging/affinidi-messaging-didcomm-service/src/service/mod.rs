@@ -84,7 +84,17 @@ impl DIDCommService {
             .ok_or_else(|| DIDCommServiceError::ListenerNotFound(listener_id.to_string()))?;
 
         handle.token.cancel();
+        drop(listeners);
+        let _ = handle.task.await;
         Ok(())
+    }
+
+    pub async fn shutdown(self) {
+        self.shutdown.cancel();
+        let listeners = self.listeners.write().await;
+        for (_, handle) in listeners.iter() {
+            let _ = handle.token.cancelled().await;
+        }
     }
 
     pub async fn list_listeners(&self) -> Vec<ListenerStatus> {

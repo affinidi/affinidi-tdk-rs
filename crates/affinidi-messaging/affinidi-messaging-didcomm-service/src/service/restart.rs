@@ -3,9 +3,35 @@ use std::time::Duration;
 
 use tracing::{debug, error};
 
-use crate::config::RetryConfig;
+use crate::config::{RestartPolicy, RetryConfig};
 
 use super::listener::Listener;
+
+enum ShouldRestart {
+    Yes(Duration),
+    Stop,
+}
+
+fn should_restart(policy: &RestartPolicy, count: u32, was_success: bool) -> ShouldRestart {
+    match policy {
+        RestartPolicy::Never => ShouldRestart::Stop,
+        RestartPolicy::OnFailure {
+            max_retries,
+            backoff,
+        } => {
+            if was_success {
+                return ShouldRestart::Stop;
+            }
+            if let Some(max) = max_retries
+                && count > *max
+            {
+                return ShouldRestart::Stop;
+            }
+            ShouldRestart::Yes(calculate_backoff(count, backoff))
+        }
+        RestartPolicy::Always { backoff } => ShouldRestart::Yes(calculate_backoff(count, backoff)),
+    }
+}
 
 impl Listener {
     pub(crate) async fn run_with_restart(
@@ -16,8 +42,9 @@ impl Listener {
         let restart_policy = self.config.restart_policy.clone();
 
         loop {
-            if let Err(e) = self.connect().await {
+            let was_success = if let Err(e) = self.connect().await {
                 debug!("[profile = {}] Failed to connect: {}", alias, e);
+                false
             } else {
                 let result = self.listen().await;
 
@@ -30,81 +57,32 @@ impl Listener {
                     debug!("[profile = {}] Listener failed: {}", alias, e);
                 }
 
-                let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
-
-                match &restart_policy {
-                    crate::config::RestartPolicy::Never => {
-                        break;
-                    }
-                    crate::config::RestartPolicy::OnFailure {
-                        max_retries,
-                        backoff,
-                    } => {
-                        if result.is_ok() {
-                            break;
-                        }
-                        if let Some(max) = max_retries
-                            && count > *max
-                        {
-                            error!(
-                                "[profile = {}] Listener exceeded max retries ({}), stopping",
-                                alias, max
-                            );
-                            break;
-                        }
-                        let delay = calculate_backoff(count, backoff);
-                        debug!(
-                            "[profile = {}] Listener failed (attempt {}), restarting in {:?}",
-                            alias, count, delay
-                        );
-                        tokio::time::sleep(delay).await;
-                    }
-                    crate::config::RestartPolicy::Always { backoff } => {
-                        let delay = calculate_backoff(count, backoff);
-                        debug!(
-                            "[profile = {}] Listener stopped (attempt {}), restarting in {:?}",
-                            alias, count, delay
-                        );
-                        tokio::time::sleep(delay).await;
-                    }
-                }
-
-                continue;
-            }
+                result.is_ok()
+            };
 
             let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
 
-            match &restart_policy {
-                crate::config::RestartPolicy::Never => {
-                    break;
+            match should_restart(&restart_policy, count, was_success) {
+                ShouldRestart::Yes(delay) => {
+                    debug!(
+                        "[profile = {}] Restarting (attempt {}), backoff {:?}",
+                        alias, count, delay
+                    );
+                    tokio::time::sleep(delay).await;
                 }
-                crate::config::RestartPolicy::OnFailure {
-                    max_retries,
-                    backoff,
-                } => {
-                    if let Some(max) = max_retries
-                        && count > *max
+                ShouldRestart::Stop => {
+                    if !was_success
+                        && let RestartPolicy::OnFailure {
+                            max_retries: Some(max),
+                            ..
+                        } = &restart_policy
                     {
-                        debug!(
-                            "[profile = {}] Listener exceeded max retries ({}), stopping",
+                        error!(
+                            "[profile = {}] Exceeded max retries ({}), stopping",
                             alias, max
                         );
-                        break;
                     }
-                    let delay = calculate_backoff(count, backoff);
-                    debug!(
-                        "[profile = {}] Connect failed (attempt {}), retrying in {:?}",
-                        alias, count, delay
-                    );
-                    tokio::time::sleep(delay).await;
-                }
-                crate::config::RestartPolicy::Always { backoff } => {
-                    let delay = calculate_backoff(count, backoff);
-                    debug!(
-                        "[profile = {}] Connect failed (attempt {}), retrying in {:?}",
-                        alias, count, delay
-                    );
-                    tokio::time::sleep(delay).await;
+                    break;
                 }
             }
         }
@@ -125,7 +103,6 @@ mod tests {
 
     fn cfg(initial: u64, max: u64) -> RetryConfig {
         RetryConfig {
-            max_attempts: 10,
             initial_delay_secs: initial,
             max_delay_secs: max,
         }
@@ -170,7 +147,6 @@ mod tests {
     #[test]
     fn default_retry_config_values() {
         let c = RetryConfig::default();
-        assert_eq!(c.max_attempts, 5);
         assert_eq!(c.initial_delay_secs, 2);
         assert_eq!(c.max_delay_secs, 60);
     }

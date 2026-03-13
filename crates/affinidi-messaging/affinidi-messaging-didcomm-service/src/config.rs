@@ -42,7 +42,6 @@ pub enum RestartPolicy {
 
 #[derive(Clone)]
 pub struct RetryConfig {
-    pub max_attempts: u32,
     pub initial_delay_secs: u64,
     pub max_delay_secs: u64,
 }
@@ -50,7 +49,6 @@ pub struct RetryConfig {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_attempts: 5,
             initial_delay_secs: 2,
             max_delay_secs: 60,
         }
@@ -74,7 +72,6 @@ mod tests {
     #[test]
     fn retry_config_defaults() {
         let rc = RetryConfig::default();
-        assert_eq!(rc.max_attempts, 5);
         assert_eq!(rc.initial_delay_secs, 2);
         assert_eq!(rc.max_delay_secs, 60);
     }
@@ -97,7 +94,7 @@ mod tests {
         } = rp
         {
             assert_eq!(max_retries, Some(3));
-            assert_eq!(backoff.max_attempts, 5);
+            assert_eq!(backoff.initial_delay_secs, 2);
         } else {
             panic!("expected OnFailure");
         }
@@ -107,13 +104,11 @@ mod tests {
     fn restart_policy_always_variant() {
         let rp = RestartPolicy::Always {
             backoff: RetryConfig {
-                max_attempts: 10,
                 initial_delay_secs: 1,
                 max_delay_secs: 30,
             },
         };
         if let RestartPolicy::Always { backoff } = rp {
-            assert_eq!(backoff.max_attempts, 10);
             assert_eq!(backoff.initial_delay_secs, 1);
             assert_eq!(backoff.max_delay_secs, 30);
         } else {

@@ -2,7 +2,7 @@ use affinidi_messaging_didcomm::Message;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::error::DIDCommServiceError;
+use crate::error::{DIDCommServiceError, TransportError};
 use crate::handler::HandlerContext;
 use crate::problem_report::{ProblemReport, ServiceProblemReport};
 use crate::utils::new_message_id;
@@ -14,14 +14,15 @@ pub fn build_response(
     response_type: String,
     body: Value,
 ) -> Result<Message, DIDCommServiceError> {
-    let sender = ctx.sender_did.as_deref().ok_or_else(|| {
-        DIDCommServiceError::Transport("Cannot build response: message has no sender DID".into())
-    })?;
+    let sender = ctx
+        .sender_did
+        .as_deref()
+        .ok_or(TransportError::MissingSenderDid)?;
 
     let mut builder = Message::build(new_message_id(), response_type, body)
         .from(ctx.profile.inner.did.clone())
         .to(sender.to_string())
-        .thid(ctx.thread_id.clone().unwrap_or_else(new_message_id));
+        .thid(ctx.thread_id.clone());
 
     if let Some(ref parent_id) = ctx.parent_thread_id {
         builder = builder.header("pthid".into(), Value::String(parent_id.clone()));
@@ -42,9 +43,10 @@ pub async fn send_response(
     message: Message,
 ) -> Result<(), DIDCommServiceError> {
     let message_id = message.id.clone();
-    let recipient = ctx.sender_did.as_deref().ok_or_else(|| {
-        DIDCommServiceError::Transport("Cannot send response: no sender DID".into())
-    })?;
+    let recipient = ctx
+        .sender_did
+        .as_deref()
+        .ok_or(TransportError::MissingSenderDid)?;
 
     let (packed_msg, _) = ctx
         .atm
@@ -78,14 +80,12 @@ pub async fn send_response(
         )
         .await;
 
-    if let Err(ref sending_error) = sending_result {
+    if let Err(sending_error) = sending_result {
         debug!(
             "[profile = {}] Failed to send response. Error: {:?}",
             &ctx.profile.inner.alias, sending_error
         );
-        return Err(DIDCommServiceError::Transport(
-            "Failed to forward message via mediator".into(),
-        ));
+        return Err(TransportError::Send(sending_error).into());
     }
 
     debug!(

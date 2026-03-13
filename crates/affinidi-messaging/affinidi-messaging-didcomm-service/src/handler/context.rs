@@ -11,6 +11,6 @@ pub struct HandlerContext {
     pub profile: Arc<ATMProfile>,
     pub sender_did: Option<String>,
     pub message_id: String,
-    pub thread_id: Option<String>,
+    pub thread_id: String,
     pub parent_thread_id: Option<String>,
 }

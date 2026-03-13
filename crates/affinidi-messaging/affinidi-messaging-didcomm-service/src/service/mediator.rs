@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use super::listener::Listener;
-use crate::error::DIDCommServiceError;
+use crate::error::{DIDCommServiceError, StartupError};
 
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
 
@@ -24,34 +24,20 @@ impl Listener {
             .mediator()
             .account_get(profile, None)
             .await
-            .map_err(|e| {
-                DIDCommServiceError::StartupFailed(format!(
-                    "[profile = {}] Failed to get account info: {}",
-                    profile.inner.alias, e
-                ))
-            })?
-            .ok_or_else(|| {
-                DIDCommServiceError::StartupFailed(format!(
-                    "[profile = {}] No account info returned",
-                    profile.inner.alias
-                ))
-            })?;
+            .map_err(StartupError::AccountInfo)?
+            .ok_or(StartupError::NoAccountInfo)?;
 
         let mut acls = MediatorACLSet::from_u64(account_info.acls);
 
         debug!("ACL_MODE: Configured to {:?}", acl_mode);
 
         acls.set_access_list_mode(acl_mode.clone(), true, false)
-            .map_err(|e| {
-                DIDCommServiceError::StartupFailed(format!("Failed to set ACL mode: {}", e))
-            })?;
+            .map_err(StartupError::AclMode)?;
 
         atm.mediator()
             .acls_set(profile, &digest(&profile.inner.did), &acls)
             .await
-            .map_err(|e| {
-                DIDCommServiceError::StartupFailed(format!("Failed to apply ACL settings: {}", e))
-            })?;
+            .map_err(StartupError::AclApply)?;
 
         Ok(())
     }

@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::config::ListenerConfig;
-use crate::error::DIDCommServiceError;
+use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::response::DIDCommResponse;
 use crate::transport;
@@ -63,11 +63,11 @@ impl Listener {
 
         let atm_config = ATMConfigBuilder::default()
             .build()
-            .map_err(|e| DIDCommServiceError::StartupFailed(e.to_string()))?;
+            .map_err(StartupError::Config)?;
 
         let atm = ATM::new(atm_config, shared_state)
             .await
-            .map_err(|e| DIDCommServiceError::StartupFailed(e.to_string()))?;
+            .map_err(StartupError::Init)?;
 
         let atm_profile = ATMProfile::from_tdk_profile(&atm, &self.config.profile).await?;
 
@@ -178,8 +178,8 @@ impl Listener {
             let meta = *meta;
 
             let sender_did = message.from.clone();
-            let thread_id = get_thread_id(&message).or_else(|| Some(message.id.clone()));
-            let parent_thread_id = get_parent_thread_id(&message);
+            let thread_id = get_thread_id(&message);
+            let parent_thread_id = get_parent_thread_id(&message, false);
 
             let ctx = HandlerContext {
                 atm: atm.clone(),

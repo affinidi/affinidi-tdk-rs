@@ -19,6 +19,36 @@ pub enum PolicyViolation {
 }
 
 #[derive(Debug, Error)]
+pub enum TransportError {
+    #[error("Message has no sender DID")]
+    MissingSenderDid,
+
+    #[error("Failed to forward message via mediator")]
+    Send(#[source] affinidi_messaging_sdk::errors::ATMError),
+}
+
+#[derive(Debug, Error)]
+pub enum StartupError {
+    #[error("Failed to build ATM config")]
+    Config(#[source] affinidi_messaging_sdk::errors::ATMError),
+
+    #[error("Failed to initialize ATM")]
+    Init(#[source] affinidi_messaging_sdk::errors::ATMError),
+
+    #[error("Failed to get mediator account info")]
+    AccountInfo(#[source] affinidi_messaging_sdk::errors::ATMError),
+
+    #[error("No account info returned")]
+    NoAccountInfo,
+
+    #[error("Failed to set ACL mode")]
+    AclMode(#[source] affinidi_messaging_sdk::errors::ATMError),
+
+    #[error("Failed to apply ACL settings")]
+    AclApply(#[source] affinidi_messaging_sdk::errors::ATMError),
+}
+
+#[derive(Debug, Error)]
 pub enum DIDCommServiceError {
     #[error("ATM error: {0}")]
     ATM(#[from] affinidi_messaging_sdk::errors::ATMError),
@@ -42,7 +72,7 @@ pub enum DIDCommServiceError {
     ListenerNotFound(String),
 
     #[error("Service startup failed: {0}")]
-    StartupFailed(String),
+    StartupFailed(#[from] StartupError),
 
     #[error("Handler error: {0}")]
     Handler(String),
@@ -51,7 +81,7 @@ pub enum DIDCommServiceError {
     Policy(#[from] PolicyViolation),
 
     #[error("Transport error: {0}")]
-    Transport(String),
+    Transport(#[from] TransportError),
 
     #[error("Internal error: {0}")]
     Internal(String),
