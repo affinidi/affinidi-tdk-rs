@@ -106,8 +106,15 @@ impl Listener {
         let shutdown_clone = self.shutdown.clone();
         let atm_clone = atm.clone();
         let profile_clone = profile.clone();
+        let handler_clone = self.handler.clone();
         tasks.spawn(async move {
-            Listener::run_periodic_offline_sync(&atm_clone, &profile_clone, &shutdown_clone).await;
+            Listener::run_periodic_offline_sync(
+                &atm_clone,
+                &profile_clone,
+                &handler_clone,
+                &shutdown_clone,
+            )
+            .await;
         });
 
         loop {
@@ -176,47 +183,58 @@ impl Listener {
 
         if let Some((message, meta)) = next {
             let meta = *meta;
-
-            let sender_did = message.from.clone();
-            let thread_id = get_thread_id(&message);
-            let parent_thread_id = get_parent_thread_id(&message, false);
-
-            let ctx = HandlerContext {
-                atm: atm.clone(),
-                profile: profile.clone(),
-                sender_did,
-                message_id: message.id.clone(),
-                thread_id,
-                parent_thread_id,
-            };
-
+            let atm = atm.clone();
+            let profile = profile.clone();
             let handler = self.handler.clone();
-            let profile_alias = ctx.profile.inner.alias.clone();
             tasks.spawn(async move {
-                match handler.handle(ctx.clone(), message, meta).await {
-                    Ok(Some(response)) => {
-                        if let Err(e) = Self::send_response(&ctx, response).await {
-                            debug!(
-                                "[profile = {}] Failed to send response: {}",
-                                profile_alias, e
-                            );
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "[profile = {}] Error handling message: {}",
-                            profile_alias, e
-                        );
-                    }
-                }
+                Self::dispatch_message(&atm, &profile, &handler, message, meta).await;
             });
         }
 
         Ok(())
     }
 
-    async fn send_response(
+    pub(crate) async fn dispatch_message(
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn DIDCommHandler>,
+        message: affinidi_messaging_didcomm::Message,
+        meta: affinidi_messaging_didcomm::UnpackMetadata,
+    ) {
+        let sender_did = message.from.clone();
+        let thread_id = get_thread_id(&message);
+        let parent_thread_id = get_parent_thread_id(&message, false);
+
+        let ctx = HandlerContext {
+            atm: atm.clone(),
+            profile: profile.clone(),
+            sender_did,
+            message_id: message.id.clone(),
+            thread_id,
+            parent_thread_id,
+        };
+
+        let profile_alias = ctx.profile.inner.alias.clone();
+        match handler.handle(ctx.clone(), message, meta).await {
+            Ok(Some(response)) => {
+                if let Err(e) = Self::send_response(&ctx, response).await {
+                    debug!(
+                        "[profile = {}] Failed to send response: {}",
+                        profile_alias, e
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                debug!(
+                    "[profile = {}] Error handling message: {}",
+                    profile_alias, e
+                );
+            }
+        }
+    }
+
+    pub(crate) async fn send_response(
         ctx: &HandlerContext,
         response: DIDCommResponse,
     ) -> Result<(), DIDCommServiceError> {

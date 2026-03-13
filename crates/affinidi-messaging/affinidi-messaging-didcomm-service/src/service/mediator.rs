@@ -9,6 +9,7 @@ use tracing::debug;
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};
+use crate::handler::DIDCommHandler;
 
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
 
@@ -45,6 +46,7 @@ impl Listener {
     pub(crate) async fn run_periodic_offline_sync(
         atm: &ATM,
         profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn DIDCommHandler>,
         shutdown: &CancellationToken,
     ) {
         let profile_alias = profile.inner.alias.clone();
@@ -55,7 +57,7 @@ impl Listener {
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(OFFLINE_SYNC_INTERVAL_SECS)) => {
-                    if let Err(e) = Listener::sync_offline_messages(atm, profile).await {
+                    if let Err(e) = Listener::sync_offline_messages(atm, profile, handler).await {
                         debug!(
                             "[profile = {}] Offline sync failed: {}",
                             profile_alias, e
@@ -69,6 +71,7 @@ impl Listener {
     async fn sync_offline_messages(
         atm: &ATM,
         profile: &Arc<ATMProfile>,
+        handler: &Arc<dyn DIDCommHandler>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let wait_for_response = true;
         let messages_limit = 100;
@@ -100,6 +103,10 @@ impl Listener {
             profile.inner.alias,
             offline_messages.len()
         );
+
+        for (message, meta) in offline_messages {
+            Listener::dispatch_message(atm, profile, handler, message, meta).await;
+        }
 
         let delete_result = atm
             .message_pickup()
