@@ -8,7 +8,7 @@ use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
 use crate::handler::extractor::Extensions;
-use crate::handler::{DIDCommHandler, HandlerContext};
+use crate::handler::{DIDCommHandler, DefaultErrorHandler, ErrorHandler, HandlerContext};
 use crate::middleware::{MiddlewareHandler, Next};
 use crate::problem_report::{ProblemReport, ServiceProblemReport};
 use crate::response::DIDCommResponse;
@@ -26,6 +26,7 @@ pub struct Router {
     fallback: Option<Arc<dyn MessageHandler>>,
     middleware: Vec<Arc<dyn MiddlewareHandler>>,
     extensions: Extensions,
+    error_handler: Arc<dyn ErrorHandler>,
 }
 
 impl Router {
@@ -35,6 +36,7 @@ impl Router {
             fallback: None,
             middleware: Vec::new(),
             extensions: Extensions::default(),
+            error_handler: Arc::new(DefaultErrorHandler),
         }
     }
 
@@ -73,6 +75,11 @@ impl Router {
         self
     }
 
+    pub fn on_error(mut self, handler: impl ErrorHandler) -> Self {
+        self.error_handler = Arc::new(handler);
+        self
+    }
+
     fn find_handler(&self, message_type: &str) -> Option<&Arc<dyn MessageHandler>> {
         self.routes
             .iter()
@@ -102,7 +109,13 @@ impl DIDCommHandler for Router {
             let handler = handler.clone();
             let middleware: Arc<[Arc<dyn MiddlewareHandler>]> = self.middleware.clone().into();
             let next = Next::new(handler, middleware, self.extensions.clone());
-            next.run(ctx, message, meta).await
+            match next.run(ctx.clone(), message, meta).await {
+                Ok(response) => Ok(response),
+                Err(e) => {
+                    self.error_handler.on_error(&ctx, &e);
+                    Ok(None)
+                }
+            }
         } else {
             // Default fallback logic - send a PR according to DIDComm protocol
             tracing::debug!(message_type = %message_type, "No handler found");

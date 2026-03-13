@@ -5,9 +5,10 @@ use std::sync::Arc;
 use affinidi_did_common::{DID as DIDCommon, PeerCreateKey, PeerKeyPurpose};
 use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use affinidi_messaging_didcomm_service::{
-    DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, Extension,
-    HandlerContext, ListenerConfig, MessagePolicy, Next, ProblemReport, RequestLogging,
-    RestartPolicy, RetryConfig, Router, ServiceProblemReport, handler_fn, middleware_fn,
+    DIDCommResponse, DIDCommService, DIDCommServiceConfig, DIDCommServiceError, ErrorHandler,
+    Extension, HandlerContext, ListenerConfig, MESSAGE_PICKUP_STATUS_TYPE, MessagePolicy, Next,
+    ProblemReport, RequestLogging, RestartPolicy, RetryConfig, Router, ServiceProblemReport,
+    TRUST_PING_TYPE, handler_fn, ignore_handler, middleware_fn, trust_ping_handler,
 };
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_secrets_resolver::secrets::Secret;
@@ -102,6 +103,19 @@ async fn fallback_handler(
     )))
 }
 
+struct EchoErrorHandler;
+
+impl ErrorHandler for EchoErrorHandler {
+    fn on_error(&self, ctx: &HandlerContext, error: &DIDCommServiceError) {
+        warn!(
+            profile = %ctx.profile.inner.alias,
+            message_id = %ctx.message_id,
+            error = %error,
+            "Echo server handler error"
+        );
+    }
+}
+
 fn generate_did_peer() -> Result<(String, Vec<Secret>), Box<dyn std::error::Error>> {
     let mut v_key = Secret::generate_ed25519(None, None);
     let mut e_secp256k1 = Secret::generate_secp256k1(None, None)?;
@@ -178,6 +192,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let router = Router::new()
         .extension(app_config)
         .extension(db)
+        .route(TRUST_PING_TYPE, handler_fn(trust_ping_handler))?
+        .route(MESSAGE_PICKUP_STATUS_TYPE, handler_fn(ignore_handler))?
         .route_regex(
             r"https://example\.com/protocols/echo/.+",
             handler_fn(echo_handler),
@@ -187,6 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             handler_fn(problem_report_handler),
         )?
         .fallback(handler_fn(fallback_handler))
+        .on_error(EchoErrorHandler)
         .layer(
             MessagePolicy::new()
                 .require_encrypted(true)

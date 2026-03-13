@@ -207,14 +207,7 @@ impl Listener {
             }
             Ok(None) => {}
             Err(e) => {
-                warn!(
-                    profile = %profile_alias,
-                    message_id = %ctx.message_id,
-                    thread_id = %ctx.thread_id,
-                    sender = ?ctx.sender_did,
-                    error = %e,
-                    "Error handling message"
-                );
+                warn!(profile = %profile_alias, error = %e, "Unhandled handler error");
             }
         }
     }
