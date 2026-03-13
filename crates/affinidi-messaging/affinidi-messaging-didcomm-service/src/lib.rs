@@ -1,5 +1,4 @@
 pub mod config;
-pub mod crypto;
 pub mod error;
 pub mod handler;
 pub mod middleware;
@@ -11,7 +10,6 @@ pub mod transport;
 pub mod utils;
 
 pub use config::{DIDCommServiceConfig, ListenerConfig, RestartPolicy, RetryConfig};
-pub use crypto::{DefaultCryptoProvider, MessageCryptoProvider};
 pub use error::{DIDCommServiceError, PolicyViolation};
 pub use handler::{DIDCommHandler, Extension, Extensions, FromMessageParts, HandlerContext};
 pub use middleware::{MessagePolicy, MiddlewareHandler, Next, RequestLogging, middleware_fn};

@@ -19,9 +19,8 @@ affinidi-messaging-didcomm-service = { path = "../affinidi-messaging-didcomm-ser
 - **N-listener support** -- run multiple listeners (profile + mediator pairs) concurrently within a single service instance
 - **Runtime listener management** -- add/remove listeners on the fly via `add_listener` / `remove_listener`; inspect state via `list_listeners`
 - **Per-listener restart policies** -- `Never`, `OnFailure` (with max retries), `Always` -- each with configurable exponential backoff
-- **Mediator ACL management** -- set `ExplicitAllow` / `ExplicitDeny` mode per listener on the mediator
+- **Mediator ACL management** -- optionally set `ExplicitAllow` / `ExplicitDeny` mode per listener on the mediator via `acl_mode` config
 - **Offline message sync** -- periodic polling for queued messages missed during downtime
-- **Pluggable crypto** -- `MessageCryptoProvider` trait for custom pack/unpack (e.g. delegating to external KMS); built-in `DefaultCryptoProvider` uses ATM with local secrets
 - **Graceful shutdown** -- in-flight message handlers are tracked via `JoinSet` and drained on shutdown; panicked tasks are detected and logged
 - **Transport utilities** -- `build_response`, `send_response`, `build_problem_report`, `send_problem_report`
 - **Problem report protocol** -- `ProblemReport` struct with standard DIDComm error codes

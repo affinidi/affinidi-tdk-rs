@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::config::ListenerConfig;
-use crate::crypto::MessageCryptoProvider;
 use crate::error::DIDCommServiceError;
 use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::response::DIDCommResponse;
@@ -22,7 +21,6 @@ const ATM_OPERATION_TIMEOUT_SECS: u64 = 10;
 pub(crate) struct Listener {
     pub config: ListenerConfig,
     pub handler: Arc<dyn DIDCommHandler>,
-    pub crypto_provider: Arc<dyn MessageCryptoProvider>,
     pub shutdown: CancellationToken,
     atm: Option<ATM>,
     profile: Option<Arc<ATMProfile>>,
@@ -32,13 +30,11 @@ impl Listener {
     pub fn new(
         config: ListenerConfig,
         handler: Arc<dyn DIDCommHandler>,
-        crypto_provider: Arc<dyn MessageCryptoProvider>,
         shutdown: CancellationToken,
     ) -> Self {
         Self {
             config,
             handler,
-            crypto_provider,
             shutdown,
             atm: None,
             profile: None,
@@ -77,7 +73,7 @@ impl Listener {
 
         let profile_arc = match tokio::time::timeout(
             Duration::from_secs(ATM_OPERATION_TIMEOUT_SECS),
-            atm.profile_add(&atm_profile, false),
+            atm.profile_add(&atm_profile, true),
         )
         .await
         {
@@ -97,18 +93,12 @@ impl Listener {
     }
 
     pub async fn listen(&self) -> Result<(), DIDCommServiceError> {
-        self.set_acl_mode().await?;
+        if let Some(ref acl_mode) = self.config.acl_mode {
+            self.set_acl_mode(acl_mode).await?;
+        }
 
         let atm = self.atm()?;
         let profile = self.profile()?;
-
-        tokio::time::timeout(
-            Duration::from_secs(ATM_OPERATION_TIMEOUT_SECS),
-            atm.profile_start_live_streaming(profile, false, true),
-        )
-        .await
-        .map_err(DIDCommServiceError::Timeout)?
-        .map_err(|e| DIDCommServiceError::StartupFailed(e.to_string()))?;
 
         let mut tasks = JoinSet::new();
 
@@ -178,17 +168,14 @@ impl Listener {
         let atm = self.atm()?;
         let profile = self.profile()?;
 
-        let packed = atm
+        let next = atm
             .message_pickup()
-            .live_stream_next_packed(profile, Some(wait_duration), auto_delete)
+            .live_stream_next(profile, Some(wait_duration), auto_delete)
             .await
             .map_err(DIDCommServiceError::ATM)?;
 
-        if let Some(packed_message) = packed {
-            let (message, meta) = self
-                .crypto_provider
-                .unpack(atm, profile, &packed_message)
-                .await?;
+        if let Some((message, meta)) = next {
+            let meta = *meta;
 
             let sender_did = message.from.clone();
             let thread_id = get_thread_id(&message).or_else(|| Some(message.id.clone()));
@@ -204,14 +191,11 @@ impl Listener {
             };
 
             let handler = self.handler.clone();
-            let crypto_provider = self.crypto_provider.clone();
             let profile_alias = ctx.profile.inner.alias.clone();
             tasks.spawn(async move {
                 match handler.handle(ctx.clone(), message, meta).await {
                     Ok(Some(response)) => {
-                        if let Err(e) =
-                            Self::send_response(&ctx, response, crypto_provider.as_ref()).await
-                        {
+                        if let Err(e) = Self::send_response(&ctx, response).await {
                             debug!(
                                 "[profile = {}] Failed to send response: {}",
                                 profile_alias, e
@@ -235,9 +219,8 @@ impl Listener {
     async fn send_response(
         ctx: &HandlerContext,
         response: DIDCommResponse,
-        crypto: &dyn MessageCryptoProvider,
     ) -> Result<(), DIDCommServiceError> {
         let message = response.into_message(ctx)?;
-        transport::send_response(ctx, message, crypto).await
+        transport::send_response(ctx, message).await
     }
 }

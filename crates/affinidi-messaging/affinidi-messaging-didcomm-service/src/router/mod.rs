@@ -43,8 +43,7 @@ impl Router {
         pattern: &str,
         handler: impl MessageHandler,
     ) -> Result<Self, DIDCommServiceError> {
-        self.routes
-            .push(Route::new(pattern, Arc::new(handler))?);
+        self.routes.push(Route::new(pattern, Arc::new(handler))?);
         Ok(self)
     }
 
@@ -54,8 +53,7 @@ impl Router {
         pattern: &str,
         handler: impl MessageHandler,
     ) -> Result<Self, DIDCommServiceError> {
-        self.routes
-            .push(Route::regex(pattern, Arc::new(handler))?);
+        self.routes.push(Route::regex(pattern, Arc::new(handler))?);
         Ok(self)
     }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
@@ -13,10 +13,12 @@ use crate::error::DIDCommServiceError;
 const OFFLINE_SYNC_INTERVAL_SECS: u64 = 30;
 
 impl Listener {
-    pub(crate) async fn set_acl_mode(&self) -> Result<(), DIDCommServiceError> {
+    pub(crate) async fn set_acl_mode(
+        &self,
+        acl_mode: &AccessListModeType,
+    ) -> Result<(), DIDCommServiceError> {
         let atm = self.atm()?;
         let profile = self.profile()?;
-        let acl_mode = &self.config.acl_mode;
 
         let account_info = atm
             .mediator()

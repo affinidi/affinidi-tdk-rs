@@ -11,7 +11,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{DIDCommServiceConfig, ListenerConfig};
-use crate::crypto::{DefaultCryptoProvider, MessageCryptoProvider};
 use crate::error::DIDCommServiceError;
 use crate::handler::DIDCommHandler;
 
@@ -118,15 +117,8 @@ impl DIDCommService {
         let restart_count_clone = restart_count.clone();
         let token_clone = listener_token.clone();
 
-        let crypto_provider: Arc<dyn MessageCryptoProvider> = config
-            .crypto_provider
-            .as_ref()
-            .map(Arc::clone)
-            .unwrap_or_else(|| Arc::new(DefaultCryptoProvider));
-
         let task = tokio::spawn(async move {
-            let mut listener =
-                listener::Listener::new(config, handler, crypto_provider, token_clone);
+            let mut listener = listener::Listener::new(config, handler, token_clone);
             listener.run_with_restart(restart_count_clone).await;
         });
 

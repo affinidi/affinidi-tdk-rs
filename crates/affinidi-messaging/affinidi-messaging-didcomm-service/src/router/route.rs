@@ -80,15 +80,13 @@ mod tests {
 
     #[test]
     fn new_exact_match() {
-        let route =
-            Route::new("https://example.com/protocols/ping/1.0", dummy_handler()).unwrap();
+        let route = Route::new("https://example.com/protocols/ping/1.0", dummy_handler()).unwrap();
         assert!(route.matches("https://example.com/protocols/ping/1.0"));
     }
 
     #[test]
     fn new_does_not_match_substring() {
-        let route =
-            Route::new("https://example.com/protocols/ping/1.0", dummy_handler()).unwrap();
+        let route = Route::new("https://example.com/protocols/ping/1.0", dummy_handler()).unwrap();
         assert!(!route.matches("https://example.com/protocols/ping/1.0/extra"));
         assert!(!route.matches("prefix/https://example.com/protocols/ping/1.0"));
     }

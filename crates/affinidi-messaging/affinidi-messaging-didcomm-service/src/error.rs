@@ -53,9 +53,6 @@ pub enum DIDCommServiceError {
     #[error("Transport error: {0}")]
     Transport(String),
 
-    #[error("Crypto error: {0}")]
-    Crypto(String),
-
     #[error("Internal error: {0}")]
     Internal(String),
 }

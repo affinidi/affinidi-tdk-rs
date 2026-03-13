@@ -9,6 +9,7 @@ use affinidi_messaging_didcomm_service::{
     HandlerContext, ListenerConfig, MessagePolicy, Next, ProblemReport, RequestLogging,
     RestartPolicy, RetryConfig, Router, ServiceProblemReport, handler_fn, middleware_fn,
 };
+use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::profiles::TDKProfile;
 use serde_json::json;
@@ -150,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             restart_policy: RestartPolicy::Always {
                 backoff: RetryConfig::default(),
             },
+            acl_mode: Some(AccessListModeType::ExplicitDeny),
             ..Default::default()
         }],
     };

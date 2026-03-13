@@ -1,9 +1,5 @@
-use std::sync::Arc;
-
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_tdk_common::profiles::TDKProfile;
-
-use crate::crypto::MessageCryptoProvider;
 
 pub struct DIDCommServiceConfig {
     pub listeners: Vec<ListenerConfig>,
@@ -12,9 +8,8 @@ pub struct DIDCommServiceConfig {
 pub struct ListenerConfig {
     pub id: String,
     pub profile: TDKProfile,
-    pub acl_mode: AccessListModeType,
+    pub acl_mode: Option<AccessListModeType>,
     pub restart_policy: RestartPolicy,
-    pub crypto_provider: Option<Arc<dyn MessageCryptoProvider>>,
     pub message_wait_duration_secs: u64,
     pub auto_delete: bool,
 }
@@ -24,9 +19,8 @@ impl Default for ListenerConfig {
         Self {
             id: String::new(),
             profile: TDKProfile::default(),
-            acl_mode: AccessListModeType::ExplicitDeny,
+            acl_mode: None,
             restart_policy: RestartPolicy::default(),
-            crypto_provider: None,
             message_wait_duration_secs: 5,
             auto_delete: true,
         }
@@ -73,7 +67,7 @@ mod tests {
         assert!(lc.id.is_empty());
         assert_eq!(lc.message_wait_duration_secs, 5);
         assert!(lc.auto_delete);
-        assert!(lc.crypto_provider.is_none());
+        assert!(lc.acl_mode.is_none());
         assert!(matches!(lc.restart_policy, RestartPolicy::Never));
     }
 

@@ -2,7 +2,6 @@ use affinidi_messaging_didcomm::Message;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::crypto::MessageCryptoProvider;
 use crate::error::DIDCommServiceError;
 use crate::handler::HandlerContext;
 use crate::problem_report::{ProblemReport, ServiceProblemReport};
@@ -16,9 +15,7 @@ pub fn build_response(
     body: Value,
 ) -> Result<Message, DIDCommServiceError> {
     let sender = ctx.sender_did.as_deref().ok_or_else(|| {
-        DIDCommServiceError::Transport(
-            "Cannot build response: message has no sender DID".into(),
-        )
+        DIDCommServiceError::Transport("Cannot build response: message has no sender DID".into())
     })?;
 
     let mut builder = Message::build(new_message_id(), response_type, body)
@@ -43,14 +40,22 @@ pub fn build_problem_report(
 pub async fn send_response(
     ctx: &HandlerContext,
     message: Message,
-    crypto: &(impl MessageCryptoProvider + ?Sized),
 ) -> Result<(), DIDCommServiceError> {
     let message_id = message.id.clone();
     let recipient = ctx.sender_did.as_deref().ok_or_else(|| {
         DIDCommServiceError::Transport("Cannot send response: no sender DID".into())
     })?;
 
-    let packed_msg = crypto.pack(&ctx.atm, &ctx.profile, &message).await?;
+    let (packed_msg, _) = ctx
+        .atm
+        .pack_encrypted(
+            &message,
+            recipient,
+            Some(&ctx.profile.inner.did),
+            Some(&ctx.profile.inner.did),
+            None,
+        )
+        .await?;
 
     let mediator_did = ctx
         .profile
@@ -93,8 +98,7 @@ pub async fn send_response(
 pub async fn send_problem_report(
     ctx: &HandlerContext,
     report: &ProblemReport,
-    crypto: &(impl MessageCryptoProvider + ?Sized),
 ) -> Result<(), DIDCommServiceError> {
     let message = build_problem_report(ctx, report)?;
-    send_response(ctx, message, crypto).await
+    send_response(ctx, message).await
 }
