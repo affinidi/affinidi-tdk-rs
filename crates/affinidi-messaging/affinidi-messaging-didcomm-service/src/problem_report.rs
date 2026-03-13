@@ -58,7 +58,7 @@ impl ServiceProblemReport for ProblemReport {
 
     fn to_body(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or_else(|e| {
-            tracing::warn!("Failed to serialize problem report: {}", e);
+            tracing::warn!(error = %e, "Failed to serialize problem report");
             serde_json::json!({
                 "code": "e.p.msg.internal-error",
                 "comment": "Failed to serialize problem report"

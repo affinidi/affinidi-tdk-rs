@@ -1,6 +1,6 @@
 use affinidi_messaging_didcomm::Message;
 use serde_json::Value;
-use tracing::debug;
+use tracing::{trace, warn};
 
 use crate::error::{DIDCommServiceError, TransportError};
 use crate::handler::HandlerContext;
@@ -81,17 +81,11 @@ pub async fn send_response(
         .await;
 
     if let Err(sending_error) = sending_result {
-        debug!(
-            "[profile = {}] Failed to send response. Error: {:?}",
-            &ctx.profile.inner.alias, sending_error
-        );
+        warn!(profile = %ctx.profile.inner.alias, error = ?sending_error, "Failed to send response");
         return Err(TransportError::Send(sending_error).into());
     }
 
-    debug!(
-        "[profile = {}] Response sent successfully",
-        &ctx.profile.inner.alias
-    );
+    trace!(profile = %ctx.profile.inner.alias, "Response sent successfully");
     Ok(())
 }
 

@@ -7,7 +7,7 @@ use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{error, info, warn};
 
 use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -79,10 +79,7 @@ impl Listener {
         {
             Ok(result) => result?,
             Err(e) => {
-                debug!(
-                    "[profile = {}] Timeout adding profile: {}",
-                    self.config.profile.alias, e
-                );
+                warn!(profile = %self.config.profile.alias, error = %e, "Timeout adding profile");
                 return Err(DIDCommServiceError::Timeout(e));
             }
         };
@@ -123,43 +120,30 @@ impl Listener {
                 if let Err(e) = result
                     && e.is_panic()
                 {
-                    warn!(
-                        "[profile = {}] Handler task panicked: {}",
-                        profile.inner.alias, e
-                    );
+                    error!(profile = %profile.inner.alias, error = %e, "Handler task panicked");
                 }
             }
 
             tokio::select! {
                 _ = self.shutdown.cancelled() => {
-                    debug!("[profile = {}] Listener received shutdown signal", profile.inner.alias);
+                    info!(profile = %profile.inner.alias, "Listener received shutdown signal");
                     break;
                 }
                 result = self.process_next_message(&mut tasks) => {
                     if let Err(e) = result {
-                        debug!(
-                            "[profile = {}] Error processing message: {}",
-                            profile.inner.alias, e
-                        );
+                        warn!(profile = %profile.inner.alias, error = %e, "Error processing message");
                     }
                 }
             }
         }
 
         // Drain in-flight tasks on shutdown
-        debug!(
-            "[profile = {}] Waiting for {} in-flight tasks to complete",
-            profile.inner.alias,
-            tasks.len()
-        );
+        info!(profile = %profile.inner.alias, count = tasks.len(), "Waiting for in-flight tasks to complete");
         while let Some(result) = tasks.join_next().await {
             if let Err(e) = result
                 && e.is_panic()
             {
-                warn!(
-                    "[profile = {}] Handler task panicked during shutdown: {}",
-                    profile.inner.alias, e
-                );
+                error!(profile = %profile.inner.alias, error = %e, "Handler task panicked during shutdown");
             }
         }
 
@@ -218,17 +202,18 @@ impl Listener {
         match handler.handle(ctx.clone(), message, meta).await {
             Ok(Some(response)) => {
                 if let Err(e) = Self::send_response(&ctx, response).await {
-                    debug!(
-                        "[profile = {}] Failed to send response: {}",
-                        profile_alias, e
-                    );
+                    warn!(profile = %profile_alias, error = %e, "Failed to send response");
                 }
             }
             Ok(None) => {}
             Err(e) => {
-                debug!(
-                    "[profile = {}] Error handling message: {}",
-                    profile_alias, e
+                warn!(
+                    profile = %profile_alias,
+                    message_id = %ctx.message_id,
+                    thread_id = %ctx.thread_id,
+                    sender = ?ctx.sender_did,
+                    error = %e,
+                    "Error handling message"
                 );
             }
         }

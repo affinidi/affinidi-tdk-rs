@@ -5,7 +5,7 @@ use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, Medi
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use super::listener::Listener;
 use crate::error::{DIDCommServiceError, StartupError};
@@ -30,7 +30,7 @@ impl Listener {
 
         let mut acls = MediatorACLSet::from_u64(account_info.acls);
 
-        debug!("ACL_MODE: Configured to {:?}", acl_mode);
+        info!(acl_mode = ?acl_mode, "ACL mode configured");
 
         acls.set_access_list_mode(acl_mode.clone(), true, false)
             .map_err(StartupError::AclMode)?;
@@ -53,15 +53,12 @@ impl Listener {
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    debug!("[profile = {}] Offline sync task shutting down", profile_alias);
+                    debug!(profile = %profile_alias, "Offline sync task shutting down");
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(OFFLINE_SYNC_INTERVAL_SECS)) => {
                     if let Err(e) = Listener::sync_offline_messages(atm, profile, handler).await {
-                        debug!(
-                            "[profile = {}] Offline sync failed: {}",
-                            profile_alias, e
-                        );
+                        warn!(profile = %profile_alias, error = %e, "Offline sync failed");
                     }
                 }
             }
@@ -82,10 +79,7 @@ impl Listener {
             .await?;
 
         let messages_count = status_reply.map(|m| m.message_count).unwrap_or(0);
-        debug!(
-            "[profile = {}] Offline messages count: {}",
-            profile.inner.alias, messages_count
-        );
+        debug!(profile = %profile.inner.alias, count = messages_count, "Offline messages count");
 
         if messages_count == 0 {
             return Ok(());
@@ -98,11 +92,7 @@ impl Listener {
 
         let message_ids: Vec<_> = offline_messages.iter().map(|(m, _)| m.id.clone()).collect();
 
-        debug!(
-            "[profile = {}] Retrieved {} offline messages",
-            profile.inner.alias,
-            offline_messages.len()
-        );
+        debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
 
         for (message, meta) in offline_messages {
             Listener::dispatch_message(atm, profile, handler, message, meta).await;
@@ -114,15 +104,9 @@ impl Listener {
             .await?;
 
         if delete_result.is_some() {
-            debug!(
-                "[profile = {}] Offline messages acknowledged and deleted",
-                profile.inner.alias
-            );
+            debug!(profile = %profile.inner.alias, "Offline messages acknowledged and deleted");
         } else {
-            debug!(
-                "[profile = {}] No status reply for offline messages ack",
-                profile.inner.alias
-            );
+            warn!(profile = %profile.inner.alias, "No status reply for offline messages ack");
         }
 
         Ok(())

@@ -98,11 +98,11 @@ impl MiddlewareHandler for MessagePolicy {
         next: Next,
     ) -> MiddlewareResult {
         if let Err(violation) = self.check(&message, &meta) {
-            tracing::debug!(
-                "[policy] Rejected message {} from {}: {}",
-                message.id,
-                ctx.sender_did.as_deref().unwrap_or("<anon>"),
-                violation
+            tracing::info!(
+                message_id = %message.id,
+                sender = ctx.sender_did.as_deref().unwrap_or("<anon>"),
+                violation = %violation,
+                "Policy rejected message"
             );
             return Err(violation.into());
         }

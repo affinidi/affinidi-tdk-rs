@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{RestartPolicy, RetryConfig};
 
@@ -43,18 +43,18 @@ impl Listener {
 
         loop {
             let was_success = if let Err(e) = self.connect().await {
-                debug!("[profile = {}] Failed to connect: {}", alias, e);
+                warn!(profile = %alias, error = %e, "Failed to connect");
                 false
             } else {
                 let result = self.listen().await;
 
                 if self.shutdown.is_cancelled() {
-                    debug!("[profile = {}] Listener shutting down", alias);
+                    debug!(profile = %alias, "Listener shutting down");
                     break;
                 }
 
                 if let Err(ref e) = result {
-                    debug!("[profile = {}] Listener failed: {}", alias, e);
+                    warn!(profile = %alias, error = %e, "Listener failed");
                 }
 
                 result.is_ok()
@@ -64,10 +64,7 @@ impl Listener {
 
             match should_restart(&restart_policy, count, was_success) {
                 ShouldRestart::Yes(delay) => {
-                    debug!(
-                        "[profile = {}] Restarting (attempt {}), backoff {:?}",
-                        alias, count, delay
-                    );
+                    info!(profile = %alias, attempt = count, backoff = ?delay, "Restarting");
                     tokio::time::sleep(delay).await;
                 }
                 ShouldRestart::Stop => {
@@ -77,10 +74,7 @@ impl Listener {
                             ..
                         } = &restart_policy
                     {
-                        error!(
-                            "[profile = {}] Exceeded max retries ({}), stopping",
-                            alias, max
-                        );
+                        error!(profile = %alias, max_retries = max, "Exceeded max retries, stopping");
                     }
                     break;
                 }

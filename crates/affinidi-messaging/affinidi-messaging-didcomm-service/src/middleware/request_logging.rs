@@ -33,12 +33,12 @@ impl MiddlewareHandler for RequestLogging {
 
         tracing::info!(
             target: "didcomm_server::request",
-            "[profile = {}] {} from={} status={} latency={:?}",
-            profile,
-            message_type,
-            sender,
-            status,
-            latency,
+            profile = %profile,
+            message_type = %message_type,
+            sender = %sender,
+            status = %status,
+            latency = ?latency,
+            "Request processed"
         );
 
         result

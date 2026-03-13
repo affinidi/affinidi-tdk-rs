@@ -105,7 +105,7 @@ impl DIDCommHandler for Router {
             next.run(ctx, message, meta).await
         } else {
             // Default fallback logic - send a PR according to DIDComm protocol
-            tracing::debug!("No handler for message type: {}", message_type);
+            tracing::debug!(message_type = %message_type, "No handler found");
             Ok(Some(DIDCommResponse::problem_report(
                 ProblemReport::bad_request(format!("Unsupported message type: {}", message_type)),
             )))
