@@ -6,7 +6,7 @@ edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-publish.workspace = true
+publish = false
 license.workspace = true
 readme = "README.md"
 rust-version.workspace = true
@@ -14,7 +14,7 @@ repository.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-tdk = "0.5"
+affinidi-tdk = { path = "../../affinidi-tdk/affinidi-tdk", version = "0.6" }
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm" }
 affinidi-did-resolver-cache-sdk = "0.8"

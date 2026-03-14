@@ -74,6 +74,19 @@ let resolver = DIDCacheClient::new(config).await?;
 
 Network mode still caches locally to reduce remote calls.
 
+## Caching Strategy
+
+The cache uses **per-method TTL** to avoid unnecessary re-resolution:
+
+| Category | Methods | TTL | Rationale |
+|---|---|---|---|
+| **Immutable** | `did:key`, `did:peer`, `did:jwk`, `did:ethr`, `did:pkh` | None (capacity-evicted only) | Document is derived deterministically from the DID string |
+| **Mutable** | `did:web`, `did:webvh`, `did:cheqd`, `did:scid` | Configurable (`cache_ttl`, default 300s) | Document is fetched from external infrastructure and can change |
+
+The `cache_ttl` configuration option only applies to mutable DID methods.
+Immutable DIDs stay cached until evicted by capacity pressure, since their
+documents can never change.
+
 ## Benchmarks
 
 ```bash

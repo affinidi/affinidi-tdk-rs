@@ -48,15 +48,16 @@ fn bench_sign_jcs(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     c.bench_function("sign_jcs", |b| {
         b.iter(|| {
-            DataIntegrityProof::sign_jcs_data(
+            rt.block_on(DataIntegrityProof::sign_jcs_data(
                 &doc,
                 Some(context.clone()),
                 &secret,
                 Some("2023-02-24T23:36:38Z".to_string()),
-            )
+            ))
             .unwrap()
         })
     });
@@ -66,15 +67,16 @@ fn bench_sign_rdfc(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     c.bench_function("sign_rdfc", |b| {
         b.iter(|| {
-            DataIntegrityProof::sign_rdfc_data(
+            rt.block_on(DataIntegrityProof::sign_rdfc_data(
                 &doc,
                 Some(context.clone()),
                 &secret,
                 Some("2023-02-24T23:36:38Z".to_string()),
-            )
+            ))
             .unwrap()
         })
     });
@@ -86,14 +88,16 @@ fn bench_verify_jcs(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let proof = DataIntegrityProof::sign_jcs_data(
-        &doc,
-        Some(context.clone()),
-        &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
-    )
-    .unwrap();
+    let proof = rt
+        .block_on(DataIntegrityProof::sign_jcs_data(
+            &doc,
+            Some(context.clone()),
+            &secret,
+            Some("2023-02-24T23:36:38Z".to_string()),
+        ))
+        .unwrap();
 
     let public_key_bytes = secret.get_public_bytes().to_vec();
 
@@ -114,14 +118,16 @@ fn bench_verify_rdfc(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let proof = DataIntegrityProof::sign_rdfc_data(
-        &doc,
-        Some(context.clone()),
-        &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
-    )
-    .unwrap();
+    let proof = rt
+        .block_on(DataIntegrityProof::sign_rdfc_data(
+            &doc,
+            Some(context.clone()),
+            &secret,
+            Some("2023-02-24T23:36:38Z".to_string()),
+        ))
+        .unwrap();
 
     let public_key_bytes = secret.get_public_bytes().to_vec();
 
@@ -144,27 +150,28 @@ fn bench_sign_comparison(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     let mut group = c.benchmark_group("sign");
     for suite in ["jcs", "rdfc"] {
         group.bench_with_input(BenchmarkId::from_parameter(suite), &suite, |b, suite| {
             b.iter(|| match *suite {
                 "jcs" => {
-                    DataIntegrityProof::sign_jcs_data(
+                    rt.block_on(DataIntegrityProof::sign_jcs_data(
                         &doc,
                         Some(context.clone()),
                         &secret,
                         Some("2023-02-24T23:36:38Z".to_string()),
-                    )
+                    ))
                     .unwrap();
                 }
                 "rdfc" => {
-                    DataIntegrityProof::sign_rdfc_data(
+                    rt.block_on(DataIntegrityProof::sign_rdfc_data(
                         &doc,
                         Some(context.clone()),
                         &secret,
                         Some("2023-02-24T23:36:38Z".to_string()),
-                    )
+                    ))
                     .unwrap();
                 }
                 _ => unreachable!(),
@@ -178,22 +185,25 @@ fn bench_verify_comparison(c: &mut Criterion) {
     let doc = b1_credential();
     let context = context_from_doc(&doc);
     let secret = test_secret();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    let jcs_proof = DataIntegrityProof::sign_jcs_data(
-        &doc,
-        Some(context.clone()),
-        &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
-    )
-    .unwrap();
+    let jcs_proof = rt
+        .block_on(DataIntegrityProof::sign_jcs_data(
+            &doc,
+            Some(context.clone()),
+            &secret,
+            Some("2023-02-24T23:36:38Z".to_string()),
+        ))
+        .unwrap();
 
-    let rdfc_proof = DataIntegrityProof::sign_rdfc_data(
-        &doc,
-        Some(context.clone()),
-        &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
-    )
-    .unwrap();
+    let rdfc_proof = rt
+        .block_on(DataIntegrityProof::sign_rdfc_data(
+            &doc,
+            Some(context.clone()),
+            &secret,
+            Some("2023-02-24T23:36:38Z".to_string()),
+        ))
+        .unwrap();
 
     let public_key_bytes = secret.get_public_bytes().to_vec();
 

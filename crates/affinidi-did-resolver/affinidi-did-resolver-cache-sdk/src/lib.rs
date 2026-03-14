@@ -13,13 +13,13 @@ As this crate can be used either natively or in a WASM environment, the followin
 */
 
 #[cfg(all(feature = "network", target_arch = "wasm32"))]
-compile_error!("Cannot enable both features at the same time");
+compile_error!("The 'network' feature is not supported on wasm32 targets");
 
 use affinidi_did_common::Document;
 use config::DIDCacheConfig;
 use errors::DIDCacheError;
 use highway::{HighwayHash, HighwayHasher};
-use moka::future::Cache;
+use moka::{Expiry, future::Cache};
 #[cfg(feature = "network")]
 use networking::{
     WSRequest,
@@ -110,12 +110,61 @@ impl TryFrom<&str> for DIDMethod {
     }
 }
 
+impl DIDMethod {
+    /// Returns `true` for DID methods whose documents are fetched from external
+    /// infrastructure and can change over time (web, webvh, cheqd, scid).
+    ///
+    /// Returns `false` for deterministic methods where the document is derived
+    /// entirely from the DID string itself (key, peer, jwk, ethr, pkh, example).
+    pub fn is_mutable(&self) -> bool {
+        matches!(
+            self,
+            DIDMethod::WEB | DIDMethod::WEBVH | DIDMethod::CHEQD | DIDMethod::SCID
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct ResolveResponse {
     pub did: String,
     pub method: DIDMethod,
     pub did_hash: [u64; 2],
     pub doc: Document,
     pub cache_hit: bool,
+}
+
+/// Per-entry expiry policy for the DID document cache.
+///
+/// - **Immutable methods** (key, peer, jwk, ethr, pkh): no expiry — entries
+///   stay cached until evicted by capacity pressure.
+/// - **Mutable methods** (web, webvh, cheqd, scid): expire after `mutable_ttl`
+///   so that updated documents are eventually re-fetched.
+struct DIDExpiry {
+    mutable_ttl: Duration,
+}
+
+impl Expiry<[u64; 2], Document> for DIDExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &[u64; 2],
+        value: &Document,
+        _created_at: std::time::Instant,
+    ) -> Option<Duration> {
+        let did_str = value.id.as_str();
+
+        // Extract the method name from "did:<method>:..."
+        let is_mutable = did_str
+            .split(':')
+            .nth(1)
+            .and_then(|m| DIDMethod::try_from(m).ok())
+            .is_some_and(|m| m.is_mutable());
+
+        if is_mutable {
+            Some(self.mutable_ttl)
+        } else {
+            None // no expiry — evicted only by capacity
+        }
+    }
 }
 
 // ***************************************************************************
@@ -256,46 +305,43 @@ impl DIDCacheClient {
     pub async fn resolve(&self, did: &str) -> Result<ResolveResponse, DIDCacheError> {
         use affinidi_did_common::DID;
 
-        // If DID's size is greater than 1KB we don't resolve it
+        // Size guard before any parsing
         if did.len() > self.config.max_did_size_in_bytes {
             return Err(DIDCacheError::DIDError(format!(
-                "The DID size of {}bytes exceeds the limit of {1}. Please ensure the size is less than {1}.",
+                "The DID size of {0} bytes exceeds the limit of {1}. Please ensure the size is less than {1}.",
                 did.len(),
                 self.config.max_did_size_in_bytes
             )));
         }
 
-        let parts: Vec<&str> = did.split(':').collect();
-        if parts.len() < 3 {
-            return Err(DIDCacheError::DIDError(format!(
-                "did isn't to spec! did ({did})",
-            )));
-        }
-
-        let key_parts: Vec<&str> = parts.last().unwrap().split(".").collect();
-        if key_parts.len() > self.config.max_did_parts {
-            return Err(DIDCacheError::DIDError(format!(
-                "The total number of keys and/or services must be less than or equal to {:?}, but {:?} were found.",
-                self.config.max_did_parts,
-                parts.len()
-            )));
-        }
-
-        // Parse the DID string into a DID struct
+        // Parse the DID string (validates "did:method:specific-id" format)
         let parsed_did: DID = did
             .parse()
             .map_err(|e| DIDCacheError::DIDError(format!("Failed to parse DID: {e}")))?;
+
+        // Check max parts in the method-specific-id
+        let method_specific_id = parsed_did.method_specific_id();
+        let key_parts: Vec<&str> = method_specific_id.split('.').collect();
+        if key_parts.len() > self.config.max_did_parts {
+            return Err(DIDCacheError::DIDError(format!(
+                "The total number of keys and/or services must be less than or equal to {}, but {} were found.",
+                self.config.max_did_parts,
+                key_parts.len()
+            )));
+        }
+
+        let method: DIDMethod = parsed_did.method().to_string().as_str().try_into()?;
 
         let hash = DIDCacheClient::hash_did(did);
 
         #[cfg(feature = "did_example")]
         // Short-circuit for example DIDs
-        if parts[1] == "example"
+        if matches!(method, DIDMethod::EXAMPLE)
             && let Some(doc) = self.did_example_cache.get(did)
         {
             return Ok(ResolveResponse {
                 did: did.to_string(),
-                method: parts[1].try_into()?,
+                method,
                 did_hash: hash,
                 doc: doc.clone(),
                 cache_hit: true,
@@ -307,7 +353,7 @@ impl DIDCacheClient {
             debug!("found did ({}) in cache", did);
             Ok(ResolveResponse {
                 did: did.to_string(),
-                method: parts[1].try_into()?,
+                method,
                 did_hash: hash,
                 doc,
                 cache_hit: true,
@@ -331,7 +377,7 @@ impl DIDCacheClient {
             self.cache.insert(hash, doc.clone()).await;
             Ok(ResolveResponse {
                 did: did.to_string(),
-                method: parts[1].try_into()?,
+                method,
                 did_hash: hash,
                 doc,
                 cache_hit: false,
@@ -385,10 +431,14 @@ impl DIDCacheClient {
     // using Self instead of DIDCacheClient leads to E0401 errors in dependent crates
     // this is due to wasm_bindgen generated code (check via `cargo expand`)
     pub async fn new(config: DIDCacheConfig) -> Result<DIDCacheClient, DIDCacheError> {
-        // Create the initial cache
+        // Create the cache with per-entry expiry:
+        // - Immutable DID methods (key, peer, jwk, ethr, pkh) → no TTL (evicted only by capacity)
+        // - Mutable DID methods (web, webvh, cheqd, scid) → expire after cache_ttl seconds
         let cache = Cache::builder()
             .max_capacity(config.cache_capacity.into())
-            .time_to_live(Duration::from_secs(config.cache_ttl.into()))
+            .expire_after(DIDExpiry {
+                mutable_ttl: Duration::from_secs(config.cache_ttl.into()),
+            })
             .build();
 
         // Register built-in resolvers
@@ -518,6 +568,10 @@ mod tests {
         DIDCacheClient::new(config).await.unwrap()
     }
 
+    // -----------------------------------------------------------------------
+    // Cache operations
+    // -----------------------------------------------------------------------
+
     #[tokio::test]
     async fn remove_existing_cached_did() {
         let client = basic_local_client().await;
@@ -535,5 +589,227 @@ mod tests {
         // We haven't resolved the cache, so it shouldn't be in the cache
         let removed_doc = client.remove(DID_KEY).await;
         assert_eq!(removed_doc, None);
+    }
+
+    #[tokio::test]
+    async fn resolve_returns_cache_hit_on_second_call() {
+        let client = basic_local_client().await;
+
+        let first = client.resolve(DID_KEY).await.unwrap();
+        assert!(!first.cache_hit);
+
+        let second = client.resolve(DID_KEY).await.unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(first.doc, second.doc);
+        assert_eq!(first.did_hash, second.did_hash);
+    }
+
+    #[tokio::test]
+    async fn add_did_document_makes_it_retrievable() {
+        let mut client = basic_local_client().await;
+
+        // Resolve to get a valid document, then remove it
+        let response = client.resolve(DID_KEY).await.unwrap();
+        client.remove(DID_KEY).await;
+
+        // Manually add it back
+        client.add_did_document(DID_KEY, response.doc.clone()).await;
+
+        // Should be a cache hit now
+        let cached = client.resolve(DID_KEY).await.unwrap();
+        assert!(cached.cache_hit);
+        assert_eq!(cached.doc, response.doc);
+    }
+
+    #[tokio::test]
+    async fn get_cache_returns_shared_cache() {
+        let client = basic_local_client().await;
+        client.resolve(DID_KEY).await.unwrap();
+
+        let cache = client.get_cache();
+        let hash = DIDCacheClient::hash_did(DID_KEY);
+        assert!(cache.get(&hash).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn clone_shares_cache() {
+        let client = basic_local_client().await;
+        let cloned = client.clone();
+
+        // Resolve on original, visible on clone
+        client.resolve(DID_KEY).await.unwrap();
+        let from_clone = cloned.resolve(DID_KEY).await.unwrap();
+        assert!(from_clone.cache_hit);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve() validation
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn resolve_rejects_did_exceeding_size_limit() {
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_max_did_size_in_bytes(20)
+            .build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        let result = client.resolve(DID_KEY).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("exceeds the limit"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_malformed_did() {
+        let client = basic_local_client().await;
+
+        // Not enough colons
+        let result = client.resolve("not-a-did").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_too_many_parts() {
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_max_did_parts(1)
+            .build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        // did:peer DIDs have multiple dot-separated parts in method-specific-id
+        let did = "did:peer:2.Vz6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv.EzQ3shQLqRUza6AMJFbPuMdvFRFWm1wKviQRnQSC1fScovJN4s";
+        let result = client.resolve(did).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("keys and/or services"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_populates_response_fields() {
+        let client = basic_local_client().await;
+
+        let response = client.resolve(DID_KEY).await.unwrap();
+        assert_eq!(response.did, DID_KEY);
+        assert_eq!(response.method, DIDMethod::KEY);
+        assert_eq!(response.did_hash, DIDCacheClient::hash_did(DID_KEY));
+        assert!(!response.cache_hit);
+        assert_eq!(response.doc.id.as_str(), DID_KEY);
+    }
+
+    // -----------------------------------------------------------------------
+    // hash_did
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hash_did_is_deterministic() {
+        let hash1 = DIDCacheClient::hash_did(DID_KEY);
+        let hash2 = DIDCacheClient::hash_did(DID_KEY);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn hash_did_differs_for_different_dids() {
+        let hash1 = DIDCacheClient::hash_did("did:key:abc");
+        let hash2 = DIDCacheClient::hash_did("did:key:def");
+        assert_ne!(hash1, hash2);
+    }
+
+    // -----------------------------------------------------------------------
+    // DIDMethod Display / TryFrom
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn did_method_display_roundtrips() {
+        let methods = [
+            DIDMethod::ETHR,
+            DIDMethod::JWK,
+            DIDMethod::KEY,
+            DIDMethod::PEER,
+            DIDMethod::PKH,
+            DIDMethod::WEB,
+            DIDMethod::WEBVH,
+            DIDMethod::CHEQD,
+            DIDMethod::SCID,
+        ];
+        for method in &methods {
+            let s = method.to_string();
+            let back: DIDMethod = s.as_str().try_into().unwrap();
+            assert_eq!(&back, method);
+        }
+    }
+
+    #[test]
+    fn did_method_try_from_is_case_insensitive() {
+        let result: Result<DIDMethod, _> = "KEY".try_into();
+        assert_eq!(result.unwrap(), DIDMethod::KEY);
+
+        let result: Result<DIDMethod, _> = "Ethr".try_into();
+        assert_eq!(result.unwrap(), DIDMethod::ETHR);
+    }
+
+    #[test]
+    fn did_method_try_from_string_works() {
+        let result: Result<DIDMethod, _> = String::from("peer").try_into();
+        assert_eq!(result.unwrap(), DIDMethod::PEER);
+    }
+
+    #[test]
+    fn did_method_try_from_unknown_returns_error() {
+        let result: Result<DIDMethod, _> = "unknown".try_into();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DIDCacheError::UnsupportedMethod(m) => assert_eq!(m, "unknown"),
+            other => panic!("expected UnsupportedMethod, got: {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // DIDMethod::is_mutable
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn immutable_methods_are_not_mutable() {
+        assert!(!DIDMethod::KEY.is_mutable());
+        assert!(!DIDMethod::PEER.is_mutable());
+        assert!(!DIDMethod::JWK.is_mutable());
+        assert!(!DIDMethod::ETHR.is_mutable());
+        assert!(!DIDMethod::PKH.is_mutable());
+        assert!(!DIDMethod::EXAMPLE.is_mutable());
+    }
+
+    #[test]
+    fn mutable_methods_are_mutable() {
+        assert!(DIDMethod::WEB.is_mutable());
+        assert!(DIDMethod::WEBVH.is_mutable());
+        assert!(DIDMethod::CHEQD.is_mutable());
+        assert!(DIDMethod::SCID.is_mutable());
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-method cache TTL
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn immutable_did_survives_beyond_ttl() {
+        // Configure a very short TTL (1 second)
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_cache_ttl(1)
+            .build();
+        let client = DIDCacheClient::new(config).await.unwrap();
+
+        // Resolve a did:key (immutable)
+        client.resolve(DID_KEY).await.unwrap();
+
+        // Wait longer than the TTL
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        // Sync Moka's internal state so expired entries are actually evicted
+        client.cache.run_pending_tasks().await;
+
+        // Immutable DID should still be cached (no TTL applied)
+        let result = client.resolve(DID_KEY).await.unwrap();
+        assert!(
+            result.cache_hit,
+            "immutable did:key should survive beyond TTL"
+        );
     }
 }

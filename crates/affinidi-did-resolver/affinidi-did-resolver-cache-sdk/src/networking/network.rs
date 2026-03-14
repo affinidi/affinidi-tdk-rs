@@ -95,7 +95,7 @@ impl NetworkTask {
 
             let mut web_socket = network_task.ws_connect().await?;
             let mut watchdog = interval_at(tokio::time::Instant::now()+Duration::from_secs(20), Duration::from_secs(20));
-            let mut missed_pings = 0;
+            let mut missed_pings: i32 = 0;
 
             loop {
                 select! {
@@ -134,7 +134,7 @@ impl NetworkTask {
                                         let _ = web_socket.send_pong(data).await;
                                     }
                                     Event::Pong(..) => {
-                                        missed_pings -= 1;
+                                        missed_pings = missed_pings.saturating_sub(1);
                                     }
                                     Event::Error(err) => {
                                         warn!("WebSocket Error: {}", err);
@@ -224,7 +224,11 @@ impl NetworkTask {
                         match conn {
                             Ok(conn) => {
                                 debug!("Websocket connected");
-                                self.sdk_tx.send(WSCommands::Connected).await.unwrap();
+                                if self.sdk_tx.send(WSCommands::Connected).await.is_err() {
+                                    return Err(DIDCacheError::TransportError(
+                                        "SDK channel closed while signaling connection".to_string(),
+                                    ));
+                                }
                                 return Ok(conn)
                             }
                             Err(e) => {
@@ -288,10 +292,10 @@ impl NetworkTask {
         websocket: &mut WebSocket<BufReader<Pin<Box<dyn ReadWrite>>>>,
         request: &WSRequest,
     ) -> Result<(), DIDCacheError> {
-        match websocket
-            .send(serde_json::to_string(request).unwrap().as_str())
-            .await
-        {
+        let request_str = serde_json::to_string(request).map_err(|e| {
+            DIDCacheError::TransportError(format!("Failed to serialize request: {e}"))
+        })?;
+        match websocket.send(request_str.as_str()).await {
             Ok(_) => {
                 debug!("Request sent: {:?}", request);
                 Ok(())

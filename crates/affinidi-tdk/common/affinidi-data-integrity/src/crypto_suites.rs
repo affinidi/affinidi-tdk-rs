@@ -2,8 +2,8 @@
 *   Recognized crypto suites
 */
 
-use affinidi_secrets_resolver::secrets::{KeyType, Secret};
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, ed25519::signature::SignerMut};
+use affinidi_secrets_resolver::secrets::KeyType;
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::DataIntegrityError;
@@ -64,16 +64,6 @@ impl CryptoSuite {
                     String::try_from(*self).unwrap_or_default()
                 ))),
             },
-        }
-    }
-
-    pub fn sign(&self, secret: &Secret, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
-        match self {
-            CryptoSuite::EddsaJcs2022 | CryptoSuite::EddsaRdfc2022 => {
-                let mut signing_key =
-                    SigningKey::from_bytes(secret.get_private_bytes().try_into().unwrap());
-                Ok(signing_key.sign(data).to_vec())
-            }
         }
     }
 

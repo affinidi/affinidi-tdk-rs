@@ -2,17 +2,18 @@
 *   W3C Data Integrity Implementation
 */
 
-use affinidi_secrets_resolver::secrets::Secret;
 use chrono::Utc;
 use crypto_suites::CryptoSuite;
 use multibase::Base;
 use serde::{Deserialize, Serialize};
 use serde_json_canonicalizer::to_string;
 use sha2::{Digest, Sha256};
+use signer::Signer;
 use thiserror::Error;
 use tracing::debug;
 
 pub mod crypto_suites;
+pub mod signer;
 pub mod verification_proof;
 
 /// Affinidi Data Integrity Library Errors
@@ -57,14 +58,14 @@ impl DataIntegrityProof {
     /// Creates a JCS (JSON Canonicalization Scheme) signature for the given data.
     /// data_doc: Serializable Struct
     /// context: Optional context for the proof
-    /// secret: Secret containing the private key to sign with
+    /// signer: Implementation of the Signer trait (e.g. a Secret, or a KMS/HSM backend)
     /// created: Optional timestamp for the proof creation ("2023-02-24T23:36:38Z")
     ///
-    /// Returns a Result containing a proof if successfull
-    pub fn sign_jcs_data<S>(
+    /// Returns a Result containing a proof if successful
+    pub async fn sign_jcs_data<S>(
         data_doc: &S,
         context: Option<Vec<String>>,
-        secret: &Secret,
+        signer: &dyn Signer,
         created: Option<String>,
     ) -> Result<DataIntegrityProof, DataIntegrityError>
     where
@@ -72,7 +73,7 @@ impl DataIntegrityProof {
     {
         // Initialise as required
         let crypto_suite = CryptoSuite::EddsaJcs2022;
-        crypto_suite.validate_key_type(secret.get_key_type())?;
+        crypto_suite.validate_key_type(signer.key_type())?;
         debug!(
             "CryptoSuite: {}",
             <CryptoSuite as TryInto<String>>::try_into(crypto_suite).unwrap()
@@ -100,7 +101,7 @@ impl DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
             cryptosuite: crypto_suite,
             created,
-            verification_method: secret.id.clone(),
+            verification_method: signer.verification_method().to_string(),
             proof_purpose: "assertionMethod".to_string(),
             proof_value: None,
             context,
@@ -119,7 +120,7 @@ impl DataIntegrityProof {
         let hash_data = hashing_eddsa_jcs(&jcs, &proof_jcs);
 
         // Step 6: Sign the final hash
-        let signed = crypto_suite.sign(secret, hash_data.as_slice())?;
+        let signed = signer.sign(hash_data.as_slice()).await?;
         debug!(
             "signature data = {}",
             signed
@@ -138,18 +139,18 @@ impl DataIntegrityProof {
     /// Creates an RDFC (RDF Dataset Canonicalization) signature for the given JSON-LD data.
     /// data_doc: JSON-LD document (must contain `@context`)
     /// context: Optional context override for the proof; if None, uses the document's `@context`
-    /// secret: Secret containing the private key to sign with
+    /// signer: Implementation of the Signer trait (e.g. a Secret, or a KMS/HSM backend)
     /// created: Optional timestamp for the proof creation ("2023-02-24T23:36:38Z")
     ///
     /// Returns a Result containing a proof if successful
-    pub fn sign_rdfc_data(
+    pub async fn sign_rdfc_data(
         data_doc: &serde_json::Value,
         context: Option<Vec<String>>,
-        secret: &Secret,
+        signer: &dyn Signer,
         created: Option<String>,
     ) -> Result<DataIntegrityProof, DataIntegrityError> {
         let crypto_suite = CryptoSuite::EddsaRdfc2022;
-        crypto_suite.validate_key_type(secret.get_key_type())?;
+        crypto_suite.validate_key_type(signer.key_type())?;
         debug!(
             "CryptoSuite: {}",
             <CryptoSuite as TryInto<String>>::try_into(crypto_suite).unwrap()
@@ -194,7 +195,7 @@ impl DataIntegrityProof {
             type_: "DataIntegrityProof".to_string(),
             cryptosuite: crypto_suite,
             created,
-            verification_method: secret.id.clone(),
+            verification_method: signer.verification_method().to_string(),
             proof_purpose: "assertionMethod".to_string(),
             proof_value: None,
             context: Some(proof_context),
@@ -208,7 +209,7 @@ impl DataIntegrityProof {
         let hash_data = hashing_eddsa_rdfc(data_doc, &proof_value)?;
 
         // Sign the final hash
-        let signed = crypto_suite.sign(secret, hash_data.as_slice())?;
+        let signed = signer.sign(hash_data.as_slice()).await?;
         debug!(
             "signature data = {}",
             signed
@@ -275,8 +276,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_sign_jcs_data_bad_key() {
+    #[tokio::test]
+    async fn test_sign_jcs_data_bad_key() {
         let generic_doc = json!({"test": "test_data"});
 
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
@@ -284,11 +285,15 @@ mod tests {
         let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
             .expect("Couldn't create test key data");
 
-        assert!(DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None).is_err());
+        assert!(
+            DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None)
+                .await
+                .is_err()
+        );
     }
 
-    #[test]
-    fn test_sign_jcs_data_good() {
+    #[tokio::test]
+    async fn test_sign_jcs_data_good() {
         let generic_doc = json!({"test": "test_data"});
 
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
@@ -302,7 +307,9 @@ mod tests {
             "context3".to_string(),
         ];
         assert!(
-            DataIntegrityProof::sign_jcs_data(&generic_doc, Some(context), &secret, None).is_ok(),
+            DataIntegrityProof::sign_jcs_data(&generic_doc, Some(context), &secret, None)
+                .await
+                .is_ok(),
             "Signing failed"
         );
     }

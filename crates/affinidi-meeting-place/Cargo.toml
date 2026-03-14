@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-meeting-place"
-version = "0.3.0"
+version = "0.3.1"
 description = "Affinidi Meeting Place SDK. Discover and connect with others in a secure and private way."
 edition.workspace = true
 authors.workspace = true
@@ -26,7 +26,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tracing = "0.1"
-uuid = { version = "1.21", features = ["v4", "fast-rng"] }
+uuid = { version = "1.22", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-secrets-resolver = "0.5"

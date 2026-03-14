@@ -1,5 +1,18 @@
 # Affinidi Data Integrity Changelog
 
+## 12th March 2026 Release 0.5.0
+
+- **BREAKING:** Signing methods (`sign_jcs_data`, `sign_rdfc_data`) are now `async`
+  and accept `&dyn Signer` instead of `&Secret`
+  - Enables pluggable signing backends (KMS, HSM, cloud key management)
+  - Existing code using `Secret` continues to work without a wrapper — `Signer`
+    is implemented directly for `Secret`
+  - Call sites must add `.await` to signing calls
+- **FEATURE:** New `signer` module with `Signer` trait for abstracting signing operations
+  - Implement `Signer` for custom backends (e.g. AWS KMS, Azure Key Vault, HSM)
+  - `key_type()`, `verification_method()`, and `async sign()` methods
+- **DEPENDENCY:** Added `async-trait`
+
 ## 2nd March 2026 Release 0.4.1
 
 - **PERFORMANCE:** ~40% faster RDFC sign/verify operations (~330 µs → ~199 µs sign,
