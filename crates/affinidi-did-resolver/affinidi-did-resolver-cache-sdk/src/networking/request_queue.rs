@@ -6,8 +6,8 @@ use crate::config::DIDCacheConfig;
 use ahash::AHashMap as HashMap;
 use tracing::debug;
 
-/// List of lookups that are in progress.Note the list is not in any order.
-/// NOTE: SHA256 Hash of the DID is used as the key for the list
+/// List of lookups that are in progress. Note the list is not in any order.
+/// NOTE: HighwayHash128 of the DID is used as the key for the list
 /// - list: The list of requests waiting for a response from the server (key: DID Hash, value: Vec[(Unique ID, Responder Channel)]
 /// - list_full: Is the list full based on limits?
 /// - limit_count: The maximum number of items to store in the request list

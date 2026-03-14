@@ -83,7 +83,7 @@ pub fn request(
 ) -> (String, String) {
     let host = host.as_ref();
     let path = path.as_ref().trim_start_matches('/');
-    let sec_key = base64_encode(42_u128.to_ne_bytes());
+    let sec_key = base64_encode(rand::random::<[u8; 16]>());
     let headers: String = headers.into_iter().map(|f| Header::fmt(&f)).collect();
     (
         format!(

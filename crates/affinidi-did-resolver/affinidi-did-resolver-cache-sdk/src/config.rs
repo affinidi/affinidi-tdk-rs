@@ -97,7 +97,9 @@ impl DIDCacheConfigBuilder {
         self
     }
 
-    /// Set the time-to-live in seconds for each item in the local cache.
+    /// Set the time-to-live in seconds for mutable DID methods (web, webvh, cheqd, scid)
+    /// in the local cache. Immutable methods (key, peer, jwk, ethr, pkh) are cached
+    /// indefinitely and only evicted by capacity pressure.
     /// Default: 300 (5 Minutes)
     pub fn with_cache_ttl(mut self, cache_ttl: u32) -> Self {
         self.cache_ttl = cache_ttl;
@@ -121,7 +123,7 @@ impl DIDCacheConfigBuilder {
     }
 
     /// Set maximum number of parts after splitting method-specific-id on "."
-    /// Default: 5 parts
+    /// Default: 12 parts
     pub fn with_max_did_parts(mut self, max_did_parts: usize) -> Self {
         self.max_did_parts = max_did_parts;
         self
@@ -148,5 +150,75 @@ impl DIDCacheConfigBuilder {
             max_did_parts: self.max_did_parts,
             max_did_size_in_bytes: self.max_did_size_in_bytes,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_has_expected_values() {
+        let config = DIDCacheConfigBuilder::default().build();
+        assert_eq!(config.cache_capacity, 100);
+        assert_eq!(config.cache_ttl, 300);
+        assert_eq!(config.max_did_parts, 12);
+        assert_eq!(config.max_did_size_in_bytes, 1_000);
+    }
+
+    #[test]
+    fn builder_overrides_cache_capacity() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_cache_capacity(500)
+            .build();
+        assert_eq!(config.cache_capacity, 500);
+    }
+
+    #[test]
+    fn builder_overrides_cache_ttl() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_cache_ttl(60)
+            .build();
+        assert_eq!(config.cache_ttl, 60);
+    }
+
+    #[test]
+    fn builder_overrides_max_did_parts() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_max_did_parts(5)
+            .build();
+        assert_eq!(config.max_did_parts, 5);
+    }
+
+    #[test]
+    fn builder_overrides_max_did_size() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_max_did_size_in_bytes(2_000)
+            .build();
+        assert_eq!(config.max_did_size_in_bytes, 2_000);
+    }
+
+    #[test]
+    fn builder_chaining_works() {
+        let config = DIDCacheConfigBuilder::default()
+            .with_cache_capacity(200)
+            .with_cache_ttl(120)
+            .with_max_did_parts(8)
+            .with_max_did_size_in_bytes(500)
+            .build();
+        assert_eq!(config.cache_capacity, 200);
+        assert_eq!(config.cache_ttl, 120);
+        assert_eq!(config.max_did_parts, 8);
+        assert_eq!(config.max_did_size_in_bytes, 500);
+    }
+
+    #[test]
+    fn config_is_cloneable() {
+        let config = DIDCacheConfigBuilder::default().build();
+        let cloned = config.clone();
+        assert_eq!(config.cache_capacity, cloned.cache_capacity);
+        assert_eq!(config.cache_ttl, cloned.cache_ttl);
+        assert_eq!(config.max_did_parts, cloned.max_did_parts);
+        assert_eq!(config.max_did_size_in_bytes, cloned.max_did_size_in_bytes);
     }
 }

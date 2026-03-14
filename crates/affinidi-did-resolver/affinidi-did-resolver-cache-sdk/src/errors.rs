@@ -48,3 +48,68 @@ impl From<serde_json::Error> for DIDCacheError {
         DIDCacheError::ParsingError(format!("serde_json: {err}"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn did_error_display() {
+        let err = DIDCacheError::DIDError("bad did".to_string());
+        assert_eq!(err.to_string(), "DID error: bad did");
+    }
+
+    #[test]
+    fn unsupported_method_display() {
+        let err = DIDCacheError::UnsupportedMethod("foo".to_string());
+        assert_eq!(err.to_string(), "Unsupported DID method: foo");
+    }
+
+    #[test]
+    fn transport_error_display() {
+        let err = DIDCacheError::TransportError("connection refused".to_string());
+        assert_eq!(err.to_string(), "Transport error: connection refused");
+    }
+
+    #[test]
+    fn config_error_display() {
+        let err = DIDCacheError::ConfigError("missing field".to_string());
+        assert_eq!(err.to_string(), "Config error: missing field");
+    }
+
+    #[test]
+    fn network_timeout_display() {
+        let err = DIDCacheError::NetworkTimeout;
+        assert_eq!(err.to_string(), "Network timeout");
+    }
+
+    #[test]
+    fn parsing_error_display() {
+        let err = DIDCacheError::ParsingError("bad json".to_string());
+        assert_eq!(err.to_string(), "Parsing error: bad json");
+    }
+
+    #[test]
+    fn from_utf8_error() {
+        let bytes = vec![0xff, 0xfe];
+        let utf8_err = String::from_utf8(bytes).unwrap_err();
+        let err: DIDCacheError = utf8_err.into();
+        assert!(err.to_string().contains("utf8:"));
+    }
+
+    #[test]
+    fn from_serde_json_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let err: DIDCacheError = json_err.into();
+        assert!(err.to_string().contains("serde_json:"));
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn to_jsvalue_contains_message() {
+        let err = DIDCacheError::DIDError("test".to_string());
+        let js: JsValue = err.into();
+        let s = js.as_string().unwrap();
+        assert!(s.contains("test"));
+    }
+}
