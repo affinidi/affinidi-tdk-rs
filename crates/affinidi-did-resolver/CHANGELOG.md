@@ -2,6 +2,39 @@
 
 ## Changelog history
 
+### 14th March 2026
+
+#### affinidi-did-resolver-cache-sdk (0.8.2)
+
+- **SECURITY:** WebSocket `Sec-WebSocket-Key` now uses a random 16-byte nonce
+  per RFC 6455 (was previously a hardcoded constant)
+- **SECURITY:** Replaced 6 panicking `.unwrap()`/`.expect()` calls in networking
+  code with proper error propagation (header parsing, `sec-websocket-accept`
+  validation, channel send, JSON serialization, ping counter underflow)
+- **FEATURE:** Per-method cache TTL using Moka's `Expiry` trait
+  - Immutable DID methods (`key`, `peer`, `jwk`, `ethr`, `pkh`) are now cached
+    indefinitely and only evicted by capacity pressure
+  - Mutable DID methods (`web`, `webvh`, `cheqd`, `scid`) expire after the
+    configured `cache_ttl` (default 300s)
+  - New `DIDMethod::is_mutable()` helper method
+- **IMPROVEMENT:** `tokio` dependency slimmed from `features = ["full"]` to
+  minimal feature set; `net` and `io-util` only enabled behind `network` feature
+- **IMPROVEMENT:** `tracing-subscriber` and `futures-util` moved from runtime
+  dependencies to dev-dependencies (only used in examples)
+- **IMPROVEMENT:** Redundant manual DID parsing removed from `resolve()` —
+  delegates to `DID::parse()` and uses `method_specific_id()` for parts check
+- **FIX:** Format string in DID size error message used mixed positional args
+- **FIX:** Doc comment for `with_max_did_parts` stated default of 5 (actual: 12)
+- **FIX:** Comments incorrectly referenced "SHA256" hash (actual: HighwayHash128)
+- **FIX:** `compile_error!` message for `network` + `wasm32` was misleading
+- **TESTS:** Test coverage increased from 14 to 46 passing tests
+  - `resolve()` validation: size limit, malformed DID, max parts, cache hit/miss
+  - Cache operations: `add_did_document`, `get_cache`, clone sharing
+  - `DIDMethod`: `Display` roundtrip, case insensitivity, `is_mutable`
+  - Config builder: defaults verification, all setters, chaining, clone
+  - Error types: `Display` for all 6 variants, `From` conversions
+  - Per-method TTL: immutable DID survives beyond configured TTL
+
 ### 6th March 2026
 
 #### affinidi-did-resolver-cache-sdk (0.8.1)
