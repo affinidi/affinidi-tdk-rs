@@ -28,7 +28,7 @@ pub struct WSRequest {
 
 /// WSResponse is the response format from the websocket connection
 /// did: DID that was resolved
-/// hash: SHA256 Hash of the DID
+/// hash: HighwayHash128 of the DID
 /// document: The resolved DID Document
 #[derive(Debug, Deserialize, Serialize)]
 pub struct WSResponse {
@@ -39,7 +39,7 @@ pub struct WSResponse {
 
 /// WSResponseError is the response format from the websocket connection if an error occurred server side.
 /// did: DID associated with the error
-/// hash: SHA256 Hash of the DID
+/// hash: HighwayHash128 of the DID
 /// error: Error message
 #[derive(Debug, Deserialize, Serialize)]
 pub struct WSResponseError {
