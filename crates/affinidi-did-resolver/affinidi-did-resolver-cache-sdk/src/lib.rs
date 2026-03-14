@@ -330,11 +330,7 @@ impl DIDCacheClient {
             )));
         }
 
-        let method: DIDMethod = parsed_did
-            .method()
-            .to_string()
-            .as_str()
-            .try_into()?;
+        let method: DIDMethod = parsed_did.method().to_string().as_str().try_into()?;
 
         let hash = DIDCacheClient::hash_did(did);
 
@@ -617,9 +613,7 @@ mod tests {
         client.remove(DID_KEY).await;
 
         // Manually add it back
-        client
-            .add_did_document(DID_KEY, response.doc.clone())
-            .await;
+        client.add_did_document(DID_KEY, response.doc.clone()).await;
 
         // Should be a cache hit now
         let cached = client.resolve(DID_KEY).await.unwrap();
@@ -686,10 +680,7 @@ mod tests {
         let result = client.resolve(did).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("keys and/or services"),
-            "got: {err}"
-        );
+        assert!(err.contains("keys and/or services"), "got: {err}");
     }
 
     #[tokio::test]
@@ -816,6 +807,9 @@ mod tests {
 
         // Immutable DID should still be cached (no TTL applied)
         let result = client.resolve(DID_KEY).await.unwrap();
-        assert!(result.cache_hit, "immutable did:key should survive beyond TTL");
+        assert!(
+            result.cache_hit,
+            "immutable did:key should survive beyond TTL"
+        );
     }
 }

@@ -65,9 +65,7 @@ impl HttpRequest {
                 break;
             }
             let (key, value) = line.split_once(":").ok_or_else(|| {
-                DIDCacheError::TransportError(format!(
-                    "Malformed HTTP header (no colon): {line}"
-                ))
+                DIDCacheError::TransportError(format!("Malformed HTTP header (no colon): {line}"))
             })?;
             headers.insert(key.to_ascii_lowercase(), value.trim_start().into());
         }
@@ -160,8 +158,7 @@ pub async fn connect(
             "Server response missing `sec-websocket-accept` header".to_string(),
         )
     })?;
-    if accept_value.ne(&handshake::accept_key_from(sec_key))
-    {
+    if accept_value.ne(&handshake::accept_key_from(sec_key)) {
         return Err(DIDCacheError::TransportError(
             "invalid websocket accept key".to_string(),
         ));

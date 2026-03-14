@@ -176,9 +176,7 @@ mod tests {
 
     #[test]
     fn builder_overrides_cache_ttl() {
-        let config = DIDCacheConfigBuilder::default()
-            .with_cache_ttl(60)
-            .build();
+        let config = DIDCacheConfigBuilder::default().with_cache_ttl(60).build();
         assert_eq!(config.cache_ttl, 60);
     }
 

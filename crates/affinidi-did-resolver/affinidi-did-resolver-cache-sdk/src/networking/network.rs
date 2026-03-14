@@ -295,10 +295,7 @@ impl NetworkTask {
         let request_str = serde_json::to_string(request).map_err(|e| {
             DIDCacheError::TransportError(format!("Failed to serialize request: {e}"))
         })?;
-        match websocket
-            .send(request_str.as_str())
-            .await
-        {
+        match websocket.send(request_str.as_str()).await {
             Ok(_) => {
                 debug!("Request sent: {:?}", request);
                 Ok(())
