@@ -95,7 +95,7 @@ impl NetworkTask {
 
             let mut web_socket = network_task.ws_connect().await?;
             let mut watchdog = interval_at(tokio::time::Instant::now()+Duration::from_secs(20), Duration::from_secs(20));
-            let mut missed_pings = 0;
+            let mut missed_pings: u32 = 0;
 
             loop {
                 select! {
