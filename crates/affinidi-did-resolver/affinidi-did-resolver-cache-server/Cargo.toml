@@ -14,7 +14,9 @@ rust-version.workspace = true
 
 [dependencies]
 # Affinidi Crates
-affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
+affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
+  "network",
+], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.3"
 
 # External Crates
