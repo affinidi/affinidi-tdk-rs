@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.2"
+version = "0.12.3"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -32,14 +32,14 @@ affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", optional = true }
 affinidi-tsp = { path = "../affinidi-tsp", optional = true }
 affinidi-encoding = { version = "0.1", optional = true }
-affinidi-messaging-mediator-processors = { version = "0.12.1", path = "affinidi-messaging-mediator-processors" }
-affinidi-messaging-mediator-common = { version = "0.12.1", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-processors = { version = "0.12", path = "affinidi-messaging-mediator-processors" }
+affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messaging-mediator-common" }
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
 
 # External Crates
-didwebvh-rs = "0.2"
+didwebvh-rs = "0.3"
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
@@ -89,7 +89,7 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
-uuid = { version = "1.21", features = ["v4", "fast-rng"] }
+uuid = { version = "1.22", features = ["v4", "fast-rng"] }
 reqwest = { version = "0.13", features = ["rustls", "json"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"

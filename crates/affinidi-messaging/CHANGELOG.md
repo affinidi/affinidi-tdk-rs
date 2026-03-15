@@ -8,6 +8,17 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 15th March 2026
+
+### Mediator (0.12.3)
+
+- **FIX:** Restored `affinidi-messaging-sdk`, `affinidi-messaging-didcomm`, and
+  `affinidi-messaging-mediator-processors` as runtime dependencies — they were
+  incorrectly placed in `[dev-dependencies]` causing compilation failures
+- **CHORE:** `didwebvh-rs` upgraded from `0.2` to `0.3`
+- **CHORE:** Relaxed dependency version specifiers (`tokio`, `uuid`,
+  `mediator-common`, `mediator-processors`)
+
 ## 10th March 2026
 
 ### DIDComm Library (0.13.0) — **BREAKING**

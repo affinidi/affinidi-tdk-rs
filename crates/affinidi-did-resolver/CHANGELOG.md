@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+### 15th March 2026
+
+#### did-scid (0.1.4)
+
+- **CHORE:** `didwebvh-rs` upgraded from `0.2` to `0.3`
+- **CHORE:** `tokio` dependency version specifier relaxed from `1.50` to `1`
+
+#### affinidi-did-resolver-cache-sdk (0.8.3)
+
+- **FIX:** Compilation error when building with `network` feature flag — added
+  explicit `u32` type annotation for `missed_pings` counter in WebSocket
+  watchdog loop to resolve ambiguous numeric type inference
+
+#### affinidi-did-resolver-cache-server (0.7.1)
+
+- **CHORE:** `tokio` dependency version specifier relaxed from `1.49` to `1`
+- **CHORE:** Crate version bumped to `0.7.1`
+
 ### 14th March 2026
 
 #### affinidi-did-resolver-cache-sdk (0.8.2)
