@@ -51,6 +51,9 @@ rust-version = "1.90.0"
 opt-level = "s"
 lto = true
 
+[patch.crates-io]
+affinidi-did-resolver-cache-sdk = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
+
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
 
