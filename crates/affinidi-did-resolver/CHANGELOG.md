@@ -4,6 +4,11 @@
 
 ### 15th March 2026
 
+#### did-scid (0.1.4)
+
+- **CHORE:** `didwebvh-rs` upgraded from `0.2` to `0.3`
+- **CHORE:** `tokio` dependency version specifier relaxed from `1.50` to `1`
+
 #### affinidi-did-resolver-cache-sdk (0.8.3)
 
 - **FIX:** Compilation error when building with `network` feature flag — added
