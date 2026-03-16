@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-messaging-didcomm-service = { path = "../affinidi-messaging-didcomm-service" }
+affinidi-messaging-didcomm-service = "0.1"
 ```
 
 ## Features
@@ -22,8 +22,10 @@ affinidi-messaging-didcomm-service = { path = "../affinidi-messaging-didcomm-ser
 - **Mediator ACL management** -- optionally set `ExplicitAllow` / `ExplicitDeny` mode per listener on the mediator via `acl_mode` config
 - **Offline message sync** -- periodic polling for queued messages missed during downtime
 - **Graceful shutdown** -- in-flight message handlers are tracked via `JoinSet` and drained on shutdown; panicked tasks are detected and logged
+- **Built-in handlers** -- `trust_ping_handler` for trust-ping protocol, `ignore_handler` for silently dropping messages (e.g. `MESSAGE_PICKUP_STATUS_TYPE`)
+- **Fallback and error handling** -- `.fallback()` for unmatched message types, `.on_error()` with `ErrorHandler` trait for centralized error logging
 - **Transport utilities** -- `build_response`, `send_response`, `build_problem_report`, `send_problem_report`
-- **Problem report protocol** -- `ProblemReport` struct with standard DIDComm error codes
+- **Problem report protocol** -- `ProblemReport` struct with standard DIDComm error codes; `DIDCommResponse::problem_report()` for returning problem reports directly from handlers
 - **Message utilities** -- `get_thread_id`, `get_parent_thread_id`, `new_message_id`
 
 ### Built-in middleware
@@ -37,7 +39,7 @@ affinidi-messaging-didcomm-service = { path = "../affinidi-messaging-didcomm-ser
 
 ```rust
 use affinidi_messaging_didcomm_service::{
-    DIDCommHandler, DIDCommService, DIDCommServiceConfig, DIDCommServiceError,
+    DIDCommService, DIDCommServiceConfig, DIDCommServiceError,
     HandlerContext, ListenerConfig, RequestLogging, RestartPolicy, RetryConfig,
     Router, handler_fn, DIDCommResponse,
 };
@@ -113,19 +115,18 @@ RUST_LOG=didcomm_server::request=info
 ## Example
 
 See [`examples/echo_server.rs`](examples/echo_server.rs) for a complete working example with:
-- Axum-style router with regex routes
+- Axum-style router with exact and regex routes (`.route()`, `.route_regex()`)
 - Function handlers with `Extension<T>` extractors for shared state
+- Shared state registration via `.extension()`
+- Built-in handlers (`trust_ping_handler`, `ignore_handler`)
+- Fallback handler for unmatched message types
+- Custom error handler via `ErrorHandler` trait
 - Custom middleware via `middleware_fn`
 - `MessagePolicy` for message validation
 - `RequestLogging` for per-request logging
+- Mediator ACL configuration
 - Restart policy configuration
 - Graceful shutdown via `CancellationToken`
-
-## Out of scope
-
-- DID document building and hosting
-- Config/profile loaders (env vars, AWS secrets, etc.)
-- DID document availability checking
 
 ## Related Crates
 
