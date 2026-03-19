@@ -1,5 +1,5 @@
 use affinidi_did_resolver_cache_sdk::{
-    DIDCacheClient,
+    DIDCacheClient, DIDMethod, ResolveResponse,
     networking::{WSRequest, WSResponse, WSResponseError, WSResponseType},
 };
 use axum::{
@@ -13,6 +13,94 @@ use tokio::select;
 use tracing::{Instrument, debug, info, span, warn};
 
 use crate::SharedData;
+
+/// For did:webvh DIDs, fetch the raw DID log (did.jsonl) from the source HTTP endpoint.
+/// This log is sent alongside the resolved document so clients can independently
+/// verify the cryptographic chain, preventing a compromised cache server from
+/// serving tampered DID documents.
+async fn fetch_webvh_log(did: &str) -> (Option<String>, Option<String>) {
+    let parsed_url = match didwebvh_rs::url::WebVHURL::parse_did_url(did) {
+        Ok(url) => url,
+        Err(e) => {
+            warn!("Failed to parse WebVH DID URL for log fetch: {e}");
+            return (None, None);
+        }
+    };
+
+    let log_url = match parsed_url.get_http_url(Some("did.jsonl")) {
+        Ok(url) => url,
+        Err(e) => {
+            warn!("Failed to construct log URL for WebVH DID: {e}");
+            return (None, None);
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to create HTTP client for WebVH log fetch: {e}");
+            return (None, None);
+        }
+    };
+
+    let did_log = match client.get(log_url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(text) => Some(text),
+            Err(e) => {
+                warn!("Failed to read WebVH log response body: {e}");
+                None
+            }
+        },
+        Ok(resp) => {
+            warn!(
+                "WebVH log fetch returned HTTP {}: {}",
+                resp.status(),
+                did
+            );
+            None
+        }
+        Err(e) => {
+            warn!("Failed to fetch WebVH log for {}: {e}", did);
+            None
+        }
+    };
+
+    // Fetch witness proofs if log was successfully retrieved
+    let did_witness_log = if did_log.is_some() {
+        let witness_url = match parsed_url.get_http_url(Some("did-witness.json")) {
+            Ok(url) => url,
+            Err(_) => return (did_log, None),
+        };
+        match client.get(witness_url).send().await {
+            Ok(resp) if resp.status().is_success() => resp.text().await.ok(),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    (did_log, did_witness_log)
+}
+
+/// Build a WSResponse, fetching the raw DID log for WebVH DIDs.
+async fn build_response(response: ResolveResponse) -> WSResponseType {
+    let (did_log, did_witness_log) = if response.method == DIDMethod::WEBVH {
+        fetch_webvh_log(&response.did).await
+    } else {
+        (None, None)
+    };
+
+    WSResponseType::Response(Box::new(WSResponse {
+        did: response.did.clone(),
+        hash: response.did_hash,
+        document: response.doc,
+        did_log,
+        did_witness_log,
+    }))
+}
 
 // Handles the switching of the protocol to a websocket connection
 pub async fn websocket_handler(
@@ -65,17 +153,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
 
                                         match state.resolver.resolve(&request.did).await {
                                             Ok(response) => {
-                                                let message = WSResponseType::Response(Box::new(WSResponse {
-                                                    did: response.did.clone(),
-                                                    hash: response.did_hash,
-                                                    document: response.doc,
-                                                }));
                                                 let mut stats = state.stats().await;
                                                 stats.increment_resolver_success();
                                                 if response.cache_hit { stats.increment_cache_hit();}
-                                                stats.increment_did_method_success(response.method);
+                                                stats.increment_did_method_success(response.method.clone());
                                                 drop(stats);
                                                 debug!("resolved DID: ({}) cache_hit?({})", response.did, response.cache_hit);
+                                                let message = build_response(response).await;
                                                 if let Err(e) = socket.send(Message::Text(serde_json::to_string(&message).unwrap().into())).await {
                                                     warn!("ws: Error sending response: {:?}", e);
                                                     break;
@@ -107,17 +191,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
 
                                         match state.resolver.resolve(&request.did).await {
                                             Ok(response) => {
-                                                let message = WSResponseType::Response(Box::new(WSResponse {
-                                                    did: response.did.clone(),
-                                                    hash: response.did_hash,
-                                                    document: response.doc,
-                                                }));
                                                 let mut stats = state.stats().await;
                                                 stats.increment_resolver_success();
                                                 if response.cache_hit { stats.increment_cache_hit();}
-                                                stats.increment_did_method_success(response.method);
+                                                stats.increment_did_method_success(response.method.clone());
                                                 drop(stats);
                                                 debug!("resolved DID: ({}) cache_hit?({})", response.did, response.cache_hit);
+                                                let message = build_response(response).await;
                                                 if let Err(e) = socket.send(Message::Text(serde_json::to_string(&message).unwrap().into())).await {
                                                     warn!("ws: Error sending response: {:?}", e);
                                                     break;
