@@ -170,11 +170,7 @@ impl DIDCacheClient {
 
                 let mut state = didwebvh_rs::DIDWebVHState::default();
                 let result = state
-                    .resolve_log(
-                        did,
-                        log_data,
-                        did_witness_log.as_deref(),
-                    )
+                    .resolve_log(did, log_data, did_witness_log.as_deref())
                     .await
                     .map_err(|e| {
                         DIDCacheError::DIDError(format!(

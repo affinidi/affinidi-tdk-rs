@@ -102,10 +102,7 @@ pub async fn resolver_handler(
                             obj.insert("_did_log".to_string(), Value::String(log));
                         }
                         if let Some(witness_log) = did_witness_log {
-                            obj.insert(
-                                "_did_witness_log".to_string(),
-                                Value::String(witness_log),
-                            );
+                            obj.insert("_did_witness_log".to_string(), Value::String(witness_log));
                         }
                     }
                     (StatusCode::OK, Json(value))

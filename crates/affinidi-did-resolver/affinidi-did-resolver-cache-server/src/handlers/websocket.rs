@@ -55,11 +55,7 @@ async fn fetch_webvh_log(did: &str) -> (Option<String>, Option<String>) {
             }
         },
         Ok(resp) => {
-            warn!(
-                "WebVH log fetch returned HTTP {}: {}",
-                resp.status(),
-                did
-            );
+            warn!("WebVH log fetch returned HTTP {}: {}", resp.status(), did);
             None
         }
         Err(e) => {
