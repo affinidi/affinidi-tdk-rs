@@ -19,7 +19,7 @@ affinidi-did-resolver-cache-sdk = { version = "0.9", features = [
 ], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.3"
 
-didwebvh-rs = { version = "0.3", path = "../../../../../didwebvh-rs" }
+didwebvh-rs = "0.3.1"
 
 # External Crates
 ahash = "0.8"
