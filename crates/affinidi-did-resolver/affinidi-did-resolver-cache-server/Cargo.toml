@@ -6,7 +6,7 @@ edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-publish.workspace = true
+publish = false
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
@@ -19,8 +19,11 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
 ], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.3"
 
+didwebvh-rs = "0.3.1"
+
 # External Crates
 ahash = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 chrono = "0.4"

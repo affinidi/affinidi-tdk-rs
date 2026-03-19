@@ -32,7 +32,7 @@ use web_socket::{CloseCode, DataType, Event, MessageType, WebSocket};
 /// Connected: Signals that the websocket is connected
 /// Exit: Exits the websocket handler
 /// Send: Sends the response string to the websocket (Channel, ID, WSRequest)
-/// ResponseReceived: Response received from the websocket
+/// ResponseReceived: Response received from the websocket (Document, optional DID log, optional witness log)
 /// ErrorReceived: Error received from the remote server
 /// NotFound: Response not found in the cache
 /// TimeOut: SDK request timed out, contains ID and did_hash we were looking for
@@ -41,7 +41,7 @@ pub(crate) enum WSCommands {
     Connected,
     Exit,
     Send(Responder, String, WSRequest),
-    ResponseReceived(Box<Document>),
+    ResponseReceived(Box<Document>, Option<String>, Option<String>),
     ErrorReceived(String),
     TimeOut(String, [u64; 2]),
 }
@@ -315,9 +315,11 @@ impl NetworkTask {
                 if let Some(channels) = self.cache.remove(&response.hash, None) {
                     // Loop through and notify each registered channel
                     for channel in channels {
-                        let _ = channel.send(WSCommands::ResponseReceived(Box::new(
-                            response.document.clone(),
-                        )));
+                        let _ = channel.send(WSCommands::ResponseReceived(
+                            Box::new(response.document.clone()),
+                            response.did_log.clone(),
+                            response.did_witness_log.clone(),
+                        ));
                     }
                 } else {
                     warn!("Response not found in request list: {:#?}", response.hash);

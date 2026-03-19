@@ -30,11 +30,18 @@ pub struct WSRequest {
 /// did: DID that was resolved
 /// hash: HighwayHash128 of the DID
 /// document: The resolved DID Document
+/// did_log: Raw JSONL DID log for verifiable DID methods (e.g. did:webvh)
+///          Enables client-side cryptographic verification of the document
+/// did_witness_log: Raw witness proofs JSON for DID methods that use witnesses
 #[derive(Debug, Deserialize, Serialize)]
 pub struct WSResponse {
     pub did: String,
     pub hash: [u64; 2],
     pub document: Document,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub did_log: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub did_witness_log: Option<String>,
 }
 
 /// WSResponseError is the response format from the websocket connection if an error occurred server side.
@@ -60,6 +67,11 @@ pub enum WSResponseType {
 impl DIDCacheClient {
     /// Resolve a DID via the network
     /// Returns the resolved DID Document, or an error
+    ///
+    /// For did:webvh DIDs, if the server includes the raw DID log in the response,
+    /// the client will independently verify the log's cryptographic chain before
+    /// accepting the document. This prevents a compromised cache server from
+    /// returning tampered DID documents.
     ///
     /// Send the request, and wait for the response
     pub(crate) async fn network_resolve(
@@ -111,9 +123,9 @@ impl DIDCacheClient {
                     }
                     value = rx => {
                         match value {
-                            Ok(WSCommands::ResponseReceived(doc)) => {
+                            Ok(WSCommands::ResponseReceived(doc, did_log, did_witness_log)) => {
                                 debug!("Received response from network task ({:#?})", did_hash);
-                                 Ok(*doc)
+                                Self::verify_network_response(did, *doc, did_log, did_witness_log).await
                             }
                             Ok(WSCommands::ErrorReceived(msg)) => {
                                 warn!("Received error response from network task");
@@ -133,5 +145,72 @@ impl DIDCacheClient {
         }
         .instrument(_span)
         .await
+    }
+
+    /// Verify a DID document received from the network cache server.
+    ///
+    /// For did:webvh DIDs with a provided raw log, this independently verifies
+    /// the cryptographic chain and compares the resulting document against the
+    /// one returned by the server. If they don't match, the document is rejected.
+    ///
+    /// For other DID methods or when no log is provided, the document is accepted as-is.
+    async fn verify_network_response(
+        did: &str,
+        doc: Document,
+        did_log: Option<String>,
+        did_witness_log: Option<String>,
+    ) -> Result<Document, DIDCacheError> {
+        // Only verify did:webvh DIDs that include a log
+        #[cfg(feature = "did-webvh")]
+        if did.starts_with("did:webvh:") {
+            if let Some(ref log_data) = did_log {
+                use didwebvh_rs::log_entry::LogEntryMethods;
+
+                debug!("Verifying did:webvh log for DID: {}", did);
+
+                let mut state = didwebvh_rs::DIDWebVHState::default();
+                let result = state
+                    .resolve_log(did, log_data, did_witness_log.as_deref())
+                    .await
+                    .map_err(|e| {
+                        DIDCacheError::DIDError(format!(
+                            "WebVH log verification failed for DID {did}: {e}"
+                        ))
+                    })?;
+
+                let verified_doc_value = result.0.get_did_document().map_err(|e| {
+                    DIDCacheError::DIDError(format!(
+                        "Failed to extract document from verified WebVH log: {e}"
+                    ))
+                })?;
+
+                let verified_doc: Document =
+                    serde_json::from_value(verified_doc_value).map_err(|e| {
+                        DIDCacheError::DIDError(format!(
+                            "Failed to deserialize verified WebVH document: {e}"
+                        ))
+                    })?;
+
+                // Compare the server-provided document with the locally verified one
+                if doc != verified_doc {
+                    return Err(DIDCacheError::DIDError(format!(
+                        "WebVH document verification failed: server document does not match \
+                         locally verified document for DID {did}. \
+                         The cache server may have tampered with the DID document."
+                    )));
+                }
+
+                debug!("WebVH log verification passed for DID: {}", did);
+                return Ok(doc);
+            } else {
+                warn!(
+                    "No DID log provided by cache server for did:webvh DID: {}. \
+                     Document accepted without cryptographic verification.",
+                    did
+                );
+            }
+        }
+
+        Ok(doc)
     }
 }
