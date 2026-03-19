@@ -156,7 +156,7 @@ fn generate_mediator_admin() -> (String, Vec<Secret>) {
 
 /// Setup did:webvh DID and document.
 /// When `use_web` is true, also returns a `(web_did, web_did_doc_json)` tuple.
-fn setup_did_webvh(
+async fn setup_did_webvh(
     url: &str,
     secure: bool,
     portable: bool,
@@ -228,10 +228,10 @@ fn setup_did_webvh(
     let next_update_secret = Secret::generate_ed25519(None, None);
 
     let parameters = WebVHParameters {
-        update_keys: Some(Arc::new(vec![update_pubkey])),
+        update_keys: Some(Arc::new(vec![update_pubkey.into()])),
         portable: Some(portable),
         next_key_hashes: Some(Arc::new(vec![
-            next_update_secret.get_public_keymultibase()?,
+            next_update_secret.get_public_keymultibase()?.into(),
         ])),
         ..Default::default()
     };
@@ -240,11 +240,12 @@ fn setup_did_webvh(
     let mut did_state = DIDWebVHState::default();
     did_state
         .create_log_entry(None, &did_document, &parameters, &update_secret)
+        .await
         .map_err(|e| format!("Failed to create DID log entry: {e}"))?;
 
-    let scid = did_state.scid.clone();
+    let scid = did_state.scid().to_string();
     let log_entry_state = did_state
-        .log_entries
+        .log_entries()
         .last()
         .ok_or("No log entries were created")?;
 
@@ -252,7 +253,7 @@ fn setup_did_webvh(
     let mut final_did = match log_entry_state.log_entry.get_did_document() {
         Ok(doc) => doc
             .get("id")
-            .and_then(|id| id.as_str())
+            .and_then(|id: &Value| id.as_str())
             .map(String::from)
             .unwrap_or(fallback_did),
         Err(_) => fallback_did,
@@ -320,7 +321,8 @@ async fn main() -> Result<()> {
         args.portable,
         args.service_endpoint.as_deref(),
         args.use_web,
-    )?;
+    )
+    .await?;
 
     let jwt_secret = args.with_jwt.then(generate_jwt_secret).unwrap_or_default();
 
