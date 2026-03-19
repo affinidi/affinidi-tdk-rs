@@ -53,14 +53,38 @@ async fn test_cache_server() {
     );
 
     sleep(Duration::from_secs(11)).await;
-    // Validate cache expiry
-    for did in dids.clone() {
-        assert!(
-            !client
-                .get_cache()
-                .contains_key(&DIDCacheClient::hash_did(did))
-        );
-    }
+    // Sync Moka's internal state so expired entries are actually evicted
+    client.get_cache().run_pending_tasks().await;
+
+    // Immutable DID methods (key, peer, ethr, pkh) have no TTL — they stay
+    // cached indefinitely. Only mutable methods (web, webvh, cheqd, scid)
+    // expire after cache_ttl. Since all DIDs in this test are immutable,
+    // they should still be present (except DID_PKH which was manually removed).
+    assert!(
+        client
+            .get_cache()
+            .contains_key(&DIDCacheClient::hash_did(&did_peer)),
+        "immutable did:peer should survive beyond TTL"
+    );
+    assert!(
+        client
+            .get_cache()
+            .contains_key(&DIDCacheClient::hash_did(DID_ETHR)),
+        "immutable did:ethr should survive beyond TTL"
+    );
+    assert!(
+        client
+            .get_cache()
+            .contains_key(&DIDCacheClient::hash_did(DID_KEY)),
+        "immutable did:key should survive beyond TTL"
+    );
+    // DID_PKH was manually removed above, so it should still be absent
+    assert!(
+        !client
+            .get_cache()
+            .contains_key(&DIDCacheClient::hash_did(DID_PKH)),
+        "manually removed did:pkh should remain absent"
+    );
 }
 
 async fn _start_cache_server() {
