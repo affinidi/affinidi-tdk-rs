@@ -37,8 +37,12 @@ pub trait JwtVerifier: Send + Sync {
     fn verify_jwt(&self, jws: &str) -> Result<serde_json::Value, SdJwtError>;
 }
 
-/// HMAC-SHA256 signer for testing purposes.
-/// NOT recommended for production use with SD-JWT (use asymmetric algorithms).
+/// HMAC-SHA256 test utilities for unit testing.
+///
+/// **WARNING:** These implementations are for testing only:
+/// - Signature comparison is NOT constant-time (vulnerable to timing attacks)
+/// - HMAC is a symmetric algorithm (not suitable for SD-JWT in production)
+/// - Use asymmetric algorithms (ES256, EdDSA) for production SD-JWT
 #[cfg(any(test, feature = "_test-utils"))]
 pub mod test_utils {
     use super::*;
@@ -46,6 +50,8 @@ pub mod test_utils {
     use sha2::Sha256;
 
     /// A simple HMAC-SHA256 signer for unit tests.
+    ///
+    /// **Not for production use.** Use asymmetric algorithms (ES256, EdDSA) instead.
     pub struct HmacSha256Signer {
         pub key: Vec<u8>,
     }
@@ -57,7 +63,6 @@ pub mod test_utils {
 
         fn hmac_sha256(&self, data: &[u8]) -> Vec<u8> {
             use sha2::Digest;
-            // Simple HMAC: H(key XOR opad || H(key XOR ipad || message))
             let mut key_block = [0u8; 64];
             if self.key.len() <= 64 {
                 key_block[..self.key.len()].copy_from_slice(&self.key);
@@ -105,6 +110,8 @@ pub mod test_utils {
     }
 
     /// A simple HMAC-SHA256 verifier for unit tests.
+    ///
+    /// **Not for production use.** Signature comparison is NOT constant-time.
     pub struct HmacSha256Verifier {
         signer: HmacSha256Signer,
     }
@@ -130,6 +137,7 @@ pub mod test_utils {
                 .decode(parts[2])
                 .map_err(|e| SdJwtError::Verification(format!("sig decode: {e}")))?;
 
+            // WARNING: Not constant-time. For testing only.
             if expected_sig != actual_sig {
                 return Err(SdJwtError::Verification("signature mismatch".into()));
             }

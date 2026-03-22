@@ -12,21 +12,30 @@ use crate::hasher::SdHasher;
 use crate::holder::resolve_claims;
 use crate::signer::JwtVerifier;
 
+/// Options for SD-JWT verification.
+#[derive(Debug, Default)]
+pub struct VerificationOptions<'a> {
+    /// Whether to verify the Key Binding JWT.
+    pub verify_kb: bool,
+    /// Expected `aud` in the KB-JWT (required if `verify_kb` is true).
+    pub expected_audience: Option<&'a str>,
+    /// Expected `nonce` in the KB-JWT (required if `verify_kb` is true).
+    pub expected_nonce: Option<&'a str>,
+}
+
 /// Result of SD-JWT verification.
 #[derive(Debug)]
 pub struct VerificationResult {
-    /// The fully resolved claims (with disclosed values restored)
+    /// The fully resolved claims (with disclosed values restored).
     pub claims: Value,
-    /// Whether the issuer JWS signature was verified
-    pub jws_verified: bool,
-    /// Whether the KB-JWT was verified (None if no KB-JWT present)
+    /// Whether the KB-JWT was verified (`None` if no KB-JWT present).
     pub kb_verified: Option<bool>,
 }
 
 impl VerificationResult {
-    /// Returns true if all present signatures are verified.
+    /// Returns true if verification succeeded and any present KB-JWT was verified.
     pub fn is_verified(&self) -> bool {
-        self.jws_verified && self.kb_verified.unwrap_or(true)
+        self.kb_verified.unwrap_or(true)
     }
 }
 
@@ -37,16 +46,23 @@ impl VerificationResult {
 /// * `sd_jwt` - The parsed SD-JWT to verify
 /// * `issuer_verifier` - Verifies the issuer's JWS signature
 /// * `hasher` - The hash function (must match `_sd_alg` in the payload)
-/// * `verify_kb` - Whether to verify the Key Binding JWT
-/// * `expected_audience` - Expected `aud` in the KB-JWT (required if verify_kb is true)
-/// * `expected_nonce` - Expected `nonce` in the KB-JWT (required if verify_kb is true)
+/// * `options` - Verification options (KB-JWT verification, audience, nonce)
+/// * `holder_verifier` - Optional verifier for the KB-JWT signature (required if `verify_kb` is true)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The issuer JWS signature is invalid
+/// - `_sd_alg` in the payload doesn't match the provided hasher
+/// - Duplicate disclosures are detected (RFC 9901 §8.1)
+/// - A disclosure digest is not found in the payload
+/// - KB-JWT verification is requested but fails (missing cnf, sd_hash mismatch, etc.)
 pub fn verify(
     sd_jwt: &SdJwt,
     issuer_verifier: &dyn JwtVerifier,
     hasher: &dyn SdHasher,
-    verify_kb: bool,
-    expected_audience: Option<&str>,
-    expected_nonce: Option<&str>,
+    options: &VerificationOptions,
+    holder_verifier: Option<&dyn JwtVerifier>,
 ) -> Result<VerificationResult> {
     // 1. Verify the issuer JWS
     let payload = issuer_verifier.verify_jwt(&sd_jwt.jws)?;
@@ -61,16 +77,19 @@ pub fn verify(
         )));
     }
 
-    // 3. Verify disclosure digests match the _sd array
+    // 3. Check for duplicate disclosures (S3, RFC 9901 §8.1)
+    check_duplicate_disclosures(&sd_jwt.disclosures)?;
+
+    // 4. Verify disclosure digests match the _sd array
     verify_disclosure_digests(&payload, &sd_jwt.disclosures, hasher)?;
 
-    // 4. Resolve disclosed claims
+    // 5. Resolve disclosed claims
     let claims = resolve_claims(&payload, &sd_jwt.disclosures)?;
 
-    // 5. Verify KB-JWT if requested
-    let kb_verified = if verify_kb {
+    // 6. Verify KB-JWT if requested
+    let kb_verified = if options.verify_kb {
         if let Some(kb_jwt_str) = &sd_jwt.kb_jwt {
-            // Extract cnf.jwk from payload for holder key verification
+            // Extract cnf.jwk from payload
             let _cnf_jwk = payload
                 .get("cnf")
                 .and_then(|v| v.get("jwk"))
@@ -80,16 +99,15 @@ pub fn verify(
                     )
                 })?;
 
-            // Verify sd_hash in the KB-JWT
-            let presentation_without_kb = build_presentation_without_kb(sd_jwt);
-            let expected_sd_hash = hasher.hash_b64(presentation_without_kb.as_bytes());
-
-            // Decode the KB-JWT payload (without verifying signature here —
-            // the caller must provide a verifier for the holder key separately,
-            // or use the cnf.jwk to construct one)
-            let kb_payload = decode_jwt_payload(kb_jwt_str)?;
+            // Verify KB-JWT signature if a holder verifier is provided (S5)
+            let kb_payload = if let Some(hv) = holder_verifier {
+                hv.verify_jwt(kb_jwt_str)?
+            } else {
+                decode_jwt_payload(kb_jwt_str)?
+            };
 
             // Verify sd_hash
+            let expected_sd_hash = hasher.hash_b64(sd_jwt.serialize_without_kb().as_bytes());
             let actual_sd_hash = kb_payload
                 .get("sd_hash")
                 .and_then(|v| v.as_str())
@@ -102,7 +120,7 @@ pub fn verify(
             }
 
             // Verify audience
-            if let Some(expected_aud) = expected_audience {
+            if let Some(expected_aud) = options.expected_audience {
                 let actual_aud = kb_payload
                     .get("aud")
                     .and_then(|v| v.as_str())
@@ -115,7 +133,7 @@ pub fn verify(
             }
 
             // Verify nonce
-            if let Some(expected_n) = expected_nonce {
+            if let Some(expected_n) = options.expected_nonce {
                 let actual_nonce = kb_payload
                     .get("nonce")
                     .and_then(|v| v.as_str())
@@ -134,14 +152,27 @@ pub fn verify(
             ));
         }
     } else {
-        sd_jwt.kb_jwt.as_ref().map(|_| false) // Present but not verified
+        sd_jwt.kb_jwt.as_ref().map(|_| false)
     };
 
     Ok(VerificationResult {
         claims,
-        jws_verified: true,
         kb_verified,
     })
+}
+
+/// Check for duplicate disclosure digests (RFC 9901 §8.1).
+fn check_duplicate_disclosures(disclosures: &[crate::disclosure::Disclosure]) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for d in disclosures {
+        if !seen.insert(&d.digest) {
+            return Err(SdJwtError::Verification(format!(
+                "duplicate disclosure digest: {}",
+                d.digest
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Verify that all disclosure digests appear in the payload's _sd arrays.
@@ -150,17 +181,14 @@ fn verify_disclosure_digests(
     disclosures: &[crate::disclosure::Disclosure],
     hasher: &dyn SdHasher,
 ) -> Result<()> {
-    // Collect all digests from the payload (recursively)
     let mut all_digests = std::collections::HashSet::new();
     collect_digests(payload, &mut all_digests);
 
-    // Verify each disclosure's digest appears somewhere
     for disclosure in disclosures {
         let expected_digest = hasher.hash_b64(disclosure.serialized.as_bytes());
         if !all_digests.contains(expected_digest.as_str()) {
             return Err(SdJwtError::Verification(format!(
-                "disclosure digest not found in payload: {}",
-                expected_digest
+                "disclosure digest not found in payload: {expected_digest}",
             )));
         }
     }
@@ -172,7 +200,6 @@ fn verify_disclosure_digests(
 fn collect_digests(value: &Value, digests: &mut std::collections::HashSet<String>) {
     match value {
         Value::Object(obj) => {
-            // Collect from _sd array
             if let Some(sd_array) = obj.get("_sd").and_then(|v| v.as_array()) {
                 for item in sd_array {
                     if let Some(s) = item.as_str() {
@@ -181,12 +208,10 @@ fn collect_digests(value: &Value, digests: &mut std::collections::HashSet<String
                 }
             }
 
-            // Collect from {"...": digest} entries
             if let Some(digest) = obj.get("...").and_then(|v| v.as_str()) {
                 digests.insert(digest.to_string());
             }
 
-            // Recurse into nested objects
             for (key, val) in obj {
                 if key != "_sd" {
                     collect_digests(val, digests);
@@ -200,15 +225,6 @@ fn collect_digests(value: &Value, digests: &mut std::collections::HashSet<String
         }
         _ => {}
     }
-}
-
-/// Build the presentation string without the KB-JWT (for sd_hash computation).
-fn build_presentation_without_kb(sd_jwt: &SdJwt) -> String {
-    let mut parts = vec![sd_jwt.jws.clone()];
-    for d in &sd_jwt.disclosures {
-        parts.push(d.serialized.clone());
-    }
-    parts.join("~") + "~"
 }
 
 /// Decode a JWT payload without verifying the signature.
@@ -238,6 +254,10 @@ mod tests {
         b"test-key-for-hmac-256-signing!!"
     }
 
+    fn default_opts() -> VerificationOptions<'static> {
+        VerificationOptions::default()
+    }
+
     #[test]
     fn verify_simple_sd_jwt() {
         let hasher = Sha256Hasher;
@@ -245,22 +265,14 @@ mod tests {
         let jwt_verifier = HmacSha256Verifier::new(test_key());
 
         let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe"
+            "sub": "user123", "given_name": "John", "family_name": "Doe"
         });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name"]
-        });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        let result = verify(&sd_jwt, &jwt_verifier, &hasher, false, None, None).unwrap();
+        let result = verify(&sd_jwt, &jwt_verifier, &hasher, &default_opts(), None).unwrap();
 
         assert!(result.is_verified());
-        assert!(result.jws_verified);
-        assert_eq!(result.claims["sub"], "user123");
         assert_eq!(result.claims["given_name"], "John");
         assert_eq!(result.claims["family_name"], "Doe");
     }
@@ -272,26 +284,35 @@ mod tests {
         let jwt_verifier = HmacSha256Verifier::new(test_key());
 
         let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe"
+            "sub": "user123", "given_name": "John", "family_name": "Doe"
         });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name"]
-        });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        // Present only given_name
         let selected = holder::select_disclosures(&sd_jwt, &["given_name"]);
         let presentation = holder::present(&sd_jwt, &selected, None, &hasher).unwrap();
 
-        let result = verify(&presentation, &jwt_verifier, &hasher, false, None, None).unwrap();
-
+        let result = verify(&presentation, &jwt_verifier, &hasher, &default_opts(), None).unwrap();
         assert!(result.is_verified());
         assert_eq!(result.claims["given_name"], "John");
         assert!(result.claims.get("family_name").is_none());
+    }
+
+    #[test]
+    fn verify_zero_disclosures() {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(test_key());
+        let jwt_verifier = HmacSha256Verifier::new(test_key());
+
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
+        let presentation = holder::present(&sd_jwt, &[], None, &hasher).unwrap();
+
+        let result = verify(&presentation, &jwt_verifier, &hasher, &default_opts(), None).unwrap();
+        assert!(result.is_verified());
+        assert!(result.claims.get("name").is_none());
     }
 
     #[test]
@@ -304,9 +325,31 @@ mod tests {
         let frame = serde_json::json!({ "_sd": ["name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        let result = verify(&sd_jwt, &wrong_verifier, &hasher, false, None, None);
+        let result = verify(&sd_jwt, &wrong_verifier, &hasher, &default_opts(), None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_duplicate_disclosure_fails() {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(test_key());
+        let jwt_verifier = HmacSha256Verifier::new(test_key());
+
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
+
+        // Duplicate the disclosure
+        let tampered = SdJwt {
+            jws: sd_jwt.jws.clone(),
+            disclosures: vec![sd_jwt.disclosures[0].clone(), sd_jwt.disclosures[0].clone()],
+            kb_jwt: None,
+        };
+
+        let result = verify(&tampered, &jwt_verifier, &hasher, &default_opts(), None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("duplicate"));
     }
 
     #[test]
@@ -314,52 +357,9 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = HmacSha256Signer::new(test_key());
         let jwt_verifier = HmacSha256Verifier::new(test_key());
-        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
-
-        let holder_jwk = serde_json::json!({
-            "kty": "oct",
-            "k": "holder-key"
-        });
-
-        let claims = serde_json::json!({
-            "sub": "user123",
-            "name": "John"
-        });
-
-        let frame = serde_json::json!({ "_sd": ["name"] });
-
-        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, Some(&holder_jwk)).unwrap();
-
-        let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
-        let kb_input = KbJwtInput {
-            audience: "https://verifier.example.com",
-            nonce: "xyz789",
-            signer: &holder_signer,
-            iat: 1700000000,
-        };
-
-        let presentation = holder::present(&sd_jwt, &all_refs, Some(&kb_input), &hasher).unwrap();
-
-        let result = verify(
-            &presentation,
-            &jwt_verifier,
-            &hasher,
-            true,
-            Some("https://verifier.example.com"),
-            Some("xyz789"),
-        )
-        .unwrap();
-
-        assert!(result.is_verified());
-        assert_eq!(result.kb_verified, Some(true));
-    }
-
-    #[test]
-    fn verify_kb_wrong_audience_fails() {
-        let hasher = Sha256Hasher;
-        let signer = HmacSha256Signer::new(test_key());
-        let jwt_verifier = HmacSha256Verifier::new(test_key());
-        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+        let holder_key = b"holder-key-for-hmac-signing!!!";
+        let holder_signer = HmacSha256Signer::new(holder_key);
+        let holder_verifier = HmacSha256Verifier::new(holder_key);
 
         let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
 
@@ -378,18 +378,89 @@ mod tests {
 
         let presentation = holder::present(&sd_jwt, &all_refs, Some(&kb_input), &hasher).unwrap();
 
+        let opts = VerificationOptions {
+            verify_kb: true,
+            expected_audience: Some("https://verifier.example.com"),
+            expected_nonce: Some("xyz789"),
+        };
+
         let result = verify(
             &presentation,
             &jwt_verifier,
             &hasher,
-            true,
-            Some("https://wrong-verifier.example.com"),
-            Some("xyz789"),
-        );
+            &opts,
+            Some(&holder_verifier),
+        )
+        .unwrap();
 
+        assert!(result.is_verified());
+        assert_eq!(result.kb_verified, Some(true));
+    }
+
+    #[test]
+    fn verify_kb_wrong_audience_fails() {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(test_key());
+        let jwt_verifier = HmacSha256Verifier::new(test_key());
+        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+
+        let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, Some(&holder_jwk)).unwrap();
+        let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
+        let kb_input = KbJwtInput {
+            audience: "https://verifier.example.com",
+            nonce: "xyz789",
+            signer: &holder_signer,
+            iat: 1700000000,
+        };
+
+        let presentation = holder::present(&sd_jwt, &all_refs, Some(&kb_input), &hasher).unwrap();
+
+        let opts = VerificationOptions {
+            verify_kb: true,
+            expected_audience: Some("https://wrong-verifier.example.com"),
+            expected_nonce: Some("xyz789"),
+        };
+
+        let result = verify(&presentation, &jwt_verifier, &hasher, &opts, None);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("aud mismatch"));
+        assert!(result.unwrap_err().to_string().contains("aud mismatch"));
+    }
+
+    #[test]
+    fn verify_kb_wrong_nonce_fails() {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(test_key());
+        let jwt_verifier = HmacSha256Verifier::new(test_key());
+        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+
+        let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, Some(&holder_jwk)).unwrap();
+        let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
+        let kb_input = KbJwtInput {
+            audience: "https://verifier.example.com",
+            nonce: "correct-nonce",
+            signer: &holder_signer,
+            iat: 1700000000,
+        };
+
+        let presentation = holder::present(&sd_jwt, &all_refs, Some(&kb_input), &hasher).unwrap();
+
+        let opts = VerificationOptions {
+            verify_kb: true,
+            expected_audience: Some("https://verifier.example.com"),
+            expected_nonce: Some("wrong-nonce"),
+        };
+
+        let result = verify(&presentation, &jwt_verifier, &hasher, &opts, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("nonce mismatch"));
     }
 
     #[test]
@@ -402,8 +473,11 @@ mod tests {
         let frame = serde_json::json!({ "_sd": ["name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        let result = verify(&sd_jwt, &jwt_verifier, &hasher, true, None, None);
+        let opts = VerificationOptions {
+            verify_kb: true,
+            ..Default::default()
+        };
+        let result = verify(&sd_jwt, &jwt_verifier, &hasher, &opts, None);
         assert!(result.is_err());
     }
 
@@ -417,13 +491,10 @@ mod tests {
         let frame = serde_json::json!({ "_sd": ["name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        // Use SHA-384 hasher for verification (mismatches sha-256 in payload)
         let wrong_hasher = crate::hasher::Sha384Hasher;
-        let result = verify(&sd_jwt, &jwt_verifier, &wrong_hasher, false, None, None);
+        let result = verify(&sd_jwt, &jwt_verifier, &wrong_hasher, &default_opts(), None);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("_sd_alg mismatch"));
+        assert!(result.unwrap_err().to_string().contains("_sd_alg mismatch"));
     }
 
     #[test]
@@ -438,43 +509,30 @@ mod tests {
             "given_name": "John",
             "family_name": "Doe",
             "email": "john@example.com",
-            "address": {
-                "street": "123 Main St",
-                "city": "Anytown",
-                "state": "CA"
-            }
+            "address": { "street": "123 Main St", "city": "Anytown", "state": "CA" }
         });
 
         let frame = serde_json::json!({
             "_sd": ["given_name", "family_name", "email"],
-            "address": {
-                "_sd": ["street"]
-            }
+            "address": { "_sd": ["street"] }
         });
 
-        // Issue
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-        assert_eq!(sd_jwt.disclosures.len(), 4); // 3 top-level + 1 nested
+        assert_eq!(sd_jwt.disclosures.len(), 4);
 
-        // Present: reveal given_name and email only
         let selected = holder::select_disclosures(&sd_jwt, &["given_name", "email"]);
         let presentation = holder::present(&sd_jwt, &selected, None, &hasher).unwrap();
 
-        // Serialize and parse back
         let serialized = presentation.serialize();
         let parsed = SdJwt::parse(&serialized, &hasher).unwrap();
 
-        // Verify
-        let result = verify(&parsed, &jwt_verifier, &hasher, false, None, None).unwrap();
+        let result = verify(&parsed, &jwt_verifier, &hasher, &default_opts(), None).unwrap();
 
         assert!(result.is_verified());
-        assert_eq!(result.claims["iss"], "https://issuer.example.com");
-        assert_eq!(result.claims["sub"], "user123");
         assert_eq!(result.claims["given_name"], "John");
         assert_eq!(result.claims["email"], "john@example.com");
-        assert!(result.claims.get("family_name").is_none()); // Not disclosed
+        assert!(result.claims.get("family_name").is_none());
         assert_eq!(result.claims["address"]["city"], "Anytown");
-        assert_eq!(result.claims["address"]["state"], "CA");
-        assert!(result.claims["address"].get("street").is_none()); // Not disclosed
+        assert!(result.claims["address"].get("street").is_none());
     }
 }

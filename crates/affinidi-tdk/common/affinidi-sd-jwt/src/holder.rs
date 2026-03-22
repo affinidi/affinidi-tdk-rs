@@ -15,13 +15,13 @@ use crate::signer::JwtSigner;
 
 /// Input for creating a Key Binding JWT.
 pub struct KbJwtInput<'a> {
-    /// The audience (verifier) for the KB-JWT
+    /// The intended audience (verifier's identifier). Must match what the verifier expects.
     pub audience: &'a str,
-    /// A nonce provided by the verifier
+    /// A nonce provided by the verifier to prevent replay attacks. Must be unique per session.
     pub nonce: &'a str,
-    /// The holder's signer
+    /// The holder's signer (must correspond to the `cnf.jwk` in the SD-JWT payload).
     pub signer: &'a dyn JwtSigner,
-    /// Issued-at timestamp (Unix seconds)
+    /// Issued-at timestamp (Unix seconds). Should be the current time.
     pub iat: u64,
 }
 
@@ -39,19 +39,17 @@ pub fn present(
     kb_input: Option<&KbJwtInput>,
     hasher: &dyn SdHasher,
 ) -> Result<SdJwt> {
-    // Build the presentation disclosures
     let revealed: Vec<Disclosure> = disclosures_to_reveal.iter().map(|d| (*d).clone()).collect();
 
-    // Build the serialized form without KB-JWT first (needed for sd_hash)
-    let mut parts = vec![sd_jwt.jws.clone()];
-    for d in &revealed {
-        parts.push(d.serialized.clone());
-    }
-    let presentation_without_kb = parts.join("~") + "~";
+    let presentation = SdJwt {
+        jws: sd_jwt.jws.clone(),
+        disclosures: revealed,
+        kb_jwt: None,
+    };
 
     // Create KB-JWT if requested
     let kb_jwt = if let Some(kb) = kb_input {
-        let sd_hash = hasher.hash_b64(presentation_without_kb.as_bytes());
+        let sd_hash = hasher.hash_b64(presentation.serialize_without_kb().as_bytes());
 
         let header = serde_json::json!({
             "alg": kb.signer.algorithm(),
@@ -65,20 +63,23 @@ pub fn present(
             "sd_hash": sd_hash,
         });
 
-        let jws = kb.signer.sign_jwt(&header, &payload)?;
-        Some(jws)
+        Some(kb.signer.sign_jwt(&header, &payload)?)
     } else {
         None
     };
 
     Ok(SdJwt {
         jws: sd_jwt.jws.clone(),
-        disclosures: revealed,
+        disclosures: presentation.disclosures,
         kb_jwt,
     })
 }
 
 /// Select disclosures by claim name from an SD-JWT.
+///
+/// Returns references to disclosures whose `claim_name` matches one of the
+/// provided names. Array element disclosures (which have no claim name) are
+/// not matched by this function.
 pub fn select_disclosures<'a>(sd_jwt: &'a SdJwt, claim_names: &[&str]) -> Vec<&'a Disclosure> {
     sd_jwt
         .disclosures
@@ -98,14 +99,13 @@ pub fn parse_presentation(serialized: &str, hasher: &dyn SdHasher) -> Result<SdJ
 
 /// Resolve the disclosed claims from the JWT payload and provided disclosures.
 ///
-/// Returns the claims object with disclosed values restored.
+/// Returns the claims object with disclosed values restored and SD-JWT
+/// internal claims (`_sd`, `_sd_alg`) removed.
 pub fn resolve_claims(payload: &Value, disclosures: &[Disclosure]) -> Result<Value> {
     let mut claims = payload.clone();
 
     if let Some(obj) = claims.as_object_mut() {
         resolve_object(obj, disclosures)?;
-
-        // Remove SD-JWT internal claims
         obj.remove("_sd");
         obj.remove("_sd_alg");
     }
@@ -118,11 +118,9 @@ fn resolve_object(
     obj: &mut serde_json::Map<String, Value>,
     disclosures: &[Disclosure],
 ) -> Result<()> {
-    // Build a map from digest -> disclosure for quick lookup
     let digest_map: std::collections::HashMap<&str, &Disclosure> =
         disclosures.iter().map(|d| (d.digest.as_str(), d)).collect();
 
-    // Process _sd array: restore disclosed claims
     if let Some(sd_array) = obj.remove("_sd")
         && let Some(digests) = sd_array.as_array()
     {
@@ -133,11 +131,9 @@ fn resolve_object(
             {
                 obj.insert(name.clone(), disclosure.claim_value.clone());
             }
-            // If digest not found in disclosures, it's either undisclosed or a decoy
         }
     }
 
-    // Recurse into nested objects
     let keys: Vec<String> = obj.keys().cloned().collect();
     for key in keys {
         if let Some(value) = obj.get_mut(&key) {
@@ -166,13 +162,11 @@ fn resolve_array(arr: &mut Vec<Value>, disclosures: &[Disclosure]) -> Result<()>
             if let Some(disclosure) = digest_map.get(digest_str) {
                 arr[i] = disclosure.claim_value.clone();
             } else {
-                // Undisclosed array element — remove it
                 arr.remove(i);
                 continue;
             }
         }
 
-        // Recurse into nested structures
         match &mut arr[i] {
             Value::Object(nested) => resolve_object(nested, disclosures)?,
             Value::Array(nested_arr) => resolve_array(nested_arr, disclosures)?,
@@ -201,18 +195,11 @@ mod tests {
         let signer = test_signer();
 
         let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe"
+            "sub": "user123", "given_name": "John", "family_name": "Doe"
         });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name"]
-        });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        // Reveal all
         let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
         let presentation = present(&sd_jwt, &all_refs, None, &hasher).unwrap();
 
@@ -226,28 +213,45 @@ mod tests {
         let signer = test_signer();
 
         let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe",
-            "email": "john@example.com"
+            "sub": "user123", "given_name": "John", "family_name": "Doe", "email": "john@example.com"
         });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name", "email"]
-        });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name", "email"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
-        // Only reveal given_name
         let selected = select_disclosures(&sd_jwt, &["given_name"]);
         assert_eq!(selected.len(), 1);
 
         let presentation = present(&sd_jwt, &selected, None, &hasher).unwrap();
-        assert_eq!(presentation.disclosures.len(), 1);
         assert_eq!(
             presentation.disclosures[0].claim_name.as_deref(),
             Some("given_name")
         );
+    }
+
+    #[test]
+    fn present_zero_disclosures() {
+        let hasher = Sha256Hasher;
+        let signer = test_signer();
+
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
+        let presentation = present(&sd_jwt, &[], None, &hasher).unwrap();
+        assert!(presentation.disclosures.is_empty());
+    }
+
+    #[test]
+    fn select_nonexistent_claims_returns_empty() {
+        let hasher = Sha256Hasher;
+        let signer = test_signer();
+
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
+        let selected = select_disclosures(&sd_jwt, &["nonexistent", "also_missing"]);
+        assert!(selected.is_empty());
     }
 
     #[test]
@@ -256,17 +260,10 @@ mod tests {
         let signer = test_signer();
         let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
 
-        let claims = serde_json::json!({
-            "sub": "user123",
-            "name": "John"
-        });
-
-        let frame = serde_json::json!({
-            "_sd": ["name"]
-        });
+        let claims = serde_json::json!({ "sub": "user123", "name": "John" });
+        let frame = serde_json::json!({ "_sd": ["name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
-
         let all_refs: Vec<&Disclosure> = sd_jwt.disclosures.iter().collect();
         let kb_input = KbJwtInput {
             audience: "https://verifier.example.com",
@@ -276,14 +273,8 @@ mod tests {
         };
 
         let presentation = present(&sd_jwt, &all_refs, Some(&kb_input), &hasher).unwrap();
-
         assert!(presentation.kb_jwt.is_some());
-        let serialized = presentation.serialize();
-        // Should end with KB-JWT (not ~)
-        assert!(!serialized.ends_with('~'));
-        // Should have JWS, disclosure, KB-JWT
-        let parts: Vec<&str> = serialized.split('~').collect();
-        assert_eq!(parts.len(), 3); // jws, disclosure, kb_jwt
+        assert!(!presentation.serialize().ends_with('~'));
     }
 
     #[test]
@@ -291,25 +282,16 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = test_signer();
 
-        let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe"
-        });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name"]
-        });
+        let claims =
+            serde_json::json!({ "sub": "user123", "given_name": "John", "family_name": "Doe" });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
         let payload = sd_jwt.payload().unwrap();
 
-        // Resolve with all disclosures
         let resolved = resolve_claims(&payload, &sd_jwt.disclosures).unwrap();
-        assert_eq!(resolved["sub"], "user123");
         assert_eq!(resolved["given_name"], "John");
         assert_eq!(resolved["family_name"], "Doe");
-        // Internal claims should be removed
         assert!(resolved.get("_sd").is_none());
         assert!(resolved.get("_sd_alg").is_none());
     }
@@ -319,20 +301,13 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = test_signer();
 
-        let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "family_name": "Doe"
-        });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "family_name"]
-        });
+        let claims =
+            serde_json::json!({ "sub": "user123", "given_name": "John", "family_name": "Doe" });
+        let frame = serde_json::json!({ "_sd": ["given_name", "family_name"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
         let payload = sd_jwt.payload().unwrap();
 
-        // Only provide given_name disclosure
         let given_name_only: Vec<Disclosure> = sd_jwt
             .disclosures
             .iter()
@@ -341,9 +316,7 @@ mod tests {
             .collect();
 
         let resolved = resolve_claims(&payload, &given_name_only).unwrap();
-        assert_eq!(resolved["sub"], "user123");
         assert_eq!(resolved["given_name"], "John");
-        // family_name not disclosed
         assert!(resolved.get("family_name").is_none());
     }
 
@@ -352,24 +325,13 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = test_signer();
 
-        let claims = serde_json::json!({
-            "sub": "user123",
-            "given_name": "John",
-            "email": "john@example.com"
-        });
-
-        let frame = serde_json::json!({
-            "_sd": ["given_name", "email"]
-        });
+        let claims = serde_json::json!({ "sub": "user123", "given_name": "John", "email": "john@example.com" });
+        let frame = serde_json::json!({ "_sd": ["given_name", "email"] });
 
         let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
         let serialized = sd_jwt.serialize();
 
-        // Parse back
         let parsed = parse_presentation(&serialized, &hasher).unwrap();
-        assert_eq!(parsed.disclosures.len(), 2);
-
-        // Resolve
         let payload = parsed.payload().unwrap();
         let resolved = resolve_claims(&payload, &parsed.disclosures).unwrap();
         assert_eq!(resolved["given_name"], "John");

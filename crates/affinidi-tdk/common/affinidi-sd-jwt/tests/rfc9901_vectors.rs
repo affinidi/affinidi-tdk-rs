@@ -295,8 +295,14 @@ fn python_testcase_array_of_scalars() {
 
     let presentation = holder::present(&sd_jwt, &ca_disclosures, None, &hasher).unwrap();
 
-    let result =
-        verifier::verify(&presentation, &jwt_verifier, &hasher, false, None, None).unwrap();
+    let result = verifier::verify(
+        &presentation,
+        &jwt_verifier,
+        &hasher,
+        &Default::default(),
+        None,
+    )
+    .unwrap();
 
     assert!(result.is_verified());
     let nats = result.claims["nationalities"].as_array().unwrap();
@@ -327,8 +333,14 @@ fn python_testcase_array_in_sd() {
     let all_refs: Vec<_> = sd_jwt.disclosures.iter().collect();
     let presentation = holder::present(&sd_jwt, &all_refs, None, &hasher).unwrap();
 
-    let result =
-        verifier::verify(&presentation, &jwt_verifier, &hasher, false, None, None).unwrap();
+    let result = verifier::verify(
+        &presentation,
+        &jwt_verifier,
+        &hasher,
+        &Default::default(),
+        None,
+    )
+    .unwrap();
 
     assert!(result.is_verified());
     assert_eq!(result.claims["sd_array"], json!([32, 23]));
@@ -360,7 +372,7 @@ fn error_disclosure_digest_not_in_payload() {
         kb_jwt: None,
     };
 
-    let result = verifier::verify(&tampered, &jwt_verifier, &hasher, false, None, None);
+    let result = verifier::verify(&tampered, &jwt_verifier, &hasher, &Default::default(), None);
     assert!(result.is_err());
     assert!(
         result
@@ -386,7 +398,13 @@ fn error_sd_alg_mismatch() {
 
     let sd_jwt = issuer::issue(&claims, &frame, &signer, &Sha256Hasher, None).unwrap();
 
-    let result = verifier::verify(&sd_jwt, &jwt_verifier, &Sha384Hasher, false, None, None);
+    let result = verifier::verify(
+        &sd_jwt,
+        &jwt_verifier,
+        &Sha384Hasher,
+        &Default::default(),
+        None,
+    );
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("_sd_alg mismatch"));
 }

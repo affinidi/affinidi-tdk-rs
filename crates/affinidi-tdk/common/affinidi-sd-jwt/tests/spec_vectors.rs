@@ -2,7 +2,7 @@
  * SD-JWT specification test vectors.
  *
  * These test the disclosure encoding and digest computation
- * against known values from the IETF SD-JWT specification (RFC 9449).
+ * against known values from the IETF SD-JWT specification (RFC 9901).
  */
 
 use affinidi_sd_jwt::disclosure::Disclosure;
@@ -278,15 +278,12 @@ fn spec_example_full_flow() {
     assert_eq!(parsed.disclosures.len(), 2);
     assert!(parsed.kb_jwt.is_some());
 
-    let result = verifier::verify(
-        &parsed,
-        &jwt_verifier,
-        &hasher,
-        true,
-        Some("https://verifier.example.com"),
-        Some("XZOUco1u_gEPknxS78sWWg"),
-    )
-    .unwrap();
+    let opts = affinidi_sd_jwt::VerificationOptions {
+        verify_kb: true,
+        expected_audience: Some("https://verifier.example.com"),
+        expected_nonce: Some("XZOUco1u_gEPknxS78sWWg"),
+    };
+    let result = verifier::verify(&parsed, &jwt_verifier, &hasher, &opts, None).unwrap();
 
     assert!(result.is_verified());
     assert_eq!(result.claims["given_name"], "John");
@@ -615,7 +612,8 @@ fn empty_disclosure_frame() {
     let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
     assert!(sd_jwt.disclosures.is_empty());
 
-    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, false, None, None).unwrap();
+    let result =
+        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
     assert!(result.is_verified());
     assert_eq!(result.claims["sub"], "user");
     assert_eq!(result.claims["name"], "Alice");
@@ -646,7 +644,8 @@ fn all_claims_disclosed() {
     assert_eq!(sd_jwt.disclosures.len(), 3);
 
     // Verify with all disclosures
-    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, false, None, None).unwrap();
+    let result =
+        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
     assert!(result.is_verified());
     assert_eq!(result.claims["given_name"], "John");
     assert_eq!(result.claims["family_name"], "Doe");
@@ -687,7 +686,8 @@ fn deeply_nested_disclosures() {
     let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, None).unwrap();
     assert_eq!(sd_jwt.disclosures.len(), 2);
 
-    let result = verifier::verify(&sd_jwt, &jwt_verifier, &hasher, false, None, None).unwrap();
+    let result =
+        verifier::verify(&sd_jwt, &jwt_verifier, &hasher, &Default::default(), None).unwrap();
     assert!(result.is_verified());
     assert_eq!(
         result.claims["address"]["formatted"]["line1"],
