@@ -3,10 +3,10 @@
  */
 
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use errors::TDKError;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use config::TDKConfig;
 use environments::TDKEnvironment;
+use errors::TDKError;
 use profiles::TDKProfile;
 use reqwest::Client;
 use rustls::ClientConfig;
