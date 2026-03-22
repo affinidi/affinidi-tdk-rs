@@ -13,6 +13,10 @@
 
 pub mod jwt;
 
+/// ES256 (ECDSA P-256) signer and verifier for production JWT operations.
+#[cfg(feature = "es256")]
+pub mod es256;
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

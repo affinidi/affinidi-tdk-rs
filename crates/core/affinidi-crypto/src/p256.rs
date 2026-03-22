@@ -84,6 +84,38 @@ pub fn public_jwk(data: &[u8]) -> Result<JWK> {
     })
 }
 
+/// Sign data with a P-256 private key, producing an ES256 signature.
+///
+/// Returns the raw signature bytes (r || s, 64 bytes).
+pub fn sign(private_key_bytes: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    use p256::ecdsa::{Signature, signature::Signer};
+
+    let signing_key = SigningKey::from_slice(private_key_bytes)
+        .map_err(|e| CryptoError::KeyError(format!("invalid P-256 private key: {e}")))?;
+
+    let signature: Signature = signing_key.sign(data);
+    Ok(signature.to_bytes().to_vec())
+}
+
+/// Verify an ES256 signature with a P-256 public key.
+///
+/// `public_key_bytes` should be the uncompressed or compressed SEC1 encoding.
+/// `signature_bytes` should be 64 bytes (r || s).
+pub fn verify(public_key_bytes: &[u8], data: &[u8], signature_bytes: &[u8]) -> Result<bool> {
+    use p256::ecdsa::{Signature, signature::Verifier};
+
+    let verifying_key = VerifyingKey::from_sec1_bytes(public_key_bytes)
+        .map_err(|e| CryptoError::KeyError(format!("invalid P-256 public key: {e}")))?;
+
+    let signature = Signature::from_slice(signature_bytes)
+        .map_err(|e| CryptoError::KeyError(format!("invalid signature: {e}")))?;
+
+    match verifying_key.verify(data, &signature) {
+        Ok(()) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +155,37 @@ mod tests {
         } else {
             panic!("Expected EC params");
         }
+    }
+
+    #[test]
+    fn sign_and_verify() {
+        let keypair = generate(None).unwrap();
+        let data = b"Hello, eIDAS 2.0!";
+
+        let signature = sign(&keypair.private_bytes, data).unwrap();
+        assert_eq!(signature.len(), 64); // r || s
+
+        let valid = verify(&keypair.public_bytes, data, &signature).unwrap();
+        assert!(valid);
+    }
+
+    #[test]
+    fn verify_wrong_data_fails() {
+        let keypair = generate(None).unwrap();
+        let signature = sign(&keypair.private_bytes, b"correct").unwrap();
+
+        let valid = verify(&keypair.public_bytes, b"wrong", &signature).unwrap();
+        assert!(!valid);
+    }
+
+    #[test]
+    fn verify_wrong_key_fails() {
+        let keypair1 = generate(None).unwrap();
+        let keypair2 = generate(None).unwrap();
+        let data = b"test data";
+
+        let signature = sign(&keypair1.private_bytes, data).unwrap();
+        let valid = verify(&keypair2.public_bytes, data, &signature).unwrap();
+        assert!(!valid);
     }
 }

@@ -32,6 +32,7 @@ k256 = { version = "0.13", features = [
 ], optional = true }
 p256 = { version = "0.13", features = [
   "ecdsa-core",
+  "ecdsa",
   "arithmetic",
 ], optional = true }
 p384 = { version = "0.13", features = [

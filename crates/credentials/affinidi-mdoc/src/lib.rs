@@ -52,10 +52,15 @@
 
 pub mod cose;
 pub mod error;
+
+/// Production ES256 (P-256 ECDSA) signer/verifier for COSE_Sign1.
+#[cfg(feature = "es256")]
+pub mod es256_cose;
 pub mod issuer_signed;
 pub mod issuer_signed_item;
 pub mod mso;
 pub mod namespace;
+pub mod session;
 pub mod tag24;
 
 pub use cose::{CoseSigner, CoseVerifier};
@@ -64,4 +69,5 @@ pub use issuer_signed::{DeviceResponse, IssuerSigned, MdocBuilder};
 pub use issuer_signed_item::{IssuerSignedItem, cbor_to_json, json_to_cbor};
 pub use mso::{DeviceKeyInfo, MobileSecurityObject, ValidityInfo};
 pub use namespace::{EIDAS_PID_NAMESPACE, MDL_NAMESPACE};
+pub use session::SessionKeys;
 pub use tag24::Tag24;
