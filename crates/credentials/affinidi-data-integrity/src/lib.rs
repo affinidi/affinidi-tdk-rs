@@ -16,6 +16,12 @@ pub mod crypto_suites;
 pub mod signer;
 pub mod verification_proof;
 
+/// BBS-2023 Data Integrity Cryptosuite for zero-knowledge selective disclosure.
+///
+/// Enabled via the `bbs-2023` feature flag.
+#[cfg(feature = "bbs-2023")]
+pub mod bbs_2023;
+
 /// Affinidi Data Integrity Library Errors
 #[derive(Error, Debug)]
 pub enum DataIntegrityError {

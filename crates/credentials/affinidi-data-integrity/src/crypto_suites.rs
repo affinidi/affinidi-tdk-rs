@@ -18,6 +18,11 @@ pub enum CryptoSuite {
     /// https://www.w3.org/TR/vc-di-eddsa/
     #[serde(rename = "eddsa-rdfc-2022")]
     EddsaRdfc2022,
+    /// BBS 2023 spec — BBS signatures with zero-knowledge selective disclosure
+    /// https://www.w3.org/TR/vc-di-bbs/
+    #[cfg(feature = "bbs-2023")]
+    #[serde(rename = "bbs-2023")]
+    Bbs2023,
 }
 
 impl TryFrom<&str> for CryptoSuite {
@@ -27,6 +32,8 @@ impl TryFrom<&str> for CryptoSuite {
         match value {
             "eddsa-jcs-2022" => Ok(CryptoSuite::EddsaJcs2022),
             "eddsa-rdfc-2022" => Ok(CryptoSuite::EddsaRdfc2022),
+            #[cfg(feature = "bbs-2023")]
+            "bbs-2023" => Ok(CryptoSuite::Bbs2023),
             _ => Err(DataIntegrityError::InputDataError(format!(
                 "Unsupported crypto suite: {value}",
             ))),
@@ -49,6 +56,8 @@ impl TryFrom<CryptoSuite> for String {
         match value {
             CryptoSuite::EddsaJcs2022 => Ok("eddsa-jcs-2022".to_string()),
             CryptoSuite::EddsaRdfc2022 => Ok("eddsa-rdfc-2022".to_string()),
+            #[cfg(feature = "bbs-2023")]
+            CryptoSuite::Bbs2023 => Ok("bbs-2023".to_string()),
         }
     }
 }
@@ -64,6 +73,9 @@ impl CryptoSuite {
                     String::try_from(*self).unwrap_or_default()
                 ))),
             },
+            // BBS-2023 uses BLS12-381 keys, not traditional key types
+            #[cfg(feature = "bbs-2023")]
+            CryptoSuite::Bbs2023 => Ok(()),
         }
     }
 
@@ -87,6 +99,11 @@ impl CryptoSuite {
                     )
                 })?)
             }
+            // BBS-2023 verification is handled separately via the bbs_2023 module
+            #[cfg(feature = "bbs-2023")]
+            CryptoSuite::Bbs2023 => Err(DataIntegrityError::InputDataError(
+                "BBS-2023 verification uses bbs_2023::verify_proof, not CryptoSuite::verify".into(),
+            )),
         }
     }
 }

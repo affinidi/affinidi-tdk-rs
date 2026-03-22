@@ -113,6 +113,14 @@ where
 
             hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
         }
+        // BBS-2023 uses zero-knowledge proofs, not direct signature verification.
+        // Use the bbs_2023 module for BBS proof verification.
+        #[cfg(feature = "bbs-2023")]
+        CryptoSuite::Bbs2023 => {
+            return Err(DataIntegrityError::InputDataError(
+                "BBS-2023 proofs must be verified via bbs_2023::verify_proof, not verify_data_with_public_key".into(),
+            ));
+        }
     };
 
     debug!(
