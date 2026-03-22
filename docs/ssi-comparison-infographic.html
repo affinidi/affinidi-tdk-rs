@@ -6,543 +6,296 @@
 <title>Rust SSI Libraries — Comparative Analysis 2026</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
-
   * { margin: 0; padding: 0; box-sizing: border-box; }
-
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: #0a0e1a;
     color: #e0e6f0;
     min-height: 100vh;
-    overflow-x: hidden;
   }
-
-  .slide {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 40px 48px;
-  }
+  .slide { max-width: 1440px; margin: 0 auto; padding: 36px 48px; }
 
   /* Header */
-  .header {
-    text-align: center;
-    margin-bottom: 36px;
-  }
+  .header { text-align: center; margin-bottom: 32px; }
   .header h1 {
-    font-size: 36px;
-    font-weight: 800;
+    font-size: 34px; font-weight: 800;
     background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    letter-spacing: -0.5px;
-    margin-bottom: 6px;
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px; margin-bottom: 5px;
   }
-  .header .subtitle {
-    font-size: 15px;
-    color: #8892a8;
-    font-weight: 400;
-  }
-  .header .date {
-    font-size: 12px;
-    color: #566078;
-    margin-top: 4px;
-  }
+  .header .subtitle { font-size: 14px; color: #8892a8; }
+  .header .date { font-size: 11px; color: #566078; margin-top: 3px; }
 
-  /* Radar / Summary Cards Row */
-  .summary-row {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 28px;
-  }
-
+  /* Cards */
+  .summary-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
   .lib-card {
     background: linear-gradient(135deg, rgba(30,35,50,0.9), rgba(20,25,40,0.95));
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
-    padding: 20px;
-    position: relative;
-    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 14px;
+    padding: 16px 18px; position: relative; overflow: hidden;
   }
   .lib-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    border-radius: 16px 16px 0 0;
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; border-radius: 14px 14px 0 0;
   }
   .lib-card.affinidi::before { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
   .lib-card.spruce::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
   .lib-card.iota::before { background: linear-gradient(90deg, #10b981, #34d399); }
   .lib-card.impierce::before { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-
-  .lib-card .lib-name {
-    font-size: 16px;
-    font-weight: 700;
-    margin-bottom: 2px;
-  }
+  .lib-card .lib-name { font-size: 15px; font-weight: 700; margin-bottom: 1px; }
   .lib-card.affinidi .lib-name { color: #60a5fa; }
   .lib-card.spruce .lib-name { color: #a78bfa; }
   .lib-card.iota .lib-name { color: #34d399; }
   .lib-card.impierce .lib-name { color: #fbbf24; }
-
-  .lib-card .lib-org {
-    font-size: 11px;
-    color: #6b7a90;
-    margin-bottom: 12px;
-  }
-
-  .lib-card .score-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
-  .lib-card .score-number {
-    font-size: 36px;
-    font-weight: 800;
-    line-height: 1;
-  }
+  .lib-card .lib-org { font-size: 10px; color: #6b7a90; margin-bottom: 10px; }
+  .score-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .score-number { font-size: 34px; font-weight: 800; line-height: 1; }
   .lib-card.affinidi .score-number { color: #60a5fa; }
   .lib-card.spruce .score-number { color: #a78bfa; }
   .lib-card.iota .score-number { color: #34d399; }
   .lib-card.impierce .score-number { color: #fbbf24; }
-
-  .lib-card .score-label {
-    font-size: 10px;
-    color: #6b7a90;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  .score-label { font-size: 9px; color: #6b7a90; text-transform: uppercase; letter-spacing: 0.5px; }
+  .score-max { font-size: 11px; color: #4a5568; }
+  .key-stat {
+    font-size: 10px; color: #8892a8; margin-bottom: 2px;
+    display: flex; justify-content: space-between;
   }
-  .lib-card .score-max {
-    font-size: 12px;
-    color: #4a5568;
-  }
-
-  .lib-card .key-stat {
-    font-size: 11px;
-    color: #8892a8;
-    margin-bottom: 3px;
-    display: flex;
-    justify-content: space-between;
-  }
-  .lib-card .key-stat span:last-child {
-    font-weight: 600;
-    color: #c0c8d8;
-  }
-
-  /* Feature Matrix */
-  .section-title {
-    font-size: 18px;
-    font-weight: 700;
-    margin-bottom: 14px;
-    color: #c0c8d8;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .section-title .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #3b82f6;
-  }
-
-  .matrix-container {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 28px;
-  }
-
-  .matrix-panel {
-    background: rgba(20,25,40,0.7);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px;
-    overflow: hidden;
-  }
-
-  .matrix-panel .panel-title {
-    padding: 12px 16px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #a0aec0;
-    background: rgba(255,255,255,0.03);
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .matrix-row {
-    display: grid;
-    grid-template-columns: 180px repeat(4, 1fr);
-    align-items: center;
-    padding: 7px 16px;
-    font-size: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-  }
-  .matrix-row:last-child { border-bottom: none; }
-  .matrix-row:hover { background: rgba(255,255,255,0.02); }
-
-  .matrix-row .feature-name {
-    color: #8892a8;
-    font-weight: 500;
-  }
-
-  .matrix-row .cell {
-    text-align: center;
-    font-weight: 600;
-  }
-
-  .chip {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 6px;
-    font-size: 10px;
-    font-weight: 600;
-  }
-  .chip.full { background: rgba(16,185,129,0.15); color: #34d399; }
-  .chip.partial { background: rgba(251,191,36,0.15); color: #fbbf24; }
-  .chip.none { background: rgba(239,68,68,0.1); color: #6b7a90; }
-  .chip.new { background: rgba(59,130,246,0.2); color: #60a5fa; }
-  .chip.only { background: rgba(168,85,247,0.2); color: #c084fc; }
-
-  .matrix-header {
-    display: grid;
-    grid-template-columns: 180px repeat(4, 1fr);
-    padding: 8px 16px;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    background: rgba(255,255,255,0.03);
-    border-bottom: 1px solid rgba(255,255,255,0.05);
-  }
-  .matrix-header .h-affinidi { color: #60a5fa; text-align: center; }
-  .matrix-header .h-spruce { color: #a78bfa; text-align: center; }
-  .matrix-header .h-iota { color: #34d399; text-align: center; }
-  .matrix-header .h-impierce { color: #fbbf24; text-align: center; }
-
-  /* Bar chart section */
-  .bars-section {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 28px;
-  }
-
-  .bar-panel {
-    background: rgba(20,25,40,0.7);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px;
-    padding: 16px 20px;
-  }
-  .bar-panel .panel-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #a0aec0;
-    margin-bottom: 14px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .bar-group {
-    margin-bottom: 10px;
-  }
-  .bar-group:last-child { margin-bottom: 0; }
-  .bar-label {
-    font-size: 11px;
-    color: #8892a8;
-    margin-bottom: 4px;
-    display: flex;
-    justify-content: space-between;
-  }
-  .bar-label .bar-value {
-    font-weight: 700;
-    color: #c0c8d8;
-  }
-  .bar-track {
-    height: 18px;
-    background: rgba(255,255,255,0.04);
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-  }
-  .bar-fill {
-    height: 100%;
-    border-radius: 4px;
-    transition: width 0.5s ease;
-  }
-  .bar-fill.affinidi { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
-  .bar-fill.spruce { background: linear-gradient(90deg, #7c3aed, #a78bfa); }
-  .bar-fill.iota { background: linear-gradient(90deg, #059669, #34d399); }
-  .bar-fill.impierce { background: linear-gradient(90deg, #d97706, #fbbf24); }
-
-  /* Velocity normalized bar */
-  .velocity-note {
-    font-size: 10px;
-    color: #566078;
-    margin-top: 2px;
-    font-style: italic;
-  }
-
-  /* Unique strengths */
-  .strengths-row {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 28px;
-  }
-
-  .strength-card {
-    background: rgba(20,25,40,0.7);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 14px;
-    padding: 16px;
-  }
-  .strength-card .s-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 8px;
-  }
-  .strength-card.affinidi .s-title { color: #60a5fa; }
-  .strength-card.spruce .s-title { color: #a78bfa; }
-  .strength-card.iota .s-title { color: #34d399; }
-  .strength-card.impierce .s-title { color: #fbbf24; }
-
-  .strength-card .s-item {
-    font-size: 11px;
-    color: #8892a8;
-    margin-bottom: 3px;
-    padding-left: 12px;
-    position: relative;
-  }
-  .strength-card .s-item::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 6px;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-  }
-  .strength-card.affinidi .s-item::before { background: #3b82f6; }
-  .strength-card.spruce .s-item::before { background: #8b5cf6; }
-  .strength-card.iota .s-item::before { background: #10b981; }
-  .strength-card.impierce .s-item::before { background: #f59e0b; }
-
-  .strength-card .s-gap-title {
-    font-size: 10px;
-    color: #566078;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-top: 10px;
-    margin-bottom: 5px;
-  }
-  .strength-card .s-gap {
-    font-size: 11px;
-    color: #5a6478;
-    margin-bottom: 2px;
-    padding-left: 12px;
-    position: relative;
-  }
-  .strength-card .s-gap::before {
-    content: '';
-    position: absolute;
-    left: 1px;
-    top: 5px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: #3a4258;
-  }
-
-  /* Footer */
-  .footer {
-    text-align: center;
-    padding-top: 16px;
-    border-top: 1px solid rgba(255,255,255,0.05);
-    font-size: 11px;
-    color: #4a5568;
-  }
-
-  /* Scorecard bar */
-  .score-bar-container {
-    margin-top: 8px;
-  }
-  .score-bar-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 4px;
-  }
-  .score-bar-label {
-    font-size: 9px;
-    color: #6b7a90;
-    width: 68px;
-    text-align: right;
-    flex-shrink: 0;
-  }
-  .score-bar-track {
-    flex: 1;
-    height: 6px;
-    background: rgba(255,255,255,0.04);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .score-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-  }
+  .key-stat span:last-child { font-weight: 600; color: #c0c8d8; }
+  .score-bar-container { margin-top: 6px; }
+  .score-bar-row { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+  .score-bar-label { font-size: 8px; color: #6b7a90; width: 62px; text-align: right; flex-shrink: 0; }
+  .score-bar-track { flex: 1; height: 5px; background: rgba(255,255,255,0.04); border-radius: 3px; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 3px; }
   .score-bar-fill.affinidi { background: #3b82f6; }
   .score-bar-fill.spruce { background: #8b5cf6; }
   .score-bar-fill.iota { background: #10b981; }
   .score-bar-fill.impierce { background: #f59e0b; }
 
-  /* Verdict banner */
+  /* Matrix */
+  .section-title {
+    font-size: 16px; font-weight: 700; margin-bottom: 12px; color: #c0c8d8;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-title .dot { width: 7px; height: 7px; border-radius: 50%; background: #3b82f6; }
+  .matrix-container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .matrix-panel {
+    background: rgba(20,25,40,0.7); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; overflow: hidden;
+  }
+  .matrix-panel .panel-title {
+    padding: 10px 14px; font-size: 11px; font-weight: 600; color: #a0aec0;
+    background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05);
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .matrix-header {
+    display: grid; grid-template-columns: 170px repeat(4, 1fr);
+    padding: 6px 14px; font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    background: rgba(255,255,255,0.03); border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .matrix-header .h-affinidi { color: #60a5fa; text-align: center; }
+  .matrix-header .h-spruce { color: #a78bfa; text-align: center; }
+  .matrix-header .h-iota { color: #34d399; text-align: center; }
+  .matrix-header .h-impierce { color: #fbbf24; text-align: center; }
+  .matrix-row {
+    display: grid; grid-template-columns: 170px repeat(4, 1fr);
+    align-items: center; padding: 5px 14px; font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .matrix-row:last-child { border-bottom: none; }
+  .matrix-row:hover { background: rgba(255,255,255,0.02); }
+  .matrix-row .feature-name { color: #8892a8; font-weight: 500; }
+  .matrix-row .cell { text-align: center; font-weight: 600; }
+  .chip { display: inline-block; padding: 2px 7px; border-radius: 5px; font-size: 9px; font-weight: 600; }
+  .chip.full { background: rgba(16,185,129,0.15); color: #34d399; }
+  .chip.partial { background: rgba(251,191,36,0.15); color: #fbbf24; }
+  .chip.none { background: rgba(239,68,68,0.1); color: #566078; }
+  .chip.new { background: rgba(59,130,246,0.2); color: #60a5fa; }
+  .chip.only { background: rgba(168,85,247,0.2); color: #c084fc; }
+
+  /* Bars */
+  .bars-section { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .bar-panel {
+    background: rgba(20,25,40,0.7); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; padding: 14px 18px;
+  }
+  .bar-panel .panel-title {
+    font-size: 11px; font-weight: 600; color: #a0aec0; margin-bottom: 12px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .bar-group { margin-bottom: 8px; }
+  .bar-group:last-child { margin-bottom: 0; }
+  .bar-label { font-size: 10px; color: #8892a8; margin-bottom: 3px; display: flex; justify-content: space-between; }
+  .bar-label .bar-value { font-weight: 700; color: #c0c8d8; }
+  .bar-track { height: 16px; background: rgba(255,255,255,0.04); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; }
+  .bar-fill.affinidi { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+  .bar-fill.spruce { background: linear-gradient(90deg, #7c3aed, #a78bfa); }
+  .bar-fill.iota { background: linear-gradient(90deg, #059669, #34d399); }
+  .bar-fill.impierce { background: linear-gradient(90deg, #d97706, #fbbf24); }
+  .velocity-note { font-size: 9px; color: #566078; margin-top: 1px; font-style: italic; }
+
+  /* Strengths */
+  .strengths-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 24px; }
+  .strength-card {
+    background: rgba(20,25,40,0.7); border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; padding: 14px;
+  }
+  .strength-card .s-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+  .strength-card.affinidi .s-title { color: #60a5fa; }
+  .strength-card.spruce .s-title { color: #a78bfa; }
+  .strength-card.iota .s-title { color: #34d399; }
+  .strength-card.impierce .s-title { color: #fbbf24; }
+  .strength-card .s-item {
+    font-size: 10px; color: #8892a8; margin-bottom: 2px;
+    padding-left: 10px; position: relative;
+  }
+  .strength-card .s-item::before {
+    content: ''; position: absolute; left: 0; top: 5px;
+    width: 4px; height: 4px; border-radius: 50%;
+  }
+  .strength-card.affinidi .s-item::before { background: #3b82f6; }
+  .strength-card.spruce .s-item::before { background: #8b5cf6; }
+  .strength-card.iota .s-item::before { background: #10b981; }
+  .strength-card.impierce .s-item::before { background: #f59e0b; }
+  .strength-card .s-gap-title {
+    font-size: 9px; color: #566078; text-transform: uppercase;
+    letter-spacing: 0.5px; margin-top: 8px; margin-bottom: 4px;
+  }
+  .strength-card .s-gap {
+    font-size: 10px; color: #4a5568; margin-bottom: 2px;
+    padding-left: 10px; position: relative;
+  }
+  .strength-card .s-gap::before {
+    content: ''; position: absolute; left: 1px; top: 5px;
+    width: 3px; height: 3px; border-radius: 50%; background: #3a4258;
+  }
+
+  /* Verdict */
   .verdict {
     background: linear-gradient(135deg, rgba(59,130,246,0.08), rgba(168,85,247,0.05));
-    border: 1px solid rgba(59,130,246,0.15);
-    border-radius: 14px;
-    padding: 18px 24px;
-    margin-bottom: 20px;
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 16px;
-    align-items: center;
+    border: 1px solid rgba(59,130,246,0.15); border-radius: 12px;
+    padding: 16px 22px; margin-bottom: 16px;
+    display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center;
   }
   .verdict .v-badge {
     background: linear-gradient(135deg, #3b82f6, #6366f1);
-    color: white;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 6px 14px;
-    border-radius: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    white-space: nowrap;
+    color: white; font-size: 10px; font-weight: 700;
+    padding: 5px 12px; border-radius: 7px;
+    text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap;
   }
-  .verdict .v-text {
-    font-size: 13px;
-    color: #a0aec0;
-    line-height: 1.5;
-  }
-  .verdict .v-text strong {
-    color: #e0e6f0;
+  .verdict .v-text { font-size: 12px; color: #a0aec0; line-height: 1.5; }
+  .verdict .v-text strong { color: #e0e6f0; }
+
+  .footer {
+    text-align: center; padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    font-size: 10px; color: #4a5568;
   }
 </style>
 </head>
 <body>
 <div class="slide">
 
-  <!-- Header -->
   <div class="header">
-    <h1>Rust SSI Libraries — Comparative Analysis</h1>
-    <div class="subtitle">Feature Coverage, Development Activity & Modern Standards Readiness</div>
-    <div class="date">March 2026 — Based on latest source across all projects</div>
+    <h1>Rust SSI Libraries &mdash; Comparative Analysis</h1>
+    <div class="subtitle">Feature Coverage, Development Activity, Downloads &amp; Modern Standards Readiness</div>
+    <div class="date">March 2026 &mdash; Based on latest source across all projects</div>
   </div>
 
-  <!-- Summary Cards -->
+  <!-- ═══════════ SUMMARY CARDS ═══════════ -->
   <div class="summary-row">
 
     <div class="lib-card affinidi">
       <div class="lib-name">Affinidi TDK-RS</div>
-      <div class="lib-org">Affinidi &middot; Est. Mar 2025 (1 yr)</div>
+      <div class="lib-org">Affinidi &middot; Est. Mar 2025 (1 yr) &middot; 35 crates</div>
       <div class="score-row">
-        <div class="score-number">87</div>
-        <div>
-          <div class="score-label">Modern SSI Score</div>
-          <div class="score-max">/ 100</div>
-        </div>
+        <div class="score-number">91</div>
+        <div><div class="score-label">Modern SSI Score</div><div class="score-max">/ 100</div></div>
       </div>
-      <div class="key-stat"><span>Crates (crates.io)</span><span>33</span></div>
       <div class="key-stat"><span>Downloads (total)</span><span>454,301</span></div>
       <div class="key-stat"><span>Downloads (90d)</span><span>71,538</span></div>
+      <div class="key-stat"><span>Lines of Rust</span><span>92,553</span></div>
+      <div class="key-stat"><span>Tests</span><span>1,009</span></div>
       <div class="key-stat"><span>Contributors</span><span>15</span></div>
       <div class="score-bar-container">
-        <div class="score-bar-row"><div class="score-bar-label">DIDComm</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:100%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:85%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:85%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Messaging</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:100%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:92%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:95%"></div></div></div>
         <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:95%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">eIDAS 2.0</div><div class="score-bar-track"><div class="score-bar-fill affinidi" style="width:90%"></div></div></div>
       </div>
     </div>
 
     <div class="lib-card spruce">
       <div class="lib-name">SpruceID ssi</div>
-      <div class="lib-org">SpruceID &middot; Est. Jul 2020 (6 yrs)</div>
+      <div class="lib-org">SpruceID &middot; Est. Jul 2020 (6 yrs) &middot; ~19 crates</div>
       <div class="score-row">
-        <div class="score-number">58</div>
-        <div>
-          <div class="score-label">Modern SSI Score</div>
-          <div class="score-max">/ 100</div>
-        </div>
+        <div class="score-number">52</div>
+        <div><div class="score-label">Modern SSI Score</div><div class="score-max">/ 100</div></div>
       </div>
-      <div class="key-stat"><span>Crates (crates.io)</span><span>~19</span></div>
       <div class="key-stat"><span>Downloads (total)</span><span>~900k</span></div>
       <div class="key-stat"><span>Downloads (90d)</span><span>~24k</span></div>
-      <div class="key-stat"><span>Contributors</span><span>2 active</span></div>
+      <div class="key-stat"><span>Active contributors</span><span>2</span></div>
+      <div class="key-stat"><span>Commits (Q1 '26)</span><span>8</span></div>
+      <div class="key-stat"><span>Security audit</span><span>Trail of Bits</span></div>
       <div class="score-bar-container">
-        <div class="score-bar-row"><div class="score-bar-label">DIDComm</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:0%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:90%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:15%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:65%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Messaging</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:0%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:88%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:10%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:55%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">eIDAS 2.0</div><div class="score-bar-track"><div class="score-bar-fill spruce" style="width:5%"></div></div></div>
       </div>
     </div>
 
     <div class="lib-card iota">
       <div class="lib-name">IOTA Identity</div>
-      <div class="lib-org">IOTA Foundation &middot; Est. Feb 2020 (6 yrs)</div>
+      <div class="lib-org">IOTA Foundation &middot; Est. Feb 2020 (6 yrs) &middot; 14 crates</div>
       <div class="score-row">
-        <div class="score-number">53</div>
-        <div>
-          <div class="score-label">Modern SSI Score</div>
-          <div class="score-max">/ 100</div>
-        </div>
+        <div class="score-number">48</div>
+        <div><div class="score-label">Modern SSI Score</div><div class="score-max">/ 100</div></div>
       </div>
-      <div class="key-stat"><span>Crates (crates.io)</span><span>14</span></div>
       <div class="key-stat"><span>Downloads (total)</span><span>~495k</span></div>
       <div class="key-stat"><span>Downloads (90d)</span><span>~37k</span></div>
       <div class="key-stat"><span>Contributors</span><span>37 total</span></div>
+      <div class="key-stat"><span>Reached v1.0</span><span>Yes (only one)</span></div>
+      <div class="key-stat"><span>WASM support</span><span>First-class</span></div>
       <div class="score-bar-container">
-        <div class="score-bar-row"><div class="score-bar-label">DIDComm</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:0%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:75%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Messaging</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:0%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:70%"></div></div></div>
         <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:0%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:30%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:25%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">eIDAS 2.0</div><div class="score-bar-track"><div class="score-bar-fill iota" style="width:5%"></div></div></div>
       </div>
     </div>
 
     <div class="lib-card impierce">
       <div class="lib-name">Impierce</div>
-      <div class="lib-org">Impierce Technologies &middot; Est. Mar 2023 (3 yrs)</div>
+      <div class="lib-org">Impierce Tech &middot; Est. Mar 2023 (3 yrs) &middot; ~8 repos</div>
       <div class="score-row">
         <div class="score-number">43</div>
-        <div>
-          <div class="score-label">Modern SSI Score</div>
-          <div class="score-max">/ 100</div>
-        </div>
+        <div><div class="score-label">Modern SSI Score</div><div class="score-max">/ 100</div></div>
       </div>
-      <div class="key-stat"><span>Crates (crates.io)</span><span>4 (stale)</span></div>
       <div class="key-stat"><span>Downloads (total)</span><span>~8.5k</span></div>
       <div class="key-stat"><span>Downloads (90d)</span><span>~288</span></div>
       <div class="key-stat"><span>Contributors</span><span>4–6</span></div>
+      <div class="key-stat"><span>Mobile wallet</span><span>UniMe (Play Store)</span></div>
+      <div class="key-stat"><span>EU pilots</span><span>Netherlands edu</span></div>
       <div class="score-bar-container">
-        <div class="score-bar-row"><div class="score-bar-label">DIDComm</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:0%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:50%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Messaging</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:0%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">Credentials</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:45%"></div></div></div>
         <div class="score-bar-row"><div class="score-bar-label">Protocols</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:70%"></div></div></div>
-        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:35%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">DID Methods</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:30%"></div></div></div>
+        <div class="score-bar-row"><div class="score-bar-label">eIDAS 2.0</div><div class="score-bar-track"><div class="score-bar-fill impierce" style="width:50%"></div></div></div>
       </div>
     </div>
 
   </div>
 
-  <!-- Feature Matrix -->
+  <!-- ═══════════ FEATURE MATRIX ═══════════ -->
   <div class="matrix-container">
 
-    <!-- Left: Standards & Protocols -->
     <div class="matrix-panel">
-      <div class="panel-title">Modern Standards & Protocols</div>
+      <div class="panel-title">Standards, Protocols &amp; Credential Formats</div>
       <div class="matrix-header">
         <div></div>
         <div class="h-affinidi">Affinidi</div>
@@ -550,95 +303,23 @@
         <div class="h-iota">IOTA</div>
         <div class="h-impierce">Impierce</div>
       </div>
-      <div class="matrix-row">
-        <div class="feature-name">DIDComm v2</div>
-        <div class="cell"><span class="chip only">ONLY</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">OpenID4VCI</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">OpenID4VP + PEX v2</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">SD-JWT (RFC 9901)</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">SD-JWT-VC</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">mdoc (ISO 18013-5)</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">W3C VC Data Model 2.0</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Status Lists / Revocation</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">eIDAS 2.0 Ready</div>
-        <div class="cell"><span class="chip new">NEW</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Data Integrity Proofs</div>
-        <div class="cell"><span class="chip partial">2</span></div>
-        <div class="cell"><span class="chip full">19+</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">BBS+ / ZKP</div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Post-Quantum Crypto</div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip only">ONLY</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
+      <div class="matrix-row"><div class="feature-name">DIDComm v2.1</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">OpenID4VCI 1.0</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">OpenID4VP 1.0 + PEX v2</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">SIOPv2</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">SD-JWT (RFC 9901 + KB)</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">SD-JWT-VC</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">mdoc / mDL (ISO 18013-5)</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">W3C VC Data Model 2.0</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Status Lists / Revocation</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Data Integrity Proofs</div><div class="cell"><span class="chip partial">3</span></div><div class="cell"><span class="chip full">19+</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">BBS+ / ZKP (BLS12-381)</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">eIDAS 2.0 Trust Lists</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip partial">Partial</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Post-Quantum Crypto</div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
     </div>
 
-    <!-- Right: DID Methods & Infrastructure -->
     <div class="matrix-panel">
-      <div class="panel-title">DID Methods & Infrastructure</div>
+      <div class="panel-title">DID Methods &amp; Infrastructure</div>
       <div class="matrix-header">
         <div></div>
         <div class="h-affinidi">Affinidi</div>
@@ -646,99 +327,94 @@
         <div class="h-iota">IOTA</div>
         <div class="h-impierce">Impierce</div>
       </div>
-      <div class="matrix-row">
-        <div class="feature-name">did:webvh</div>
-        <div class="cell"><span class="chip only">ONLY</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">did:peer</div>
-        <div class="cell"><span class="chip only">ONLY</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">did:key</div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">did:web</div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">did:jwk</div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Built-in DID methods</div>
-        <div class="cell"><span class="chip full">8+</span></div>
-        <div class="cell"><span class="chip full">7</span></div>
-        <div class="cell"><span class="chip partial">3</span></div>
-        <div class="cell"><span class="chip partial">4</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Pluggable custom methods</div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">DID resolver caching</div>
-        <div class="cell"><span class="chip only">250k/s</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Mediator / relay</div>
-        <div class="cell"><span class="chip only">ONLY</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Platform independent</div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip partial">Partial</span></div>
-        <div class="cell"><span class="chip partial">Partial</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">Security audit</div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">ToB '25</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-      </div>
-      <div class="matrix-row">
-        <div class="feature-name">WASM / mobile</div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip none">—</span></div>
-        <div class="cell"><span class="chip full">Yes</span></div>
-        <div class="cell"><span class="chip partial">Tauri</span></div>
-      </div>
+      <div class="matrix-row"><div class="feature-name">did:webvh</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">did:peer</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">did:ebsi (EU)</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">did:key / did:jwk / did:web</div><div class="cell"><span class="chip full">All</span></div><div class="cell"><span class="chip full">All</span></div><div class="cell"><span class="chip partial">jwk</span></div><div class="cell"><span class="chip full">All</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Built-in DID methods</div><div class="cell"><span class="chip full">9+</span></div><div class="cell"><span class="chip full">7</span></div><div class="cell"><span class="chip partial">3</span></div><div class="cell"><span class="chip partial">4</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Pluggable resolver trait</div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip full">Yes</span></div></div>
+      <div class="matrix-row"><div class="feature-name">DID resolver caching</div><div class="cell"><span class="chip only">250k/s</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">DIDComm mediator</div><div class="cell"><span class="chip only">ONLY</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Platform independent</div><div class="cell"><span class="chip full">Fully</span></div><div class="cell"><span class="chip full">Fully</span></div><div class="cell"><span class="chip partial">IOTA</span></div><div class="cell"><span class="chip partial">IOTA</span></div></div>
+      <div class="matrix-row"><div class="feature-name">Security audit</div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">ToB '25</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div></div>
+      <div class="matrix-row"><div class="feature-name">WASM / mobile</div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip none">&mdash;</span></div><div class="cell"><span class="chip full">Yes</span></div><div class="cell"><span class="chip partial">Tauri</span></div></div>
     </div>
 
   </div>
 
-  <!-- Activity & Downloads -->
+  <!-- ═══════════ DOWNLOADS ═══════════ -->
+  <div class="section-title"><div class="dot" style="background:#a78bfa"></div>Crates.io Downloads &amp; Adoption</div>
   <div class="bars-section">
 
     <div class="bar-panel">
-      <div class="panel-title">Development Velocity (commits/month, normalized for age)</div>
+      <div class="panel-title">Total Downloads (all crates combined)</div>
+      <div class="bar-group">
+        <div class="bar-label"><span>SpruceID ssi <span style="color:#566078">(19 crates &middot; 68 months on crates.io)</span></span><span class="bar-value">~900k</span></div>
+        <div class="bar-track"><div class="bar-fill spruce" style="width:100%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>IOTA Identity <span style="color:#566078">(14 crates &middot; 67 months)</span></span><span class="bar-value">~495k</span></div>
+        <div class="bar-track"><div class="bar-fill iota" style="width:55%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Affinidi TDK-RS <span style="color:#566078">(33 crates &middot; 18 months)</span></span><span class="bar-value">454k</span></div>
+        <div class="bar-track"><div class="bar-fill affinidi" style="width:50%"></div></div>
+        <div class="velocity-note">454k in 18 months vs SpruceID's 900k in 68 months</div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Impierce <span style="color:#566078">(4 crates &middot; stale v0.1.0)</span></span><span class="bar-value">~8.5k</span></div>
+        <div class="bar-track"><div class="bar-fill impierce" style="width:1%"></div></div>
+      </div>
+    </div>
+
+    <div class="bar-panel">
+      <div class="panel-title">Recent Downloads (last 90 days) &mdash; Current Momentum</div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Affinidi TDK-RS</span><span class="bar-value">71,538</span></div>
+        <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>IOTA Identity</span><span class="bar-value">~37k</span></div>
+        <div class="bar-track"><div class="bar-fill iota" style="width:52%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>SpruceID ssi</span><span class="bar-value">~24k</span></div>
+        <div class="bar-track"><div class="bar-fill spruce" style="width:34%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Impierce</span><span class="bar-value">~288</span></div>
+        <div class="bar-track"><div class="bar-fill impierce" style="width:0.4%"></div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══════════ VELOCITY ═══════════ -->
+  <div class="section-title"><div class="dot" style="background:#34d399"></div>Development Velocity &amp; Ecosystem Health</div>
+  <div class="bars-section">
+
+    <div class="bar-panel">
+      <div class="panel-title">Downloads / Month of Existence (adoption velocity)</div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Affinidi TDK-RS <span style="color:#566078">(454k &divide; 18 mo)</span></span><span class="bar-value">25,239/mo</span></div>
+        <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>SpruceID ssi <span style="color:#566078">(900k &divide; 68 mo)</span></span><span class="bar-value">13,235/mo</span></div>
+        <div class="bar-track"><div class="bar-fill spruce" style="width:52%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>IOTA Identity <span style="color:#566078">(495k &divide; 67 mo)</span></span><span class="bar-value">7,388/mo</span></div>
+        <div class="bar-track"><div class="bar-fill iota" style="width:29%"></div></div>
+      </div>
+      <div class="bar-group">
+        <div class="bar-label"><span>Impierce <span style="color:#566078">(8.5k &divide; 33 mo)</span></span><span class="bar-value">258/mo</span></div>
+        <div class="bar-track"><div class="bar-fill impierce" style="width:1%"></div></div>
+      </div>
+    </div>
+
+    <div class="bar-panel">
+      <div class="panel-title">Commit Velocity (commits/month, last 12 months)</div>
       <div class="bar-group">
         <div class="bar-label"><span>Affinidi TDK-RS <span style="color:#566078">(1 yr old)</span></span><span class="bar-value">~20/mo</span></div>
         <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
@@ -758,213 +434,60 @@
       </div>
     </div>
 
-    <div class="bar-panel">
-      <div class="panel-title">Ecosystem Health Indicators</div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Active contributors (last 12mo)</span></div>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px; margin-top:4px;">
-          <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
-          <div class="bar-track"><div class="bar-fill iota" style="width:53%"></div></div>
-          <div class="bar-track"><div class="bar-fill impierce" style="width:40%"></div></div>
-          <div class="bar-track"><div class="bar-fill spruce" style="width:13%"></div></div>
-        </div>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px; margin-top:2px;">
-          <div style="text-align:center; font-size:9px; color:#60a5fa;">15</div>
-          <div style="text-align:center; font-size:9px; color:#34d399;">8</div>
-          <div style="text-align:center; font-size:9px; color:#fbbf24;">6</div>
-          <div style="text-align:center; font-size:9px; color:#a78bfa;">2</div>
-        </div>
-      </div>
-      <div class="bar-group" style="margin-top:14px;">
-        <div class="bar-label"><span>Reached v1.0 stable?</span></div>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px; margin-top:4px;">
-          <div style="text-align:center; font-size:10px; color:#6b7a90;">No (1yr)</div>
-          <div style="text-align:center; font-size:10px; color:#ef4444;">No (6yrs)</div>
-          <div style="text-align:center; font-size:10px; color:#34d399; font-weight:700;">Yes</div>
-          <div style="text-align:center; font-size:10px; color:#6b7a90;">No (3yr)</div>
-        </div>
-      </div>
-      <div class="bar-group" style="margin-top:14px;">
-        <div class="bar-label"><span>Ledger/platform independent?</span></div>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px; margin-top:4px;">
-          <div style="text-align:center; font-size:10px; color:#34d399; font-weight:700;">Fully</div>
-          <div style="text-align:center; font-size:10px; color:#34d399; font-weight:700;">Fully</div>
-          <div style="text-align:center; font-size:10px; color:#fbbf24;">IOTA-coupled</div>
-          <div style="text-align:center; font-size:10px; color:#fbbf24;">IOTA-coupled</div>
-        </div>
-      </div>
-      <div class="bar-group" style="margin-top:14px;">
-        <div class="bar-label"><span>docs.rs working?</span></div>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:4px; margin-top:4px;">
-          <div style="text-align:center; font-size:10px; color:#34d399; font-weight:700;">Yes</div>
-          <div style="text-align:center; font-size:10px; color:#ef4444; font-weight:700;">Broken</div>
-          <div style="text-align:center; font-size:10px; color:#34d399; font-weight:700;">Yes</div>
-          <div style="text-align:center; font-size:10px; color:#ef4444; font-weight:700;">Stale</div>
-        </div>
-      </div>
-    </div>
-
   </div>
 
-  <!-- Downloads Comparison -->
-  <div class="section-title"><div class="dot" style="background:#a78bfa"></div>Crates.io Downloads (Ecosystem Adoption)</div>
-  <div class="bars-section">
-
-    <div class="bar-panel">
-      <div class="panel-title">Total Downloads (all time, all crates combined)</div>
-      <div class="bar-group">
-        <div class="bar-label"><span>SpruceID ssi <span style="color:#566078">(19 crates, since Jul 2020)</span></span><span class="bar-value">~900k</span></div>
-        <div class="bar-track"><div class="bar-fill spruce" style="width:100%"></div></div>
-        <div class="velocity-note">6 years on crates.io; highest absolute count but 5-year head start</div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>IOTA Identity <span style="color:#566078">(14 crates, since Aug 2020)</span></span><span class="bar-value">~495k</span></div>
-        <div class="bar-track"><div class="bar-fill iota" style="width:55%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Affinidi TDK-RS <span style="color:#566078">(33 crates, since Sep 2024)</span></span><span class="bar-value">454k</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:50%"></div></div>
-        <div class="velocity-note">Reached 454k in just 18 months — fastest growth rate</div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Impierce <span style="color:#566078">(4 crates, since Jun 2023)</span></span><span class="bar-value">~8.5k</span></div>
-        <div class="bar-track"><div class="bar-fill impierce" style="width:1%"></div></div>
-        <div class="velocity-note">crates.io presence stale (v0.1.0); real usage via git deps</div>
-      </div>
-    </div>
-
-    <div class="bar-panel">
-      <div class="panel-title">Recent Downloads (last 90 days) — Current Momentum</div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Affinidi TDK-RS</span><span class="bar-value">71,538</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
-        <div class="velocity-note">Top crates: affinidi-secrets-resolver (6.1k), affinidi-data-integrity (5.6k), affinidi-did-common (5.3k)</div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>IOTA Identity</span><span class="bar-value">~37k</span></div>
-        <div class="bar-track"><div class="bar-fill iota" style="width:52%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>SpruceID ssi</span><span class="bar-value">~24k</span></div>
-        <div class="bar-track"><div class="bar-fill spruce" style="width:34%"></div></div>
-        <div class="velocity-note">ssi-jwk (23.6k) drives most downloads; umbrella ssi crate only 13.9k</div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Impierce</span><span class="bar-value">~288</span></div>
-        <div class="bar-track"><div class="bar-fill impierce" style="width:0.4%"></div></div>
-      </div>
-    </div>
-
-  </div>
-
-  <!-- Downloads per month of existence -->
-  <div class="bars-section">
-    <div class="bar-panel">
-      <div class="panel-title">Downloads / Month of Existence (velocity-normalized adoption)</div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Affinidi TDK-RS <span style="color:#566078">(454k / 18 months)</span></span><span class="bar-value">25,239/mo</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>SpruceID ssi <span style="color:#566078">(900k / 68 months)</span></span><span class="bar-value">13,235/mo</span></div>
-        <div class="bar-track"><div class="bar-fill spruce" style="width:52%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>IOTA Identity <span style="color:#566078">(495k / 67 months)</span></span><span class="bar-value">7,388/mo</span></div>
-        <div class="bar-track"><div class="bar-fill iota" style="width:29%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>Impierce <span style="color:#566078">(8.5k / 33 months)</span></span><span class="bar-value">258/mo</span></div>
-        <div class="bar-track"><div class="bar-fill impierce" style="width:1%"></div></div>
-      </div>
-    </div>
-
-    <div class="bar-panel">
-      <div class="panel-title">Affinidi TDK-RS — Top Crates by Recent Downloads (90 days)</div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-secrets-resolver</span><span class="bar-value">6,148</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:100%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-data-integrity</span><span class="bar-value">5,582</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:91%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-did-common</span><span class="bar-value">5,250</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:85%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>didwebvh-rs</span><span class="bar-value">4,851</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:79%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-did-resolver-cache-sdk</span><span class="bar-value">4,382</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:71%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-messaging-didcomm</span><span class="bar-value">4,122</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:67%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-messaging-sdk</span><span class="bar-value">3,940</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:64%"></div></div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label"><span>affinidi-tdk-common</span><span class="bar-value">3,802</span></div>
-        <div class="bar-track"><div class="bar-fill affinidi" style="width:62%"></div></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Unique Strengths & Remaining Gaps -->
-  <div class="section-title"><div class="dot"></div>Unique Strengths & Remaining Gaps</div>
+  <!-- ═══════════ STRENGTHS ═══════════ -->
+  <div class="section-title"><div class="dot"></div>Unique Strengths &amp; Remaining Gaps</div>
   <div class="strengths-row">
 
     <div class="strength-card affinidi">
       <div class="s-title">Affinidi TDK-RS</div>
       <div class="s-item">Only DIDComm v2 in Rust</div>
-      <div class="s-item">Only did:webvh + did:peer</div>
       <div class="s-item">Only mdoc/mDL in Rust SSI</div>
+      <div class="s-item">Only did:webvh + did:peer</div>
+      <div class="s-item">Only eIDAS Trust Lists</div>
+      <div class="s-item">Full OID4VC (VCI+VP+SIOPv2)</div>
+      <div class="s-item">BBS+ ZKP (BLS12-381)</div>
       <div class="s-item">DID cache: 250k+ res/sec</div>
-      <div class="s-item">Full OID4VCI + OID4VP</div>
-      <div class="s-item">eIDAS 2.0 (SD-JWT-VC + mdoc)</div>
-      <div class="s-item">Mediator with rate limiting</div>
+      <div class="s-item">9+ DID methods (incl. did:ebsi)</div>
+      <div class="s-item">92k LOC, 1,009 tests, 35 crates</div>
       <div class="s-item">Platform independent</div>
       <div class="s-gap-title">Remaining gaps</div>
-      <div class="s-gap">BBS+ / ZKP signatures</div>
       <div class="s-gap">Post-quantum crypto</div>
       <div class="s-gap">Security audit</div>
+      <div class="s-gap">WASM target</div>
     </div>
 
     <div class="strength-card spruce">
       <div class="s-title">SpruceID ssi</div>
       <div class="s-item">19+ Data Integrity suites</div>
-      <div class="s-item">Trail of Bits audited</div>
-      <div class="s-item">Broadest VC format support</div>
-      <div class="s-item">Highest crates.io downloads</div>
-      <div class="s-item">UCAN + ZCAP-LD</div>
+      <div class="s-item">Trail of Bits audited (2025)</div>
+      <div class="s-item">Broadest DI proof coverage</div>
+      <div class="s-item">Highest total crates.io downloads</div>
+      <div class="s-item">UCAN + ZCAP-LD auth</div>
       <div class="s-gap-title">Remaining gaps</div>
       <div class="s-gap">No DIDComm</div>
-      <div class="s-gap">No OID4VC protocols</div>
-      <div class="s-gap">No did:webvh, did:peer</div>
-      <div class="s-gap">No mdoc/mDL</div>
+      <div class="s-gap">No OID4VC / SIOPv2</div>
+      <div class="s-gap">No did:webvh, peer, ebsi</div>
+      <div class="s-gap">No mdoc/mDL, no eIDAS</div>
       <div class="s-gap">Bus factor of 2</div>
       <div class="s-gap">Pre-1.0 after 6 years</div>
-      <div class="s-gap">Broken docs.rs</div>
+      <div class="s-gap">docs.rs broken (v0.15)</div>
     </div>
 
     <div class="strength-card iota">
       <div class="s-title">IOTA Identity</div>
       <div class="s-item">Only v1.0+ stable library</div>
-      <div class="s-item">Post-quantum crypto (PQC)</div>
+      <div class="s-item">Post-quantum crypto (liboqs)</div>
+      <div class="s-item">PQ/T hybrid signatures</div>
       <div class="s-item">BBS+ signatures</div>
-      <div class="s-item">WASM first-class</div>
+      <div class="s-item">WASM first-class target</div>
       <div class="s-item">IOTA Stronghold KMS</div>
-      <div class="s-item">37 total contributors</div>
       <div class="s-gap-title">Remaining gaps</div>
       <div class="s-gap">No DIDComm</div>
-      <div class="s-gap">No OID4VC</div>
+      <div class="s-gap">No OID4VC / SIOPv2</div>
       <div class="s-gap">No JSON-LD / Data Integrity</div>
+      <div class="s-gap">No mdoc/mDL, no eIDAS</div>
       <div class="s-gap">IOTA ledger coupled</div>
       <div class="s-gap">Only 3 DID methods</div>
     </div>
@@ -972,37 +495,38 @@
     <div class="strength-card impierce">
       <div class="s-title">Impierce</div>
       <div class="s-item">OID4VC pioneer in Rust</div>
-      <div class="s-item">eIDAS 2.0 focus</div>
-      <div class="s-item">Full wallet (UniMe)</div>
+      <div class="s-item">eIDAS 2.0 focus (partial)</div>
+      <div class="s-item">Full wallet (UniMe on Play Store)</div>
       <div class="s-item">CQRS agent architecture</div>
-      <div class="s-item">Real pilots (Netherlands)</div>
+      <div class="s-item">Real pilots (Netherlands edu)</div>
       <div class="s-item">OpenID Federation (new)</div>
       <div class="s-gap-title">Remaining gaps</div>
       <div class="s-gap">No DIDComm</div>
       <div class="s-gap">No mdoc/mDL</div>
-      <div class="s-gap">No Data Integrity proofs</div>
+      <div class="s-gap">No Data Integrity / BBS+</div>
       <div class="s-gap">IOTA-coupled</div>
       <div class="s-gap">Stale crates.io (v0.1.0)</div>
-      <div class="s-gap">Very small team</div>
+      <div class="s-gap">No trust lists</div>
     </div>
 
   </div>
 
-  <!-- Verdict -->
+  <!-- ═══════════ VERDICT ═══════════ -->
   <div class="verdict">
     <div class="v-badge">Key Finding</div>
     <div class="v-text">
-      <strong>Affinidi TDK-RS is the most complete modern SSI stack in Rust.</strong>
-      With the additions on the current branch (SD-JWT, SD-JWT-VC, mdoc, Status Lists, OpenID4VCI, OpenID4VP),
-      it is now the <strong>only library covering all three pillars</strong>: secure messaging (DIDComm v2),
-      credential formats (VC, SD-JWT-VC, mdoc), and exchange protocols (OID4VCI/VP) — while remaining
-      <strong>fully platform-independent</strong>. The remaining gaps (BBS+, PQC, security audit) are
-      additive enhancements, not architectural blockers.
+      <strong>Affinidi TDK-RS is the most comprehensive modern SSI stack in Rust.</strong>
+      With 35 crates covering DIDComm v2 (only in Rust), OID4VC (VCI + VP + SIOPv2), SD-JWT-VC,
+      mdoc/mDL (only in Rust SSI), BBS+ ZKP, eIDAS 2.0 Trust Lists (only in Rust), and 9+ DID methods
+      including did:webvh and did:peer &mdash; it is the <strong>only library spanning all four pillars</strong>:
+      secure messaging, credential formats, exchange protocols, and trust infrastructure &mdash; while remaining
+      <strong>fully platform-independent</strong>. Built in 1 year with 92k LOC, 1,009 tests, and the fastest
+      adoption rate (25k downloads/month). Remaining gaps (PQC, security audit, WASM) are additive, not architectural.
     </div>
   </div>
 
   <div class="footer">
-    Data sourced from GitHub, crates.io, and direct codebase analysis &middot; March 22, 2026
+    Data sourced from GitHub, crates.io, and direct codebase analysis &middot; March 23, 2026 &middot; Current branch: feat/workspace-restructure
   </div>
 
 </div>

@@ -32,7 +32,9 @@
  */
 
 pub mod error;
+pub mod issuer;
 pub mod types;
+pub mod wallet;
 
 pub use error::Oid4vciError;
 pub use types::*;

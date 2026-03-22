@@ -54,6 +54,7 @@ pub mod registry;
 pub mod service_status;
 pub mod service_type;
 pub mod types;
+pub mod xml;
 
 pub use error::TrustListError;
 pub use registry::{LookupResult, TrustAnchorEntry, TrustListRegistry};

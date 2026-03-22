@@ -11,6 +11,8 @@
  * - [`compute_jwk_thumbprint`] — RFC 7638 JWK Thumbprint computation
  */
 
+pub mod jwt;
+
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

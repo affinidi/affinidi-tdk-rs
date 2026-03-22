@@ -27,6 +27,8 @@
 
 pub mod error;
 pub mod types;
+pub mod verifier;
+pub mod wallet;
 
 pub use error::Oid4vpError;
 pub use types::*;

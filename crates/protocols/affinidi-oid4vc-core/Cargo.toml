@@ -12,6 +12,10 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+_test-utils = []
+
 [dependencies]
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
