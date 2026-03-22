@@ -13,7 +13,7 @@ cross-crate types.
 
 ```toml
 [dependencies]
-affinidi-tdk-common = "0.4"
+affinidi-tdk-common = "0.5"
 ```
 
 ## Feature Flags

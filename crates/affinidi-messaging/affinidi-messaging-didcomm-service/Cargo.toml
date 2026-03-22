@@ -12,7 +12,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-tdk-common = "0.4"
+affinidi-tdk-common = "0.5"
 affinidi-messaging-sdk = "0.15"
 affinidi-messaging-didcomm = "0.12"
 affinidi-secrets-resolver = "0.5"

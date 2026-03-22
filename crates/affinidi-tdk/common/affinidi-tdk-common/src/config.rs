@@ -140,6 +140,31 @@ impl TDKConfigBuilder {
         self
     }
 
+    /// Provide a custom DID resolver configuration.
+    /// This is used when the TDK creates the DID resolver internally.
+    /// Has no effect if `with_did_resolver()` is also called (pre-built resolver takes priority).
+    ///
+    /// Use this to configure network mode for deployments where the resolver
+    /// runs as a sidecar (e.g., Nitro Enclaves).
+    ///
+    /// Example:
+    /// ```ignore
+    /// use affinidi_tdk_common::config::TDKConfig;
+    /// use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
+    ///
+    /// let resolver_config = DIDCacheConfigBuilder::default()
+    ///     .with_network_mode("ws://127.0.0.1:4445/did/v1/ws")
+    ///     .build();
+    ///
+    /// let tdk_config = TDKConfig::builder()
+    ///     .with_did_resolver_config(resolver_config)
+    ///     .build()?;
+    /// ```
+    pub fn with_did_resolver_config(mut self, config: DIDCacheConfig) -> Self {
+        self.did_resolver_config = Some(config);
+        self
+    }
+
     /// If you have a SecretsResolver already setup outside of the TDK
     /// Example:
     /// ```
