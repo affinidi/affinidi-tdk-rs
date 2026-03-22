@@ -32,7 +32,7 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
 affinidi-did-common = "0.3"
 affinidi-messaging-didcomm = "0.12"
 affinidi-messaging-sdk = "0.15"
-affinidi-tdk = { path = "../../affinidi-tdk/affinidi-tdk", version = "0.6" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
 
 didwebvh-rs = "0.3.1"
 ahash = { version = "0.8", features = ["serde"] }
