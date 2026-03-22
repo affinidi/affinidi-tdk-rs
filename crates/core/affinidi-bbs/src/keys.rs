@@ -5,9 +5,8 @@
  * - `sk_to_pk`: Derive the public key from a secret key
  */
 
-use bls12_381_plus::{G2Projective, Scalar};
+use bls12_381_plus::G2Projective;
 use ff::Field;
-use group::Group;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
@@ -18,13 +17,19 @@ use crate::types::{PublicKey, SecretKey};
 ///
 /// Per IETF draft §3.4:
 /// - `key_material` must be at least 32 bytes
-/// - `key_info` is optional additional context
+/// - `key_info` must be at most 65535 bytes (I2OSP limit)
 ///
 /// The secret key is deterministically derived via `hash_to_scalar`.
 pub fn keygen(key_material: &[u8], key_info: &[u8], cs: Ciphersuite) -> Result<SecretKey> {
     if key_material.len() < 32 {
         return Err(BbsError::InvalidKey(
             "key_material must be at least 32 bytes".into(),
+        ));
+    }
+
+    if key_info.len() > 65535 {
+        return Err(BbsError::InvalidKey(
+            "key_info must be at most 65535 bytes".into(),
         ));
     }
 
@@ -54,6 +59,7 @@ pub fn sk_to_pk(sk: &SecretKey) -> PublicKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bls12_381_plus::Scalar;
 
     #[test]
     fn keygen_produces_nonzero_key() {

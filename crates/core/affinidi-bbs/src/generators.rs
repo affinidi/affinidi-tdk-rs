@@ -11,7 +11,7 @@
  */
 
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
-use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use elliptic_curve::hash2curve::ExpandMsgXmd;
 use group::Group;
 use sha2::Sha256;
 
@@ -69,11 +69,9 @@ pub fn create_generators(count: usize, cs: Ciphersuite) -> Result<Vec<G1Projecti
 /// This ensures byte-exact compatibility with what `bls12_381_plus::hash`
 /// uses internally for its hash-to-curve operations.
 fn expand_msg_xmd(msg: &[u8], dst: &[u8], len: usize) -> Vec<u8> {
-    let mut output = vec![0u8; len];
-    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[msg], &[dst], len)
-        .expect("expand_message should not fail")
-        .fill_bytes(&mut output);
-    output
+    // Use the shared implementation from hash module
+    crate::hash::expand_msg_xmd(msg, dst, len)
+        .expect("generator expand_message should not fail with valid DST")
 }
 
 /// Calculate the domain value that binds PK, generators, and header.

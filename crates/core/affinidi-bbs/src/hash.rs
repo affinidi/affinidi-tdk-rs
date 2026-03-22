@@ -4,6 +4,7 @@
  * Implements:
  * - `hash_to_scalar`: Hash arbitrary data to a BLS12-381 scalar
  * - `messages_to_scalars`: Convert message byte arrays to scalars
+ * - `expand_message`: SHA-256 (XMD) message expansion per RFC 9380
  *
  * Uses `elliptic_curve::hash2curve::ExpandMsgXmd<Sha256>` for exact
  * compatibility with the `bls12_381_plus` hash-to-curve implementation.
@@ -14,22 +15,16 @@ use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
-use crate::error::Result;
+use crate::error::{BbsError, Result};
 
 /// Hash arbitrary bytes to a BLS12-381 scalar.
 ///
 /// Per IETF draft §4.3.3:
 /// 1. `uniform_bytes = expand_message(msg_octets, dst, expand_len)`
 /// 2. Return `OS2IP(uniform_bytes) mod r`
-///
-/// Uses the `elliptic_curve` crate's `ExpandMsgXmd<Sha256>` to ensure
-/// byte-exact compatibility with `bls12_381_plus` hash-to-curve.
 pub fn hash_to_scalar(data: &[u8], dst: &[u8], _cs: Ciphersuite) -> Result<Scalar> {
     let expand_len = 48; // ceil((255 + 128) / 8)
-    let mut uniform_bytes = vec![0u8; expand_len];
-    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[data], &[dst], expand_len)
-        .expect("expand_message should not fail")
-        .fill_bytes(&mut uniform_bytes);
+    let uniform_bytes = expand_msg_xmd(data, dst, expand_len)?;
     Ok(scalar_from_wide_bytes(&uniform_bytes))
 }
 
@@ -38,8 +33,7 @@ pub fn hash_to_scalar(data: &[u8], dst: &[u8], _cs: Ciphersuite) -> Result<Scala
 /// Per IETF draft §4.3.1:
 /// For each message: `hash_to_scalar(message, api_id || "MAP_MSG_TO_SCALAR_AS_HASH_")`
 pub fn messages_to_scalars(messages: &[&[u8]], cs: Ciphersuite) -> Result<Vec<Scalar>> {
-    let mut dst = cs.api_id();
-    dst.extend_from_slice(b"MAP_MSG_TO_SCALAR_AS_HASH_");
+    let dst = [cs.api_id().as_slice(), b"MAP_MSG_TO_SCALAR_AS_HASH_"].concat();
 
     messages
         .iter()
@@ -49,20 +43,22 @@ pub fn messages_to_scalars(messages: &[&[u8]], cs: Ciphersuite) -> Result<Vec<Sc
 
 /// Expand message using ExpandMsgXmd<SHA-256> from the elliptic_curve crate.
 ///
-/// This is the canonical expand_message implementation used throughout BBS
-/// for both generator creation and hash_to_scalar.
-pub fn expand_message_xmd_sha256(msg: &[u8], dst: &[u8], len_in_bytes: usize) -> Vec<u8> {
+/// Returns an error instead of panicking on invalid inputs.
+pub fn expand_msg_xmd(msg: &[u8], dst: &[u8], len_in_bytes: usize) -> Result<Vec<u8>> {
     let mut output = vec![0u8; len_in_bytes];
     <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[msg], &[dst], len_in_bytes)
-        .expect("expand_message should not fail")
+        .map_err(|_| {
+            BbsError::Crypto(format!(
+                "expand_message failed (dst_len={}, out_len={})",
+                dst.len(),
+                len_in_bytes
+            ))
+        })?
         .fill_bytes(&mut output);
-    output
+    Ok(output)
 }
 
-/// Convert a wide byte array to a scalar via OS2IP mod r.
-///
-/// Uses `Scalar::from_okm` which expects exactly 48 bytes and performs
-/// a wide reduction modulo the BLS12-381 group order.
+/// Convert a wide byte array (48 bytes) to a scalar via OS2IP mod r.
 fn scalar_from_wide_bytes(bytes: &[u8]) -> Scalar {
     let mut wide = [0u8; 48];
     let len = bytes.len().min(48);
@@ -131,10 +127,10 @@ mod tests {
 
     #[test]
     fn expand_message_output_length() {
-        let result = expand_message_xmd_sha256(b"test", b"dst-at-least-16-bytes!", 48);
+        let result = expand_msg_xmd(b"test", b"dst-at-least-16-bytes!", 48).unwrap();
         assert_eq!(result.len(), 48);
 
-        let result = expand_message_xmd_sha256(b"test", b"dst-at-least-16-bytes!", 64);
+        let result = expand_msg_xmd(b"test", b"dst-at-least-16-bytes!", 64).unwrap();
         assert_eq!(result.len(), 64);
     }
 
@@ -161,7 +157,6 @@ mod tests {
 
     #[test]
     fn hash_to_scalar_matches_ietf_fixture() {
-        // From DIF fixture: bls12-381-sha-256/h2s.json
         let msg = hex::decode("9872ad089e452c7b6e283dfac2a80d58e8d0ff71cc4d5e310a1debdda4a45f02")
             .unwrap();
         let dst = hex::decode("4242535f424c53313233383147315f584d443a5348412d3235365f535357555f524f5f4832475f484d32535f4832535f").unwrap();
@@ -173,7 +168,6 @@ mod tests {
 
     #[test]
     fn messages_to_scalars_match_ietf_fixture() {
-        // From DIF fixture: bls12-381-sha-256/MapMessageToScalarAsHash.json
         let msg0 = hex::decode("9872ad089e452c7b6e283dfac2a80d58e8d0ff71cc4d5e310a1debdda4a45f02")
             .unwrap();
         let expected_scalar0 = "1cb5bb86114b34dc438a911617655a1db595abafac92f47c5001799cf624b430";

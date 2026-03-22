@@ -45,6 +45,8 @@
  * ```
  */
 
+#![allow(deprecated)] // G1/G2Projective::generator() deprecated in favor of GENERATOR constant
+
 pub mod ciphersuite;
 pub mod error;
 pub mod generators;

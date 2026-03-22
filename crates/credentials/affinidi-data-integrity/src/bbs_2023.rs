@@ -25,8 +25,7 @@
  * selective disclosure of PID and QEAA attributes.
  */
 
-use affinidi_bbs::{self as bbs, Ciphersuite, PublicKey, SecretKey, Signature};
-use serde_json::Value;
+use affinidi_bbs::{self as bbs, PublicKey, SecretKey, Signature};
 use sha2::{Digest, Sha256};
 
 use crate::DataIntegrityError;
@@ -145,6 +144,9 @@ pub fn verify_proof(
 /// Compute a BBS header from proof options and mandatory claims.
 ///
 /// Per W3C vc-di-bbs: `header = SHA-256(proof_options) || SHA-256(mandatory_statements)`
+///
+/// Each mandatory statement is length-prefixed (8-byte big-endian) before hashing
+/// to prevent ambiguity (e.g., `["ab","cd"]` vs `["abc","d"]`).
 pub fn compute_bbs_header(proof_options: &[u8], mandatory_statements: &[&[u8]]) -> Vec<u8> {
     let mut header = Vec::with_capacity(64);
 
@@ -152,9 +154,11 @@ pub fn compute_bbs_header(proof_options: &[u8], mandatory_statements: &[&[u8]]) 
     let options_hash = Sha256::digest(proof_options);
     header.extend_from_slice(&options_hash);
 
-    // SHA-256 of concatenated mandatory statements
+    // SHA-256 of length-prefixed mandatory statements
     let mut mandatory_hasher = Sha256::new();
     for statement in mandatory_statements {
+        // Length prefix prevents concatenation ambiguity
+        mandatory_hasher.update((statement.len() as u64).to_be_bytes());
         mandatory_hasher.update(statement);
     }
     let mandatory_hash = mandatory_hasher.finalize();

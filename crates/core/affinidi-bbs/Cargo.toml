@@ -21,15 +21,11 @@ bls12_381_plus = { version = "0.8", features = ["hashing", "alloc"] }
 elliptic-curve = { version = "0.13", features = ["hash2curve"] }
 ff = "0.13"
 group = "0.13"
-rand = "0.9"
-rand_core = "0.9"
-serde = { version = "1.0", features = ["derive"] }
-sha2 = "0.10"
-sha3 = "0.10"
-subtle = "2.6"
-thiserror = "2.0"
-tracing = "0.1"
 hex = "0.4"
+rand = "0.9"
+sha2 = "0.10"
+thiserror = "2.0"
+zeroize = "1.8"
 
 [dev-dependencies]
 serde_json = "1.0"

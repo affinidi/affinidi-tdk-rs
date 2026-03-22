@@ -10,6 +10,8 @@
  * cannot be correlated by verifiers.
  */
 
+use std::collections::HashSet;
+
 use bls12_381_plus::{
     G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective, Scalar, multi_miller_loop,
 };
@@ -21,6 +23,7 @@ use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
 use crate::generators::{calculate_domain, create_generators, p1_generator, point_to_bytes};
 use crate::hash::{hash_to_scalar, messages_to_scalars, scalar_to_bytes};
+use crate::signature::compute_b;
 use crate::types::{Proof, PublicKey, Signature};
 
 /// Generate a zero-knowledge proof of selective disclosure.
@@ -50,12 +53,20 @@ pub fn core_proof_gen(
 ) -> Result<Proof> {
     let l = messages.len();
 
-    // Validate disclosed indexes
-    for &idx in disclosed_indexes {
-        if idx >= l {
-            return Err(BbsError::InvalidIndex(format!(
-                "disclosed index {idx} >= message count {l}"
-            )));
+    // Validate disclosed indexes: bounds check and no duplicates
+    {
+        let mut seen = HashSet::with_capacity(disclosed_indexes.len());
+        for &idx in disclosed_indexes {
+            if idx >= l {
+                return Err(BbsError::InvalidIndex(format!(
+                    "disclosed index {idx} >= message count {l}"
+                )));
+            }
+            if !seen.insert(idx) {
+                return Err(BbsError::InvalidIndex(format!(
+                    "duplicate disclosed index: {idx}"
+                )));
+            }
         }
     }
 
@@ -90,10 +101,7 @@ pub fn core_proof_gen(
     }
 
     // 5. Compute B = P1 + Q1*domain + H1*msg1 + ... + HL*msgL
-    let mut b = p1_generator() + *q1 * domain;
-    for (i, scalar) in msg_scalars.iter().enumerate() {
-        b += h_generators[i] * scalar;
-    }
+    let b = compute_b(q1, &domain, h_generators, &msg_scalars);
 
     // 6. Blinding: D = B * r2, Abar = A * (r1 * r2), Bbar = D * r1 - Abar * e
     let d = b * r2;
@@ -154,7 +162,7 @@ pub fn core_proof_gen(
     }
     proof_bytes.extend_from_slice(&scalar_to_bytes(&challenge));
 
-    Ok(Proof::from_bytes(proof_bytes))
+    Ok(Proof::from_bytes(&proof_bytes))
 }
 
 /// Verify a BBS zero-knowledge proof.
@@ -177,6 +185,9 @@ pub fn core_proof_verify(
     disclosed_indexes: &[usize],
     cs: Ciphersuite,
 ) -> Result<bool> {
+    // Validate public key
+    pk.validate()?;
+
     let proof_bytes = proof.to_bytes();
 
     // Determine U (undisclosed count) from proof length
