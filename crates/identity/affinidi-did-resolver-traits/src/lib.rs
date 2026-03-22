@@ -51,6 +51,7 @@ pub enum MethodName {
     Webvh,
     Cheqd,
     Scid,
+    Ebsi,
     /// Catch-all for methods not explicitly modeled.
     Other(String),
 }
@@ -67,6 +68,7 @@ impl std::fmt::Display for MethodName {
             MethodName::Webvh => write!(f, "webvh"),
             MethodName::Cheqd => write!(f, "cheqd"),
             MethodName::Scid => write!(f, "scid"),
+            MethodName::Ebsi => write!(f, "ebsi"),
             MethodName::Other(s) => write!(f, "{s}"),
         }
     }
@@ -85,6 +87,7 @@ impl From<&DIDMethod> for MethodName {
             DIDMethod::Webvh { .. } => MethodName::Webvh,
             DIDMethod::Cheqd { .. } => MethodName::Cheqd,
             DIDMethod::Scid { .. } => MethodName::Scid,
+            DIDMethod::Ebsi { .. } => MethodName::Ebsi,
             DIDMethod::Other { method, .. } => MethodName::Other(method.clone()),
             _ => MethodName::Other(format!("{method}")),
         }

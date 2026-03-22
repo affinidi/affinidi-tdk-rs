@@ -1,0 +1,26 @@
+[package]
+name = "did-ebsi"
+version = "0.1.0"
+description = "Implementation of did:ebsi (EBSI DID method for legal entities) in Rust"
+repository.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+affinidi-did-common = "0.3"
+bs58 = "0.5"
+rand = "0.9"
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"

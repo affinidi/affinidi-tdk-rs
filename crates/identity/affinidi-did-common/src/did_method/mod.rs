@@ -93,6 +93,12 @@ pub enum DIDMethod {
         /// Self-Certifying IDentifier
         scid: String,
     },
+    /// EBSI DID method for legal entities (did:ebsi)
+    /// Format: z<base58btc(0x01 + 16_random_bytes)>
+    Ebsi {
+        /// Raw identifier (e.g., "zfEmvX5twhXjQJiCWsukvQA")
+        identifier: String,
+    },
     /// Catch-all for methods we don't explicitly model
     Other {
         /// Method name (e.g., "example")
@@ -115,6 +121,7 @@ impl DIDMethod {
             DIDMethod::Webvh { .. } => "webvh",
             DIDMethod::Cheqd { .. } => "cheqd",
             DIDMethod::Scid { .. } => "scid",
+            DIDMethod::Ebsi { .. } => "ebsi",
             DIDMethod::Other { method, .. } => method,
         }
     }
@@ -131,6 +138,7 @@ impl DIDMethod {
             DIDMethod::Webvh { identifier, .. } => identifier,
             DIDMethod::Cheqd { identifier, .. } => identifier,
             DIDMethod::Scid { identifier, .. } => identifier,
+            DIDMethod::Ebsi { identifier, .. } => identifier,
             DIDMethod::Other { identifier, .. } => identifier,
         }
     }

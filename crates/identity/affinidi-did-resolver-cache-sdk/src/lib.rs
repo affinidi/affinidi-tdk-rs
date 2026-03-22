@@ -59,6 +59,7 @@ pub enum DIDMethod {
     WEBVH,
     CHEQD,
     SCID,
+    EBSI,
     EXAMPLE,
 }
 
@@ -75,6 +76,7 @@ impl fmt::Display for DIDMethod {
             DIDMethod::WEBVH => write!(f, "webvh"),
             DIDMethod::CHEQD => write!(f, "cheqd"),
             DIDMethod::SCID => write!(f, "scid"),
+            DIDMethod::EBSI => write!(f, "ebsi"),
             DIDMethod::EXAMPLE => write!(f, "example"),
         }
     }
@@ -103,6 +105,7 @@ impl TryFrom<&str> for DIDMethod {
             "webvh" => Ok(DIDMethod::WEBVH),
             "cheqd" => Ok(DIDMethod::CHEQD),
             "scid" => Ok(DIDMethod::SCID),
+            "ebsi" => Ok(DIDMethod::EBSI),
             #[cfg(feature = "did_example")]
             "example" => Ok(DIDMethod::EXAMPLE),
             _ => Err(DIDCacheError::UnsupportedMethod(value.to_string())),
@@ -119,7 +122,11 @@ impl DIDMethod {
     pub fn is_mutable(&self) -> bool {
         matches!(
             self,
-            DIDMethod::WEB | DIDMethod::WEBVH | DIDMethod::CHEQD | DIDMethod::SCID
+            DIDMethod::WEB
+                | DIDMethod::WEBVH
+                | DIDMethod::CHEQD
+                | DIDMethod::SCID
+                | DIDMethod::EBSI
         )
     }
 }
@@ -486,6 +493,11 @@ impl DIDCacheClient {
             .entry(MethodName::Scid)
             .or_default()
             .push_back(Box::new(network_resolvers::ScidResolver));
+        #[cfg(feature = "did-ebsi")]
+        resolvers
+            .entry(MethodName::Ebsi)
+            .or_default()
+            .push_back(Box::new(network_resolvers::EbsiResolver));
 
         let resolvers = Arc::new(resolvers);
 

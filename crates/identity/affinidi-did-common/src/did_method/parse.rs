@@ -215,6 +215,29 @@ fn parse_scid(identifier: &str) -> Result<DIDMethod, DIDError> {
     })
 }
 
+fn parse_ebsi(identifier: &str) -> Result<DIDMethod, DIDError> {
+    // EBSI identifiers must start with 'z' (base58btc multibase prefix)
+    // and decode to version_byte (0x01) + 16 random bytes = 17 bytes
+    if !identifier.starts_with('z') {
+        return Err(DIDError::InvalidMethodSpecificId(
+            "did:ebsi identifier must start with 'z' (base58btc)".into(),
+        ));
+    }
+
+    // Validate the base58btc content (21-22 chars after 'z')
+    let b58_content = &identifier[1..];
+    if b58_content.len() < 21 || b58_content.len() > 23 {
+        return Err(DIDError::InvalidMethodSpecificId(format!(
+            "did:ebsi identifier has invalid length: {} (expected 22-24 total)",
+            identifier.len()
+        )));
+    }
+
+    Ok(DIDMethod::Ebsi {
+        identifier: identifier.to_string(),
+    })
+}
+
 /// Parse method name and identifier into a rich DIDMethod variant
 pub fn parse_method(method_name: &str, identifier: &str) -> Result<DIDMethod, DIDError> {
     // First validate basic identifier format (common to all methods)
@@ -234,6 +257,7 @@ pub fn parse_method(method_name: &str, identifier: &str) -> Result<DIDMethod, DI
         "webvh" => parse_webvh(identifier),
         "cheqd" => parse_cheqd(identifier),
         "scid" => parse_scid(identifier),
+        "ebsi" => parse_ebsi(identifier),
         other => Ok(DIDMethod::Other {
             method: other.to_string(),
             identifier: identifier.to_string(),

@@ -341,3 +341,41 @@ impl AsyncResolver for ScidResolver {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// did:ebsi (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Resolver for `did:ebsi` — EBSI DID method for legal entities.
+///
+/// Resolves DIDs via the EBSI DID Registry API (pilot environment by default).
+#[cfg(feature = "did-ebsi")]
+pub struct EbsiResolver;
+
+#[cfg(feature = "did-ebsi")]
+impl AsyncResolver for EbsiResolver {
+    fn name(&self) -> &str {
+        "EbsiResolver"
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        did: &'a DID,
+    ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+        Box::pin(async move {
+            if !matches!(did.method(), DIDMethod::Ebsi { .. }) {
+                return None;
+            }
+
+            let did_str = did.to_string();
+            Some(
+                did_ebsi::resolve_ebsi_did(&did_str, did_ebsi::EBSI_PILOT_API)
+                    .await
+                    .map_err(|e| {
+                        error!("did:ebsi resolution error: {e:?}");
+                        ResolverError::ResolutionFailed(e.to_string())
+                    }),
+            )
+        })
+    }
+}

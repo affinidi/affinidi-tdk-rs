@@ -12,6 +12,7 @@ members = [
   "crates/identity/affinidi-did-resolver-cache-server",
   "crates/identity/did-methods/did-example",
   "crates/identity/did-methods/did-scid",
+  "crates/identity/did-methods/did-ebsi",
   "crates/identity/affinidi-did-resolver-traits",
   "crates/identity/affinidi-did-authentication",
 
@@ -71,6 +72,8 @@ lto = true
 
 [patch.crates-io]
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
+affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
+affinidi-did-resolver-traits = { path = "crates/identity/affinidi-did-resolver-traits" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
