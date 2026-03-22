@@ -132,7 +132,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "TODO: align T2 undisclosed term reconstruction with IETF draft"]
+    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn full_flow_sign_verify_prove() {
         let sk = keygen(b"test-key-material-at-least-32-by", b"").unwrap();
         let pk = sk_to_pk(&sk);
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: align T2 undisclosed term reconstruction with IETF draft"]
+    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn full_flow_multiple_disclosures() {
         let sk = keygen(b"another-key-material-32-bytes!!!", b"").unwrap();
         let pk = sk_to_pk(&sk);

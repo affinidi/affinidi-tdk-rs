@@ -23,7 +23,10 @@ fn main() {
     let sk = keygen(b"issuer-key-material-must-be-32+!", b"eidas-pid").unwrap();
     let pk = sk_to_pk(&sk);
     println!("Secret key: 32 bytes");
-    println!("Public key: {} bytes (compressed G2)\n", pk.to_bytes().len());
+    println!(
+        "Public key: {} bytes (compressed G2)\n",
+        pk.to_bytes().len()
+    );
 
     // ── Step 2: Sign multiple PID attributes in one signature ──
     let messages: Vec<&[u8]> = vec![
@@ -42,7 +45,10 @@ fn main() {
 
     // ── Step 3: Verify the signature ──
     let valid = verify(&pk, &signature, b"eidas-pid-v1", &messages).unwrap();
-    println!("Signature verification: {}\n", if valid { "PASS" } else { "FAIL" });
+    println!(
+        "Signature verification: {}\n",
+        if valid { "PASS" } else { "FAIL" }
+    );
 
     // ── Step 4: Generate proof (all disclosed) ──
     let all_indexes: Vec<usize> = (0..messages.len()).collect();
@@ -70,7 +76,10 @@ fn main() {
     )
     .unwrap();
 
-    println!("Proof verification: {}\n", if proof_valid { "PASS" } else { "FAIL" });
+    println!(
+        "Proof verification: {}\n",
+        if proof_valid { "PASS" } else { "FAIL" }
+    );
 
     // ── Step 6: Demonstrate unlinkability ──
     let proof2 = proof_gen(
@@ -85,7 +94,10 @@ fn main() {
 
     println!("--- Unlinkability ---");
     println!("Proof 1 (first 16 bytes): {:02x?}", &proof.to_bytes()[..16]);
-    println!("Proof 2 (first 16 bytes): {:02x?}", &proof2.to_bytes()[..16]);
+    println!(
+        "Proof 2 (first 16 bytes): {:02x?}",
+        &proof2.to_bytes()[..16]
+    );
     println!("Same credential, different sessions -> completely different proof bytes");
     println!("Cryptographically impossible to link these proofs!\n");
 
@@ -95,14 +107,27 @@ fn main() {
         &proof,
         b"eidas-pid-v1",
         b"session-001",
-        &[b"family_name:FAKE".as_ref(), b"given_name:Erika", b"birth_date:1964-08-12",
-          b"age_over_18:true", b"nationality:DE", b"resident_city:Berlin",
-          b"document_number:T22000129"],
+        &[
+            b"family_name:FAKE".as_ref(),
+            b"given_name:Erika",
+            b"birth_date:1964-08-12",
+            b"age_over_18:true",
+            b"nationality:DE",
+            b"resident_city:Berlin",
+            b"document_number:T22000129",
+        ],
         &all_indexes,
     )
     .unwrap();
 
-    println!("Tampered message verification: {}", if wrong_valid { "PASS (BAD!)" } else { "FAIL (correct)" });
+    println!(
+        "Tampered message verification: {}",
+        if wrong_valid {
+            "PASS (BAD!)"
+        } else {
+            "FAIL (correct)"
+        }
+    );
 
     println!("\nDone!");
 }

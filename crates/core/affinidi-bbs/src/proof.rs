@@ -415,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: align T2 undisclosed term reconstruction with IETF draft"]
+    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_multiple_messages_partial_disclosure() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![b"msg0", b"msg1", b"msg2", b"msg3"];
@@ -488,7 +488,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: align T2 undisclosed term reconstruction with IETF draft"]
+    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_none_disclosed() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![b"secret1", b"secret2"];
@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: align T2 undisclosed term reconstruction with IETF draft"]
+    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_ten_messages_selective() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![

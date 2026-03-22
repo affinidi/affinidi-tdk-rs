@@ -2,65 +2,78 @@
  * BBS generator creation and domain calculation.
  *
  * Per IETF draft §4.1:
- * - `create_generators`: Deterministically derive G1 generators from ciphersuite
+ * - `create_generators`: Deterministically derive G1 generators via hash-to-curve
  * - `calculate_domain`: Bind PK, generators, and header into a domain scalar
  *
  * Generators are hash-to-curve derived points in G1 used as bases for
  * the multi-scalar multiplication in signing and verification.
+ * They MUST be independently derived (not scalar multiples of each other).
  */
 
-use bls12_381_plus::{G1Projective, Scalar};
+use bls12_381_plus::{G1Affine, G1Projective, Scalar};
+use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
 use group::Group;
+use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::Result;
-use crate::hash::{hash_to_scalar, i2osp};
+use crate::hash::hash_to_scalar;
 use crate::types::PublicKey;
 
 /// The P1 generator point — a fixed, publicly known G1 point.
-///
-/// Per the spec, P1 is defined as hash_to_curve_g1("", ciphersuite_id || "BP_").
-/// For simplicity, we use the standard G1 generator.
 pub fn p1_generator() -> G1Projective {
     G1Projective::generator()
 }
 
 /// Create `count` deterministic generators (Q1, H1, H2, ..., H_{count-1}).
 ///
-/// Per IETF draft §4.1.1:
+/// Per IETF draft §4.3.4 and zkryptium's verified implementation:
 /// ```text
-/// v = expand_message(seed_dst, seed_len)
-/// for i in 1..count:
-///     v = expand_message(v || I2OSP(i, 4), seed_len)
+/// seed_dst = api_id || "SIG_GENERATOR_SEED_"
+/// generator_dst = api_id || "SIG_GENERATOR_DST_"
+/// generator_seed = api_id || "MESSAGE_GENERATOR_SEED"
+/// v = expand_message(generator_seed, seed_dst, expand_len)
+/// for i in 1..count+1:
+///     v = expand_message(v || I2OSP(i, 8), seed_dst, expand_len)
 ///     generator_i = hash_to_curve_g1(v, generator_dst)
 /// ```
 pub fn create_generators(count: usize, cs: Ciphersuite) -> Result<Vec<G1Projective>> {
-    use bls12_381_plus::G1Projective;
+    let api_id = cs.api_id();
 
-    let seed_dst = [cs.api_id().as_slice(), b"SIG_GENERATOR_SEED_"].concat();
-    let generator_dst = [cs.api_id().as_slice(), b"SIG_GENERATOR_DST_"].concat();
-    let seed_len = cs.expand_len();
+    let seed_dst = [api_id.as_slice(), b"SIG_GENERATOR_SEED_"].concat();
+    let generator_dst = [api_id.as_slice(), b"SIG_GENERATOR_DST_"].concat();
+    let generator_seed = [api_id.as_slice(), b"MESSAGE_GENERATOR_SEED"].concat();
 
+    let expand_len = cs.expand_len();
     let mut generators = Vec::with_capacity(count);
 
-    // Initial seed: v = expand_message("", seed_dst, seed_len)
-    let mut v = crate::hash::expand_message_xmd_sha256(b"", &seed_dst, seed_len);
+    // Initial seed: v = expand_message(generator_seed, seed_dst, expand_len)
+    let mut v = expand_msg_xmd(&generator_seed, &seed_dst, expand_len);
 
     for i in 1..=count {
-        // v = expand_message(v || I2OSP(i, 4), seed_dst, seed_len)
+        // v = expand_message(v || I2OSP(i, 8), seed_dst, expand_len)
         let mut input = v.clone();
-        input.extend_from_slice(&i2osp(i as u64, 4));
-        v = crate::hash::expand_message_xmd_sha256(&input, &seed_dst, seed_len);
+        input.extend_from_slice(&(i as u64).to_be_bytes()); // I2OSP(i, 8)
+        v = expand_msg_xmd(&input, &seed_dst, expand_len);
 
         // generator_i = hash_to_curve_g1(v, generator_dst)
-        // Derive deterministic generator via scalar multiplication of the base point.
-        // A full implementation would use hash_to_curve_g1 per RFC 9380.
-        let scalar = crate::hash::hash_to_scalar(&v, &generator_dst, cs)?;
-        let point = G1Projective::generator() * scalar;
+        let point = G1Projective::hash::<ExpandMsgXmd<Sha256>>(&v, &generator_dst);
         generators.push(point);
     }
 
     Ok(generators)
+}
+
+/// Expand message using the elliptic_curve crate's XMD implementation.
+///
+/// This ensures byte-exact compatibility with what `bls12_381_plus::hash`
+/// uses internally for its hash-to-curve operations.
+fn expand_msg_xmd(msg: &[u8], dst: &[u8], len: usize) -> Vec<u8> {
+    let mut output = vec![0u8; len];
+    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[msg], &[dst], len)
+        .expect("expand_message should not fail")
+        .fill_bytes(&mut output);
+    output
 }
 
 /// Calculate the domain value that binds PK, generators, and header.
@@ -68,8 +81,8 @@ pub fn create_generators(count: usize, cs: Ciphersuite) -> Result<Vec<G1Projecti
 /// Per IETF draft §4.1.2:
 /// ```text
 /// domain = hash_to_scalar(
-///     serialize(PK, len(Q1, H1..HL), Q1, H1..HL, ciphersuite_id, header),
-///     domain_dst
+///     serialize(PK, len(generators), Q1, H1..HL, ciphersuite_id, header),
+///     api_id || "H2S_"
 /// )
 /// ```
 pub fn calculate_domain(
@@ -81,7 +94,6 @@ pub fn calculate_domain(
 ) -> Result<Scalar> {
     let domain_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
 
-    // Serialize: PK || count || Q1 || H1 || ... || HL || ciphersuite_id || header
     let pk_bytes = pk.to_bytes();
     let count = (generators.len() as u64).to_be_bytes();
     let q1_bytes = point_to_bytes(q1);
@@ -94,7 +106,6 @@ pub fn calculate_domain(
         data.extend_from_slice(&point_to_bytes(g));
     }
     data.extend_from_slice(cs.id().as_bytes());
-    // Header with length prefix
     data.extend_from_slice(&(header.len() as u64).to_be_bytes());
     data.extend_from_slice(header);
 
@@ -103,14 +114,11 @@ pub fn calculate_domain(
 
 /// Serialize a G1 projective point to compressed bytes (48 bytes).
 pub fn point_to_bytes(p: &G1Projective) -> [u8; 48] {
-    use bls12_381_plus::G1Affine;
-    let affine = G1Affine::from(p);
-    affine.to_compressed()
+    G1Affine::from(p).to_compressed()
 }
 
 /// Deserialize a G1 point from compressed bytes.
 pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
-    use bls12_381_plus::G1Affine;
     let affine = G1Affine::from_compressed(bytes);
     if affine.is_some().into() {
         Some(G1Projective::from(affine.unwrap()))
@@ -149,6 +157,14 @@ mod tests {
     }
 
     #[test]
+    fn generators_are_not_identity() {
+        let gens = create_generators(5, Ciphersuite::Bls12381Sha256).unwrap();
+        for g in &gens {
+            assert!(!bool::from(G1Affine::from(g).is_identity()));
+        }
+    }
+
+    #[test]
     fn point_roundtrip() {
         let p = G1Projective::generator();
         let bytes = point_to_bytes(&p);
@@ -157,28 +173,19 @@ mod tests {
     }
 
     #[test]
-    fn domain_is_deterministic() {
-        let pk = PublicKey::from_bytes(&[0u8; 96]);
-        // This will fail for invalid PK but tests the function path
-        if let Ok(pk) = pk {
-            let gens = create_generators(3, Ciphersuite::Bls12381Sha256).unwrap();
-            let d1 = calculate_domain(
-                &pk,
-                &gens[0],
-                &gens[1..],
-                b"header",
-                Ciphersuite::Bls12381Sha256,
-            )
-            .unwrap();
-            let d2 = calculate_domain(
-                &pk,
-                &gens[0],
-                &gens[1..],
-                b"header",
-                Ciphersuite::Bls12381Sha256,
-            )
-            .unwrap();
-            assert_eq!(d1, d2);
-        }
+    fn generators_match_ietf_fixtures() {
+        // From DIF BBS fixture: bls12-381-sha-256/generators.json
+        let expected_q1 = "a9ec65b70a7fbe40c874c9eb041c2cb0a7af36ccec1bea48fa2ba4c2eb67ef7f9ecb17ed27d38d27cdeddff44c8137be";
+        let expected_h0 = "98cd5313283aaf5db1b3ba8611fe6070d19e605de4078c38df36019fbaad0bd28dd090fd24ed27f7f4d22d5ff5dea7d4";
+        let expected_h1 = "a31fbe20c5c135bcaa8d9fc4e4ac665cc6db0226f35e737507e803044093f37697a9d452490a970eea6f9ad6c3dcaa3a";
+
+        let gens = create_generators(11, Ciphersuite::Bls12381Sha256).unwrap();
+        let q1_hex = hex::encode(point_to_bytes(&gens[0]));
+        let h0_hex = hex::encode(point_to_bytes(&gens[1]));
+        let h1_hex = hex::encode(point_to_bytes(&gens[2]));
+
+        assert_eq!(q1_hex, expected_q1, "Q1 generator mismatch");
+        assert_eq!(h0_hex, expected_h0, "H0 generator mismatch");
+        assert_eq!(h1_hex, expected_h1, "H1 generator mismatch");
     }
 }

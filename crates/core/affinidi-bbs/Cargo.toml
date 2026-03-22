@@ -18,6 +18,7 @@ path = "examples/bbs_selective_disclosure.rs"
 
 [dependencies]
 bls12_381_plus = { version = "0.8", features = ["hashing", "alloc"] }
+elliptic-curve = { version = "0.13", features = ["hash2curve"] }
 ff = "0.13"
 group = "0.13"
 rand = "0.9"

@@ -4,13 +4,14 @@
  * Implements:
  * - `hash_to_scalar`: Hash arbitrary data to a BLS12-381 scalar
  * - `messages_to_scalars`: Convert message byte arrays to scalars
- * - `expand_message`: SHA-256 (XMD) and SHAKE-256 (XOF) message expansion
  *
- * Per IETF draft §4.
+ * Uses `elliptic_curve::hash2curve::ExpandMsgXmd<Sha256>` for exact
+ * compatibility with the `bls12_381_plus` hash-to-curve implementation.
  */
 
 use bls12_381_plus::Scalar;
-use sha2::{Digest, Sha256};
+use elliptic_curve::hash2curve::{ExpandMsg, ExpandMsgXmd, Expander};
+use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::Result;
@@ -20,9 +21,15 @@ use crate::error::Result;
 /// Per IETF draft §4.3.3:
 /// 1. `uniform_bytes = expand_message(msg_octets, dst, expand_len)`
 /// 2. Return `OS2IP(uniform_bytes) mod r`
-pub fn hash_to_scalar(data: &[u8], dst: &[u8], cs: Ciphersuite) -> Result<Scalar> {
-    let expand_len = cs.expand_len();
-    let uniform_bytes = expand_message_xmd_sha256(data, dst, expand_len);
+///
+/// Uses the `elliptic_curve` crate's `ExpandMsgXmd<Sha256>` to ensure
+/// byte-exact compatibility with `bls12_381_plus` hash-to-curve.
+pub fn hash_to_scalar(data: &[u8], dst: &[u8], _cs: Ciphersuite) -> Result<Scalar> {
+    let expand_len = 48; // ceil((255 + 128) / 8)
+    let mut uniform_bytes = vec![0u8; expand_len];
+    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[data], &[dst], expand_len)
+        .expect("expand_message should not fail")
+        .fill_bytes(&mut uniform_bytes);
     Ok(scalar_from_wide_bytes(&uniform_bytes))
 }
 
@@ -40,62 +47,16 @@ pub fn messages_to_scalars(messages: &[&[u8]], cs: Ciphersuite) -> Result<Vec<Sc
         .collect()
 }
 
-/// Expand message using SHA-256 (XMD) per RFC 9380 §5.3.1.
+/// Expand message using ExpandMsgXmd<SHA-256> from the elliptic_curve crate.
 ///
-/// This is the `expand_message_xmd` function with SHA-256.
+/// This is the canonical expand_message implementation used throughout BBS
+/// for both generator creation and hash_to_scalar.
 pub fn expand_message_xmd_sha256(msg: &[u8], dst: &[u8], len_in_bytes: usize) -> Vec<u8> {
-    let b_in_bytes = 32; // SHA-256 output
-    let r_in_bytes = 64; // SHA-256 block size
-    let ell = (len_in_bytes + b_in_bytes - 1) / b_in_bytes;
-
-    assert!(ell <= 255, "expand_message: ell > 255");
-    assert!(len_in_bytes <= 65535, "expand_message: len > 65535");
-    assert!(dst.len() <= 255, "expand_message: DST length > 255");
-
-    // DST_prime = DST || I2OSP(len(DST), 1)
-    let mut dst_prime = dst.to_vec();
-    dst_prime.push(dst.len() as u8);
-
-    // Z_pad = I2OSP(0, r_in_bytes)
-    let z_pad = vec![0u8; r_in_bytes];
-
-    // l_i_b_str = I2OSP(len_in_bytes, 2)
-    let l_i_b_str = (len_in_bytes as u16).to_be_bytes();
-
-    // b_0 = H(Z_pad || msg || l_i_b_str || I2OSP(0, 1) || DST_prime)
-    let mut hasher = Sha256::new();
-    hasher.update(&z_pad);
-    hasher.update(msg);
-    hasher.update(l_i_b_str);
-    hasher.update([0u8]);
-    hasher.update(&dst_prime);
-    let b_0 = hasher.finalize();
-
-    // b_1 = H(b_0 || I2OSP(1, 1) || DST_prime)
-    let mut hasher = Sha256::new();
-    hasher.update(b_0);
-    hasher.update([1u8]);
-    hasher.update(&dst_prime);
-    let mut b_i = hasher.finalize();
-
-    let mut uniform_bytes = b_i.to_vec();
-
-    for i in 2..=ell {
-        // b_i = H(strxor(b_0, b_(i-1)) || I2OSP(i, 1) || DST_prime)
-        let mut xored = [0u8; 32];
-        for j in 0..32 {
-            xored[j] = b_0[j] ^ b_i[j];
-        }
-        let mut hasher = Sha256::new();
-        hasher.update(xored);
-        hasher.update([i as u8]);
-        hasher.update(&dst_prime);
-        b_i = hasher.finalize();
-        uniform_bytes.extend_from_slice(&b_i);
-    }
-
-    uniform_bytes.truncate(len_in_bytes);
-    uniform_bytes
+    let mut output = vec![0u8; len_in_bytes];
+    <ExpandMsgXmd<Sha256> as ExpandMsg<'_>>::expand_message(&[msg], &[dst], len_in_bytes)
+        .expect("expand_message should not fail")
+        .fill_bytes(&mut output);
+    output
 }
 
 /// Convert a wide byte array to a scalar via OS2IP mod r.
@@ -123,19 +84,6 @@ pub fn scalar_from_bytes(bytes: &[u8; 32]) -> Option<Scalar> {
     } else {
         None
     }
-}
-
-/// Concatenate byte slices with length prefixes for hash input.
-///
-/// Per the spec, serialization for hash input uses:
-/// `I2OSP(len, 8) || data` for each element.
-pub fn serialize_for_hash(elements: &[&[u8]]) -> Vec<u8> {
-    let mut result = Vec::new();
-    for elem in elements {
-        result.extend_from_slice(&(elem.len() as u64).to_be_bytes());
-        result.extend_from_slice(elem);
-    }
-    result
 }
 
 /// I2OSP (Integer to Octet String Primitive) per RFC 8017.
@@ -183,10 +131,10 @@ mod tests {
 
     #[test]
     fn expand_message_output_length() {
-        let result = expand_message_xmd_sha256(b"test", b"dst", 48);
+        let result = expand_message_xmd_sha256(b"test", b"dst-at-least-16-bytes!", 48);
         assert_eq!(result.len(), 48);
 
-        let result = expand_message_xmd_sha256(b"test", b"dst", 64);
+        let result = expand_message_xmd_sha256(b"test", b"dst-at-least-16-bytes!", 64);
         assert_eq!(result.len(), 64);
     }
 
@@ -200,9 +148,38 @@ mod tests {
 
     #[test]
     fn scalar_roundtrip() {
-        let s = hash_to_scalar(b"roundtrip", b"dst", Ciphersuite::Bls12381Sha256).unwrap();
+        let s = hash_to_scalar(
+            b"roundtrip",
+            b"dst-for-roundtrip-test!",
+            Ciphersuite::Bls12381Sha256,
+        )
+        .unwrap();
         let bytes = scalar_to_bytes(&s);
         let recovered = scalar_from_bytes(&bytes).unwrap();
         assert_eq!(s, recovered);
+    }
+
+    #[test]
+    fn hash_to_scalar_matches_ietf_fixture() {
+        // From DIF fixture: bls12-381-sha-256/h2s.json
+        let msg = hex::decode("9872ad089e452c7b6e283dfac2a80d58e8d0ff71cc4d5e310a1debdda4a45f02")
+            .unwrap();
+        let dst = hex::decode("4242535f424c53313233383147315f584d443a5348412d3235365f535357555f524f5f4832475f484d32535f4832535f").unwrap();
+        let expected = "0f90cbee27beb214e6545becb8404640d3612da5d6758dffeccd77ed7169807c";
+
+        let scalar = hash_to_scalar(&msg, &dst, Ciphersuite::Bls12381Sha256).unwrap();
+        assert_eq!(hex::encode(scalar_to_bytes(&scalar)), expected);
+    }
+
+    #[test]
+    fn messages_to_scalars_match_ietf_fixture() {
+        // From DIF fixture: bls12-381-sha-256/MapMessageToScalarAsHash.json
+        let msg0 = hex::decode("9872ad089e452c7b6e283dfac2a80d58e8d0ff71cc4d5e310a1debdda4a45f02")
+            .unwrap();
+        let expected_scalar0 = "1cb5bb86114b34dc438a911617655a1db595abafac92f47c5001799cf624b430";
+
+        let messages: Vec<&[u8]> = vec![&msg0];
+        let scalars = messages_to_scalars(&messages, Ciphersuite::Bls12381Sha256).unwrap();
+        assert_eq!(hex::encode(scalar_to_bytes(&scalars[0])), expected_scalar0);
     }
 }
