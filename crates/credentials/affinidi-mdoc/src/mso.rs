@@ -1,171 +1,149 @@
 /*!
  * Mobile Security Object (MSO) — the issuer-signed digest structure.
  *
- * The MSO contains:
- * - `digestAlgorithm`: Hash algorithm used (e.g., "SHA-256")
- * - `valueDigests`: Map of namespace → (digest_id → digest_value)
- * - `deviceKeyInfo`: Holder's device public key
- * - `docType`: Document type identifier
- * - `validityInfo`: Temporal validity (signed, validFrom, validUntil)
+ * Per ISO 18013-5 §9.1.2.4, the MSO contains:
  *
- * The MSO is signed by the issuer using COSE_Sign1 and included in
- * `IssuerSigned.issuerAuth`.
+ * ```text
+ * MobileSecurityObject = {
+ *   "version": tstr,                    ; "1.0"
+ *   "digestAlgorithm": tstr,            ; "SHA-256" | "SHA-384" | "SHA-512"
+ *   "valueDigests": ValueDigests,       ; namespace → (digestID → digest)
+ *   "deviceKeyInfo": DeviceKeyInfo,     ; holder's device public key
+ *   "docType": tstr,                    ; e.g. "org.iso.18013.5.1.mDL"
+ *   "validityInfo": ValidityInfo        ; temporal validity
+ * }
+ * ```
+ *
+ * The MSO is CBOR-encoded, wrapped in Tag24, and signed with COSE_Sign1
+ * to produce `issuerAuth`.
  */
 
 use std::collections::BTreeMap;
 
-use rand::Rng;
-use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{MdocError, Result};
+use crate::issuer_signed_item::{IssuerSignedItem, generate_decoy_digest};
+use crate::tag24::Tag24;
 
-/// A single data element with its random salt and value.
-#[derive(Debug, Clone)]
-pub struct DataElement {
-    /// The attribute identifier (e.g., "family_name").
-    pub identifier: String,
-    /// The attribute value as a CBOR-compatible JSON value.
-    pub value: serde_json::Value,
-    /// Random salt for digest computation.
-    pub random: Vec<u8>,
-    /// The digest ID assigned to this element.
-    pub digest_id: u32,
-}
-
-/// Digest computation for a data element.
-///
-/// Per ISO 18013-5, the digest is computed as:
-/// `SHA-256(CBOR(DataElementValue))` where DataElementValue includes
-/// the random salt, element identifier, and element value.
-impl DataElement {
-    /// Create a new data element with a random salt.
-    pub fn new(identifier: impl Into<String>, value: serde_json::Value) -> Self {
-        let mut rng = rand::rng();
-        let mut random = vec![0u8; 32];
-        rng.fill(&mut random[..]);
-
-        Self {
-            identifier: identifier.into(),
-            value,
-            random,
-            digest_id: 0, // Set during MSO creation
-        }
-    }
-
-    /// Create a data element with a specific salt (for test vectors).
-    pub fn with_random(
-        identifier: impl Into<String>,
-        value: serde_json::Value,
-        random: Vec<u8>,
-    ) -> Self {
-        Self {
-            identifier: identifier.into(),
-            value,
-            random,
-            digest_id: 0,
-        }
-    }
-
-    /// Compute the digest of this data element.
-    ///
-    /// The input to the hash function is the CBOR encoding of a tagged
-    /// structure containing: digestID, random, elementIdentifier, elementValue.
-    pub fn compute_digest(&self) -> Vec<u8> {
-        // Simplified: hash(random || identifier || CBOR(value))
-        // Full ISO 18013-5 uses CBOR Tag 24 wrapping
-        let mut hasher = Sha256::new();
-        hasher.update(&self.random);
-        hasher.update(self.identifier.as_bytes());
-
-        // Encode value as CBOR bytes
-        let mut cbor_buf = Vec::new();
-        ciborium::into_writer(&self.value, &mut cbor_buf)
-            .expect("CBOR encoding should not fail for JSON values");
-        hasher.update(&cbor_buf);
-
-        hasher.finalize().to_vec()
-    }
-}
-
-/// The Mobile Security Object — contains digests of all data elements.
-#[derive(Debug, Clone)]
+/// The Mobile Security Object per ISO 18013-5.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MobileSecurityObject {
-    /// Document type (e.g., "eu.europa.ec.eudi.pid.1").
-    pub doc_type: String,
+    /// Version string (always "1.0").
+    pub version: String,
 
-    /// Hash algorithm name (e.g., "SHA-256").
+    /// Hash algorithm name: "SHA-256", "SHA-384", or "SHA-512".
+    #[serde(rename = "digestAlgorithm")]
     pub digest_algorithm: String,
 
     /// Digests organized by namespace.
-    /// namespace → (digest_id → digest_bytes)
-    pub value_digests: BTreeMap<String, BTreeMap<u32, Vec<u8>>>,
+    /// `Map<namespace, Map<digestID, digest_bytes>>`
+    #[serde(rename = "valueDigests")]
+    pub value_digests: BTreeMap<String, BTreeMap<u32, serde_bytes::ByteBuf>>,
 
-    /// Validity information.
-    pub validity: ValidityInfo,
+    /// Holder's device public key information.
+    #[serde(rename = "deviceKeyInfo")]
+    pub device_key_info: DeviceKeyInfo,
+
+    /// Document type (e.g., "org.iso.18013.5.1.mDL", "eu.europa.ec.eudi.pid.1").
+    #[serde(rename = "docType")]
+    pub doc_type: String,
+
+    /// Temporal validity information.
+    #[serde(rename = "validityInfo")]
+    pub validity_info: ValidityInfo,
 }
 
-/// Temporal validity of an MSO.
-#[derive(Debug, Clone)]
+/// Device key information embedded in the MSO.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceKeyInfo {
+    /// The device's public key (COSE_Key).
+    #[serde(rename = "deviceKey")]
+    pub device_key: ciborium::Value,
+}
+
+/// Temporal validity of an MSO per ISO 18013-5.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidityInfo {
-    /// When the MSO was signed (ISO 8601).
+    /// When the MSO was signed (CBOR Tag 0, RFC 3339 tstr).
     pub signed: String,
-    /// Valid from (ISO 8601).
+
+    /// Valid from date (CBOR Tag 0, RFC 3339 tstr).
+    #[serde(rename = "validFrom")]
     pub valid_from: String,
-    /// Valid until (ISO 8601).
+
+    /// Valid until date (CBOR Tag 0, RFC 3339 tstr).
+    #[serde(rename = "validUntil")]
     pub valid_until: String,
 }
 
 impl MobileSecurityObject {
-    /// Create an MSO from data elements organized by namespace.
+    /// Create an MSO from IssuerSignedItems organized by namespace.
     ///
-    /// Assigns sequential digest IDs and computes all digests.
+    /// Computes the digest of each Tag24-wrapped IssuerSignedItem and stores
+    /// them in `valueDigests`. Optionally adds decoy digests per namespace.
     pub fn create(
         doc_type: impl Into<String>,
-        namespaces: &mut BTreeMap<String, Vec<DataElement>>,
+        digest_algorithm: &str,
+        namespaces: &BTreeMap<String, Vec<IssuerSignedItem>>,
+        device_key: ciborium::Value,
         validity: ValidityInfo,
+        decoys_per_namespace: usize,
     ) -> Result<Self> {
         let mut value_digests = BTreeMap::new();
 
-        for (ns, elements) in namespaces.iter_mut() {
+        for (ns, items) in namespaces {
             let mut ns_digests = BTreeMap::new();
 
-            for (i, element) in elements.iter_mut().enumerate() {
-                let digest_id = i as u32;
-                element.digest_id = digest_id;
-                let digest = element.compute_digest();
-                ns_digests.insert(digest_id, digest);
+            for item in items {
+                let digest = item.compute_digest(digest_algorithm)?;
+                ns_digests.insert(item.digest_id, serde_bytes::ByteBuf::from(digest));
+            }
+
+            // Add decoy digests
+            let max_id = items.iter().map(|i| i.digest_id).max().unwrap_or(0);
+            for i in 0..decoys_per_namespace {
+                let decoy_id = max_id + 1 + i as u32;
+                let decoy = generate_decoy_digest(digest_algorithm)?;
+                ns_digests.insert(decoy_id, serde_bytes::ByteBuf::from(decoy));
             }
 
             value_digests.insert(ns.clone(), ns_digests);
         }
 
         Ok(MobileSecurityObject {
-            doc_type: doc_type.into(),
-            digest_algorithm: "SHA-256".to_string(),
+            version: "1.0".to_string(),
+            digest_algorithm: digest_algorithm.to_string(),
             value_digests,
-            validity,
+            device_key_info: DeviceKeyInfo { device_key },
+            doc_type: doc_type.into(),
+            validity_info: validity,
         })
     }
 
-    /// Verify a data element's digest against the stored digest.
-    pub fn verify_digest(&self, namespace: &str, element: &DataElement) -> Result<bool> {
+    /// Wrap the MSO in Tag24 for inclusion in COSE_Sign1 payload.
+    pub fn to_tagged(&self) -> Result<Tag24<MobileSecurityObject>> {
+        Tag24::new(self.clone())
+    }
+
+    /// Verify a single IssuerSignedItem's digest against the stored digest.
+    pub fn verify_item_digest(&self, namespace: &str, item: &IssuerSignedItem) -> Result<bool> {
         let ns_digests = self.value_digests.get(namespace).ok_or_else(|| {
             MdocError::InvalidNamespace(format!("namespace not found: {namespace}"))
         })?;
 
-        let stored = ns_digests.get(&element.digest_id).ok_or_else(|| {
-            MdocError::DigestMismatch(format!("digest_id {} not found", element.digest_id))
+        let stored = ns_digests.get(&item.digest_id).ok_or_else(|| {
+            MdocError::DigestMismatch(format!("digest_id {} not found", item.digest_id))
         })?;
 
-        let computed = element.compute_digest();
-        Ok(computed == *stored)
+        let computed = item.compute_digest(&self.digest_algorithm)?;
+        Ok(computed == stored.as_ref())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn test_validity() -> ValidityInfo {
         ValidityInfo {
@@ -175,30 +153,18 @@ mod tests {
         }
     }
 
-    #[test]
-    fn data_element_digest_deterministic() {
-        let random = vec![1u8; 32];
-        let e1 = DataElement::with_random("name", json!("Alice"), random.clone());
-        let e2 = DataElement::with_random("name", json!("Alice"), random);
-
-        assert_eq!(e1.compute_digest(), e2.compute_digest());
-    }
-
-    #[test]
-    fn data_element_different_random_different_digest() {
-        let e1 = DataElement::with_random("name", json!("Alice"), vec![1u8; 32]);
-        let e2 = DataElement::with_random("name", json!("Alice"), vec![2u8; 32]);
-
-        assert_ne!(e1.compute_digest(), e2.compute_digest());
-    }
-
-    #[test]
-    fn data_element_different_value_different_digest() {
-        let random = vec![1u8; 32];
-        let e1 = DataElement::with_random("name", json!("Alice"), random.clone());
-        let e2 = DataElement::with_random("name", json!("Bob"), random);
-
-        assert_ne!(e1.compute_digest(), e2.compute_digest());
+    fn test_device_key() -> ciborium::Value {
+        // Minimal COSE_Key placeholder
+        ciborium::Value::Map(vec![
+            (
+                ciborium::Value::Integer(1.into()), // kty
+                ciborium::Value::Integer(2.into()), // EC2
+            ),
+            (
+                ciborium::Value::Integer((-1).into()), // crv
+                ciborium::Value::Integer(1.into()),    // P-256
+            ),
+        ])
     }
 
     #[test]
@@ -207,81 +173,180 @@ mod tests {
         namespaces.insert(
             "eu.europa.ec.eudi.pid.1".to_string(),
             vec![
-                DataElement::new("family_name", json!("Doe")),
-                DataElement::new("given_name", json!("John")),
-                DataElement::new("birth_date", json!("1990-01-01")),
+                IssuerSignedItem::new(0, "family_name", ciborium::Value::Text("Doe".into())),
+                IssuerSignedItem::new(1, "given_name", ciborium::Value::Text("John".into())),
+                IssuerSignedItem::new(2, "birth_date", ciborium::Value::Text("1990-01-01".into())),
             ],
         );
 
         let mso = MobileSecurityObject::create(
             "eu.europa.ec.eudi.pid.1",
-            &mut namespaces,
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
             test_validity(),
+            0,
         )
         .unwrap();
 
-        assert_eq!(mso.doc_type, "eu.europa.ec.eudi.pid.1");
+        assert_eq!(mso.version, "1.0");
         assert_eq!(mso.digest_algorithm, "SHA-256");
+        assert_eq!(mso.doc_type, "eu.europa.ec.eudi.pid.1");
 
         let ns_digests = &mso.value_digests["eu.europa.ec.eudi.pid.1"];
         assert_eq!(ns_digests.len(), 3);
 
-        // Verify each element's digest
-        for element in &namespaces["eu.europa.ec.eudi.pid.1"] {
+        // Verify each item
+        for item in &namespaces["eu.europa.ec.eudi.pid.1"] {
             assert!(
-                mso.verify_digest("eu.europa.ec.eudi.pid.1", element)
+                mso.verify_item_digest("eu.europa.ec.eudi.pid.1", item)
                     .unwrap()
             );
         }
     }
 
     #[test]
-    fn verify_digest_tampered_value_fails() {
+    fn tampered_value_fails_verification() {
+        let item = IssuerSignedItem::new(0, "name", ciborium::Value::Text("Alice".into()));
+
         let mut namespaces = BTreeMap::new();
-        let mut elements = vec![DataElement::new("name", json!("Alice"))];
-        namespaces.insert("test".to_string(), elements.clone());
+        namespaces.insert("test".to_string(), vec![item]);
 
-        let mso = MobileSecurityObject::create("test", &mut namespaces, test_validity()).unwrap();
+        let mso = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            0,
+        )
+        .unwrap();
 
-        // Tamper with the value
-        elements[0].value = json!("Bob");
-        elements[0].digest_id = 0;
+        // Tamper: different value
+        let tampered = IssuerSignedItem::with_random(
+            0,
+            "name",
+            ciborium::Value::Text("Bob".into()),
+            namespaces["test"][0].random.clone(),
+        )
+        .unwrap();
 
-        assert!(!mso.verify_digest("test", &elements[0]).unwrap());
+        assert!(!mso.verify_item_digest("test", &tampered).unwrap());
     }
 
     #[test]
-    fn verify_unknown_namespace_fails() {
-        let mut namespaces = BTreeMap::new();
-        namespaces.insert("test".to_string(), vec![DataElement::new("x", json!(1))]);
-
-        let mso = MobileSecurityObject::create("test", &mut namespaces, test_validity()).unwrap();
-
-        let element = DataElement::new("x", json!(1));
-        assert!(mso.verify_digest("unknown", &element).is_err());
-    }
-
-    #[test]
-    fn mso_has_sequential_digest_ids() {
+    fn decoy_digests_added() {
         let mut namespaces = BTreeMap::new();
         namespaces.insert(
-            "ns".to_string(),
-            vec![
-                DataElement::new("a", json!(1)),
-                DataElement::new("b", json!(2)),
-                DataElement::new("c", json!(3)),
-            ],
+            "test".to_string(),
+            vec![IssuerSignedItem::new(
+                0,
+                "attr",
+                ciborium::Value::Bool(true),
+            )],
         );
 
-        let mso = MobileSecurityObject::create("test", &mut namespaces, test_validity()).unwrap();
+        let mso = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            5, // 5 decoy digests
+        )
+        .unwrap();
 
-        let ids: Vec<u32> = mso.value_digests["ns"].keys().copied().collect();
-        assert_eq!(ids, vec![0, 1, 2]);
+        // 1 real + 5 decoy
+        assert_eq!(mso.value_digests["test"].len(), 6);
     }
 
     #[test]
-    fn digest_is_32_bytes_sha256() {
-        let e = DataElement::new("test", json!("value"));
-        assert_eq!(e.compute_digest().len(), 32);
+    fn mso_cbor_roundtrip() {
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert(
+            "test".to_string(),
+            vec![IssuerSignedItem::new(
+                0,
+                "name",
+                ciborium::Value::Text("Alice".into()),
+            )],
+        );
+
+        let mso = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            0,
+        )
+        .unwrap();
+
+        // Encode to CBOR
+        let mut buf = Vec::new();
+        ciborium::into_writer(&mso, &mut buf).unwrap();
+
+        // Decode back
+        let decoded: MobileSecurityObject = ciborium::from_reader(&buf[..]).unwrap();
+        assert_eq!(decoded.doc_type, "test");
+        assert_eq!(decoded.version, "1.0");
+        assert_eq!(decoded.digest_algorithm, "SHA-256");
+        assert_eq!(decoded.value_digests["test"].len(), 1);
+    }
+
+    #[test]
+    fn mso_tag24_wrapping() {
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert(
+            "test".to_string(),
+            vec![IssuerSignedItem::new(
+                0,
+                "x",
+                ciborium::Value::Integer(1.into()),
+            )],
+        );
+
+        let mso = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            0,
+        )
+        .unwrap();
+
+        let tagged = mso.to_tagged().unwrap();
+        let tagged_bytes = tagged.to_tagged_bytes().unwrap();
+
+        // Tag24 marker
+        assert_eq!(tagged_bytes[0], 0xd8);
+        assert_eq!(tagged_bytes[1], 24);
+    }
+
+    #[test]
+    fn unknown_namespace_fails() {
+        let mut namespaces = BTreeMap::new();
+        namespaces.insert(
+            "test".to_string(),
+            vec![IssuerSignedItem::new(
+                0,
+                "x",
+                ciborium::Value::Integer(1.into()),
+            )],
+        );
+
+        let mso = MobileSecurityObject::create(
+            "test",
+            "SHA-256",
+            &namespaces,
+            test_device_key(),
+            test_validity(),
+            0,
+        )
+        .unwrap();
+
+        let item = IssuerSignedItem::new(0, "x", ciborium::Value::Integer(1.into()));
+        assert!(mso.verify_item_digest("unknown", &item).is_err());
     }
 }
