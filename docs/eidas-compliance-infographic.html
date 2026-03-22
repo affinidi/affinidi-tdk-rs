@@ -8,132 +8,130 @@
   @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Inter', -apple-system, sans-serif; background: #0a0e27; color: #e0e4f0; width: 1920px; min-height: 1080px; overflow-x: hidden; }
-  .slide { width: 1920px; min-height: 1080px; padding: 44px 60px; position: relative; background: linear-gradient(135deg, #0a0e27 0%, #111640 50%, #0d1235 100%); }
-  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
-  .header h1 { font-size: 34px; font-weight: 800; background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.5px; }
-  .header .subtitle { font-size: 15px; color: #8b92b0; }
-  .score-badge { background: linear-gradient(135deg, #1e3a5f, #1a2955); border: 1px solid #2d4a7a; border-radius: 16px; padding: 14px 24px; text-align: center; }
-  .score-badge .label { font-size: 11px; color: #8b92b0; text-transform: uppercase; letter-spacing: 1px; }
-  .score-badge .value { font-size: 46px; font-weight: 800; color: #60a5fa; line-height: 1.1; }
-  .score-badge .sub { font-size: 12px; color: #6b7394; margin-top: 2px; }
-  .main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-  .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 16px 18px; }
-  .card h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
-  .card h3 .icon { font-size: 16px; }
-  .status-item { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .slide { width: 1920px; min-height: 1080px; padding: 40px 56px; position: relative; background: linear-gradient(135deg, #0a0e27 0%, #111640 50%, #0d1235 100%); }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+  .header h1 { font-size: 32px; font-weight: 800; background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .header .subtitle { font-size: 14px; color: #8b92b0; }
+  .score-badge { background: linear-gradient(135deg, #1e3a5f, #1a2955); border: 1px solid #2d4a7a; border-radius: 16px; padding: 12px 22px; text-align: center; }
+  .score-badge .label { font-size: 10px; color: #8b92b0; text-transform: uppercase; letter-spacing: 1px; }
+  .score-badge .value { font-size: 42px; font-weight: 800; color: #60a5fa; line-height: 1.1; }
+  .score-badge .sub { font-size: 11px; color: #6b7394; margin-top: 2px; }
+  .main-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+  .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 14px 16px; }
+  .card h3 { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .card h3 .icon { font-size: 15px; }
+  .status-item { display: flex; align-items: center; gap: 7px; padding: 4px 0; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,0.03); }
   .status-item:last-child { border-bottom: none; }
-  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 600; white-space: nowrap; min-width: 62px; justify-content: center; }
+  .badge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 20px; font-size: 9px; font-weight: 600; white-space: nowrap; min-width: 56px; justify-content: center; }
   .badge.full { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
   .badge.partial { background: rgba(250,204,21,0.12); color: #fbbf24; border: 1px solid rgba(250,204,21,0.2); }
   .badge.types { background: rgba(96,165,250,0.12); color: #60a5fa; border: 1px solid rgba(96,165,250,0.2); }
   .badge.none { background: rgba(239,68,68,0.1); color: #f87171; border: 1px solid rgba(239,68,68,0.15); }
   .badge.new { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
   .item-label { flex: 1; color: #c0c6dc; }
-  .item-detail { font-size: 10px; color: #6b7394; }
-  .progress-section { margin-bottom: 20px; }
-  .progress-bar-container { display: flex; gap: 3px; height: 26px; border-radius: 8px; overflow: hidden; margin-top: 6px; }
-  .progress-segment { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: white; letter-spacing: 0.3px; }
+  .item-detail { font-size: 9px; color: #6b7394; }
+  .progress-section { margin-bottom: 16px; }
+  .progress-bar-container { display: flex; gap: 2px; height: 24px; border-radius: 7px; overflow: hidden; margin-top: 5px; }
+  .progress-segment { display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: white; }
   .seg-full { background: #22c55e; }
   .seg-partial { background: #eab308; }
   .seg-types { background: #3b82f6; }
   .seg-none { background: #374151; color: #9ca3af; }
-  .progress-legend { display: flex; gap: 20px; margin-top: 8px; font-size: 11px; color: #8b92b0; }
-  .legend-item { display: flex; align-items: center; gap: 5px; }
-  .legend-dot { width: 9px; height: 9px; border-radius: 3px; }
-  .arch-section { margin-bottom: 18px; }
-  .arch-section h2 { font-size: 14px; font-weight: 700; color: #a0a8c4; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
-  .layer-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: stretch; }
-  .layer-label { width: 100px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #6b7394; background: rgba(255,255,255,0.02); border-radius: 7px; border: 1px solid rgba(255,255,255,0.05); }
-  .layer-crates { flex: 1; display: flex; gap: 6px; flex-wrap: wrap; }
-  .crate-box { padding: 6px 10px; border-radius: 7px; font-size: 11px; font-weight: 500; border: 1px solid; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .progress-legend { display: flex; gap: 18px; margin-top: 6px; font-size: 10px; color: #8b92b0; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 3px; }
+  .arch-section { margin-bottom: 14px; }
+  .arch-section h2 { font-size: 13px; font-weight: 700; color: #a0a8c4; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+  .layer-row { display: flex; gap: 7px; margin-bottom: 5px; align-items: stretch; }
+  .layer-label { width: 90px; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #6b7394; background: rgba(255,255,255,0.02); border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); }
+  .layer-crates { flex: 1; display: flex; gap: 5px; flex-wrap: wrap; }
+  .crate-box { padding: 5px 9px; border-radius: 6px; font-size: 10px; font-weight: 500; border: 1px solid; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
   .crate-box.existing { background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.2); color: #86efac; }
   .crate-box.new { background: rgba(96,165,250,0.08); border-color: rgba(96,165,250,0.25); color: #93c5fd; }
   .crate-box.bbs { background: rgba(168,85,247,0.1); border-color: rgba(168,85,247,0.3); color: #d8b4fe; }
-  .crate-box.new::before { content: "NEW"; font-size: 7px; font-weight: 800; background: #3b82f6; color: white; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.5px; }
-  .crate-box.bbs::before { content: "BBS"; font-size: 7px; font-weight: 800; background: #8b5cf6; color: white; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.5px; }
-  .bottom-stats { display: flex; gap: 12px; justify-content: space-between; }
-  .stat-card { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 11px; padding: 12px 16px; text-align: center; }
-  .stat-card .stat-value { font-size: 28px; font-weight: 800; }
-  .stat-card .stat-label { font-size: 9px; color: #6b7394; text-transform: uppercase; letter-spacing: 1px; margin-top: 3px; }
+  .crate-box.new::before { content: "NEW"; font-size: 7px; font-weight: 800; background: #3b82f6; color: white; padding: 1px 3px; border-radius: 2px; }
+  .crate-box.bbs::before { content: "BBS"; font-size: 7px; font-weight: 800; background: #8b5cf6; color: white; padding: 1px 3px; border-radius: 2px; }
+  .bottom-stats { display: flex; gap: 10px; justify-content: space-between; }
+  .stat-card { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 14px; text-align: center; }
+  .stat-card .stat-value { font-size: 26px; font-weight: 800; }
+  .stat-card .stat-label { font-size: 8px; color: #6b7394; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
   .stat-green { color: #4ade80; }
   .stat-blue { color: #60a5fa; }
   .stat-yellow { color: #fbbf24; }
   .stat-purple { color: #a78bfa; }
-  .footer { position: absolute; bottom: 16px; left: 60px; right: 60px; display: flex; justify-content: space-between; font-size: 10px; color: #4a5072; }
+  .footer { position: absolute; bottom: 14px; left: 56px; right: 56px; display: flex; justify-content: space-between; font-size: 9px; color: #4a5072; }
 </style>
 </head>
 <body>
 <div class="slide">
-
   <div class="header">
     <div>
       <h1>Affinidi TDK for Rust — eIDAS 2.0 Readiness</h1>
-      <div class="subtitle">Workspace capability assessment against EU Digital Identity Regulation requirements</div>
+      <div class="subtitle">Comprehensive assessment against EU Digital Identity Regulation (eIDAS 2.0 / ARF v2.5)</div>
     </div>
     <div class="score-badge">
       <div class="label">Overall Coverage</div>
-      <div class="value">82%</div>
-      <div class="sub">30% &rarr; 65% &rarr; 75% &rarr; 82%</div>
+      <div class="value">85%</div>
+      <div class="sub">30% &rarr; 65% &rarr; 75% &rarr; 82% &rarr; 85%</div>
     </div>
   </div>
 
   <div class="progress-section">
     <div class="progress-bar-container">
-      <div class="progress-segment seg-full" style="flex: 17;">FULL (17)</div>
-      <div class="progress-segment seg-partial" style="flex: 3;">PARTIAL (3)</div>
-      <div class="progress-segment seg-types" style="flex: 3;">TYPES (3)</div>
+      <div class="progress-segment seg-full" style="flex: 18;">FULL (18)</div>
+      <div class="progress-segment seg-partial" style="flex: 4;">PARTIAL (4)</div>
+      <div class="progress-segment seg-types" style="flex: 1;">TYPES (1)</div>
       <div class="progress-segment seg-none" style="flex: 2;">PLATFORM (2)</div>
     </div>
     <div class="progress-legend">
       <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Full Implementation</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div> Partial (data model, integration pending)</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> Types/schemas only</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#374151"></div> Platform-specific (SE/TEE hardware)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div> Partial (production crypto wired, flow pending)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> Types + Validation</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#374151"></div> Platform-specific (SE/TEE)</div>
     </div>
   </div>
 
   <div class="main-grid">
-
     <div class="card">
       <h3><span class="icon">&#x1F4C4;</span> Credential Formats &amp; Status</h3>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">SD-JWT VC</span><span class="item-detail">RFC 9901 + VC profile</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">ISO 18013-5 mdoc</span><span class="item-detail">Tag24, COSE_Sign1, MSO</span></div>
+      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">ISO 18013-5 mdoc</span><span class="item-detail">COSE P-256, AES-GCM session, Tag24</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">W3C VCDM 1.1 + 2.0</span><span class="item-detail">Builder, validation, temporal</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">W3C Data Integrity</span><span class="item-detail">EdDSA + BBS-2023</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Status List (ASL/ARL)</span><span class="item-detail">Bitstring, decoys, GZIP</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">W3C Data Integrity</span><span class="item-detail">EdDSA + BBS-2023 ZKP</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Status List (ASL/ARL)</span><span class="item-detail">Bitstring O(1), decoys, GZIP</span></div>
     </div>
 
     <div class="card">
       <h3><span class="icon">&#x1F517;</span> Protocols</h3>
-      <div class="status-item"><span class="badge new">NEW</span><span class="item-label">SIOPv2</span><span class="item-detail">ID Token, JWK Thumbprint, DID auth</span></div>
-      <div class="status-item"><span class="badge new">NEW</span><span class="item-label">OID4VC Core</span><span class="item-detail">Shared types, RFC 7638</span></div>
-      <div class="status-item"><span class="badge types">TYPES</span><span class="item-label">OpenID4VCI</span><span class="item-detail">Metadata, offers, requests</span></div>
-      <div class="status-item"><span class="badge types">TYPES</span><span class="item-label">OpenID4VP + PE v2</span><span class="item-detail">Auth request, descriptors</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">SIOPv2</span><span class="item-detail">ID Token, JWK Thumbprint, DID auth</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">OID4VC Core + JWT</span><span class="item-detail">ES256 signer, JWK Thumbprint</span></div>
+      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">OpenID4VCI</span><span class="item-detail">Types + issuer/wallet flow logic</span></div>
+      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">OpenID4VP + PE v2</span><span class="item-detail">Types + verifier/wallet flow</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">DIDComm v2.1</span><span class="item-detail">Full protocol suite + mediator</span></div>
     </div>
 
     <div class="card">
       <h3><span class="icon">&#x1F512;</span> Trust &amp; Security</h3>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Credential Revocation</span><span class="item-detail">ASL + ARL + privacy</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">Trust Lists</span><span class="item-detail">Registry, lookup, 25 types</span></div>
-      <div class="status-item"><span class="badge none">NONE</span><span class="item-label">WSCD / Key Attestation</span><span class="item-detail">Platform SE/TEE</span></div>
-      <div class="status-item"><span class="badge none">NONE</span><span class="item-label">Wallet Unit Attestation</span><span class="item-detail">Platform-specific</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">Secure Key Management</span><span class="item-detail">Software keys, zeroize</span></div>
+      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">Trust Lists (ETSI 119 612)</span><span class="item-detail">Registry, XML parser, 25 types</span></div>
+      <div class="status-item"><span class="badge none">NONE</span><span class="item-label">WSCD / Key Attestation</span><span class="item-detail">Platform SE/TEE hardware</span></div>
+      <div class="status-item"><span class="badge none">NONE</span><span class="item-label">Wallet Unit Attestation</span><span class="item-detail">Platform-specific infra</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Secure Key Mgmt</span><span class="item-detail">Zeroize, volatile writes</span></div>
     </div>
 
     <div class="card">
       <h3><span class="icon">&#x1F511;</span> Cryptography</h3>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ECDSA P-256 / P-384</span><span class="item-detail">ES256, ES384</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ECDSA P-256 (ES256)</span><span class="item-detail">Sign, verify, JWT, COSE</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">EdDSA (Ed25519)</span><span class="item-detail">Signing + key agreement</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">BBS over BLS12-381</span><span class="item-detail">52 tests, IETF fixtures</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">COSE Signatures</span><span class="item-detail">coset integrated in mdoc</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">JWK Thumbprint (RFC 7638)</span><span class="item-detail">EC, OKP, RSA in oid4vc-core</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">AES-256-GCM + HKDF</span><span class="item-detail">Session encryption for mdoc</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">JWK Thumbprint (RFC 7638)</span><span class="item-detail">EC, OKP, RSA</span></div>
     </div>
 
     <div class="card">
       <h3><span class="icon">&#x1F310;</span> DID Infrastructure</h3>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">11 DID Methods</span><span class="item-detail">key, peer, web, jwk, webvh, ebsi...</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">did:ebsi</span><span class="item-detail">EU blockchain registry (opt-in)</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">did:ebsi (EU registry)</span><span class="item-detail">Opt-in, EBSI DID Registry API</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Cached Resolution</span><span class="item-detail">250k+/sec, local + network</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">DID Authentication</span><span class="item-detail">Challenge-response + SIOPv2</span></div>
     </div>
@@ -146,18 +144,17 @@
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Holder Binding (ZKP_06)</span><span class="item-detail">Presentation header binding</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Status List Privacy</span><span class="item-detail">Random index, decoys, herd</span></div>
     </div>
-
   </div>
 
   <div class="arch-section">
-    <h2>Workspace Architecture (35 Crates)</h2>
+    <h2>Workspace Architecture (35 Crates, 983 Tests)</h2>
     <div class="layer-row">
       <div class="layer-label">Core</div>
       <div class="layer-crates">
-        <div class="crate-box existing">affinidi-encoding</div>
-        <div class="crate-box existing">affinidi-crypto</div>
-        <div class="crate-box existing">affinidi-secrets-resolver</div>
-        <div class="crate-box bbs">affinidi-bbs</div>
+        <div class="crate-box existing">encoding</div>
+        <div class="crate-box existing">crypto <span style="color:#4ade80;font-size:8px;margin-left:2px">+ES256</span></div>
+        <div class="crate-box existing">secrets-resolver</div>
+        <div class="crate-box bbs">bbs</div>
       </div>
     </div>
     <div class="layer-row">
@@ -165,7 +162,7 @@
       <div class="layer-crates">
         <div class="crate-box existing">did-common</div>
         <div class="crate-box existing">did-resolver-sdk</div>
-        <div class="crate-box existing">did-authentication</div>
+        <div class="crate-box existing">did-auth</div>
         <div class="crate-box new">did-ebsi</div>
       </div>
     </div>
@@ -175,7 +172,7 @@
         <div class="crate-box existing">sd-jwt</div>
         <div class="crate-box new">vc</div>
         <div class="crate-box new">sd-jwt-vc</div>
-        <div class="crate-box new">mdoc</div>
+        <div class="crate-box new">mdoc <span style="color:#4ade80;font-size:8px;margin-left:2px">+COSE+AES</span></div>
         <div class="crate-box new">status-list</div>
         <div class="crate-box existing">data-integrity <span style="color:#c084fc;font-size:8px;margin-left:2px">+BBS</span></div>
       </div>
@@ -183,7 +180,7 @@
     <div class="layer-row">
       <div class="layer-label">Protocols</div>
       <div class="layer-crates">
-        <div class="crate-box new">oid4vc-core</div>
+        <div class="crate-box new">oid4vc-core <span style="color:#4ade80;font-size:8px;margin-left:2px">+ES256</span></div>
         <div class="crate-box new">siopv2</div>
         <div class="crate-box new">openid4vci</div>
         <div class="crate-box new">openid4vp</div>
@@ -194,7 +191,7 @@
     <div class="layer-row">
       <div class="layer-label">Trust</div>
       <div class="layer-crates">
-        <div class="crate-box new">trust-lists</div>
+        <div class="crate-box new">trust-lists <span style="color:#fbbf24;font-size:8px;margin-left:2px">+XML</span></div>
       </div>
     </div>
   </div>
@@ -202,8 +199,8 @@
   <div class="bottom-stats">
     <div class="stat-card"><div class="stat-value stat-green">35</div><div class="stat-label">Total Crates</div></div>
     <div class="stat-card"><div class="stat-value stat-blue">12</div><div class="stat-label">New Crates</div></div>
-    <div class="stat-card"><div class="stat-value stat-purple">946</div><div class="stat-label">Tests Passing</div></div>
-    <div class="stat-card"><div class="stat-value stat-yellow">10</div><div class="stat-label">Specs Implemented</div></div>
+    <div class="stat-card"><div class="stat-value stat-purple">983</div><div class="stat-label">Tests Passing</div></div>
+    <div class="stat-card"><div class="stat-value stat-yellow">10</div><div class="stat-label">Specs Covered</div></div>
     <div class="stat-card"><div class="stat-value stat-green">11</div><div class="stat-label">DID Methods</div></div>
     <div class="stat-card"><div class="stat-value stat-green">0</div><div class="stat-label">Failures</div></div>
   </div>
@@ -212,7 +209,6 @@
     <span>Affinidi Trust Development Kit for Rust &bull; github.com/affinidi/affinidi-tdk-rs</span>
     <span>March 2026 &bull; RFC 9901, ISO 18013-5, W3C VCDM/DI, IETF BBS, SIOPv2, OID4VCI/VP, ETSI TS 119 612</span>
   </div>
-
 </div>
 </body>
 </html>
