@@ -25,7 +25,9 @@ members = [
   "crates/credentials/affinidi-sd-jwt-vc",
   "crates/credentials/affinidi-mdoc",
 
-  # Protocols: OpenID4VCI, OpenID4VP
+  # Protocols: OID4VC core, SIOPv2, OpenID4VCI, OpenID4VP
+  "crates/protocols/affinidi-oid4vc-core",
+  "crates/protocols/affinidi-siopv2",
   "crates/protocols/affinidi-openid4vci",
   "crates/protocols/affinidi-openid4vp",
 

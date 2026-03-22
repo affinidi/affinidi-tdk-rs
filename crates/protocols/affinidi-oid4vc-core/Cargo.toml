@@ -1,0 +1,24 @@
+[package]
+name = "affinidi-oid4vc-core"
+description = "Shared types for the OpenID for Verifiable Credentials (OID4VC) protocol family."
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords = ["ssi", "affinidi", "openid4vc", "siopv2"]
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
