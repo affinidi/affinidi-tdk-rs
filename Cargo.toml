@@ -18,6 +18,14 @@ members = [
   "crates/credentials/affinidi-sd-jwt",
   "crates/credentials/affinidi-data-integrity",
   "crates/credentials/affinidi-rdf-encoding",
+  "crates/credentials/affinidi-vc",
+  "crates/credentials/affinidi-status-list",
+  "crates/credentials/affinidi-sd-jwt-vc",
+  "crates/credentials/affinidi-mdoc",
+
+  # Protocols: OpenID4VCI, OpenID4VP
+  "crates/protocols/affinidi-openid4vci",
+  "crates/protocols/affinidi-openid4vp",
 
   # Messaging: DIDComm, SDK, mediator
   "crates/messaging/affinidi-messaging-didcomm",
