@@ -27,6 +27,7 @@ graph TD
         METHODS --> WEBVH["did:webvh"]
         METHODS --> CHEQD["did:cheqd"]
         METHODS --> SCID["did:scid"]
+        METHODS --> EBSI["did:ebsi"]
         METHODS --> ETH["did:ethr"]
         METHODS --> PKH["did:pkh"]
     end
@@ -87,13 +88,14 @@ cargo run
 | `did:webvh` | Yes | `did-methods` |
 | `did:cheqd` | Yes | `did-methods` |
 | `did:scid` | Yes | `did-methods` |
+| `did:ebsi` | No | `did-ebsi` (EBSI DID Registry API) |
 | `did:example` | No | `did_example` |
 
 ## Related Crates
 
-- [`affinidi-tdk`](../affinidi-tdk/) — Unified TDK entry point
-- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging (depends on this resolver)
-- [`affinidi-crypto`](../affinidi-tdk/common/affinidi-crypto/) — Cryptographic primitives
+- [`affinidi-tdk`](../tdk/) — Unified TDK entry point
+- [`affinidi-messaging`](../messaging/) — DIDComm messaging (depends on this resolver)
+- [`affinidi-crypto`](../core/affinidi-crypto/) — Cryptographic primitives
 
 ## License
 

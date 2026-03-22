@@ -115,7 +115,7 @@ impl TryFrom<&str> for DIDMethod {
 
 impl DIDMethod {
     /// Returns `true` for DID methods whose documents are fetched from external
-    /// infrastructure and can change over time (web, webvh, cheqd, scid).
+    /// infrastructure and can change over time (web, webvh, cheqd, scid, ebsi).
     ///
     /// Returns `false` for deterministic methods where the document is derived
     /// entirely from the DID string itself (key, peer, jwk, ethr, pkh, example).
@@ -144,7 +144,7 @@ pub struct ResolveResponse {
 ///
 /// - **Immutable methods** (key, peer, jwk, ethr, pkh): no expiry — entries
 ///   stay cached until evicted by capacity pressure.
-/// - **Mutable methods** (web, webvh, cheqd, scid): expire after `mutable_ttl`
+/// - **Mutable methods** (web, webvh, cheqd, scid, ebsi): expire after `mutable_ttl`
 ///   so that updated documents are eventually re-fetched.
 struct DIDExpiry {
     mutable_ttl: Duration,
@@ -440,7 +440,7 @@ impl DIDCacheClient {
     pub async fn new(config: DIDCacheConfig) -> Result<DIDCacheClient, DIDCacheError> {
         // Create the cache with per-entry expiry:
         // - Immutable DID methods (key, peer, jwk, ethr, pkh) → no TTL (evicted only by capacity)
-        // - Mutable DID methods (web, webvh, cheqd, scid) → expire after cache_ttl seconds
+        // - Mutable DID methods (web, webvh, cheqd, scid, ebsi) → expire after cache_ttl seconds
         let cache = Cache::builder()
             .max_capacity(config.cache_capacity.into())
             .expire_after(DIDExpiry {

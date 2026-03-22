@@ -29,6 +29,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 | `did:webvh` | Yes | `did-methods` |
 | `did:cheqd` | Yes | `did-methods` |
 | `did:scid` | Yes | `did-methods` |
+| `did:ebsi` | No | `did-ebsi` (EBSI DID Registry API) |
 | `did:example` | No | `did_example` (must be manually loaded) |
 
 ## Feature Flags
@@ -37,6 +38,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 |---|---|---|
 | `local` | Yes | Reserved for future local-only features |
 | `did-methods` | Yes | Includes `did-webvh`, `did-cheqd`, `did-scid` |
+| `did-ebsi` | No | EBSI DID method (requires network access to EU API) |
 | `network` | No | Enable network mode for remote cache server |
 | `did-webvh` | — | WebVH DID method support |
 | `did-cheqd` | — | Cheqd blockchain DID method support |
