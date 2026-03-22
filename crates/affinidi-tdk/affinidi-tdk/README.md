@@ -15,7 +15,7 @@ single crate and enable feature flags to pull in only the libraries you need.
 
 ```toml
 [dependencies]
-affinidi-tdk = "0.5"
+affinidi-tdk = "0.6"
 ```
 
 ## Feature Flags

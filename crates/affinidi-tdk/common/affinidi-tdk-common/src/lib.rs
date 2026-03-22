@@ -6,6 +6,7 @@ use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuil
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use config::TDKConfig;
 use environments::TDKEnvironment;
+use errors::TDKError;
 use profiles::TDKProfile;
 use reqwest::Client;
 use rustls::ClientConfig;
@@ -53,33 +54,80 @@ pub fn create_http_client() -> Client {
 }
 
 impl TDKSharedState {
-    /// default basic setup for TDKSharedState
-    /// For production code you should be using the TDKConfig Builder to create a custom setup
-    pub async fn default() -> Self {
-        let config = TDKConfig::builder().build().unwrap();
-        let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-            .await
-            .unwrap();
-        let (secrets_resolver, _) = ThreadedSecretsResolver::new(None).await;
+    /// Creates a new `TDKSharedState` from the provided configuration.
+    ///
+    /// The DID resolver is selected in priority order:
+    /// 1. `config.did_resolver` — a pre-built resolver instance
+    /// 2. `config.did_resolver_config` — a custom resolver configuration
+    /// 3. Default local-mode resolver
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TDKError::Config`] if the DID resolver fails to initialize.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use affinidi_tdk_common::{TDKSharedState, config::TDKConfig};
+    /// use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
+    ///
+    /// // Use a network-mode resolver (e.g., for Nitro Enclave deployments)
+    /// let resolver_config = DIDCacheConfigBuilder::default()
+    ///     .with_network_mode("ws://127.0.0.1:4445/did/v1/ws")
+    ///     .build();
+    ///
+    /// let config = TDKConfig::builder()
+    ///     .with_did_resolver_config(resolver_config)
+    ///     .build()?;
+    ///
+    /// let tdk = TDKSharedState::new(config).await?;
+    /// ```
+    pub async fn new(config: TDKConfig) -> Result<Self, TDKError> {
+        let did_resolver = if let Some(resolver) = config.did_resolver.clone() {
+            resolver
+        } else {
+            let resolver_config = config
+                .did_resolver_config
+                .clone()
+                .unwrap_or_else(|| DIDCacheConfigBuilder::default().build());
+            DIDCacheClient::new(resolver_config)
+                .await
+                .map_err(|e| TDKError::Config(format!("DID resolver init failed: {e}")))?
+        };
+
+        let secrets_resolver = if let Some(sr) = config.secrets_resolver.clone() {
+            sr
+        } else {
+            let (sr, _) = ThreadedSecretsResolver::new(None).await;
+            sr
+        };
+
         let client = create_http_client();
         let environment = TDKEnvironment::default();
         let (authentication, _) = AuthenticationCache::new(
-            1_000,
+            config.authentication_cache_limit as u64,
             &did_resolver,
             secrets_resolver.clone(),
             &client,
-            None,
+            config.custom_auth_handlers.clone(),
         );
         authentication.start().await;
 
-        TDKSharedState {
+        Ok(TDKSharedState {
             config,
             did_resolver,
             secrets_resolver,
             client,
             environment,
-            authentication: authentication.clone(),
-        }
+            authentication,
+        })
+    }
+
+    /// Default basic setup for TDKSharedState
+    /// For production code you should be using the TDKConfig Builder to create a custom setup
+    pub async fn default() -> Self {
+        let config = TDKConfig::builder().build().unwrap();
+        Self::new(config).await.unwrap()
     }
 
     /// Adds a TDK Profile to the shared state

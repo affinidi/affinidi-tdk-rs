@@ -44,6 +44,9 @@ pub enum TDKError {
     #[error("DID Method Error: {0}")]
     DIDMethod(String),
 
+    #[error("Config Error: {0}")]
+    Config(String),
+
     #[error("Data Integrity Error")]
     DataIntegrity(#[from] DataIntegrityError),
 }
