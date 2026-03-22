@@ -4,6 +4,7 @@ members = [
   "crates/core/affinidi-encoding",
   "crates/core/affinidi-crypto",
   "crates/core/affinidi-secrets-resolver",
+  "crates/core/affinidi-bbs",
 
   # Identity: DID resolution, authentication
   "crates/identity/affinidi-did-common",
