@@ -38,6 +38,9 @@ members = [
   "crates/messaging/affinidi-messaging-mediator",
   "crates/messaging/affinidi-messaging-text-client",
 
+  # Trust: trust infrastructure
+  "crates/trust/affinidi-trust-lists",
+
   # TDK: unified entry point
   "crates/tdk/affinidi-tdk-common",
   "crates/tdk/affinidi-tdk",

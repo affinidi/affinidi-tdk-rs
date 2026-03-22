@@ -1,0 +1,34 @@
+[package]
+name = "affinidi-trust-lists"
+description = "EU Trusted Lists (ETSI TS 119 612) for eIDAS 2.0 trust infrastructure."
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords = ["ssi", "affinidi", "eidas", "trust-list", "etsi"]
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[[example]]
+name = "lookup_issuer"
+path = "examples/lookup_issuer.rs"
+
+[[example]]
+name = "browse_trust_list"
+path = "examples/browse_trust_list.rs"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+quick-xml = { version = "0.37", features = ["serialize"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
