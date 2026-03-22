@@ -137,7 +137,8 @@ pub fn core_proof_gen(
 
     let mut m_hats: Vec<Scalar> = Vec::with_capacity(u);
     for (k, &j) in undisclosed_indexes.iter().enumerate() {
-        m_hats.push(m_tildes[k] - challenge * msg_scalars[j]);
+        // Per IETF draft: m^_j = m~_j + msg_j * c (addition, not subtraction)
+        m_hats.push(m_tildes[k] + challenge * msg_scalars[j]);
     }
 
     // 11. Serialize proof
@@ -415,7 +416,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_multiple_messages_partial_disclosure() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![b"msg0", b"msg1", b"msg2", b"msg3"];
@@ -488,7 +488,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_none_disclosed() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![b"secret1", b"secret2"];
@@ -670,7 +669,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "T2 reconstruction for undisclosed messages needs exact IETF draft alignment"]
     fn proof_ten_messages_selective() {
         let (sk, pk) = test_keypair();
         let messages: Vec<&[u8]> = vec![
