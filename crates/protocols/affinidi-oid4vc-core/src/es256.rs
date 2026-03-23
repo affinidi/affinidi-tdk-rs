@@ -47,7 +47,6 @@ impl Es256Signer {
 
     /// Get the public key as uncompressed SEC1 bytes.
     pub fn public_key_bytes(&self) -> Vec<u8> {
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
         VerifyingKey::from(&self.signing_key)
             .to_encoded_point(false)
             .to_bytes()
@@ -56,7 +55,6 @@ impl Es256Signer {
 
     /// Get the public key as a JWK Value.
     pub fn public_key_jwk(&self) -> serde_json::Value {
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
         let vk = VerifyingKey::from(&self.signing_key);
         let point = vk.to_encoded_point(false);
 
