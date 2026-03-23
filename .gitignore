@@ -5,6 +5,8 @@ environments.json
 Cargo.lock
 **/environments.json*
 
+docs
+
 # Superego
 .superego/
 CLAUDE.md
