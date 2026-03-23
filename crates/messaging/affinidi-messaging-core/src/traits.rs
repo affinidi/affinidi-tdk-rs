@@ -102,18 +102,3 @@ pub trait RelationshipManager: Send + Sync {
     ) -> Result<RelationshipState, MessagingError>;
 }
 
-/// Transport — send and receive raw packed messages over the network.
-///
-/// Both protocols are transport-agnostic. This trait allows plugging in
-/// HTTP, WebSocket, or any other transport.
-#[async_trait::async_trait]
-pub trait Transport: Send + Sync {
-    /// Send a packed message to an endpoint.
-    ///
-    /// Returns the response bytes if the transport supports synchronous replies.
-    async fn send(
-        &self,
-        endpoint: &url::Url,
-        message: &[u8],
-    ) -> Result<Option<Vec<u8>>, MessagingError>;
-}

@@ -45,12 +45,12 @@ pub struct ReceivedMessage {
 pub struct ResolvedIdentity {
     /// The identifier string (DID or VID).
     pub id: String,
-    /// Signing/verification public key bytes.
-    pub verification_key: Vec<u8>,
+    /// Signing/verification public key bytes (if available).
+    pub verification_key: Option<Vec<u8>>,
     /// Encryption public key bytes.
     pub encryption_key: Vec<u8>,
-    /// Service endpoint URLs for message delivery.
-    pub endpoints: Vec<Url>,
+    /// Service endpoint URLs for message delivery (if available).
+    pub endpoints: Option<Vec<Url>>,
 }
 
 /// State of a relationship between two parties.

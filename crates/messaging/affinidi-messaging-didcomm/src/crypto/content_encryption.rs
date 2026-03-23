@@ -9,6 +9,8 @@ use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::Sha512;
 
+use subtle::ConstantTimeEq;
+
 use crate::error::DIDCommError;
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
@@ -98,8 +100,8 @@ pub fn decrypt(
     hmac.update(&aad_len_bits.to_be_bytes());
     let full_tag = hmac.finalize().into_bytes();
 
-    // Compare truncated tag
-    if full_tag[..TAG_SIZE] != *tag {
+    // Constant-time tag comparison to prevent timing attacks
+    if full_tag[..TAG_SIZE].ct_eq(tag).unwrap_u8() != 1 {
         return Err(DIDCommError::ContentEncryption(
             "authentication tag mismatch".into(),
         ));

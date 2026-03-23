@@ -11,7 +11,6 @@
 //! - [`MessagingProtocol`] — Pack/unpack messages (encrypt, sign, encode)
 //! - [`IdentityResolver`] — Resolve identifiers to keys and endpoints
 //! - [`RelationshipManager`] — Manage relationship lifecycle
-//! - [`Transport`] — Send messages over the network
 //!
 //! ## Protocol Differences
 //!
@@ -27,5 +26,5 @@ pub mod traits;
 pub mod types;
 
 pub use error::MessagingError;
-pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager, Transport};
+pub use traits::{IdentityResolver, MessagingProtocol, RelationshipManager};
 pub use types::{Protocol, ReceivedMessage, RelationshipState, ResolvedIdentity};

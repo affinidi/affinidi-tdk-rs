@@ -38,6 +38,15 @@ pub struct SealResult {
 /// Uses HPKE Auth mode: the sender's identity is cryptographically bound
 /// to the ciphertext, providing both confidentiality and sender authentication.
 ///
+/// # Nonce safety
+///
+/// Each call to `seal()` generates a fresh ephemeral X25519 keypair inside
+/// [`auth_encap`]. Because the ephemeral secret key is unique per call, the
+/// ECDH shared secret is unique, and therefore [`key_schedule`] derives a
+/// unique `(key, base_nonce)` pair for every message. The `base_nonce` is
+/// used exactly once (sequence number 0) and then discarded, so there is no
+/// nonce reuse even though we do not maintain an explicit counter.
+///
 /// # Arguments
 /// * `plaintext` - The data to encrypt
 /// * `aad` - Additional authenticated data (e.g., TSP envelope)
@@ -68,6 +77,13 @@ pub fn seal(
 }
 
 /// Open (decrypt + verify sender) a ciphertext.
+///
+/// # Nonce safety
+///
+/// The `enc` field carries the sender's ephemeral public key, which is unique
+/// per message. [`auth_decap`] uses it to recover the same unique shared secret
+/// that was produced by `seal`, so the derived `(key, base_nonce)` pair is
+/// equally unique and used only once.
 ///
 /// # Arguments
 /// * `ciphertext` - The encrypted data (including 16-byte AES-GCM tag)

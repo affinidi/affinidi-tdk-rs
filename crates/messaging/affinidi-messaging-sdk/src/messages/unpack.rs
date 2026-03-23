@@ -27,12 +27,17 @@ impl ATM {
     }
 }
 
+/// Maximum number of forward message layers that will be unwrapped.
+/// Prevents denial-of-service via deeply nested forward envelopes.
+const MAX_FORWARD_DEPTH: usize = 10;
+
 impl SharedState {
     pub async fn unpack(&self, message: &str) -> Result<(Message, UnpackMetadata), ATMError> {
         let _span = span!(Level::DEBUG, "unpack",);
 
         async move {
             let mut msg_string = message.to_string();
+            let mut forward_depth: usize = 0;
 
             loop {
                 // Compute SHA-256 hash of the packed message
@@ -81,6 +86,12 @@ impl SharedState {
                 if self.config.unpack_forwards
                     && msg.typ == "https://didcomm.org/routing/2.0/forward"
                 {
+                    forward_depth += 1;
+                    if forward_depth > MAX_FORWARD_DEPTH {
+                        return Err(ATMError::MsgReceiveError(format!(
+                            "Forward message nesting depth exceeded maximum of {MAX_FORWARD_DEPTH}"
+                        )));
+                    }
                     // Extract the inner message and loop to unpack it
                     msg_string = Self::extract_forward_payload(&msg)?;
                 } else {
@@ -694,6 +705,27 @@ mod tests {
         assert!(
             matches!(&result.unwrap_err(), ATMError::MsgReceiveError(msg) if msg.contains("cannot be decoded")),
             "Expected MsgReceiveError mentioning decode failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn unpack_forward_depth_exceeded() {
+        let atm = create_atm().await;
+        let inner = make_inner_message();
+        let mut json_str = make_plaintext_json(&inner);
+
+        // Nest forward messages deeper than the limit
+        for _ in 0..=super::MAX_FORWARD_DEPTH {
+            let forward = wrap_in_forward_json(&json_str, None);
+            json_str = make_plaintext_json(&forward);
+        }
+
+        let result = atm.unpack(&json_str).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, ATMError::MsgReceiveError(msg) if msg.contains("nesting depth exceeded")),
+            "Expected MsgReceiveError about nesting depth, got: {err:?}"
         );
     }
 

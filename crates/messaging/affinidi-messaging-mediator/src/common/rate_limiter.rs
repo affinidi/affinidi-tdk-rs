@@ -99,18 +99,27 @@ where
             .get::<ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0.ip());
 
-        if let Some(ip) = ip {
-            if limiter.check_key(&ip).is_err() {
-                warn!("Rate limit exceeded for IP: {}", ip);
-                metrics::counter!(super::metrics::names::RATE_LIMITED_TOTAL).increment(1);
-                return Box::pin(async move {
-                    Ok((
-                        StatusCode::TOO_MANY_REQUESTS,
-                        "Rate limit exceeded. Please try again later.",
-                    )
-                        .into_response())
-                });
-            }
+        let Some(ip) = ip else {
+            warn!("No client IP available; rejecting request (rate limiting requires client IP)");
+            return Box::pin(async move {
+                Ok((
+                    StatusCode::FORBIDDEN,
+                    "Rate limiting requires client IP; request rejected.",
+                )
+                    .into_response())
+            });
+        };
+
+        if limiter.check_key(&ip).is_err() {
+            warn!("Rate limit exceeded for IP: {}", ip);
+            metrics::counter!(super::metrics::names::RATE_LIMITED_TOTAL).increment(1);
+            return Box::pin(async move {
+                Ok((
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "Rate limit exceeded. Please try again later.",
+                )
+                    .into_response())
+            });
         }
 
         let mut inner = self.inner.clone();

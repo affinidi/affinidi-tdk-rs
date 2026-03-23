@@ -2,6 +2,11 @@
 //!
 //! Simpler than TspStore — DIDComm has implicit relationships based on
 //! message exchange rather than explicit relationship state machines.
+//!
+//! **Note:** This store is intended for development and testing. It is a
+//! single-threaded, non-persistent `HashMap`-backed store with no encryption
+//! at rest or audit logging. Production deployments should implement a
+//! persistent store with appropriate key protection.
 
 use std::collections::HashMap;
 
@@ -9,6 +14,9 @@ use crate::error::DIDCommError;
 use crate::identity::{Mediator, PrivateIdentity, ResolvedIdentity};
 
 /// An in-memory store for local and resolved identities.
+///
+/// Suitable for development, testing, and single-threaded use cases.
+/// Not recommended for production — see module docs for details.
 #[derive(Default)]
 pub struct DIDCommStore {
     /// Local identities (keyed by DID)

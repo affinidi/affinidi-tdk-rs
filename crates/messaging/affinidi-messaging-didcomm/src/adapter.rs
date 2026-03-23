@@ -233,9 +233,9 @@ impl IdentityResolver for DIDCommAdapter {
 
         Ok(ResolvedIdentity {
             id: resolved.did.clone(),
-            verification_key: resolved.verifying_key.map(|k| k.to_vec()).unwrap_or_default(),
+            verification_key: resolved.verifying_key.map(|k| k.to_vec()),
             encryption_key: public_key_bytes(&resolved.key_agreement_public),
-            endpoints: vec![], // DIDComm endpoints come from DID resolution, not stored here
+            endpoints: None, // DIDComm endpoints come from DID resolution, not stored here
         })
     }
 }

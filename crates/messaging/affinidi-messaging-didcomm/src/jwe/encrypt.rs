@@ -19,8 +19,24 @@ pub fn authcrypt(
     if recipients.is_empty() {
         return Err(DIDCommError::InvalidMessage("no recipients".into()));
     }
+    if sender_kid.is_empty() {
+        return Err(DIDCommError::InvalidMessage("sender KID must not be empty".into()));
+    }
 
     let curve = recipients[0].1.curve();
+    // Validate all recipients use the same curve
+    for (kid, pk) in recipients {
+        if kid.is_empty() {
+            return Err(DIDCommError::InvalidMessage("recipient KID must not be empty".into()));
+        }
+        if pk.curve() != curve {
+            return Err(DIDCommError::KeyAgreement(format!(
+                "all recipients must use the same curve; expected {curve:?} but '{}' uses {:?}",
+                kid,
+                pk.curve()
+            )));
+        }
+    }
     let ephemeral = EphemeralKeyPair::generate(curve);
 
     // Compute APU and APV
@@ -92,6 +108,19 @@ pub fn anoncrypt(
     }
 
     let curve = recipients[0].1.curve();
+    // Validate all recipients use the same curve and have non-empty KIDs
+    for (kid, pk) in recipients {
+        if kid.is_empty() {
+            return Err(DIDCommError::InvalidMessage("recipient KID must not be empty".into()));
+        }
+        if pk.curve() != curve {
+            return Err(DIDCommError::KeyAgreement(format!(
+                "all recipients must use the same curve; expected {curve:?} but '{}' uses {:?}",
+                kid,
+                pk.curve()
+            )));
+        }
+    }
     let ephemeral = EphemeralKeyPair::generate(curve);
 
     let apv_raw = compute_apv(recipients.iter().map(|(kid, _)| *kid));

@@ -35,80 +35,72 @@ impl Envelope {
         }
     }
 
-    /// Encode the envelope to CESR bytes.
+    /// Encode the envelope to CESR qb2 (binary) bytes.
     ///
-    /// Format:
-    /// - Version + message type as a 2-byte Matter (code "J", 16-byte seed slot,
-    ///   but we use a simpler approach: fixed 2-byte prefix)
-    /// - Sender VID as variable-length CESR Matter (code "4B")
-    /// - Receiver VID as variable-length CESR Matter (code "4B")
-    ///
-    /// For simplicity, we use a length-prefixed binary format for the envelope
-    /// since CESR variable-length encoding requires 4-byte alignment.
+    /// Wire format (all CESR qb2-encoded, concatenated):
+    /// 1. Header Matter (code `"1AAF"` / Tag1, 3 raw bytes):
+    ///    `[version, message_type, 0x00]`
+    /// 2. Sender VID Matter (code `"4B"`, variable-length raw bytes)
+    /// 3. Receiver VID Matter (code `"4B"`, variable-length raw bytes)
     pub fn encode(&self) -> Result<Vec<u8>, TspError> {
-        let sender_bytes = self.sender.as_bytes();
-        let receiver_bytes = self.receiver.as_bytes();
+        // Header: version + message_type + padding byte → 3 raw bytes in Tag1
+        let header = Matter::new("1AAF", vec![self.version, self.message_type as u8, 0x00])?;
+        let sender = Matter::new("4B", self.sender.as_bytes().to_vec())?;
+        let receiver = Matter::new("4B", self.receiver.as_bytes().to_vec())?;
 
-        // Pre-allocate: 2 (header) + 2 (sender len) + sender + 2 (receiver len) + receiver
-        let mut buf = Vec::with_capacity(6 + sender_bytes.len() + receiver_bytes.len());
+        let header_qb2 = header.qb2()?;
+        let sender_qb2 = sender.qb2()?;
+        let receiver_qb2 = receiver.qb2()?;
 
-        // Fixed header: version (1 byte) + message type (1 byte)
-        buf.push(self.version);
-        buf.push(self.message_type as u8);
-
-        // Sender VID: length-prefixed (2 bytes big-endian + UTF-8)
-        let sender_len = sender_bytes.len() as u16;
-        buf.extend_from_slice(&sender_len.to_be_bytes());
-        buf.extend_from_slice(sender_bytes);
-
-        // Receiver VID: length-prefixed (2 bytes big-endian + UTF-8)
-        let receiver_len = receiver_bytes.len() as u16;
-        buf.extend_from_slice(&receiver_len.to_be_bytes());
-        buf.extend_from_slice(receiver_bytes);
+        let mut buf = Vec::with_capacity(
+            header_qb2.len() + sender_qb2.len() + receiver_qb2.len(),
+        );
+        buf.extend_from_slice(&header_qb2);
+        buf.extend_from_slice(&sender_qb2);
+        buf.extend_from_slice(&receiver_qb2);
 
         Ok(buf)
     }
 
-    /// Decode an envelope from bytes. Returns (envelope, bytes_consumed).
+    /// Decode an envelope from CESR qb2 bytes. Returns (envelope, bytes_consumed).
     pub fn decode(data: &[u8]) -> Result<(Self, usize), TspError> {
-        if data.len() < 6 {
-            return Err(TspError::InvalidMessage("envelope too short".into()));
+        // 1. Parse header Matter (fixed-length Tag1: 6 qb2 bytes)
+        let header = Matter::from_qb2(data)
+            .map_err(|e| TspError::InvalidMessage(format!("envelope header: {e}")))?;
+        if header.code() != "1AAF" {
+            return Err(TspError::InvalidMessage(format!(
+                "expected header code 1AAF, got {}",
+                header.code()
+            )));
         }
-
-        let version = data[0];
+        let header_raw = header.raw();
+        if header_raw.len() < 2 {
+            return Err(TspError::InvalidMessage("header raw too short".into()));
+        }
+        let version = header_raw[0];
         if version != TSP_VERSION {
             return Err(TspError::InvalidMessage(format!(
                 "unsupported TSP version: {version}"
             )));
         }
+        let message_type = MessageType::from_byte(header_raw[1])?;
+        let mut pos = header.full_size_qb2();
 
-        let message_type = MessageType::from_byte(data[1])?;
-        let mut pos = 2;
-
-        // Sender VID
-        let sender_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        pos += 2;
-        if pos + sender_len > data.len() {
-            return Err(TspError::InvalidMessage("sender VID truncated".into()));
-        }
-        let sender = std::str::from_utf8(&data[pos..pos + sender_len])
+        // 2. Parse sender VID Matter (variable-length)
+        let sender_matter = Matter::from_qb2(&data[pos..])
+            .map_err(|e| TspError::InvalidMessage(format!("sender VID: {e}")))?;
+        let sender = std::str::from_utf8(sender_matter.raw())
             .map_err(|_| TspError::InvalidMessage("invalid sender VID encoding".into()))?
             .to_string();
-        pos += sender_len;
+        pos += sender_matter.full_size_qb2();
 
-        // Receiver VID
-        if pos + 2 > data.len() {
-            return Err(TspError::InvalidMessage("receiver length truncated".into()));
-        }
-        let receiver_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-        pos += 2;
-        if pos + receiver_len > data.len() {
-            return Err(TspError::InvalidMessage("receiver VID truncated".into()));
-        }
-        let receiver = std::str::from_utf8(&data[pos..pos + receiver_len])
+        // 3. Parse receiver VID Matter (variable-length)
+        let receiver_matter = Matter::from_qb2(&data[pos..])
+            .map_err(|e| TspError::InvalidMessage(format!("receiver VID: {e}")))?;
+        let receiver = std::str::from_utf8(receiver_matter.raw())
             .map_err(|_| TspError::InvalidMessage("invalid receiver VID encoding".into()))?
             .to_string();
-        pos += receiver_len;
+        pos += receiver_matter.full_size_qb2();
 
         Ok((
             Envelope {
@@ -159,15 +151,20 @@ mod tests {
 
     #[test]
     fn envelope_invalid_version() {
-        let mut data = Envelope::new(MessageType::Direct, "a", "b")
-            .encode()
-            .unwrap();
-        data[0] = 99; // bad version
+        let env = Envelope::new(MessageType::Direct, "a", "b");
+        let mut data = env.encode().unwrap();
+        // The version byte is inside the Tag1 Matter's raw payload.
+        // Easiest way to test: construct a valid CESR envelope with bad version.
+        let bad_header = Matter::new("1AAF", vec![99, 0x00, 0x00]).unwrap();
+        let bad_qb2 = bad_header.qb2().unwrap();
+        // Replace the header portion (first 6 bytes for Tag1 qb2)
+        data[..bad_qb2.len()].copy_from_slice(&bad_qb2);
         assert!(Envelope::decode(&data).is_err());
     }
 
     #[test]
     fn envelope_truncated() {
+        // Too short to contain even the header Matter
         assert!(Envelope::decode(&[1, 0]).is_err());
     }
 

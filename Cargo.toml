@@ -76,22 +76,19 @@ tokio = "1.50"
 opt-level = "s"
 lto = true
 
+# Redirect crates.io deps to local workspace crates so all members use the same version.
+# Only needed for crates that are referenced by version (not path) in other workspace members.
 [patch.crates-io]
 affinidi-secrets-resolver = { path = "crates/core/affinidi-secrets-resolver" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
 affinidi-crypto = { path = "crates/core/affinidi-crypto" }
 affinidi-encoding = { path = "crates/core/affinidi-encoding" }
-affinidi-did-resolver-traits = { path = "crates/identity/affinidi-did-resolver-traits" }
 affinidi-data-integrity = { path = "crates/credentials/affinidi-data-integrity" }
-did-example = { path = "crates/identity/did-methods/did-example" }
-did-scid = { path = "crates/identity/did-methods/did-scid" }
 affinidi-messaging-didcomm = { path = "crates/messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
-affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
-affinidi-messaging-didcomm-service = { path = "crates/messaging/affinidi-messaging-didcomm-service" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"

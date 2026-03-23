@@ -60,27 +60,46 @@ impl Matter {
         let sizage =
             matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
 
-        let fs = if sizage.fs > 0 {
-            sizage.fs
+        if sizage.fs > 0 {
+            // Fixed-length
+            if qb64.len() < sizage.fs {
+                return Err(CesrError::UnexpectedEnd);
+            }
+            let raw = Self::extract_raw(qb64, &sizage, sizage.fs)?;
+            Ok(Self {
+                code: code.to_string(),
+                raw,
+                sizage,
+            })
         } else {
-            // Variable-length: read soft size
+            // Variable-length: read soft size (count of 4-char groups)
+            if qb64.len() < hs + sizage.ss {
+                return Err(CesrError::UnexpectedEnd);
+            }
             let ss_str = &qb64[hs..hs + sizage.ss];
             let count = b64_to_count(ss_str)?;
-            // fs = hs + ss + count * 4 (each group is 4 chars)
-            sizage.hs + sizage.ss + count * 4
-        };
+            let data_chars = count * 4;
+            let fs = hs + sizage.ss + data_chars;
 
-        if qb64.len() < fs {
-            return Err(CesrError::UnexpectedEnd);
+            if qb64.len() < fs {
+                return Err(CesrError::UnexpectedEnd);
+            }
+
+            // Decode just the data portion (after code + count)
+            let data_b64 = &qb64[hs + sizage.ss..fs];
+            let all_bytes = codec::b64_decode(data_b64)?;
+
+            // Strip lead zero-bytes (padding prepended during encoding to
+            // reach a multiple of 3). Lead count is at most 2.
+            let lead = count_leading_zeros(&all_bytes, 2);
+            let raw = all_bytes[lead..].to_vec();
+
+            Ok(Self {
+                code: code.to_string(),
+                raw,
+                sizage,
+            })
         }
-
-        let raw = Self::extract_raw(qb64, &sizage, fs)?;
-
-        Ok(Self {
-            code: code.to_string(),
-            raw,
-            sizage,
-        })
     }
 
     /// Parse a Matter from qb2 (binary domain) bytes.
@@ -112,66 +131,115 @@ impl Matter {
         let sizage =
             matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
 
-        let fs = if sizage.fs > 0 {
-            sizage.fs
+        if sizage.fs > 0 {
+            // Fixed-length: binary size = fs * 3 / 4
+            let bs = sizage.fs * 3 / 4;
+            if qb2.len() < bs {
+                return Err(CesrError::UnexpectedEnd);
+            }
+
+            // Convert the full binary to text and extract raw
+            let qb64 = codec::b64_encode(&qb2[..bs]);
+            let raw = Self::extract_raw(&qb64, &sizage, sizage.fs)?;
+
+            Ok(Self {
+                code: code.to_string(),
+                raw,
+                sizage,
+            })
         } else {
-            return Err(CesrError::Conversion(
-                "variable-length qb2 not yet supported".into(),
-            ));
-        };
+            // Variable-length: need enough bytes to read the soft (count) portion.
+            // In qb64: code is hs chars, count is ss chars → (hs+ss) chars total header.
+            // In qb2: (hs+ss) chars → (hs+ss)*3/4 bytes. (hs+ss) is always a multiple of 4
+            // for the variable-length codes we support (hs=2,ss=2 → 4 chars → 3 bytes).
+            let header_chars = sizage.hs + sizage.ss;
+            let header_bytes = header_chars * 3 / 4;
+            if qb2.len() < header_bytes {
+                return Err(CesrError::UnexpectedEnd);
+            }
 
-        // Binary size = fs * 3 / 4
-        let bs = fs * 3 / 4;
-        if qb2.len() < bs {
-            return Err(CesrError::UnexpectedEnd);
+            // Convert the header portion to qb64 to read the count
+            let header_b64 = codec::b64_encode(&qb2[..header_bytes]);
+            let count_str = &header_b64[sizage.hs..sizage.hs + sizage.ss];
+            let count = b64_to_count(count_str)?;
+
+            // Total qb64 size and binary size
+            let fs = header_chars + count * 4;
+            let bs = fs * 3 / 4;
+            if qb2.len() < bs {
+                return Err(CesrError::UnexpectedEnd);
+            }
+
+            // Convert the full primitive to qb64 and use text-domain parsing
+            let full_b64 = codec::b64_encode(&qb2[..bs]);
+            let data_b64 = &full_b64[header_chars..fs];
+            let all_bytes = codec::b64_decode(data_b64)?;
+
+            let lead = count_leading_zeros(&all_bytes, 2);
+            let raw = all_bytes[lead..].to_vec();
+
+            Ok(Self {
+                code: code.to_string(),
+                raw,
+                sizage,
+            })
         }
-
-        // Convert the full binary to text and extract raw
-        let qb64 = codec::b64_encode(&qb2[..bs]);
-        let raw = Self::extract_raw(&qb64, &sizage, fs)?;
-
-        Ok(Self {
-            code: code.to_string(),
-            raw,
-            sizage,
-        })
     }
 
     /// Encode this Matter to qb64 (text domain).
     pub fn qb64(&self) -> Result<String, CesrError> {
-        let fs = if self.sizage.fs > 0 {
-            self.sizage.fs
+        if self.sizage.fs > 0 {
+            // Fixed-length encoding
+            let fs = self.sizage.fs;
+            let hs = self.sizage.hs;
+            let cs = fs - hs; // chars for raw portion
+
+            // Compute lead bytes
+            let ls = self.compute_lead();
+
+            // Prepend lead zero bytes
+            let mut padded = vec![0u8; ls];
+            padded.extend_from_slice(&self.raw);
+
+            let encoded = codec::b64_encode(&padded);
+
+            // Take the last `cs` characters
+            if encoded.len() < cs {
+                return Err(CesrError::InvalidRawSize {
+                    expected: cs,
+                    got: encoded.len(),
+                });
+            }
+            let raw_b64 = &encoded[encoded.len() - cs..];
+
+            let mut result = String::with_capacity(fs);
+            result.push_str(&self.code);
+            result.push_str(raw_b64);
+            Ok(result)
         } else {
-            return Err(CesrError::Conversion(
-                "variable-length qb64 encoding not yet supported".into(),
-            ));
-        };
+            // Variable-length encoding: code (hs chars) + count (ss chars) + data (count * 4 chars)
+            // The raw bytes are padded to a multiple of 3, then base64-encoded.
+            // The count is the number of 4-char base64 groups in the data portion.
+            let ls = codec::lead_bytes(self.raw.len());
+            let mut padded = vec![0u8; ls];
+            padded.extend_from_slice(&self.raw);
 
-        let hs = self.sizage.hs;
-        let cs = fs - hs; // chars for raw portion
+            let encoded = codec::b64_encode(&padded);
+            let num_groups = encoded.len() / 4;
+            if encoded.len() % 4 != 0 {
+                return Err(CesrError::Conversion(
+                    "padded raw bytes did not produce aligned base64".into(),
+                ));
+            }
 
-        // Compute lead bytes
-        let ls = self.compute_lead();
+            let count_b64 = count_to_b64(num_groups, self.sizage.ss)?;
 
-        // Prepend lead zero bytes
-        let mut padded = vec![0u8; ls];
-        padded.extend_from_slice(&self.raw);
-
-        let encoded = codec::b64_encode(&padded);
-
-        // Take the last `cs` characters
-        if encoded.len() < cs {
-            return Err(CesrError::InvalidRawSize {
-                expected: cs,
-                got: encoded.len(),
-            });
+            let mut result = String::with_capacity(self.sizage.hs + self.sizage.ss + encoded.len());
+            result.push_str(&self.code);
+            result.push_str(&count_b64);
+            result.push_str(&encoded);
+            Ok(result)
         }
-        let raw_b64 = &encoded[encoded.len() - cs..];
-
-        let mut result = String::with_capacity(fs);
-        result.push_str(&self.code);
-        result.push_str(raw_b64);
-        Ok(result)
     }
 
     /// Encode this Matter to qb2 (binary domain).
@@ -196,8 +264,23 @@ impl Matter {
     }
 
     /// The full size in qb64 characters.
+    ///
+    /// For fixed-length codes this is the static `fs` from the sizage table.
+    /// For variable-length codes it is computed from the raw data length.
     pub fn full_size(&self) -> usize {
-        self.sizage.fs
+        if self.sizage.fs > 0 {
+            self.sizage.fs
+        } else {
+            let ls = self.compute_lead();
+            let padded = ls + self.raw.len();
+            let num_groups = padded / 3;
+            self.sizage.hs + self.sizage.ss + num_groups * 4
+        }
+    }
+
+    /// The full size in qb2 (binary) bytes.
+    pub fn full_size_qb2(&self) -> usize {
+        self.full_size() * 3 / 4
     }
 
     /// Compute lead bytes for the current raw size.
@@ -266,6 +349,11 @@ impl Matter {
         let raw = all_bytes[lead..].to_vec();
         Ok(raw)
     }
+}
+
+/// Count leading zero bytes in a slice, up to a maximum.
+fn count_leading_zeros(data: &[u8], max: usize) -> usize {
+    data.iter().take(max).take_while(|&&b| b == 0).count()
 }
 
 /// Convert a Base64url string to a count value.
@@ -411,5 +499,65 @@ mod tests {
     #[test]
     fn test_invalid_raw_size() {
         assert!(Matter::new("B", vec![0u8; 16]).is_err());
+    }
+
+    #[test]
+    fn test_variable_length_qb64_roundtrip() {
+        let raw = b"did:example:alice".to_vec();
+        let m = Matter::new("4B", raw.clone()).unwrap();
+        let qb64 = m.qb64().unwrap();
+
+        // Code "4B" (2 chars) + count (2 chars) + data
+        assert!(qb64.starts_with("4B"));
+
+        let m2 = Matter::from_qb64(&qb64).unwrap();
+        assert_eq!(m2.code(), "4B");
+        assert_eq!(m2.raw(), raw.as_slice());
+    }
+
+    #[test]
+    fn test_variable_length_qb2_roundtrip() {
+        let raw = b"did:example:bob".to_vec();
+        let m = Matter::new("4B", raw.clone()).unwrap();
+        let qb2 = m.qb2().unwrap();
+
+        let m2 = Matter::from_qb2(&qb2).unwrap();
+        assert_eq!(m2.code(), "4B");
+        assert_eq!(m2.raw(), raw.as_slice());
+    }
+
+    #[test]
+    fn test_variable_length_full_size() {
+        // 17 bytes raw → lead = (3 - 17%3)%3 = (3-2)%3 = 1, padded = 18, groups = 6
+        // fs = 2 + 2 + 6*4 = 28 chars, bs = 28*3/4 = 21 bytes
+        let raw = b"did:example:alice".to_vec(); // 17 bytes
+        let m = Matter::new("4B", raw).unwrap();
+        assert_eq!(m.full_size(), 28);
+        assert_eq!(m.full_size_qb2(), 21);
+    }
+
+    #[test]
+    fn test_variable_length_multiple_of_3() {
+        // Raw data length is exactly a multiple of 3 (no lead bytes needed)
+        let raw = b"abcdef".to_vec(); // 6 bytes, lead = 0
+        let m = Matter::new("4B", raw.clone()).unwrap();
+        let qb64 = m.qb64().unwrap();
+        let m2 = Matter::from_qb64(&qb64).unwrap();
+        assert_eq!(m2.raw(), raw.as_slice());
+
+        let qb2 = m.qb2().unwrap();
+        let m3 = Matter::from_qb2(&qb2).unwrap();
+        assert_eq!(m3.raw(), raw.as_slice());
+    }
+
+    #[test]
+    fn test_variable_length_string_code() {
+        // "4A" is for string variable-length
+        let raw = b"hello world".to_vec();
+        let m = Matter::new("4A", raw.clone()).unwrap();
+        let qb64 = m.qb64().unwrap();
+        let m2 = Matter::from_qb64(&qb64).unwrap();
+        assert_eq!(m2.code(), "4A");
+        assert_eq!(m2.raw(), raw.as_slice());
     }
 }

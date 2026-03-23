@@ -126,9 +126,9 @@ impl IdentityResolver for TspAdapter {
 
         Ok(ResolvedIdentity {
             id: resolved.id,
-            verification_key: resolved.signing_key.to_vec(),
+            verification_key: Some(resolved.signing_key.to_vec()),
             encryption_key: resolved.encryption_key.to_vec(),
-            endpoints: resolved.endpoints,
+            endpoints: Some(resolved.endpoints),
         })
     }
 }
@@ -233,7 +233,7 @@ mod tests {
         let (alice, _) = setup();
         let resolved = alice.resolve("did:example:bob").await.unwrap();
         assert_eq!(resolved.id, "did:example:bob");
-        assert_eq!(resolved.verification_key.len(), 32);
+        assert_eq!(resolved.verification_key.as_ref().unwrap().len(), 32);
         assert_eq!(resolved.encryption_key.len(), 32);
     }
 

@@ -14,6 +14,10 @@ use crate::error::TspError;
 use crate::message::MessageType;
 use crate::message::envelope::Envelope;
 
+/// Maximum allowed message size (1 MB) to prevent memory exhaustion from
+/// maliciously crafted ciphertext length fields on the wire.
+const MAX_MESSAGE_SIZE: usize = 1_048_576;
+
 /// A packed (sealed + signed) TSP direct message ready for transport.
 #[derive(Debug, Clone)]
 pub struct PackedMessage {
@@ -91,8 +95,10 @@ pub fn unpack(
     sender_encryption_key: &[u8; 32],
     sender_signing_key: &[u8; 32],
 ) -> Result<UnpackedMessage, TspError> {
-    // Minimum size: envelope(6+) + enc(32) + ct_len(4) + ct(16 min for tag) + sig(64)
-    if wire.len() < 122 {
+    // Minimum size: envelope (CESR-encoded, at least ~30 bytes for short VIDs)
+    // + enc(32) + ct_len(4) + ct(16 min for AEAD tag) + sig(64)
+    // Use a conservative lower bound; detailed checks below catch real truncation.
+    if wire.len() < 48 {
         return Err(TspError::InvalidMessage("message too short".into()));
     }
 
@@ -115,6 +121,11 @@ pub fn unpack(
     }
     let ct_len =
         u32::from_be_bytes(wire[ct_len_start..ct_len_start + 4].try_into().unwrap()) as usize;
+    if ct_len > MAX_MESSAGE_SIZE {
+        return Err(TspError::InvalidMessage(
+            format!("ciphertext length {ct_len} exceeds maximum allowed size of {MAX_MESSAGE_SIZE} bytes"),
+        ));
+    }
     let ct_start = ct_len_start + 4;
     if ct_start + ct_len > wire.len() {
         return Err(TspError::InvalidMessage("ciphertext truncated".into()));
