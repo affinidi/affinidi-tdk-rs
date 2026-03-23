@@ -35,6 +35,18 @@ pub enum MdocError {
     #[error("Missing field: {0}")]
     MissingField(String),
 
+    /// Device authentication failed.
+    #[error("Device auth error: {0}")]
+    DeviceAuth(String),
+
+    /// Reader authentication failed.
+    #[error("Reader auth error: {0}")]
+    ReaderAuth(String),
+
+    /// Session transcript error.
+    #[error("Session transcript error: {0}")]
+    SessionTranscript(String),
+
     /// JSON conversion error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),

@@ -14,6 +14,14 @@ use crate::tag24::Tag24;
 /// Trait for signing COSE payloads.
 ///
 /// Implementations can use local keys, HSM, or WSCD.
+///
+/// # Supported Algorithms
+///
+/// | Algorithm | COSE ID | Curve | Feature |
+/// |-----------|---------|-------|---------|
+/// | ES256 | -7 | P-256 | `es256` |
+/// | ES384 | -35 | P-384 | `es384` |
+/// | EdDSA | -8 | Ed25519 | `eddsa` |
 pub trait CoseSigner: Send + Sync {
     /// The COSE algorithm identifier (e.g., -7 for ES256, -35 for ES384).
     fn algorithm(&self) -> coset::iana::Algorithm;
@@ -24,6 +32,12 @@ pub trait CoseSigner: Send + Sync {
     /// Optional X.509 certificate chain (DER-encoded).
     /// The first certificate is the signing certificate (Document Signer).
     fn x5chain(&self) -> Option<Vec<Vec<u8>>> {
+        None
+    }
+
+    /// Optional key identifier (kid).
+    /// Used to identify which key was used for signing.
+    fn kid(&self) -> Option<Vec<u8>> {
         None
     }
 }
@@ -46,7 +60,7 @@ pub fn sign_mso(mso: &MobileSecurityObject, signer: &dyn CoseSigner) -> Result<C
     // Build protected header
     let protected = HeaderBuilder::new().algorithm(signer.algorithm()).build();
 
-    // Build unprotected header with x5chain if available
+    // Build unprotected header with x5chain and kid if available
     let mut unprotected_builder = HeaderBuilder::new();
     if let Some(chain) = signer.x5chain() {
         if chain.len() == 1 {
@@ -59,6 +73,9 @@ pub fn sign_mso(mso: &MobileSecurityObject, signer: &dyn CoseSigner) -> Result<C
                 chain.into_iter().map(coset::cbor::Value::Bytes).collect();
             unprotected_builder = unprotected_builder.value(33, coset::cbor::Value::Array(certs));
         }
+    }
+    if let Some(kid) = signer.kid() {
+        unprotected_builder = unprotected_builder.key_id(kid);
     }
     let unprotected = unprotected_builder.build();
 
@@ -104,6 +121,38 @@ pub fn verify_issuer_auth(
         .map_err(|e| MdocError::Cbor(format!("MSO decode: {e}")))?;
 
     Ok(tagged.inner)
+}
+
+/// Verify a COSE_Sign1 issuerAuth with algorithm verification.
+///
+/// Same as `verify_issuer_auth` but also checks that the algorithm
+/// in the protected header matches the expected algorithm.
+pub fn verify_issuer_auth_with_alg(
+    sign1: &CoseSign1,
+    verifier: &dyn CoseVerifier,
+    expected_alg: coset::iana::Algorithm,
+) -> Result<MobileSecurityObject> {
+    // Check the algorithm in protected header
+    let alg = &sign1.protected.header.alg;
+    let expected = coset::RegisteredLabelWithPrivate::Assigned(expected_alg);
+    if alg.as_ref() != Some(&expected) {
+        return Err(MdocError::Cose(format!(
+            "algorithm mismatch: expected {expected:?}, got {alg:?}"
+        )));
+    }
+
+    verify_issuer_auth(sign1, verifier)
+}
+
+/// Extract the key ID (kid) from a COSE_Sign1 unprotected header.
+pub fn extract_kid(sign1: &CoseSign1) -> Option<&[u8]> {
+    let kid = &sign1.unprotected.key_id;
+    if kid.is_empty() { None } else { Some(kid) }
+}
+
+/// Extract the algorithm from a COSE_Sign1 protected header.
+pub fn extract_algorithm(sign1: &CoseSign1) -> Option<&coset::RegisteredLabelWithPrivate<coset::iana::Algorithm>> {
+    sign1.protected.header.alg.as_ref()
 }
 
 #[cfg(any(test, feature = "_test-utils"))]

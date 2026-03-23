@@ -26,6 +26,13 @@
  * 6. **Access Certificate Authorities** — Issue access certificates
  * 7. **Registration Certificate Providers** — Issue registration certificates
  *
+ * # Features
+ *
+ * - **XML Parsing**: Full ETSI TS 119 612 XML parsing — TSPs, services, certificates
+ * - **Trust Registry**: O(1) lookup by certificate, SKI, public key, or DID
+ * - **X.509 Validation**: Certificate chain validation against trust anchors
+ * - **COSE x5chain**: Integration point for mdoc issuerAuth certificate chains
+ *
  * # Usage
  *
  * ```rust
@@ -46,6 +53,9 @@
  * // Look up an issuer
  * let result = registry.lookup_by_certificate(b"<certificate-bytes>");
  * assert!(result.is_trusted());
+ *
+ * // Validate an x5chain from COSE_Sign1 (mdoc issuerAuth)
+ * let chain_result = validate_x5chain(&[/* DER certs */], &registry);
  * ```
  */
 
@@ -54,6 +64,7 @@ pub mod registry;
 pub mod service_status;
 pub mod service_type;
 pub mod types;
+pub mod x509;
 pub mod xml;
 
 pub use error::TrustListError;
@@ -64,3 +75,4 @@ pub use types::{
     OtherTslPointer, SchemeInformation, ServiceDigitalIdentity, ServiceHistoryEntry,
     ServiceInformation, TrustServiceProvider, TrustServiceStatusList, TslType,
 };
+pub use x509::{CertInfo, ChainValidationResult, validate_chain, validate_x5chain};

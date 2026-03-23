@@ -71,22 +71,20 @@
     </div>
     <div class="score-badge">
       <div class="label">Overall Coverage</div>
-      <div class="value">85%</div>
-      <div class="sub">30% &rarr; 65% &rarr; 75% &rarr; 82% &rarr; 85%</div>
+      <div class="value">91%</div>
+      <div class="sub">30% &rarr; 65% &rarr; 75% &rarr; 82% &rarr; 85% &rarr; 91%</div>
     </div>
   </div>
 
   <div class="progress-section">
     <div class="progress-bar-container">
-      <div class="progress-segment seg-full" style="flex: 18;">FULL (18)</div>
-      <div class="progress-segment seg-partial" style="flex: 4;">PARTIAL (4)</div>
-      <div class="progress-segment seg-types" style="flex: 1;">TYPES (1)</div>
+      <div class="progress-segment seg-full" style="flex: 21;">FULL (21)</div>
+      <div class="progress-segment seg-partial" style="flex: 2;">PARTIAL (2)</div>
       <div class="progress-segment seg-none" style="flex: 2;">PLATFORM (2)</div>
     </div>
     <div class="progress-legend">
       <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div> Full Implementation</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div> Partial (production crypto wired, flow pending)</div>
-      <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> Types + Validation</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div> Partial (types + crypto, execution pending)</div>
       <div class="legend-item"><div class="legend-dot" style="background:#374151"></div> Platform-specific (SE/TEE)</div>
     </div>
   </div>
@@ -94,8 +92,8 @@
   <div class="main-grid">
     <div class="card">
       <h3><span class="icon">&#x1F4C4;</span> Credential Formats &amp; Status</h3>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">SD-JWT VC</span><span class="item-detail">RFC 9901 + VC profile</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">ISO 18013-5 mdoc</span><span class="item-detail">COSE P-256, AES-GCM session, Tag24</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">SD-JWT VC</span><span class="item-detail">RFC 9901 + VC profile + KB-JWT</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ISO 18013-5 mdoc</span><span class="item-detail">ES256/ES384/EdDSA, DeviceAuth, ReaderAuth, Mac0</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">W3C VCDM 1.1 + 2.0</span><span class="item-detail">Builder, validation, temporal</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">W3C Data Integrity</span><span class="item-detail">EdDSA + BBS-2023 ZKP</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Status List (ASL/ARL)</span><span class="item-detail">Bitstring O(1), decoys, GZIP</span></div>
@@ -113,7 +111,7 @@
     <div class="card">
       <h3><span class="icon">&#x1F512;</span> Trust &amp; Security</h3>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Credential Revocation</span><span class="item-detail">ASL + ARL + privacy</span></div>
-      <div class="status-item"><span class="badge partial">PARTIAL</span><span class="item-label">Trust Lists (ETSI 119 612)</span><span class="item-detail">Registry, XML parser, 25 types</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Trust Lists (ETSI 119 612)</span><span class="item-detail">XML→TSP, X.509 chain validation, x5chain</span></div>
       <div class="status-item"><span class="badge none">NONE</span><span class="item-label">WSCD / Key Attestation</span><span class="item-detail">Platform SE/TEE hardware</span></div>
       <div class="status-item"><span class="badge none">NONE</span><span class="item-label">Wallet Unit Attestation</span><span class="item-detail">Platform-specific infra</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Secure Key Mgmt</span><span class="item-detail">Zeroize, volatile writes</span></div>
@@ -121,11 +119,12 @@
 
     <div class="card">
       <h3><span class="icon">&#x1F511;</span> Cryptography</h3>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ECDSA P-256 (ES256)</span><span class="item-detail">Sign, verify, JWT, COSE</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">EdDSA (Ed25519)</span><span class="item-detail">Signing + key agreement</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ECDSA P-256 (ES256)</span><span class="item-detail">JWT, COSE_Sign1, JWS</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">ECDSA P-384 (ES384)</span><span class="item-detail">COSE_Sign1, high-assurance</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">EdDSA (Ed25519)</span><span class="item-detail">COSE + JWS + key agreement</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">BBS over BLS12-381</span><span class="item-detail">52 tests, IETF fixtures</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">HMAC-SHA-256 (COSE_Mac0)</span><span class="item-detail">Symmetric device auth</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">AES-256-GCM + HKDF</span><span class="item-detail">Session encryption for mdoc</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">JWK Thumbprint (RFC 7638)</span><span class="item-detail">EC, OKP, RSA</span></div>
     </div>
 
     <div class="card">
@@ -137,22 +136,22 @@
     </div>
 
     <div class="card">
-      <h3><span class="icon">&#x1F6E1;</span> Privacy &amp; ZKP</h3>
+      <h3><span class="icon">&#x1F6E1;</span> Privacy, ZKP &amp; mdoc</h3>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">SD-JWT Selective Disclosure</span><span class="item-detail">Per-claim, decoy digests</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">mdoc Selective Disclosure</span><span class="item-detail">Per-attribute DeviceResponse</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">mdoc Selective Disclosure</span><span class="item-detail">DeviceResponse + holder binding</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">mdoc Session &amp; Transport</span><span class="item-detail">Engagement, Transcript, QR/NFC/OID4VP</span></div>
       <div class="status-item"><span class="badge full">FULL</span><span class="item-label">BBS ZK Proofs (ZKP_01-03)</span><span class="item-detail">Unlinkable, zero-knowledge</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Holder Binding (ZKP_06)</span><span class="item-detail">Presentation header binding</span></div>
-      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Status List Privacy</span><span class="item-detail">Random index, decoys, herd</span></div>
+      <div class="status-item"><span class="badge full">FULL</span><span class="item-label">Typed COSE_Key (RFC 9052)</span><span class="item-detail">EC2/OKP, validation, key_ops</span></div>
     </div>
   </div>
 
   <div class="arch-section">
-    <h2>Workspace Architecture (35 Crates, 983 Tests)</h2>
+    <h2>Workspace Architecture (35 Crates, 1050+ Tests)</h2>
     <div class="layer-row">
       <div class="layer-label">Core</div>
       <div class="layer-crates">
         <div class="crate-box existing">encoding</div>
-        <div class="crate-box existing">crypto <span style="color:#4ade80;font-size:8px;margin-left:2px">+ES256</span></div>
+        <div class="crate-box existing">crypto <span style="color:#4ade80;font-size:8px;margin-left:2px">P-256/384/Ed25519</span></div>
         <div class="crate-box existing">secrets-resolver</div>
         <div class="crate-box bbs">bbs</div>
       </div>
@@ -172,7 +171,7 @@
         <div class="crate-box existing">sd-jwt</div>
         <div class="crate-box new">vc</div>
         <div class="crate-box new">sd-jwt-vc</div>
-        <div class="crate-box new">mdoc <span style="color:#4ade80;font-size:8px;margin-left:2px">+COSE+AES</span></div>
+        <div class="crate-box new">mdoc <span style="color:#4ade80;font-size:8px;margin-left:2px">+COSE(3alg)+Mac0+CoseKey</span></div>
         <div class="crate-box new">status-list</div>
         <div class="crate-box existing">data-integrity <span style="color:#c084fc;font-size:8px;margin-left:2px">+BBS</span></div>
       </div>
@@ -191,7 +190,7 @@
     <div class="layer-row">
       <div class="layer-label">Trust</div>
       <div class="layer-crates">
-        <div class="crate-box new">trust-lists <span style="color:#fbbf24;font-size:8px;margin-left:2px">+XML</span></div>
+        <div class="crate-box new">trust-lists <span style="color:#4ade80;font-size:8px;margin-left:2px">+XML+X.509+x5chain</span></div>
       </div>
     </div>
   </div>
@@ -199,15 +198,15 @@
   <div class="bottom-stats">
     <div class="stat-card"><div class="stat-value stat-green">35</div><div class="stat-label">Total Crates</div></div>
     <div class="stat-card"><div class="stat-value stat-blue">12</div><div class="stat-label">New Crates</div></div>
-    <div class="stat-card"><div class="stat-value stat-purple">983</div><div class="stat-label">Tests Passing</div></div>
-    <div class="stat-card"><div class="stat-value stat-yellow">10</div><div class="stat-label">Specs Covered</div></div>
+    <div class="stat-card"><div class="stat-value stat-purple">1050</div><div class="stat-label">Tests Passing</div></div>
+    <div class="stat-card"><div class="stat-value stat-yellow">11</div><div class="stat-label">Specs Covered</div></div>
     <div class="stat-card"><div class="stat-value stat-green">11</div><div class="stat-label">DID Methods</div></div>
     <div class="stat-card"><div class="stat-value stat-green">0</div><div class="stat-label">Failures</div></div>
   </div>
 
   <div class="footer">
     <span>Affinidi Trust Development Kit for Rust &bull; github.com/affinidi/affinidi-tdk-rs</span>
-    <span>March 2026 &bull; RFC 9901, ISO 18013-5, W3C VCDM/DI, IETF BBS, SIOPv2, OID4VCI/VP, ETSI TS 119 612</span>
+    <span>March 2026 &bull; RFC 9901/9052, ISO 18013-5, W3C VCDM/DI, IETF BBS, SIOPv2, OID4VCI/VP, ETSI TS 119 612</span>
   </div>
 </div>
 </body>

@@ -21,9 +21,11 @@ use std::collections::BTreeMap;
 use coset::CoseSign1;
 
 use crate::cose::{CoseSigner, CoseVerifier, sign_mso, verify_issuer_auth};
+use crate::device_auth::{DeviceAuthentication, DeviceNameSpaces, DeviceSigned};
 use crate::error::Result;
 use crate::issuer_signed_item::{IssuerSignedItem, json_to_cbor};
 use crate::mso::{MobileSecurityObject, ValidityInfo};
+use crate::session_transcript::SessionTranscript;
 use crate::tag24::Tag24;
 
 /// An mdoc credential as created by the issuer.
@@ -209,6 +211,8 @@ pub struct DeviceResponse {
     pub mso: MobileSecurityObject,
     /// The original issuerAuth (for signature verification by the verifier).
     pub issuer_auth: CoseSign1,
+    /// Device-signed data proving holder binding (optional).
+    pub device_signed: Option<DeviceSigned>,
     /// Response status (0 = OK).
     pub status: u32,
 }
@@ -246,6 +250,7 @@ impl DeviceResponse {
             disclosed,
             mso: issuer_signed.mso.clone(),
             issuer_auth: issuer_signed.issuer_auth.clone(),
+            device_signed: None,
             status: 0,
         })
     }
@@ -279,6 +284,105 @@ impl DeviceResponse {
             })
             .unwrap_or_default()
     }
+
+    /// Create a device response with holder binding (device signature).
+    ///
+    /// The device proves possession of its private key by signing
+    /// `DeviceAuthenticationBytes` with COSE_Sign1.
+    ///
+    /// # Arguments
+    ///
+    /// * `issuer_signed` — The full issuer-signed credential
+    /// * `requested` — Map of namespace to list of attribute identifiers to disclose
+    /// * `session_transcript` — The session transcript for this session
+    /// * `device_signer` — Signer with the device's private key
+    /// * `device_namespaces` — Optional device-signed data (usually empty)
+    pub fn create_with_device_auth(
+        issuer_signed: &IssuerSigned,
+        requested: &BTreeMap<String, Vec<String>>,
+        session_transcript: &SessionTranscript,
+        device_signer: &dyn CoseSigner,
+        device_namespaces: Option<DeviceNameSpaces>,
+    ) -> Result<Self> {
+        let mut response = Self::create(issuer_signed, requested)?;
+
+        let ns = device_namespaces.unwrap_or_default();
+        let device_auth = DeviceAuthentication::new(
+            session_transcript.clone(),
+            &issuer_signed.doc_type,
+            ns,
+        );
+
+        let device_signed = DeviceSigned::sign(&device_auth, device_signer)?;
+        response.device_signed = Some(device_signed);
+
+        Ok(response)
+    }
+
+    /// Verify the device signature against the session transcript.
+    ///
+    /// Reconstructs `DeviceAuthentication` from the session context and
+    /// verifies the COSE_Sign1 detached signature.
+    pub fn verify_device_auth(
+        &self,
+        session_transcript: &SessionTranscript,
+        verifier: &dyn CoseVerifier,
+    ) -> Result<bool> {
+        let device_signed = self
+            .device_signed
+            .as_ref()
+            .ok_or_else(|| crate::error::MdocError::DeviceAuth("no device_signed present".into()))?;
+
+        // Reconstruct DeviceAuthentication with empty namespaces
+        // (the verifier uses the namespaces_bytes from DeviceSigned to reconstruct)
+        let ns_value: ciborium::Value =
+            ciborium::from_reader(&device_signed.namespaces_bytes[..])
+                .map_err(|e| {
+                    crate::error::MdocError::DeviceAuth(format!(
+                        "DeviceNameSpaces decode: {e}"
+                    ))
+                })?;
+
+        let device_namespaces = decode_device_namespaces(&ns_value)?;
+
+        let device_auth = DeviceAuthentication::new(
+            session_transcript.clone(),
+            &self.doc_type,
+            device_namespaces,
+        );
+
+        device_signed.verify(&device_auth, verifier)
+    }
+}
+
+/// Decode DeviceNameSpaces from a CBOR Value.
+fn decode_device_namespaces(
+    value: &ciborium::Value,
+) -> Result<DeviceNameSpaces> {
+    let entries = match value {
+        ciborium::Value::Map(m) => m,
+        _ => return Ok(BTreeMap::new()),
+    };
+
+    let mut result = BTreeMap::new();
+    for (k, v) in entries {
+        let ns = match k {
+            ciborium::Value::Text(s) => s.clone(),
+            _ => continue,
+        };
+        let items_map = match v {
+            ciborium::Value::Map(m) => m,
+            _ => continue,
+        };
+        let mut items = BTreeMap::new();
+        for (ik, iv) in items_map {
+            if let ciborium::Value::Text(id) = ik {
+                items.insert(id.clone(), iv.clone());
+            }
+        }
+        result.insert(ns, items);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -463,5 +567,98 @@ mod tests {
         let response = DeviceResponse::create(&mdoc, &requested).unwrap();
         assert_eq!(response.version, "1.0");
         assert_eq!(response.status, 0);
+        assert!(response.device_signed.is_none());
+    }
+
+    #[test]
+    fn create_with_device_auth_and_verify() {
+        let issuer_key = test_key();
+        let device_key = b"test-device-key-for-holder-bind!";
+        let issuer_signer = TestSigner::new(issuer_key);
+        let device_signer = TestSigner::new(device_key);
+        let device_verifier = TestVerifier::new(device_key);
+
+        let mdoc = build_test_mdoc(&issuer_signer);
+
+        let de = crate::device_engagement::DeviceEngagement::new(
+            ciborium::Value::Map(vec![]),
+        )
+        .unwrap();
+        let transcript =
+            crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
+                .unwrap();
+
+        let mut requested = BTreeMap::new();
+        requested.insert(
+            pid_namespace().to_string(),
+            vec!["family_name".to_string(), "age_over_18".to_string()],
+        );
+
+        let response = DeviceResponse::create_with_device_auth(
+            &mdoc,
+            &requested,
+            &transcript,
+            &device_signer,
+            None,
+        )
+        .unwrap();
+
+        assert!(response.device_signed.is_some());
+        assert!(response.verify_device_auth(&transcript, &device_verifier).unwrap());
+    }
+
+    #[test]
+    fn device_auth_wrong_key_fails() {
+        let issuer_signer = TestSigner::new(test_key());
+        let device_signer = TestSigner::new(b"correct-device-key-for-signing!");
+        let wrong_verifier = TestVerifier::new(b"wrong-key-should-fail-verify!!!");
+
+        let mdoc = build_test_mdoc(&issuer_signer);
+
+        let de = crate::device_engagement::DeviceEngagement::new(
+            ciborium::Value::Map(vec![]),
+        )
+        .unwrap();
+        let transcript =
+            crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
+                .unwrap();
+
+        let mut requested = BTreeMap::new();
+        requested.insert(pid_namespace().to_string(), vec!["family_name".to_string()]);
+
+        let response = DeviceResponse::create_with_device_auth(
+            &mdoc,
+            &requested,
+            &transcript,
+            &device_signer,
+            None,
+        )
+        .unwrap();
+
+        let result = response.verify_device_auth(&transcript, &wrong_verifier);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_device_auth_without_device_signed_fails() {
+        let signer = TestSigner::new(test_key());
+        let verifier = TestVerifier::new(test_key());
+        let mdoc = build_test_mdoc(&signer);
+
+        let mut requested = BTreeMap::new();
+        requested.insert(pid_namespace().to_string(), vec!["family_name".to_string()]);
+
+        let response = DeviceResponse::create(&mdoc, &requested).unwrap();
+
+        let de = crate::device_engagement::DeviceEngagement::new(
+            ciborium::Value::Map(vec![]),
+        )
+        .unwrap();
+        let transcript =
+            crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
+                .unwrap();
+
+        let result = response.verify_device_auth(&transcript, &verifier);
+        assert!(result.is_err());
     }
 }
