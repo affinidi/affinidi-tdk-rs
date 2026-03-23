@@ -32,6 +32,75 @@ tooling.
   - Problem report generation per DIDComm spec
   - Optional ACL mode configuration
 
+## 10th March 2026
+
+### DIDComm Library (0.13.0) — **BREAKING**
+
+- **BREAKING:** Complete rewrite of the DIDComm v2.1 implementation
+  - Replaced the legacy `affinidi-didcomm` (forked from DIDComm-rs) with a new
+    lean implementation built from scratch
+  - Crate renamed from `affinidi-didcomm` to `affinidi-messaging-didcomm` v0.13.0
+    for semver-safe publishing under the same package name
+- **FEATURE:** Crypto support: X25519, P-256, secp256k1 key agreement;
+  Ed25519 signing; A256CBC-HS512 content encryption; AES-256 Key Wrap
+- **FEATURE:** JWE authcrypt (ECDH-1PU+A256KW) and anoncrypt (ECDH-ES+A256KW)
+- **FEATURE:** JWS EdDSA signed messages
+- **FEATURE:** `DIDCommAgent` high-level API for key management, packing, and
+  unpacking
+- **FEATURE:** Optional `messaging-core` feature for protocol-agnostic trait
+  integration
+- **REMOVED:** Legacy test vectors, routing protocol, from_prior, SSI-derived
+  utilities, and all upstream DIDComm-rs code
+
+### SDK (0.15.0)
+
+- **MIGRATION:** Fully migrated to new `affinidi-messaging-didcomm` 0.13.0
+  - Added `messages::compat` module providing `UnpackMetadata` and
+    `PackEncryptedMetadata` bridge types
+  - Pack/unpack functions now use bridge helpers to convert between new DIDComm
+    API and SDK's existing interface
+- **CHORE:** Updated import paths (`affinidi_didcomm` → `affinidi_messaging_didcomm`)
+
+### Mediator (0.13.0)
+
+- **FEATURE:** Protocol feature flags added — `didcomm` (default) and `tsp`
+  - At least one feature must be enabled or compilation fails
+  - Both features can be enabled simultaneously
+  - DIDComm-specific code gated behind `#[cfg(feature = "didcomm")]`:
+    authentication, inbound message handling, OOB discovery, DIDComm protocol
+    handlers, and problem report packaging
+  - Protocol-agnostic routes remain available: `/outbound`, `/fetch`, `/list`,
+    `/delete`, `/ws`, `/whoami`, `/.well-known/did`
+- **MIGRATION:** Fully migrated to new `affinidi-messaging-didcomm` 0.13.0
+  - Added `didcomm_compat` bridge module for pack/unpack using new DIDComm API
+- **CHORE:** Updated import paths across all source files
+
+### Mediator-Common (0.12.2)
+
+- **CHORE:** Updated import paths (`affinidi_didcomm` → `affinidi_messaging_didcomm`)
+
+### Helpers (0.12.2)
+
+- **FEATURE:** Added `protocol_comparison` benchmark example — compares TSP vs
+  DIDComm message packing performance using direct protocol APIs
+- **FEATURE:** Added `unified_messaging` example — demonstrates messaging-core
+  trait abstraction across protocols
+- **CHORE:** Updated import paths across all examples
+
+### Text-Client (0.12.0)
+
+- **MIGRATION:** Fully migrated to new `affinidi-messaging-didcomm` 0.13.0
+- **CHORE:** Updated import paths across all source files
+
+### New Crates
+
+- **`affinidi-messaging-core`** (0.1.0) — Protocol-agnostic messaging traits
+  (`MessagingProtocol`, `IdentityResolver`, `RelationshipManager`, `Transport`)
+- **`affinidi-tsp`** (0.1.0) — Trust Spanning Protocol implementation with
+  HPKE-Auth encryption, Ed25519 signing, and CESR binary encoding
+- **`affinidi-cesr`** (0.1.0) — CESR (Composable Event Streaming Representation)
+  codec for binary message encoding
+
 ## 6th March 2026
 
 ### Mediator (0.12.2)

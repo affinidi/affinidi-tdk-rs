@@ -10,6 +10,12 @@ high-level API for sending and receiving end-to-end encrypted
 [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) messages via a
 mediator service.
 
+> **Note:** This SDK focuses on the DIDComm protocol. For
+> [Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/)
+> messaging, see the [`affinidi-tsp`](../affinidi-tsp/) crate directly, or use
+> [`affinidi-messaging-core`](../affinidi-messaging-core/) for a protocol-agnostic
+> API that works with both DIDComm and TSP.
+
 ## Installation
 
 ```toml
@@ -113,6 +119,8 @@ examples.
 ## Related Crates
 
 - [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol implementation (dependency)
+- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol (alternative protocol)
+- [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
 - [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
 - [`affinidi-did-resolver-cache-sdk`](../../affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) — DID resolution
 

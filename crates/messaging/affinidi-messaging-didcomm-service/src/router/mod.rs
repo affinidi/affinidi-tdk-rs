@@ -103,7 +103,7 @@ impl DIDCommHandler for Router {
         message: Message,
         meta: UnpackMetadata,
     ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
-        let message_type = &message.type_;
+        let message_type = &message.typ;
 
         if let Some(handler) = self.find_handler(message_type) {
             let handler = handler.clone();

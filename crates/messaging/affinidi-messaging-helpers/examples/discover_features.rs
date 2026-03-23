@@ -145,7 +145,7 @@ async fn main() -> Result<(), ATMError> {
 
     // Pack the message
     let (packed_msg, _) = atm
-        .pack_encrypted(&msg, &args.did, Some(from_did), Some(from_did), None)
+        .pack_encrypted(&msg, &args.did, Some(from_did), Some(from_did))
         .await?;
 
     let msg_hash = digest(&packed_msg);
@@ -201,7 +201,7 @@ async fn main() -> Result<(), ATMError> {
     for msg in msgs.success {
         if let Some(raw) = &msg.msg {
             let (unpacked, _) = atm.unpack(raw).await?;
-            if unpacked.type_ == "https://didcomm.org/discover-features/2.0/disclose" {
+            if unpacked.typ == "https://didcomm.org/discover-features/2.0/disclose" {
                 found_disclosure = true;
                 match serde_json::from_value::<DiscoverFeaturesDisclosure>(unpacked.body) {
                     Ok(disclosure) => {
@@ -219,7 +219,7 @@ async fn main() -> Result<(), ATMError> {
                     }
                 }
             } else {
-                debug!("Skipping non-disclosure message: {}", unpacked.type_);
+                debug!("Skipping non-disclosure message: {}", unpacked.typ);
             }
         }
     }

@@ -95,6 +95,7 @@ impl Listener {
         debug!(profile = %profile.inner.alias, count = offline_messages.len(), "Retrieved offline messages");
 
         for (message, meta) in offline_messages {
+            let meta = super::listener::convert_meta(meta);
             Listener::dispatch_message(atm, profile, handler, message, meta).await;
         }
 

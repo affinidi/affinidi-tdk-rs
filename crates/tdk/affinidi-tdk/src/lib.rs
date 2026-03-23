@@ -30,7 +30,6 @@ pub mod secrets;
 #[cfg(feature = "meeting-place")]
 pub use affinidi_meeting_place as meeting_place;
 
-#[cfg(feature = "messaging")]
 pub use affinidi_messaging_didcomm as didcomm;
 #[cfg(feature = "messaging")]
 pub use affinidi_messaging_sdk as messaging;

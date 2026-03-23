@@ -1,0 +1,22 @@
+[package]
+name = "affinidi-messaging-core"
+description = "Protocol-agnostic messaging traits for DIDComm and TSP"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords.workspace = true
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+thiserror = "2"
+url = { version = "2.5", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+
+[lints]
+workspace = true

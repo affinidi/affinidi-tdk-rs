@@ -1,5 +1,10 @@
 # Meeting Place Changelog
 
+## 10th March 2026 (0.2.3)
+
+- **CHORE:** Updated to new `affinidi-messaging-didcomm` 0.13.0
+  - Import paths changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
+
 ## 18th December 2025 (0.2.2)
 
 - **CHORE:** Updating dependencies

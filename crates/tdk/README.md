@@ -45,6 +45,10 @@ graph TD
     TDK --> TDKC["tdk-common"]
     TDK --> DIDCOMMON["did-common"]
 
+    MSGSDK --> DIDCOMM
+    DIDCOMM --> CORE["messaging-core"]
+    TSP["affinidi-tsp"] --> CORE
+
     DI --> CRYPTO
     DI --> RDF["rdf-encoding"]
     SECRETS --> CRYPTO
@@ -56,7 +60,9 @@ graph TD
 
 ## Related Crates
 
-- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm messaging framework
+- [`affinidi-messaging`](../affinidi-messaging/) — DIDComm and TSP messaging framework
+- [`affinidi-tsp`](../affinidi-messaging/affinidi-tsp/) — Trust Spanning Protocol implementation
+- [`affinidi-messaging-core`](../affinidi-messaging/affinidi-messaging-core/) — Protocol-agnostic messaging traits
 - [`affinidi-did-resolver`](../affinidi-did-resolver/) — DID resolution and caching
 - [`affinidi-meeting-place`](../affinidi-meeting-place/) — Secure discovery and connection
 

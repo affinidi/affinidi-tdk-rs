@@ -116,9 +116,9 @@ mod tests {
     use serde_json::json;
 
     fn msg_with_from(from: Option<&str>) -> Message {
-        let mut b = Message::build("id".into(), "test".into(), json!({}));
+        let mut b = Message::build("id".to_string(), "test".to_string(), json!({}));
         if let Some(f) = from {
-            b = b.from(f.into());
+            b = b.from(f.to_string());
         }
         b.finalize()
     }

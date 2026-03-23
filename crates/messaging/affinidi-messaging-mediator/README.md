@@ -3,17 +3,39 @@
 [![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/affinidi-messaging/affinidi-messaging-mediator)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-A mediator and relay service based on the
-[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) specification.
-Handles connections, permissions, and message routing between DIDComm
+A mediator and relay service supporting
+[DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) and
+[Trust Spanning Protocol (TSP)](https://trustoverip.github.io/tswg-tsp-specification/).
+Handles connections, permissions, and message routing between messaging
 participants.
+
+## Feature Flags
+
+Protocol support is controlled via Cargo feature flags. At least one must be
+enabled.
+
+| Feature | Default | Description |
+|---|---|---|
+| `didcomm` | Yes | DIDComm v2 protocol support (authentication, inbound/outbound, OOB discovery) |
+| `tsp` | No | Trust Spanning Protocol support |
+
+```bash
+# DIDComm only (default)
+cargo build
+
+# TSP only
+cargo build --no-default-features --features tsp
+
+# Both protocols
+cargo build --features "didcomm,tsp"
+```
 
 ## Architecture
 
 ```mermaid
 graph TD
-    A["Alice"] -->|DIDComm| MED["Mediator Service"]
-    B["Bob"] -->|DIDComm| MED
+    A["Alice"] -->|DIDComm / TSP| MED["Mediator Service"]
+    B["Bob"] -->|DIDComm / TSP| MED
     MED ---|Message Storage| REDIS[(Redis)]
     MED --- ACL["Access Control<br/>Lists (ACLs)"]
     MED --- PROC["Processors<br/>(Forwarding, Expiry)"]
@@ -120,6 +142,8 @@ examples.
 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Client SDK
 - [`affinidi-messaging-didcomm`](../affinidi-messaging-didcomm/) — DIDComm protocol
+- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
+- [`affinidi-messaging-core`](../affinidi-messaging-core/) — Protocol-agnostic messaging traits
 - [`affinidi-did-resolver`](../../affinidi-did-resolver/) — DID resolution
 
 ## License

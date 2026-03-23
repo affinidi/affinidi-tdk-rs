@@ -4,9 +4,7 @@
  */
 use super::DatabaseHandler;
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
 use tracing::{Instrument, Level, debug, info, span};
 
@@ -41,19 +39,16 @@ impl DatabaseHandler {
                 .await
                 .map_err(|err| {
                     // TODO: Should check the response from the function and have better error handling
-                    MediatorError::MediatorError(
+                    MediatorError::problem_with_log(
                         10,
-                        "NA".to_string(),
+                        "NA",
                         request_msg_id.map(|s| s.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "database.message.delete.error".into(),
-                            "Couldn't delete message_hash ({1}). Reason: {2}".into(),
-                            vec![message_hash.to_string(), err.to_string()],
-                            None,
-                        )),
-                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "database.message.delete.error",
+                        "Couldn't delete message_hash ({1}). Reason: {2}",
+                        vec![message_hash.to_string(), err.to_string()],
+                        StatusCode::SERVICE_UNAVAILABLE,
                         format!("Couldn't delete message_hash ({message_hash}). Reason: {err}"),
                     )
                 })?;
@@ -72,19 +67,16 @@ impl DatabaseHandler {
 
             if response != "OK" {
                 // TODO: As above - better handling of error response from the function
-                Err(MediatorError::MediatorError(
+                Err(MediatorError::problem_with_log(
                     11,
-                    "NA".to_string(),
+                    "NA",
                     request_msg_id.map(|s| s.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "database.message.delete.status".into(),
-                        "delete function returned not being OK. Status: {1}".into(),
-                        vec![response.to_string()],
-                        None,
-                    )),
-                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "database.message.delete.status",
+                    "delete function returned not being OK. Status: {1}",
+                    vec![response.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
                     format!("delete function returned not being OK. Status: {response}"),
                 ))
             } else {

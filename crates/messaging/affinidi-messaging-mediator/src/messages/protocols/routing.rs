@@ -1,16 +1,18 @@
-use std::time::SystemTime;
+use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 
 use crate::{
     SharedData,
-    database::session::Session,
+    database::{forwarding::ForwardQueueEntry, session::Session},
     messages::{
         ProcessMessageResponse, WrapperType,
         error_response::generate_error_response,
         store::{store_forwarded_message, store_message},
     },
 };
-use affinidi_did_common::{Document, service::Endpoint};
-use affinidi_messaging_didcomm::{AttachmentData, Message, UnpackMetadata, envelope::MetaEnvelope};
+use affinidi_did_common::Document;
+use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
+use crate::didcomm_compat::MetaEnvelope;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -20,7 +22,7 @@ use base64::prelude::*;
 use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
-use tracing::{Instrument, debug, span, warn};
+use tracing::{Instrument, debug, info, span, warn};
 
 // Reads the body of an incoming forward message
 #[derive(Default, Deserialize)]
@@ -41,7 +43,7 @@ pub(crate) async fn process(
         session_id = session.session_id.as_str()
     );
     async move {
-        let ephemeral = if let Some(ephemeral) = msg.extra_headers.get("ephemeral") {
+        let ephemeral = if let Some(ephemeral) = msg.extra.get("ephemeral") {
             match ephemeral.as_bool() {
                 Some(true) => true,
                 Some(false) => false,
@@ -68,38 +70,31 @@ pub(crate) async fn process(
             Ok(body) => match body.next {
                 Some(next_str) => next_str,
                 None => {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         56,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "protocol.forwarding.next.missing".into(),
-                            "Forwarding message is missing next field".into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::BAD_REQUEST.as_u16(),
-                        "Forwarding message is missing next field".to_string(),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.forwarding.next.missing",
+                        "Forwarding message is missing next field",
+                        vec![],
+                        StatusCode::BAD_REQUEST,
                     ));
                 }
             },
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     57,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.forwarding.parse".into(),
-                        "Couldn't parse forwarding message body. Reason: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Couldn't parse forwarding message body. Reason: {e}"),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.parse",
+                    "Failed to parse forwarding message body. Reason: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to parse forwarding message body. Reason: {e}"),
                 ));
             }
         };
@@ -120,37 +115,31 @@ pub(crate) async fn process(
                     )
                     .await
                     .map_err(|e| {
-                        MediatorError::MediatorError(
+                        MediatorError::problem_with_log(
                             14,
-                            session.session_id.to_string(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error".into(),
-                                "Database transaction error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
                             format!("Database transaction error: {e}"),
                         )
                     })?
             }
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     14,
-                    session.session_id.to_string(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.error".into(),
-                        "Database transaction error: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.error",
+                    "Database transaction error: {1}",
+                    vec![e.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
                     format!("Database transaction error: {e}"),
                 ));
             }
@@ -160,40 +149,32 @@ pub(crate) async fn process(
         // Check if the next hop is allowed to receive forwarded messages
         let next_acls = MediatorACLSet::from_u64(next_account.acls);
         if !next_acls.get_receive_forwarded().0 {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 58,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.receive_forwarded".into(),
-                    "Recipient isn't accepting forwarded messages".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "Recipient isn't accepting forwarded messages".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.receive_forwarded",
+                "Recipient isn't accepting forwarded messages",
+                vec![],
+                StatusCode::FORBIDDEN,
             ));
         }
 
         let attachments = if let Some(attachments) = &msg.attachments {
             attachments.to_owned()
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 59,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.attachments.missing".into(),
-                    "There were no attachments for this forward message".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "There were no attachments for this forward message".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.attachments.missing",
+                "There were no attachments for this forward message",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         };
         let attachments_bytes = attachments
@@ -219,19 +200,16 @@ pub(crate) async fn process(
                     ..Default::default()
                 },
                 Err(e) => {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem_with_log(
                         14,
-                        session.session_id.to_string(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.res.storage.error".into(),
-                            "Database transaction error: {1}".into(),
-                            vec![e.to_string()],
-                            None,
-                        )),
-                        StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error",
+                        "Database transaction error: {1}",
+                        vec![e.to_string()],
+                        StatusCode::SERVICE_UNAVAILABLE,
                         format!("Database transaction error: {e}"),
                     ));
                 }
@@ -239,39 +217,31 @@ pub(crate) async fn process(
             let from_acls = MediatorACLSet::from_u64(from_account.acls);
 
             if !from_acls.get_send_forwarded().0 {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem(
                     60,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "authorization.send_forwarded".into(),
-                        "Sender isn't allowed to send forwarded messages".into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::FORBIDDEN.as_u16(),
-                    "Sender isn't allowed to send forwarded messages".to_string(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "authorization.send_forwarded",
+                    "Sender isn't allowed to send forwarded messages",
+                    vec![],
+                    StatusCode::FORBIDDEN,
                 ));
             }
 
             from_account
         } else if !session.acls.get_send_forwarded().0 {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 60,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.send_forwarded".into(),
-                    "Sender isn't allowed to send forwarded messages".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "Sender isn't allowed to send forwarded messages".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.send_forwarded",
+                "Sender isn't allowed to send forwarded messages",
+                vec![],
+                StatusCode::FORBIDDEN,
             ));
         } else {
             Account {
@@ -294,20 +264,16 @@ pub(crate) async fn process(
                 from_account.did_hash, next_did_hash
             );
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 73,
-                session.session_id.to_string(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.access_list.denied".into(),
-                    "Delivery blocked due to ACLs (access_list denied)".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "Delivery blocked due to ACLs (access_list denied)".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.access_list.denied",
+                "Delivery blocked due to ACLs (access_list denied)",
+                vec![],
+                StatusCode::FORBIDDEN,
             ));
         }
 
@@ -323,20 +289,16 @@ pub(crate) async fn process(
                 "Sender DID ({}) has too many messages waiting to be delivered",
                 session.did_hash
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 61,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "limits.queue.sender".into(),
-                    "Sender has too many messages waiting to be delivered".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                "Sender has too many messages waiting to be delivered".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "limits.queue.sender",
+                "Sender has too many messages waiting to be delivered",
+                vec![],
+                StatusCode::SERVICE_UNAVAILABLE,
             ));
         }
 
@@ -356,20 +318,16 @@ pub(crate) async fn process(
                 "Next DID ({}) has too many messages waiting to be delivered",
                 next_did_hash
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 62,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "limits.queue.recipient".into(),
-                    "Recipient (next) has too many messages waiting to be delivered".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                "Recipient (next) has too many messages waiting to be delivered".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "limits.queue.recipient",
+                "Recipient (next) has too many messages waiting to be delivered",
+                vec![],
+                StatusCode::SERVICE_UNAVAILABLE,
             ));
         }
 
@@ -378,22 +336,19 @@ pub(crate) async fn process(
                 "Too many attachments in message, limit is {}",
                 state.config.limits.attachments_max_count
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 63,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.attachments.too_many".into(),
-                    "Forwarded message has too many attachments ({1}). Limit is ({2})".into(),
-                    vec![
-                        attachments.len().to_string(),
-                        state.config.limits.attachments_max_count.to_string(),
-                    ],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.attachments.too_many",
+                "Forwarded message has too many attachments ({1}). Limit is ({2})",
+                vec![
+                    attachments.len().to_string(),
+                    state.config.limits.attachments_max_count.to_string(),
+                ],
+                StatusCode::BAD_REQUEST,
                 format!(
                     "Forwarded message has too many attachments ({}). Limit is ({})",
                     attachments.len(),
@@ -410,28 +365,24 @@ pub(crate) async fn process(
                 "Forward task queue is full, limit is {}",
                 state.config.limits.forward_task_queue
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 64,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.forwarding.queue.limit".into(),
-                    "Mediator forwarding queue is at max limit, try again later".into(),
-                    vec![
-                        attachments.len().to_string(),
-                        state.config.limits.attachments_max_count.to_string(),
-                    ],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                "Mediator forwarding queue is at max limit, try again later".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.forwarding.queue.limit",
+                "Mediator forwarding queue is at max limit, try again later",
+                vec![
+                    attachments.len().to_string(),
+                    state.config.limits.attachments_max_count.to_string(),
+                ],
+                StatusCode::SERVICE_UNAVAILABLE,
             ));
         }
 
         // Check if a delay has been specified and if so, is it longer than we allow?
-        let delay_milli = if let Some(delay_milli) = msg.extra_headers.get("delay_milli") {
+        let delay_milli = if let Some(delay_milli) = msg.extra.get("delay_milli") {
             debug!("forward delay requested: ({:?})", delay_milli);
             delay_milli.as_i64().unwrap_or(0)
         } else {
@@ -444,19 +395,16 @@ pub(crate) async fn process(
                 "Forwarding delay is too long, limit is {}",
                 state.config.processors.forwarding.future_time_limit
             );
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 65,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.delay_milli".into(),
-                    "Forward delay_milli field isn't valid. Max field value: {1}".into(),
-                    vec![(state.config.processors.forwarding.future_time_limit * 1000).to_string()],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.delay_milli",
+                "Forward delay_milli field isn't valid. Max field value: {1}",
+                vec![(state.config.processors.forwarding.future_time_limit * 1000).to_string()],
+                StatusCode::BAD_REQUEST,
                 format!(
                     "Forward delay_milli field isn't valid. Max field value: {}",
                     state.config.processors.forwarding.future_time_limit * 1000
@@ -468,120 +416,120 @@ pub(crate) async fn process(
         // First step is to determine if the next hop is local to the mediator or remote?
         //if next_did_doc.service
 
-        let attachment = attachments.first().unwrap();
-        let data = match attachment.data {
-            AttachmentData::Base64 { ref value } => {
-                match BASE64_URL_SAFE_NO_PAD.decode(&value.base64) {
+        let attachment = match attachments.first() {
+            Some(a) => a,
+            None => {
+                return Err(MediatorError::problem(
+                    59,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.missing",
+                    "Forward message has empty attachments list",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        };
+        let data = if let Some(ref b64) = attachment.data.base64 {
+                match BASE64_URL_SAFE_NO_PAD.decode(b64) {
                     Ok(data) => match String::from_utf8(data) {
                         Ok(data) => data,
                         Err(e) => {
-                            return Err(MediatorError::MediatorError(
+                            return Err(MediatorError::problem_with_log(
                                 68,
-                                session.session_id.clone(),
+                                &session.session_id,
                                 Some(msg.id.to_string()),
-                                Box::new(ProblemReport::new(
-                                    ProblemReportSorter::Warning,
-                                    ProblemReportScope::Message,
-                                    "protocol.forwarding.attachments.base64".into(),
-                                    "Couldn't parse base64 attachment. Error: {1}".into(),
-                                    vec![e.to_string()],
-                                    None,
-                                )),
-                                StatusCode::BAD_REQUEST.as_u16(),
-                                format!("Couldn't parse base64 attachment. Error: {e}"),
+                                ProblemReportSorter::Warning,
+                                ProblemReportScope::Message,
+                                "protocol.forwarding.attachments.base64",
+                                "Failed to decode base64 attachment. Reason: {1}",
+                                vec![e.to_string()],
+                                StatusCode::BAD_REQUEST,
+                                format!("Failed to decode base64 attachment. Reason: {e}"),
                             ));
                         }
                     },
                     Err(e) => {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem_with_log(
                             68,
-                            session.session_id.clone(),
+                            &session.session_id,
                             Some(msg.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "protocol.forwarding.attachments.base64".into(),
-                                "Couldn't decode base64 attachment. Error: {1}".into(),
-                                vec![e.to_string()],
-                                None,
-                            )),
-                            StatusCode::BAD_REQUEST.as_u16(),
-                            format!("Couldn't decode base64 attachment. Error: {e}"),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "protocol.forwarding.attachments.base64",
+                            "Failed to decode base64 attachment. Reason: {1}",
+                            vec![e.to_string()],
+                            StatusCode::BAD_REQUEST,
+                            format!("Failed to decode base64 attachment. Reason: {e}"),
                         ));
                     }
                 }
-            }
-            AttachmentData::Json { ref value } => {
-                if value.jws.is_some() {
+        } else if let Some(ref json_val) = attachment.data.json {
+                if attachment.data.jws.is_some() {
                     // TODO: Implement JWS verification
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem(
                         66,
-                        session.session_id.clone(),
+                        &session.session_id,
                         Some(msg.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.not_implemented".into(),
-                            "Feature is not implemented by the mediator: JWS Verified Attachment"
-                                .into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        "Feature is not implemented by the mediator: JWS Verified Attachment"
-                            .to_string(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.not_implemented",
+                        "JWS verified attachments are not yet supported by this mediator",
+                        vec![],
+                        StatusCode::NOT_IMPLEMENTED,
                     ));
                 } else {
-                    match serde_json::to_string(&value.json) {
+                    match serde_json::to_string(json_val) {
                         Ok(data) => data,
                         Err(e) => {
-                            return Err(MediatorError::MediatorError(
+                            return Err(MediatorError::problem_with_log(
                                 67,
-                                session.session_id.clone(),
+                                &session.session_id,
                                 Some(msg.id.to_string()),
-                                Box::new(ProblemReport::new(
-                                    ProblemReportSorter::Warning,
-                                    ProblemReportScope::Message,
-                                    "protocol.forwarding.attachments.json.invalid".into(),
-                                    "JSON schema for attachment is incorrect: JSON({1}) Error: {2}"
-                                        .into(),
-                                    vec![value.json.to_string(), e.to_string()],
-                                    None,
-                                )),
-                                StatusCode::BAD_REQUEST.as_u16(),
+                                ProblemReportSorter::Warning,
+                                ProblemReportScope::Message,
+                                "protocol.forwarding.attachments.json.invalid",
+                                "Invalid attachment JSON schema. Reason: {1}",
+                                vec![e.to_string()],
+                                StatusCode::BAD_REQUEST,
                                 format!(
-                                    "JSON schema for attachment is incorrect: JSON({}) Error: {}",
-                                    value.json, e
+                                    "Invalid attachment JSON schema. Reason: {}",
+                                    e
                                 ),
                             ));
                         }
                     }
                 }
-            }
-            AttachmentData::Links { .. } => {
-                return Err(MediatorError::MediatorError(
+        } else if attachment.data.links.is_some() {
+                return Err(MediatorError::problem(
                     66,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.not_implemented".into(),
-                        "Feature is not implemented by the mediator: Attachment Links".into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    "Feature is not implemented by the mediator: Attachment Links".to_string(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.not_implemented",
+                    "Linked attachments are not yet supported by this mediator",
+                    vec![],
+                    StatusCode::NOT_IMPLEMENTED,
                 ));
-            }
+        } else {
+                return Err(MediatorError::problem(
+                    67,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.unknown",
+                    "Attachment data format is not supported",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
+                ));
         };
 
         let expires_at = if let Some(expires_at) = msg.expires_time {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
 
             if expires_at > now + state.config.limits.message_expiry_seconds {
                 now + state.config.limits.message_expiry_seconds
@@ -589,10 +537,7 @@ pub(crate) async fn process(
                 expires_at
             }
         } else {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
+            unix_timestamp_secs()
                 + state.config.limits.message_expiry_seconds
         };
 
@@ -600,48 +545,36 @@ pub(crate) async fn process(
         let next_envelope = match MetaEnvelope::new(&data, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     37,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(msg.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "message.envelope.read".into(),
-                        "Couldn't read forward attached DIDComm envelope: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.envelope.read",
+                    "Couldn't read forward attached DIDComm envelope: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
                     format!("Couldn't read DIDComm envelope: {e}"),
                 ));
             }
         };
 
         if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 69,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(msg.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.receive_anon".into(),
-                    "Recipient isn't accepting anonymous messages".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "Recipient isn't accepting anonymous messages".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.receive_anon",
+                "Recipient isn't accepting anonymous messages",
+                vec![],
+                StatusCode::FORBIDDEN,
             ));
         }
 
-        debug!(" *************************************** ");
-        debug!(" TO: {}", next);
-        debug!(" FROM: {:?}", msg.from);
-        debug!(" Forwarded message:\n{}", data);
-        debug!(" Ephemeral: {}", ephemeral);
-        debug!(" *************************************** ");
+        debug!("Forwarded message: to_did_hash={}, ephemeral={}", next_did_hash, ephemeral);
 
         if ephemeral {
             // Live stream the message?
@@ -657,15 +590,121 @@ pub(crate) async fn process(
                     debug!("Live streaming message to UUID: {}", stream_uuid);
                 }
         } else {
-            store_forwarded_message(
-                state,
-                session,
-                &data,
-                Some(&from_account.did_hash),
-                &next,
-                Some(expires_at),
-            )
-            .await?;
+            // Determine if the next hop is local or remote by resolving the DID Document
+            let remote_endpoint = if state.config.processors.forwarding.external_forwarding {
+                match state.did_resolver.resolve(&next).await {
+                    Ok(resolve_response) => {
+                        match service_endpoint_for_remote(state, &resolve_response.doc) {
+                            Some(endpoint_url) => {
+                                debug!(
+                                    "Next hop ({}) is remote, endpoint: {}",
+                                    next, endpoint_url
+                                );
+                                Some(endpoint_url)
+                            }
+                            None => {
+                                debug!("Next hop ({}) is local to this mediator", next);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Can't resolve the DID — treat as local (store normally)
+                        warn!(
+                            "Couldn't resolve DID document for {}: {}. Treating as local.",
+                            next, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            if let Some(endpoint_url) = remote_endpoint {
+                // Remote destination — enqueue to FORWARD_Q for the forwarding processor
+
+                // Check hop count for loop detection
+                let hop_count = msg
+                    .extra
+                    .get("hop_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+
+                if hop_count >= state.config.processors.forwarding.max_hops {
+                    metrics::counter!(crate::common::metrics::names::FORWARD_LOOP_DETECTED_TOTAL).increment(1);
+                    return Err(MediatorError::problem_with_log(
+                        94,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "protocol.forwarding.loop_detected",
+                        "Message exceeded maximum hop count ({1}), possible forwarding loop",
+                        vec![state.config.processors.forwarding.max_hops.to_string()],
+                        StatusCode::LOOP_DETECTED,
+                        format!(
+                            "Message exceeded maximum hop count ({}), possible forwarding loop",
+                            state.config.processors.forwarding.max_hops
+                        ),
+                    ));
+                }
+
+                let now_ms = unix_timestamp_millis();
+
+                // Get the sender's full DID for problem reports
+                let from_did = msg.from.clone().unwrap_or_default();
+
+                let entry = ForwardQueueEntry {
+                    stream_id: String::new(), // Set by Redis on XADD
+                    message: data.clone(),
+                    to_did_hash: next_did_hash.clone(),
+                    from_did_hash: from_account.did_hash.clone(),
+                    from_did,
+                    to_did: next.clone(),
+                    endpoint_url: endpoint_url.clone(),
+                    received_at_ms: now_ms,
+                    delay_milli,
+                    expires_at,
+                    retry_count: 0,
+                    hop_count: hop_count + 1,
+                };
+
+                state.database.forward_queue_enqueue_with_limit(
+                    &entry,
+                    state.config.limits.forward_task_queue,
+                ).await.map_err(|e| {
+                    MediatorError::problem_with_log(
+                        90,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.forwarding.enqueue",
+                        "Failed to enqueue message for remote forwarding: {1}",
+                        vec![e.to_string()],
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Failed to enqueue message for remote forwarding: {e}"),
+                    )
+                })?;
+
+                metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
+                info!(
+                    "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
+                    next_did_hash, from_account.did_hash, endpoint_url
+                );
+            } else {
+                // Local destination — store as before
+                store_forwarded_message(
+                    state,
+                    session,
+                    &data,
+                    Some(&from_account.did_hash),
+                    &next,
+                    Some(expires_at),
+                )
+                .await?;
+            }
         }
 
         Ok(ProcessMessageResponse {
@@ -679,98 +718,39 @@ pub(crate) async fn process(
     .await
 }
 
-/// Determines if the next hop is local to the mediator or remote
-/// The next field of a routing message is a DID
-/// https://identity.foundation/didcomm-messaging/spec/#routing-protocol-20
-/// - next: DID (may include key ID) of the next hop
-/// - next_doc: Resolved DID Document of the next hop
+/// Checks if the next hop's DID Document contains a DIDCommMessaging service
+/// that points to a different mediator (remote endpoint).
 ///
-/*
-{
-    "id": "did:example:123456789abcdefghi#didcomm-1",
-    "type": "DIDCommMessaging",
-    "serviceEndpoint": [{
-        "uri": "https://example.com/path",
-        "accept": [
-            "didcomm/v2",
-            "didcomm/aip2;env=rfc587"
-        ],
-        "routingKeys": ["did:example:somemediator#somekey"]
-    }]
-}
-*/
-fn _service_local(
-    session: &Session,
-    state: &SharedData,
-    next: &str,
-    next_doc: &Document,
-    msg_id: &str,
-) -> Result<bool, MediatorError> {
-    let mut _error = None;
-
-    // If the next hop is the mediator itself, then this is a recursive forward
-    if next == state.config.mediator_did {
-        warn!(
-            "next hop is the mediator itself, but this should have been unpacked. not accepting this message"
-        );
-        return Err(MediatorError::MediatorError(
-            70,
-            session.session_id.clone(),
-            Some(msg_id.to_string()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "protocol.forwarding.next.mediator.self".into(),
-                "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::FORBIDDEN.as_u16(),
-            "Forwarded next hop is the same mediator. Not allowed due to creating loops"
-                .to_string(),
-        ));
-    }
-
-    let local = next_doc
-        .service
-        .iter()
-        .filter(|s| s.type_.contains(&"DIDCommMessaging".to_string()))
-        .any(|s| {
-            // Service Type is DIDCommMessaging
-                    match &s.service_endpoint {
-                        Endpoint::Url(uri) => {
-                            if uri.as_str().eq(&state.config.mediator_did) {
-                                warn!("next hop is the mediator itself, but this should have been unpacked. not accepting this message");
-                                _error = Some(MediatorError::MediatorError(
-                                    70,
-                                    session.session_id.clone(),
-                                    Some(msg_id.to_string()),
-                                    Box::new(ProblemReport::new(
-                                        ProblemReportSorter::Warning,
-                                        ProblemReportScope::Message,
-                                        "protocol.forwarding.next.mediator.self".into(),
-                                        "Forwarded next hop is the same mediator. Not allowed due to creating loops".into(),
-                                        vec![],
-                                        None,
-                                    )),
-                                    StatusCode::FORBIDDEN.as_u16(),
-                                    "Forwarded next hop is the same mediator. Not allowed due to creating loops"
-                                        .to_string(),
-                                ));
-                                false
-                            } else {
-                                // Next hop is remote to the mediator
-                                false
-                            }
-                        }
-                        Endpoint::Map(_) => {true}
-                    }
+/// Returns `Some(endpoint_url)` if the next hop should be forwarded to a remote mediator,
+/// or `None` if the next hop is local to this mediator.
+///
+/// A DIDCommMessaging service with a `uri` field pointing to this mediator's DID
+/// means the recipient uses this mediator — so it's local.
+/// A `uri` pointing elsewhere (an HTTP/HTTPS URL) means the message should be
+/// forwarded to that remote mediator endpoint.
+fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Option<String> {
+    for service in &next_doc.service {
+        if !service.type_.contains(&"DIDCommMessaging".to_string()) {
+            continue;
         }
-                );
 
-    if let Some(e) = _error {
-        Err(e)
-    } else {
-        Ok(local)
+        let uris = service.service_endpoint.get_uris();
+        for uri in &uris {
+            // Strip surrounding quotes if present (from JSON serialization)
+            let uri_clean = uri.trim_matches('"');
+
+            // If the service endpoint points to this mediator's DID, it's local
+            if uri_clean == state.config.mediator_did {
+                return None;
+            }
+
+            // If the service endpoint is an HTTP(S) URL, it's a remote mediator
+            if uri_clean.starts_with("http://") || uri_clean.starts_with("https://") {
+                return Some(uri_clean.to_string());
+            }
+        }
     }
+
+    // No DIDCommMessaging service found with a remote endpoint — treat as local
+    None
 }

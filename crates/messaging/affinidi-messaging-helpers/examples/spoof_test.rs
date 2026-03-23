@@ -1,7 +1,7 @@
 //! Tries to Spoof a message from Mallory to Bob, but pretending to be Alice.
 //! Mallory send to Bob, but inner envelope pretends to be Alice
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::{
     errors::ATMError,
     profiles::ATMProfile,
@@ -196,8 +196,8 @@ async fn main() -> Result<(), ATMError> {
         .as_secs();
 
     let msg = Message::build(
-        Uuid::new_v4().into(),
-        "Naughty Mallory".into(),
+        Uuid::new_v4().to_string(),
+        "Naughty Mallory".to_string(),
         json!("I am trying to be Alice!"),
     )
     .to(atm_bob.inner.did.clone())
@@ -220,7 +220,6 @@ async fn main() -> Result<(), ATMError> {
             &atm_bob.inner.did,
             Some(&atm_mallory.inner.did),
             Some(&atm_mallory.inner.did),
-            None,
         )
         .await?;
 

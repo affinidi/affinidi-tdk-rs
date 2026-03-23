@@ -1,35 +1,52 @@
+#[cfg(feature = "didcomm")]
 use self::protocols::ping;
-use crate::{SharedData, database::session::Session, messages::protocols::discover_features};
+use crate::{SharedData, database::session::Session};
+#[cfg(feature = "didcomm")]
+use crate::messages::protocols::discover_features;
+#[cfg(feature = "didcomm")]
 use affinidi_did_common::service::Endpoint;
+#[cfg(feature = "didcomm")]
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{
-    Message, PackEncryptedMetadata, PackEncryptedOptions, UnpackMetadata,
-};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_didcomm::message::Message;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::{PackEncryptedMetadata, UnpackMetadata};
+#[cfg(feature = "didcomm")]
+use crate::didcomm_compat;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
     known::MessageType as SDKMessageType,
     problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
 };
+#[cfg(feature = "didcomm")]
 use affinidi_secrets_resolver::SecretsResolver;
+#[cfg(feature = "didcomm")]
 use ahash::AHashSet as HashSet;
 use http::StatusCode;
+#[cfg(feature = "didcomm")]
 use protocols::{
     mediator::{accounts, acls, administration},
     message_pickup, routing,
 };
+#[cfg(feature = "didcomm")]
 use serde_json::Value;
-use std::time::SystemTime;
+#[cfg(feature = "didcomm")]
+use crate::common::time::unix_timestamp_secs;
 
+#[cfg(feature = "didcomm")]
 pub mod error_response;
 pub mod inbound;
+#[cfg(feature = "didcomm")]
 pub mod protocols;
 pub(crate) mod store;
 
+#[cfg(feature = "didcomm")]
 struct MessageType(SDKMessageType);
 
 /// Helps with parsing the message type and handling higher level protocols.
 /// NOTE:
 ///   Not all Message Types need to be handled as a protocol.
+#[cfg(feature = "didcomm")]
 impl MessageType {
     pub(crate) async fn process(
         &self,
@@ -52,22 +69,16 @@ impl MessageType {
             SDKMessageType::MessagePickupStatusRequest => {
                 message_pickup::status_request(message, state, session).await
             }
-            SDKMessageType::MessagePickupStatusResponse => Err(MediatorError::MediatorError(
+            SDKMessageType::MessagePickupStatusResponse => Err(MediatorError::problem(
                     66,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(message.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.not_implemented".into(),
-                        "Feature is not implemented by the mediator: Mediator doesn't respond to Message Pickup Status responses"
-                            .into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    "Feature is not implemented by the mediator: Mediator doesn't respond to Message Pickup Status responses"
-                        .to_string(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.not_implemented",
+                    "Mediator does not process Message Pickup status responses",
+                    vec![],
+                    StatusCode::NOT_IMPLEMENTED,
                 )),
             SDKMessageType::MessagePickupDeliveryRequest => {
                 message_pickup::delivery_request(message, state, session).await
@@ -78,94 +89,66 @@ impl MessageType {
             SDKMessageType::MessagePickupLiveDeliveryChange => {
                 message_pickup::toggle_live_delivery(message, state, session).await
             }
-            SDKMessageType::AffinidiAuthenticate => Err(MediatorError::MediatorError(
+            SDKMessageType::AffinidiAuthenticate => Err(MediatorError::problem(
                     66,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(message.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.not_implemented".into(),
-                        "Feature is not implemented by the mediator: Affinidi Authentication is only handled by the Authorization handler"
-                            .into(),
-                        vec![],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    "Feature is not implemented by the mediator: Affinidi Authentication is only handled by the Authorization handler"
-                        .to_string(),
-                )),
-            SDKMessageType::AffinidiAuthenticateRefresh => Err(MediatorError::MediatorError(
-                66,
-                session.session_id.clone(),
-                Some(message.id.to_string()),
-                Box::new(ProblemReport::new(
                     ProblemReportSorter::Error,
                     ProblemReportScope::Protocol,
-                    "me.not_implemented".into(),
-                    "Feature is not implemented by the mediator: Affinidi Authentication is only handled by the Authorization handler"
-                        .into(),
+                    "me.not_implemented",
+                    "Authentication must use the /authenticate endpoint, not the message handler",
                     vec![],
-                    None,
+                    StatusCode::BAD_REQUEST,
                 )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Feature is not implemented by the mediator: Affinidi Authentication is only handled by the Authorization handler"
-                    .to_string(),
+            SDKMessageType::AffinidiAuthenticateRefresh => Err(MediatorError::problem(
+                66,
+                &session.session_id,
+                Some(message.id.to_string()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.not_implemented",
+                "Authentication refresh must use the /authenticate/refresh endpoint, not the message handler",
+                vec![],
+                StatusCode::BAD_REQUEST,
             )),
             SDKMessageType::ForwardRequest => routing::process(message, metadata, state, session, ).await,
-            SDKMessageType::ProblemReport => Err(MediatorError::MediatorError(
+            SDKMessageType::ProblemReport => Err(MediatorError::problem(
                 66,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(message.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.not_implemented".into(),
-                    "Feature is not implemented by the mediator: Problem Reports are not supported to the Mediator"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Feature is not implemented by the mediator: Problem Reports are not supported to the Mediator"
-                    .to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.not_implemented",
+                "Mediator does not process inbound Problem Report messages",
+                vec![],
+                StatusCode::NOT_IMPLEMENTED,
             )),
             SDKMessageType::DiscoverFeaturesQueries => {
                 discover_features::process(message, session, state)
             }
-            SDKMessageType::DiscoverFeaturesDisclose => Err(MediatorError::MediatorError(
+            SDKMessageType::DiscoverFeaturesDisclose => Err(MediatorError::problem(
                 88,
-                session.session_id.clone(),
+                &session.session_id,
                 Some(message.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.not_implemented".into(),
-                    "Feature is not implemented by the mediator: Discover Features disclosures are not supported to the Mediator"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Feature is not implemented by the mediator: Discover Features disclosures are not supported to the Mediator"
-                    .to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.not_implemented",
+                "Mediator does not process Discover Features disclosure responses",
+                vec![],
+                StatusCode::NOT_IMPLEMENTED,
             )),
             SDKMessageType::Other(ref type_) => Err(
-                MediatorError::MediatorError(
+                MediatorError::problem_with_log(
                     66,
-                    session.session_id.clone(),
+                    &session.session_id,
                     Some(message.id.to_string()),
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.not_implemented".into(),
-                        "Feature is not implemented by the mediator: Message type ({1}) is not supported to the Mediator"
-                            .into(),
-                        vec![type_.to_string()],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Feature is not implemented by the mediator: Message type ({type_}) is not supported to the Mediator")
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.not_implemented",
+                    "Unsupported message type: {1}",
+                    vec![type_.to_string()],
+                    StatusCode::NOT_IMPLEMENTED,
+                    format!("Unsupported message type: {type_}"),
                 )),
         }
     }
@@ -177,6 +160,7 @@ impl MessageType {
 pub enum WrapperType {
     /// to_did, message, expires_at
     Envelope(String, String, u64),
+    #[cfg(feature = "didcomm")]
     Message(Box<Message>),
     #[default]
     None,
@@ -190,6 +174,7 @@ pub(crate) struct ProcessMessageResponse {
 }
 
 /// Options for packing a message
+#[cfg(feature = "didcomm")]
 #[derive(Debug)]
 pub struct PackOptions {
     /// Protects against DoS attacks by limiting the number of keys per recipient
@@ -198,6 +183,7 @@ pub struct PackOptions {
     pub forward: bool,
 }
 
+#[cfg(feature = "didcomm")]
 impl Default for PackOptions {
     fn default() -> Self {
         PackOptions {
@@ -207,6 +193,7 @@ impl Default for PackOptions {
     }
 }
 
+#[cfg(feature = "didcomm")]
 pub(crate) trait MessageHandler {
     /// Processes an incoming message, determines any additional actions to take
     /// Returns a message to store and deliver if necessary
@@ -234,6 +221,7 @@ pub(crate) trait MessageHandler {
         S: SecretsResolver;
 }
 
+#[cfg(feature = "didcomm")]
 impl MessageHandler for Message {
     async fn process(
         &self,
@@ -241,7 +229,7 @@ impl MessageHandler for Message {
         session: &Session,
         metadata: &UnpackMetadata,
     ) -> Result<ProcessMessageResponse, MediatorError> {
-        let msg_type = MessageType(self.type_.as_str().parse::<SDKMessageType>().map_err(
+        let msg_type = MessageType(self.typ.as_str().parse::<SDKMessageType>().map_err(
             |err| {
                 MediatorError::MediatorError(
                     30,
@@ -251,21 +239,18 @@ impl MessageHandler for Message {
                         ProblemReportSorter::Error,
                         ProblemReportScope::Protocol,
                         "message.type.incorrect".into(),
-                        "Unexpected message type: {1}: Error: {2}".into(),
-                        vec![self.type_.to_string(), err.to_string()],
+                        "Unexpected message type: {1}. Reason: {2}".into(),
+                        vec![self.typ.to_string(), err.to_string()],
                         None,
                     )),
                     StatusCode::BAD_REQUEST.as_u16(),
-                    format!("Unexpected message type: {} Error: {}", self.type_, err),
+                    format!("Unexpected message type: {}. Reason: {}", self.typ, err),
                 )
             },
         )?);
 
         // Check if message expired
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = unix_timestamp_secs();
         if let Some(expires) = self.expires_time
             && expires <= now
         {
@@ -340,9 +325,8 @@ impl MessageHandler for Message {
                 if endpoints.is_array() {
                     endpoints
                         .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|endpoint| check_loopback(endpoint, forward_locals))
+                        .map(|arr| arr.iter().any(|endpoint| check_loopback(endpoint, forward_locals)))
+                        .unwrap_or(false)
                 } else {
                     check_loopback(endpoints, forward_locals)
                 }
@@ -361,18 +345,12 @@ impl MessageHandler for Message {
 
         if metadata.encrypted {
             // Respond with an encrypted message
-            let a = match self
-                .pack_encrypted(
+            let a = match didcomm_compat::pack_encrypted(
+                    self,
                     to_did,
                     self.from.as_deref(),
-                    Some(mediator_did),
                     did_resolver,
                     secrets_resolver,
-                    &PackEncryptedOptions {
-                        to_kids_limit: pack_options.to_keys_per_recipient_limit,
-                        forward: forward_loopback,
-                        ..PackEncryptedOptions::default()
-                    },
                 )
                 .await
             {
@@ -398,22 +376,16 @@ impl MessageHandler for Message {
 
             Ok(a)
         } else {
-            Err(MediatorError::MediatorError(
+            Err(MediatorError::problem(
                 66,
-                session_id.to_string(),
+                session_id,
                 Some(self.id.to_string()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.not_implemented".into(),
-                    "Feature is not implemented by the mediator: Mediator will only pack encrypted messages"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Feature is not implemented by the mediator: Mediator will only pack encrypted messages"
-                    .to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.not_implemented",
+                "Mediator only supports encrypted message packing",
+                vec![],
+                StatusCode::NOT_IMPLEMENTED,
             ))
         }
     }

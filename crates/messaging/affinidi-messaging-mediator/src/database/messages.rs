@@ -48,7 +48,7 @@ impl Database {
         let _span = span!(Level::DEBUG, "purge_messages", did_hash = did_hash, folder = ?folder);
 
         async move {
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             // Grab a message from the Stream
             let key = if folder == &Folder::Inbox {
@@ -61,14 +61,16 @@ impl Database {
                     .query_async(&mut con)
                     .await
                     .map_err(|e| {
-                        MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
+                        MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to read messages for purge. Reason: {e}"))
                     })?;
 
             let (stream_id, message) = if message.is_empty() {
                 debug!("No messages to purge...");
                 return Ok((0, 0));
+            } else if let Some(first) = message.first() {
+                first
             } else {
-                message.first().unwrap()
+                return Ok((0, 0));
             };
 
             // Extract the message details
@@ -96,7 +98,7 @@ impl Database {
             };
 
             // Delete the message
-            self.0
+            self.handler
                 .delete_message(Some(&session.session_id), did_hash, message_hash, None)
                 .await?;
 
@@ -117,13 +119,13 @@ impl Database {
         key: &str,
         id: &str,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         deadpool_redis::redis::Cmd::xdel(key, &[id])
             .exec_async(&mut con)
             .await
             .map_err(|e| {
-                MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
+                MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to delete stream record. Reason: {e}"))
             })
     }
 
@@ -134,7 +136,7 @@ impl Database {
         did_hash: &str,
         folder: &Folder,
     ) -> Result<(), MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         let key = if folder == &Folder::Inbox {
             ["RECEIVE_Q:", did_hash].concat()
@@ -146,7 +148,7 @@ impl Database {
             .exec_async(&mut con)
             .await
             .map_err(|e| {
-                MediatorError::DatabaseError(14, session.session_id.clone(), e.to_string())
+                MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to delete folder stream. Reason: {e}"))
             })
     }
 }

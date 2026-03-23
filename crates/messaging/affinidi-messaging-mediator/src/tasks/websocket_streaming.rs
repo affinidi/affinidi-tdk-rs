@@ -11,7 +11,7 @@
 use crate::database::Database;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
+    ProblemReportScope, ProblemReportSorter,
 };
 use ahash::AHashMap as HashMap;
 use http::StatusCode;
@@ -94,7 +94,9 @@ impl StreamingTask {
                     _task
                         .ws_streaming_task(database, &mut rx)
                         .await
-                        .expect("Error starting websocket_streaming thread");
+                        .unwrap_or_else(|e| {
+                            error!("websocket_streaming thread failed: {e}");
+                        });
                 })
             };
 
@@ -110,26 +112,22 @@ impl StreamingTask {
         let _span = span!(Level::INFO, "_start_pubsub");
 
         async move {
-            let mut pubsub = database.0.get_pubsub_connection().await?;
+            let mut pubsub = database.handler.get_pubsub_connection().await?;
 
             let channel = format!("CHANNEL:{uuid}");
             pubsub.subscribe(channel.clone()).await.map_err(|err| {
                 error!("Error subscribing to channel: {}", err);
 
-                MediatorError::MediatorError(
+                MediatorError::problem(
                     78,
-                    "".to_string(),
+                    "",
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.pubsub.subscribe".into(),
-                        "Can't subscribe to channel: {1}".into(),
-                        vec![err.to_string()],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    format!("Can't subscribe to channel: {err}"),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.pubsub.subscribe",
+                    "Can't subscribe to channel: {1}",
+                    vec![err.to_string()],
+                    StatusCode::INTERNAL_SERVER_ERROR,
                 )
             })?;
 
@@ -150,7 +148,7 @@ impl StreamingTask {
         let _span = span!(Level::INFO, "ws_streaming_task", uuid = &self.uuid);
 
         async move {
-            debug!("Starting...");
+            info!("WebSocket streaming task starting");
 
             // Clean up any existing sessions left over from previous runs
             database.streaming_clean_start(&self.uuid).await?;
@@ -170,7 +168,13 @@ impl StreamingTask {
                     value = stream.next() => { // redis pubsub
                         if let Some(msg) = value {
                             if let Ok(payload) = msg.get_payload::<String>() {
-                                let payload: PubSubRecord = serde_json::from_str(&payload).unwrap();
+                                let payload: PubSubRecord = match serde_json::from_str(&payload) {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        error!("Failed to parse pub/sub payload: {e}");
+                                        continue;
+                                    }
+                                };
 
                                 // Find the MPSC transmit channel for the associated DID hash
                                 match clients.get(&payload.did_hash) { Some((tx, active)) => {
@@ -179,10 +183,10 @@ impl StreamingTask {
                                         match tx.send(WebSocketCommands::Message(payload.message.clone())).await { Err(err) => {
                                             error!("Error sending message to client ({}): {}", payload.did_hash, err);
                                         } _ => {
-                                            info!("Sent message to client ({})", payload.did_hash);
+                                            debug!("Sent message to client ({})", payload.did_hash);
                                         }}
                                     } else {
-                                        warn!("pub/sub msg received for did_hash({}) but it is not active", payload.did_hash);
+                                        debug!("pub/sub msg received for did_hash({}) but it is not active", payload.did_hash);
                                         if let Err(err) = database.streaming_stop_live(&payload.did_hash, &self.uuid).await {
                                             error!("Error stopping streaming for client ({}): {}", payload.did_hash, err);
                                         }

@@ -2,7 +2,8 @@
  * Message cache for WebSocket transport
  */
 use super::WebSocketResponses;
-use affinidi_messaging_didcomm::{Message, UnpackMetadata};
+use affinidi_messaging_didcomm::message::Message;
+use crate::messages::compat::UnpackMetadata;
 use ahash::AHashMap as HashMap;
 use std::mem::size_of_val;
 use tokio::sync::oneshot;

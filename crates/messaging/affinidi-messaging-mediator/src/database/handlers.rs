@@ -15,7 +15,7 @@ impl Database {
             )
         })?;
 
-        let mut conn = self.0.get_async_connection().await?;
+        let mut conn = self.get_connection().await?;
         match deadpool_redis::redis::cmd("FUNCTION")
             .arg("LOAD")
             .arg("REPLACE")

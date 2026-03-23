@@ -15,8 +15,8 @@ repository.workspace = true
 [dependencies]
 # Affinidi Crates
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
-affinidi-messaging-sdk = "0.15"
-affinidi-messaging-didcomm = "0.12"
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm" }
 affinidi-did-resolver-cache-sdk = "0.8"
 
 # External Crates
@@ -38,7 +38,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 textwrap = "0.16"
-tokio = { version = "1.49", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [

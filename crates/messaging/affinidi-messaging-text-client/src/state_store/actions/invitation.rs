@@ -1,4 +1,4 @@
-use affinidi_messaging_didcomm::{Attachment, Message, MessageBuilder};
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::{
     ATM,
     messages::SuccessResponse,
@@ -369,7 +369,7 @@ pub async fn send_invitation_accept(
 
     // Create response message
     let accept_message_id = Uuid::new_v4();
-    let accept_message = MessageBuilder::new(
+    let accept_message = Message::build(
         accept_message_id.to_string(),
         "https://affinidi.com/atm/client-actions/connection-setup".to_string(),
         json!({"channel_did": accept_secure_profile.inner.did.clone()}),
@@ -387,7 +387,6 @@ pub async fn send_invitation_accept(
             &invite_did,
             Some(&accept_temp_profile.inner.did.clone()),
             Some(&accept_temp_profile.inner.did.clone()),
-            None,
         )
         .await?;
 

@@ -1,7 +1,5 @@
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
 use config::DatabaseConfig;
 use deadpool_redis::Connection;
@@ -13,15 +11,24 @@ use tracing::{Level, event, info};
 pub mod config;
 pub mod delete;
 
+/// Low-level Redis connection handler used by the mediator.
+///
+/// Manages a connection pool via `deadpool_redis` and provides methods for
+/// obtaining async connections and pub/sub channels. Created once at startup
+/// after verifying Redis server version compatibility.
 #[derive(Clone)]
 pub struct DatabaseHandler {
+    /// Connection pool for async Redis operations.
     pub pool: deadpool_redis::Pool,
+    /// Redis connection URL (kept for creating pub/sub connections).
     redis_url: String,
 }
 
 const REDIS_VERSION_REQ: &str = ">=7.1, <9.0";
 
 impl DatabaseHandler {
+    /// Creates a new `DatabaseHandler`, establishing a connection pool and verifying
+    /// that the Redis server version is compatible. Retries on connection failure.
     pub async fn new(config: &DatabaseConfig) -> Result<Self, MediatorError> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -29,19 +36,16 @@ impl DatabaseHandler {
         let pool = deadpool_redis::Config::from_url(&config.database_url)
             .builder()
             .map_err(|err| {
-                MediatorError::MediatorError(
+                MediatorError::problem_with_log(
                     1,
-                    "NA".to_string(),
+                    "NA",
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.url".into(),
-                        "Database URL ({1}) is invalid. Reason: {2}".into(),
-                        vec![config.database_url.clone(), err.to_string()],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.url",
+                    "Database URL ({1}) is invalid. Reason: {2}",
+                    vec![config.database_url.clone(), err.to_string()],
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     format!(
                         "Database URL ({}) is invalid. Reason: {}",
                         config.database_url, err
@@ -61,19 +65,16 @@ impl DatabaseHandler {
             })
             .build()
             .map_err(|err| {
-                MediatorError::MediatorError(
+                MediatorError::problem_with_log(
                     2,
-                    "NA".to_string(),
+                    "NA",
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.config".into(),
-                        "Database config is invalid. Reason: {2}".into(),
-                        vec![err.to_string()],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.config",
+                    "Database config is invalid. Reason: {2}",
+                    vec![err.to_string()],
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     format!("Database config is invalid. Reason: {err}"),
                 )
             })?;
@@ -129,19 +130,16 @@ impl DatabaseHandler {
     /// This is the main method to get a connection to the database
     pub async fn get_async_connection(&self) -> Result<Connection, MediatorError> {
         self.pool.get().await.map_err(|err| {
-            MediatorError::MediatorError(
+            MediatorError::problem_with_log(
                 3,
-                "NA".to_string(),
+                "NA",
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.connection".into(),
-                    "Can't get database connection. Reason: {1}".into(),
-                    vec![err.to_string()],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.connection",
+                "Can't get database connection. Reason: {1}",
+                vec![err.to_string()],
+                StatusCode::SERVICE_UNAVAILABLE,
                 format!("Can't get database connection. Reason: {err}"),
             )
         })
@@ -151,37 +149,31 @@ impl DatabaseHandler {
     /// This should only be used for pubsub operations
     pub async fn get_pubsub_connection(&self) -> Result<PubSub, MediatorError> {
         let client = redis::Client::open(self.redis_url.clone()).map_err(|err| {
-            MediatorError::MediatorError(
+            MediatorError::problem_with_log(
                 4,
-                "NA".to_string(),
+                "NA",
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.connection.pubsub".into(),
-                    "Can't open database connection for pubsub. Reason: {1}".into(),
-                    vec![err.to_string()],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.connection.pubsub",
+                "Can't open database connection for pubsub. Reason: {1}",
+                vec![err.to_string()],
+                StatusCode::SERVICE_UNAVAILABLE,
                 format!("Can't open database connection for pubsub. Reason: {err}"),
             )
         })?;
 
         client.get_async_pubsub().await.map_err(|err| {
-            MediatorError::MediatorError(
+            MediatorError::problem_with_log(
                 5,
-                "NA".to_string(),
+                "NA",
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.connection.pubsub.receiver".into(),
-                    "Can't get pubsub receiver. Reason: {1}".into(),
-                    vec![err.to_string()],
-                    None,
-                )),
-                StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.connection.pubsub.receiver",
+                "Can't get pubsub receiver. Reason: {1}",
+                vec![err.to_string()],
+                StatusCode::SERVICE_UNAVAILABLE,
                 format!("Can't get pubsub receiver. Reason: {err}"),
             )
         })
@@ -202,19 +194,16 @@ impl DatabaseHandler {
         {
             Ok(result) => result,
             Err(err) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     6,
-                    "NA".to_string(),
+                    "NA",
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.info".into(),
-                        "Couldn't query database information. Reason: {1}".into(),
-                        vec![err.to_string()],
-                        None,
-                    )),
-                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.info",
+                    "Couldn't query database information. Reason: {1}",
+                    vec![err.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
                     format!("Couldn't query database information. Reason: {err}"),
                 ));
             }
@@ -240,19 +229,16 @@ impl DatabaseHandler {
             let semver_version: Version = match Version::parse(&version) {
                 Ok(result) => result,
                 Err(err) => {
-                    return Err(MediatorError::MediatorError(
+                    return Err(MediatorError::problem_with_log(
                         7,
-                        "NA".to_string(),
+                        "NA",
                         None,
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.res.storage.version".into(),
-                            "Cannot parse database version ({1}). Reason: {2}".into(),
-                            vec![version.clone(), err.to_string()],
-                            None,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.version",
+                        "Cannot parse database version ({1}). Reason: {2}",
+                        vec![version.clone(), err.to_string()],
+                        StatusCode::INTERNAL_SERVER_ERROR,
                         format!("Cannot parse database version ({version}). Reason: {err}"),
                     ));
                 }
@@ -261,39 +247,32 @@ impl DatabaseHandler {
                 info!("Redis version is compatible: {}", version);
                 Ok(version.to_owned())
             } else {
-                Err(MediatorError::MediatorError(
+                Err(MediatorError::problem_with_log(
                     8,
-                    "NA".to_string(),
+                    "NA",
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.version.incompatible".into(),
-                        "Database version {1} does not match expected {2}".into(),
-                        vec![version.clone(), redis_version_req.to_string()],
-                        None,
-                    )),
-                    StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.version.incompatible",
+                    "Database version {1} does not match expected {2}",
+                    vec![version.clone(), redis_version_req.to_string()],
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     format!(
                         "Database version {version} does not match expected {redis_version_req}"
                     ),
                 ))
             }
         } else {
-            Err(MediatorError::MediatorError(
+            Err(MediatorError::problem(
                 9,
-                "NA".to_string(),
+                "NA",
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.version.unknown".into(),
-                    "Couldn't determine database version".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Couldn't determine database version".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.version.unknown",
+                "Couldn't determine database version",
+                vec![],
+                StatusCode::INTERNAL_SERVER_ERROR,
             ))
         }
     }

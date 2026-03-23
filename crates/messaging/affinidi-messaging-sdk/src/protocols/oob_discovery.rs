@@ -10,7 +10,7 @@ use crate::{
     messages::{GenericDataStruct, SuccessResponse},
     profiles::ATMProfile,
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -55,11 +55,11 @@ impl OOBDiscovery {
             .as_secs();
 
         let mut msg = Message::build(
-            Uuid::new_v4().into(),
-            "https://didcomm.org/out-of-band/2.0/invitation".into(),
+            Uuid::new_v4().to_string(),
+            "https://didcomm.org/out-of-band/2.0/invitation".to_string(),
             json!({}),
         )
-        .thid(Uuid::new_v4().into())
+        .thid(Uuid::new_v4().to_string())
         .from(profile.inner.did.clone())
         .created_time(now);
 

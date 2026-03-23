@@ -1,7 +1,8 @@
 use std::time::SystemTime;
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{Attachment, Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::message::{Attachment, Message};
+use affinidi_messaging_mediator::didcomm_compat;
 use affinidi_messaging_sdk::{
     messages::AuthenticationChallenge,
     protocols::{message_pickup::MessagePickupDeliveryRequest, trust_ping::TrustPingSent},
@@ -22,7 +23,7 @@ pub fn create_auth_challenge_response(
     let now = _get_time_now();
 
     Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://affinidi.com/atm/1.0/authenticate".to_owned(),
         json!(body),
     )
@@ -48,7 +49,7 @@ where
     let now = _get_time_now();
 
     let mut msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/trust-ping/2.0/ping".to_owned(),
         json!({"response_requested": expect_response}),
     )
@@ -68,14 +69,12 @@ where
         bytes: 0,
         response: SendMessageResponse::EmptyResponse,
     };
-    let (msg, _) = msg
-        .pack_encrypted(
+    let (msg, _) = didcomm_compat::pack_encrypted(
+            &msg,
             to_did,
-            from_did.as_deref(),
             from_did.as_deref(),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .unwrap();
@@ -96,30 +95,28 @@ pub async fn build_status_request_message<S>(
 where
     S: SecretsResolver,
 {
-    let mut msg = Message::build(
-        Uuid::new_v4().into(),
-        "https://didcomm.org/messagepickup/3.0/status-request".to_owned(),
-        json!({}),
-    )
-    .header("return_route".into(), Value::String("all".into()));
-
-    msg = msg.body(json!({"recipient_did": recipient_did }));
-
     let to_did = mediator_did;
-
-    msg = msg.to(to_did.to_owned());
-
-    msg = msg.from(recipient_did.clone());
     let now = _get_time_now();
-    let msg = msg.created_time(now).expires_time(now + 300).finalize();
-    let (msg, _) = msg
-        .pack_encrypted(
+
+    let mut msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/messagepickup/3.0/status-request".to_owned(),
+        json!({"recipient_did": recipient_did }),
+    )
+    .to(to_did.to_owned())
+    .from(recipient_did.clone())
+    .created_time(now)
+    .expires_time(now + 300)
+    .finalize();
+
+    msg.extra.insert("return_route".into(), Value::String("all".into()));
+
+    let (msg, _) = didcomm_compat::pack_encrypted(
+            &msg,
             to_did,
-            Some(&recipient_did),
             Some(&recipient_did),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .unwrap();
@@ -142,29 +139,29 @@ where
         limit: 10,
     };
 
+    let to_did = mediator_did;
+    let now = _get_time_now();
+
     let mut msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/messagepickup/3.0/delivery-request".to_owned(),
         serde_json::to_value(body).unwrap(),
     )
-    .header("return_route".into(), Value::String("all".into()));
+    .to(to_did.to_owned())
+    .from(recipient_did.clone())
+    .created_time(now)
+    .expires_time(now + 300)
+    .finalize();
 
-    let to_did = mediator_did;
-    msg = msg.to(to_did.to_owned());
-
-    msg = msg.from(recipient_did.clone().to_owned());
-    let now = _get_time_now();
-    let msg = msg.created_time(now).expires_time(now + 300).finalize();
+    msg.extra.insert("return_route".into(), Value::String("all".into()));
 
     // Pack the message
-    let (msg, _) = msg
-        .pack_encrypted(
+    let (msg, _) = didcomm_compat::pack_encrypted(
+            &msg,
             to_did,
-            Some(&recipient_did),
             Some(&recipient_did),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .unwrap();
@@ -183,32 +180,32 @@ pub async fn build_message_received_message<S>(
 where
     S: SecretsResolver,
 {
-    let mut msg = Message::build(
-        Uuid::new_v4().into(),
-        "https://didcomm.org/messagepickup/3.0/messages-received".to_owned(),
-        json!({"message_id_list": to_delete_list}),
-    )
-    .header("return_route".into(), Value::String("all".into()));
-
     let to_did = mediator_did;
-    msg = msg.to(to_did.to_owned());
-
-    msg = msg.from(recipient_did.clone());
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let msg = msg.created_time(now).expires_time(now + 300).finalize();
+
+    let mut msg = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/messagepickup/3.0/messages-received".to_owned(),
+        json!({"message_id_list": to_delete_list}),
+    )
+    .to(to_did.to_owned())
+    .from(recipient_did.clone())
+    .created_time(now)
+    .expires_time(now + 300)
+    .finalize();
+
+    msg.extra.insert("return_route".into(), Value::String("all".into()));
 
     // Pack the message
-    let (msg, _) = msg
-        .pack_encrypted(
+    let (msg, _) = didcomm_compat::pack_encrypted(
+            &msg,
             to_did,
-            Some(&recipient_did),
             Some(&recipient_did),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .unwrap();
@@ -230,7 +227,7 @@ where
     let now = _get_time_now();
 
     let msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/routing/2.0/forward".to_owned(),
         json!({ "next": recipient_did }),
     )
@@ -247,14 +244,12 @@ where
     let msg = msg.created_time(now).expires_time(now + 300).finalize();
 
     // Pack the message
-    let (msg, _) = msg
-        .pack_encrypted(
+    let (msg, _) = didcomm_compat::pack_encrypted(
+            &msg,
             mediator_did,
-            Some(&actor_did.clone()),
-            Some(&actor_did.clone()),
+            Some(&actor_did),
             did_resolver,
             secrets_resolver,
-            &PackEncryptedOptions::default(),
         )
         .await
         .unwrap();
