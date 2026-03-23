@@ -307,11 +307,8 @@ impl DeviceResponse {
         let mut response = Self::create(issuer_signed, requested)?;
 
         let ns = device_namespaces.unwrap_or_default();
-        let device_auth = DeviceAuthentication::new(
-            session_transcript.clone(),
-            &issuer_signed.doc_type,
-            ns,
-        );
+        let device_auth =
+            DeviceAuthentication::new(session_transcript.clone(), &issuer_signed.doc_type, ns);
 
         let device_signed = DeviceSigned::sign(&device_auth, device_signer)?;
         response.device_signed = Some(device_signed);
@@ -328,20 +325,16 @@ impl DeviceResponse {
         session_transcript: &SessionTranscript,
         verifier: &dyn CoseVerifier,
     ) -> Result<bool> {
-        let device_signed = self
-            .device_signed
-            .as_ref()
-            .ok_or_else(|| crate::error::MdocError::DeviceAuth("no device_signed present".into()))?;
+        let device_signed = self.device_signed.as_ref().ok_or_else(|| {
+            crate::error::MdocError::DeviceAuth("no device_signed present".into())
+        })?;
 
         // Reconstruct DeviceAuthentication with empty namespaces
         // (the verifier uses the namespaces_bytes from DeviceSigned to reconstruct)
-        let ns_value: ciborium::Value =
-            ciborium::from_reader(&device_signed.namespaces_bytes[..])
-                .map_err(|e| {
-                    crate::error::MdocError::DeviceAuth(format!(
-                        "DeviceNameSpaces decode: {e}"
-                    ))
-                })?;
+        let ns_value: ciborium::Value = ciborium::from_reader(&device_signed.namespaces_bytes[..])
+            .map_err(|e| {
+                crate::error::MdocError::DeviceAuth(format!("DeviceNameSpaces decode: {e}"))
+            })?;
 
         let device_namespaces = decode_device_namespaces(&ns_value)?;
 
@@ -356,9 +349,7 @@ impl DeviceResponse {
 }
 
 /// Decode DeviceNameSpaces from a CBOR Value.
-fn decode_device_namespaces(
-    value: &ciborium::Value,
-) -> Result<DeviceNameSpaces> {
+fn decode_device_namespaces(value: &ciborium::Value) -> Result<DeviceNameSpaces> {
     let entries = match value {
         ciborium::Value::Map(m) => m,
         _ => return Ok(BTreeMap::new()),
@@ -580,10 +571,8 @@ mod tests {
 
         let mdoc = build_test_mdoc(&issuer_signer);
 
-        let de = crate::device_engagement::DeviceEngagement::new(
-            ciborium::Value::Map(vec![]),
-        )
-        .unwrap();
+        let de =
+            crate::device_engagement::DeviceEngagement::new(ciborium::Value::Map(vec![])).unwrap();
         let transcript =
             crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
                 .unwrap();
@@ -604,7 +593,11 @@ mod tests {
         .unwrap();
 
         assert!(response.device_signed.is_some());
-        assert!(response.verify_device_auth(&transcript, &device_verifier).unwrap());
+        assert!(
+            response
+                .verify_device_auth(&transcript, &device_verifier)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -615,10 +608,8 @@ mod tests {
 
         let mdoc = build_test_mdoc(&issuer_signer);
 
-        let de = crate::device_engagement::DeviceEngagement::new(
-            ciborium::Value::Map(vec![]),
-        )
-        .unwrap();
+        let de =
+            crate::device_engagement::DeviceEngagement::new(ciborium::Value::Map(vec![])).unwrap();
         let transcript =
             crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
                 .unwrap();
@@ -650,10 +641,8 @@ mod tests {
 
         let response = DeviceResponse::create(&mdoc, &requested).unwrap();
 
-        let de = crate::device_engagement::DeviceEngagement::new(
-            ciborium::Value::Map(vec![]),
-        )
-        .unwrap();
+        let de =
+            crate::device_engagement::DeviceEngagement::new(ciborium::Value::Map(vec![])).unwrap();
         let transcript =
             crate::session_transcript::SessionTranscript::new_qr(&de, ciborium::Value::Map(vec![]))
                 .unwrap();

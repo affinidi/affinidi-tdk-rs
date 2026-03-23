@@ -203,9 +203,10 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                     }
                     "ServiceInformation" => {
                         // Finalize current service
-                        let status_time = chrono::DateTime::parse_from_rfc3339(&current_status_time)
-                            .map(|dt| dt.with_timezone(&chrono::Utc))
-                            .unwrap_or_else(|_| chrono::Utc::now());
+                        let status_time =
+                            chrono::DateTime::parse_from_rfc3339(&current_status_time)
+                                .map(|dt| dt.with_timezone(&chrono::Utc))
+                                .unwrap_or_else(|_| chrono::Utc::now());
 
                         let identity = match current_service_cert.take() {
                             Some(cert) => ServiceDigitalIdentity::X509Certificate(cert),

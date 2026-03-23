@@ -151,7 +151,9 @@ pub fn extract_kid(sign1: &CoseSign1) -> Option<&[u8]> {
 }
 
 /// Extract the algorithm from a COSE_Sign1 protected header.
-pub fn extract_algorithm(sign1: &CoseSign1) -> Option<&coset::RegisteredLabelWithPrivate<coset::iana::Algorithm>> {
+pub fn extract_algorithm(
+    sign1: &CoseSign1,
+) -> Option<&coset::RegisteredLabelWithPrivate<coset::iana::Algorithm>> {
     sign1.protected.header.alg.as_ref()
 }
 

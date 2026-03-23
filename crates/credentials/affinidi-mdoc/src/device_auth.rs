@@ -162,10 +162,7 @@ impl DeviceSigned {
     ///
     /// The COSE_Sign1 uses a **detached payload**: the payload field is empty,
     /// and `DeviceAuthenticationBytes` is passed as external additional authenticated data.
-    pub fn sign(
-        device_auth: &DeviceAuthentication,
-        signer: &dyn CoseSigner,
-    ) -> Result<Self> {
+    pub fn sign(device_auth: &DeviceAuthentication, signer: &dyn CoseSigner) -> Result<Self> {
         let auth_bytes = device_auth.to_device_authentication_bytes()?;
         let namespaces_bytes = encode_namespaces_bytes(&device_auth.device_namespaces)?;
 
@@ -195,10 +192,7 @@ impl DeviceSigned {
     ///
     /// * `device_auth` — The DeviceAuthentication structure
     /// * `mac_key` — 32-byte HMAC-SHA-256 key (derived from ECDH)
-    pub fn mac(
-        device_auth: &DeviceAuthentication,
-        mac_key: &[u8; 32],
-    ) -> Result<Self> {
+    pub fn mac(device_auth: &DeviceAuthentication, mac_key: &[u8; 32]) -> Result<Self> {
         let auth_bytes = device_auth.to_device_authentication_bytes()?;
         let namespaces_bytes = encode_namespaces_bytes(&device_auth.device_namespaces)?;
 
@@ -212,7 +206,8 @@ impl DeviceSigned {
             header: protected,
         };
         // Serialize the protected header to CBOR
-        let protected_cbor = protected_serialized.cbor_bstr()
+        let protected_cbor = protected_serialized
+            .cbor_bstr()
             .map_err(|e| MdocError::DeviceAuth(format!("protected header encoding: {e}")))?;
         ciborium::into_writer(&protected_cbor, &mut protected_bytes)
             .map_err(|e| MdocError::DeviceAuth(format!("protected header CBOR: {e}")))?;
@@ -269,11 +264,9 @@ impl DeviceSigned {
                     .map_err(|e| MdocError::DeviceAuth(format!("verification failed: {e}")))?;
                 Ok(true)
             }
-            DeviceAuth::Mac(_) => {
-                Err(MdocError::DeviceAuth(
-                    "use verify_mac() for MAC-based device auth".into(),
-                ))
-            }
+            DeviceAuth::Mac(_) => Err(MdocError::DeviceAuth(
+                "use verify_mac() for MAC-based device auth".into(),
+            )),
         }
     }
 
@@ -291,9 +284,7 @@ impl DeviceSigned {
         let mac_tag = match &self.device_auth {
             DeviceAuth::Mac(tag) => tag,
             DeviceAuth::Signature(_) => {
-                return Err(MdocError::DeviceAuth(
-                    "expected MAC, got signature".into(),
-                ));
+                return Err(MdocError::DeviceAuth("expected MAC, got signature".into()));
             }
         };
 
@@ -307,7 +298,8 @@ impl DeviceSigned {
             original_data: None,
             header: protected,
         };
-        let protected_cbor = protected_serialized.cbor_bstr()
+        let protected_cbor = protected_serialized
+            .cbor_bstr()
             .map_err(|e| MdocError::DeviceAuth(format!("protected header encoding: {e}")))?;
 
         // Reconstruct MAC_structure
@@ -395,11 +387,8 @@ mod tests {
 
     #[test]
     fn device_authentication_cbor_structure() {
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let value = da.to_cbor_value().unwrap();
         match value {
@@ -422,11 +411,8 @@ mod tests {
 
     #[test]
     fn device_authentication_bytes_has_tag24() {
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let bytes = da.to_device_authentication_bytes().unwrap();
         // Should start with Tag24 marker: 0xd8 0x18
@@ -440,11 +426,8 @@ mod tests {
         let signer = TestSigner::new(key);
         let verifier = TestVerifier::new(key);
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::sign(&da, &signer).unwrap();
         assert!(device_signed.verify(&da, &verifier).unwrap());
@@ -455,11 +438,8 @@ mod tests {
         let signer = TestSigner::new(b"correct-key-for-device-signing!");
         let wrong_verifier = TestVerifier::new(b"wrong-key-should-fail-verify!!!");
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::sign(&da, &signer).unwrap();
         let result = device_signed.verify(&da, &wrong_verifier);
@@ -472,20 +452,14 @@ mod tests {
         let signer = TestSigner::new(key);
         let verifier = TestVerifier::new(key);
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::sign(&da, &signer).unwrap();
 
         // Verify with a different doc_type — should fail
-        let da_different = DeviceAuthentication::new(
-            test_transcript(),
-            "different.doctype",
-            BTreeMap::new(),
-        );
+        let da_different =
+            DeviceAuthentication::new(test_transcript(), "different.doctype", BTreeMap::new());
 
         let result = device_signed.verify(&da_different, &verifier);
         assert!(result.is_err());
@@ -505,11 +479,7 @@ mod tests {
         );
         namespaces.insert("org.iso.18013.5.1".to_string(), items);
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            namespaces,
-        );
+        let da = DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", namespaces);
 
         let device_signed = DeviceSigned::sign(&da, &signer).unwrap();
         assert!(device_signed.verify(&da, &verifier).unwrap());
@@ -519,11 +489,8 @@ mod tests {
     fn mac_and_verify_device_auth() {
         let mac_key = [0x42u8; 32];
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::mac(&da, &mac_key).unwrap();
         assert!(matches!(device_signed.device_auth, DeviceAuth::Mac(_)));
@@ -535,11 +502,8 @@ mod tests {
         let mac_key = [0x42u8; 32];
         let wrong_key = [0x43u8; 32];
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::mac(&da, &mac_key).unwrap();
         let result = device_signed.verify_mac(&da, &wrong_key);
@@ -550,19 +514,13 @@ mod tests {
     fn mac_different_transcript_fails() {
         let mac_key = [0x42u8; 32];
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::mac(&da, &mac_key).unwrap();
 
-        let da_different = DeviceAuthentication::new(
-            test_transcript(),
-            "different.doctype",
-            BTreeMap::new(),
-        );
+        let da_different =
+            DeviceAuthentication::new(test_transcript(), "different.doctype", BTreeMap::new());
 
         let result = device_signed.verify_mac(&da_different, &mac_key);
         assert!(result.is_err());
@@ -574,11 +532,8 @@ mod tests {
         let signer = TestSigner::new(key);
         let mac_key = [0x42u8; 32];
 
-        let da = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         let device_signed = DeviceSigned::sign(&da, &signer).unwrap();
         // Trying verify_mac on a signature-based DeviceSigned should fail
@@ -588,16 +543,10 @@ mod tests {
 
     #[test]
     fn device_authentication_bytes_deterministic() {
-        let da1 = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
-        let da2 = DeviceAuthentication::new(
-            test_transcript(),
-            "org.iso.18013.5.1.mDL",
-            BTreeMap::new(),
-        );
+        let da1 =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
+        let da2 =
+            DeviceAuthentication::new(test_transcript(), "org.iso.18013.5.1.mDL", BTreeMap::new());
 
         assert_eq!(
             da1.to_device_authentication_bytes().unwrap(),

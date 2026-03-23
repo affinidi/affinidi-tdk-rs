@@ -281,8 +281,11 @@ mod tests {
 
     #[test]
     fn reader_authentication_cbor_structure() {
-        let req = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_attribute(MDL_NAMESPACE, "family_name", false);
+        let req = ItemsRequest::new("org.iso.18013.5.1.mDL").add_attribute(
+            MDL_NAMESPACE,
+            "family_name",
+            false,
+        );
 
         let ra = ReaderAuthentication::new(test_transcript(), req);
         let value = ra.to_cbor_value().unwrap();
@@ -301,8 +304,11 @@ mod tests {
 
     #[test]
     fn reader_authentication_bytes_has_tag24() {
-        let req = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_attribute(MDL_NAMESPACE, "family_name", false);
+        let req = ItemsRequest::new("org.iso.18013.5.1.mDL").add_attribute(
+            MDL_NAMESPACE,
+            "family_name",
+            false,
+        );
 
         let ra = ReaderAuthentication::new(test_transcript(), req);
         let bytes = ra.to_reader_authentication_bytes().unwrap();
@@ -332,8 +338,11 @@ mod tests {
         let signer = TestSigner::new(b"correct-key-for-reader-signing!");
         let wrong_verifier = TestVerifier::new(b"wrong-key-should-fail-verify!!!");
 
-        let req = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_attribute(MDL_NAMESPACE, "family_name", false);
+        let req = ItemsRequest::new("org.iso.18013.5.1.mDL").add_attribute(
+            MDL_NAMESPACE,
+            "family_name",
+            false,
+        );
 
         let ra = ReaderAuthentication::new(test_transcript(), req);
         let sign1 = sign_reader_auth(&ra, &signer).unwrap();
@@ -348,15 +357,21 @@ mod tests {
         let signer = TestSigner::new(key);
         let verifier = TestVerifier::new(key);
 
-        let req1 = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_attribute(MDL_NAMESPACE, "family_name", false);
+        let req1 = ItemsRequest::new("org.iso.18013.5.1.mDL").add_attribute(
+            MDL_NAMESPACE,
+            "family_name",
+            false,
+        );
 
         let ra1 = ReaderAuthentication::new(test_transcript(), req1);
         let sign1 = sign_reader_auth(&ra1, &signer).unwrap();
 
         // Different request
-        let req2 = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_attribute(MDL_NAMESPACE, "portrait", true);
+        let req2 = ItemsRequest::new("org.iso.18013.5.1.mDL").add_attribute(
+            MDL_NAMESPACE,
+            "portrait",
+            true,
+        );
 
         let ra2 = ReaderAuthentication::new(test_transcript(), req2);
         let result = verify_reader_auth(&sign1, &ra2, &verifier);
@@ -365,12 +380,11 @@ mod tests {
 
     #[test]
     fn items_request_cbor_roundtrip() {
-        let req = ItemsRequest::new("org.iso.18013.5.1.mDL")
-            .add_namespace(
-                MDL_NAMESPACE,
-                &["family_name", "given_name", "birth_date"],
-                false,
-            );
+        let req = ItemsRequest::new("org.iso.18013.5.1.mDL").add_namespace(
+            MDL_NAMESPACE,
+            &["family_name", "given_name", "birth_date"],
+            false,
+        );
 
         let bytes = req.to_cbor_bytes().unwrap();
         let value: ciborium::Value = ciborium::from_reader(&bytes[..]).unwrap();

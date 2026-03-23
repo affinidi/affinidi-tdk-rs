@@ -150,17 +150,61 @@ mod tests {
     fn build_complete_mdl(signer: &TestSigner) -> IssuerSigned {
         MdocBuilder::new(MDL_DOC_TYPE)
             .validity(test_validity())
-            .add_attribute(MDL_NAMESPACE, "family_name", ciborium::Value::Text("Doe".into()))
-            .add_attribute(MDL_NAMESPACE, "given_name", ciborium::Value::Text("John".into()))
-            .add_attribute(MDL_NAMESPACE, "birth_date", ciborium::Value::Text("1990-01-01".into()))
-            .add_attribute(MDL_NAMESPACE, "issue_date", ciborium::Value::Text("2024-01-01".into()))
-            .add_attribute(MDL_NAMESPACE, "expiry_date", ciborium::Value::Text("2029-01-01".into()))
-            .add_attribute(MDL_NAMESPACE, "issuing_country", ciborium::Value::Text("US".into()))
-            .add_attribute(MDL_NAMESPACE, "issuing_authority", ciborium::Value::Text("State DMV".into()))
-            .add_attribute(MDL_NAMESPACE, "document_number", ciborium::Value::Text("DL12345".into()))
-            .add_attribute(MDL_NAMESPACE, "portrait", ciborium::Value::Bytes(vec![0xFF, 0xD8]))
-            .add_attribute(MDL_NAMESPACE, "driving_privileges", ciborium::Value::Array(vec![]))
-            .add_attribute(MDL_NAMESPACE, "un_distinguishing_sign", ciborium::Value::Text("USA".into()))
+            .add_attribute(
+                MDL_NAMESPACE,
+                "family_name",
+                ciborium::Value::Text("Doe".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "given_name",
+                ciborium::Value::Text("John".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "birth_date",
+                ciborium::Value::Text("1990-01-01".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "issue_date",
+                ciborium::Value::Text("2024-01-01".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "expiry_date",
+                ciborium::Value::Text("2029-01-01".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "issuing_country",
+                ciborium::Value::Text("US".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "issuing_authority",
+                ciborium::Value::Text("State DMV".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "document_number",
+                ciborium::Value::Text("DL12345".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "portrait",
+                ciborium::Value::Bytes(vec![0xFF, 0xD8]),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "driving_privileges",
+                ciborium::Value::Array(vec![]),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "un_distinguishing_sign",
+                ciborium::Value::Text("USA".into()),
+            )
             .build(signer)
             .unwrap()
     }
@@ -181,8 +225,16 @@ mod tests {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
             .validity(test_validity())
-            .add_attribute(MDL_NAMESPACE, "family_name", ciborium::Value::Text("Doe".into()))
-            .add_attribute(MDL_NAMESPACE, "given_name", ciborium::Value::Text("John".into()))
+            .add_attribute(
+                MDL_NAMESPACE,
+                "family_name",
+                ciborium::Value::Text("Doe".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "given_name",
+                ciborium::Value::Text("John".into()),
+            )
             .build(&signer)
             .unwrap();
 
@@ -199,7 +251,11 @@ mod tests {
         // Build with PID doc type instead of mDL
         let mdoc = MdocBuilder::new("eu.europa.ec.eudi.pid.1")
             .validity(test_validity())
-            .add_attribute(MDL_NAMESPACE, "family_name", ciborium::Value::Text("Doe".into()))
+            .add_attribute(
+                MDL_NAMESPACE,
+                "family_name",
+                ciborium::Value::Text("Doe".into()),
+            )
             .build(&signer)
             .unwrap();
 
@@ -212,9 +268,21 @@ mod tests {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
             .validity(test_validity())
-            .add_attribute(MDL_NAMESPACE, "family_name", ciborium::Value::Text("Doe".into()))
-            .add_attribute(MDL_NAMESPACE, "nationality", ciborium::Value::Text("US".into()))
-            .add_attribute(MDL_NAMESPACE, "height", ciborium::Value::Integer(180.into()))
+            .add_attribute(
+                MDL_NAMESPACE,
+                "family_name",
+                ciborium::Value::Text("Doe".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "nationality",
+                ciborium::Value::Text("US".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "height",
+                ciborium::Value::Integer(180.into()),
+            )
             .build(&signer)
             .unwrap();
 
@@ -229,8 +297,16 @@ mod tests {
         let signer = TestSigner::new(b"test-signing-key-for-mdl-tests!");
         let mdoc = MdocBuilder::new(MDL_DOC_TYPE)
             .validity(test_validity())
-            .add_attribute(MDL_NAMESPACE, "family_name", ciborium::Value::Text("Doe".into()))
-            .add_attribute(MDL_NAMESPACE, "custom_field", ciborium::Value::Text("value".into()))
+            .add_attribute(
+                MDL_NAMESPACE,
+                "family_name",
+                ciborium::Value::Text("Doe".into()),
+            )
+            .add_attribute(
+                MDL_NAMESPACE,
+                "custom_field",
+                ciborium::Value::Text("value".into()),
+            )
             .build(&signer)
             .unwrap();
 

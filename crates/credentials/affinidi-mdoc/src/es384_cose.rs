@@ -209,8 +209,7 @@ mod tests {
 
     #[test]
     fn es384_with_kid() {
-        let signer = Es384CoseSigner::generate()
-            .with_kid(b"key-id-384".to_vec());
+        let signer = Es384CoseSigner::generate().with_kid(b"key-id-384".to_vec());
         assert_eq!(signer.kid(), Some(b"key-id-384".to_vec()));
     }
 }

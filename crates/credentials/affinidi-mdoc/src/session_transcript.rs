@@ -120,13 +120,17 @@ impl SessionTranscript {
     pub fn to_cbor_value(&self) -> Result<ciborium::Value> {
         // DeviceEngagementBytes: Tag24 wrapping or null
         let de_val = match &self.device_engagement_bytes {
-            Some(bytes) => ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(bytes.clone()))),
+            Some(bytes) => {
+                ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(bytes.clone())))
+            }
             None => ciborium::Value::Null,
         };
 
         // EReaderKeyBytes: Tag24 wrapping or null
         let ek_val = match &self.e_reader_key_bytes {
-            Some(bytes) => ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(bytes.clone()))),
+            Some(bytes) => {
+                ciborium::Value::Tag(24, Box::new(ciborium::Value::Bytes(bytes.clone())))
+            }
             None => ciborium::Value::Null,
         };
 

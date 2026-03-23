@@ -65,48 +65,45 @@ pub fn parse_certificate(der: &[u8]) -> Result<CertInfo> {
     let issuer = cert.issuer().to_string();
     let serial = cert.raw_serial_as_string();
 
-    let not_before = cert.validity().not_before.to_rfc2822()
+    let not_before = cert
+        .validity()
+        .not_before
+        .to_rfc2822()
         .unwrap_or_else(|_| "unknown".to_string());
-    let not_after = cert.validity().not_after.to_rfc2822()
+    let not_after = cert
+        .validity()
+        .not_after
+        .to_rfc2822()
         .unwrap_or_else(|_| "unknown".to_string());
 
     let is_time_valid = cert.validity().is_valid();
 
     // Extract SKI
-    let subject_key_identifier = cert
-        .extensions()
-        .iter()
-        .find_map(|ext| {
-            if let ParsedExtension::SubjectKeyIdentifier(ski) = ext.parsed_extension() {
-                Some(ski.0.to_vec())
-            } else {
-                None
-            }
-        });
+    let subject_key_identifier = cert.extensions().iter().find_map(|ext| {
+        if let ParsedExtension::SubjectKeyIdentifier(ski) = ext.parsed_extension() {
+            Some(ski.0.to_vec())
+        } else {
+            None
+        }
+    });
 
     // Extract AKI
-    let authority_key_identifier = cert
-        .extensions()
-        .iter()
-        .find_map(|ext| {
-            if let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension() {
-                aki.key_identifier.as_ref().map(|ki| ki.0.to_vec())
-            } else {
-                None
-            }
-        });
+    let authority_key_identifier = cert.extensions().iter().find_map(|ext| {
+        if let ParsedExtension::AuthorityKeyIdentifier(aki) = ext.parsed_extension() {
+            aki.key_identifier.as_ref().map(|ki| ki.0.to_vec())
+        } else {
+            None
+        }
+    });
 
     // Check basicConstraints for CA
-    let is_ca = cert
-        .extensions()
-        .iter()
-        .any(|ext| {
-            if let ParsedExtension::BasicConstraints(bc) = ext.parsed_extension() {
-                bc.ca
-            } else {
-                false
-            }
-        });
+    let is_ca = cert.extensions().iter().any(|ext| {
+        if let ParsedExtension::BasicConstraints(bc) = ext.parsed_extension() {
+            bc.ca
+        } else {
+            false
+        }
+    });
 
     Ok(CertInfo {
         subject,
@@ -309,7 +306,13 @@ mod tests {
         }
         let cert = make_test_cert();
         let mut registry = TrustListRegistry::new();
-        registry.add_provider("DE", "Test CA", ServiceType::CaQc, ServiceStatus::Granted, &cert);
+        registry.add_provider(
+            "DE",
+            "Test CA",
+            ServiceType::CaQc,
+            ServiceStatus::Granted,
+            &cert,
+        );
 
         let result = validate_chain(&[cert], &registry).unwrap();
         assert!(result.trust_anchor.is_some());

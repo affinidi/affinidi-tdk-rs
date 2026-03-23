@@ -217,20 +217,25 @@ impl CoseKey {
         if self.x.len() != expected {
             return Err(MdocError::Cose(format!(
                 "x coordinate must be {} bytes for {:?}, got {}",
-                expected, self.crv, self.x.len()
+                expected,
+                self.crv,
+                self.x.len()
             )));
         }
 
         // Validate y for EC2 keys
         match self.kty {
             KeyType::Ec2 => {
-                let y = self.y.as_ref().ok_or_else(|| {
-                    MdocError::Cose("EC2 key requires y coordinate".into())
-                })?;
+                let y = self
+                    .y
+                    .as_ref()
+                    .ok_or_else(|| MdocError::Cose("EC2 key requires y coordinate".into()))?;
                 if y.len() != expected {
                     return Err(MdocError::Cose(format!(
                         "y coordinate must be {} bytes for {:?}, got {}",
-                        expected, self.crv, y.len()
+                        expected,
+                        self.crv,
+                        y.len()
                     )));
                 }
             }
@@ -246,7 +251,9 @@ impl CoseKey {
             if d.len() != expected {
                 return Err(MdocError::Cose(format!(
                     "private key must be {} bytes for {:?}, got {}",
-                    expected, self.crv, d.len()
+                    expected,
+                    self.crv,
+                    d.len()
                 )));
             }
         }
@@ -377,8 +384,8 @@ impl CoseKey {
         };
 
         // Parse kty (1) — required
-        let kty_val = get_int(1)
-            .ok_or_else(|| MdocError::Cose("COSE_Key missing kty (1)".into()))?;
+        let kty_val =
+            get_int(1).ok_or_else(|| MdocError::Cose("COSE_Key missing kty (1)".into()))?;
         let kty = match kty_val {
             1 => KeyType::Okp,
             2 => KeyType::Ec2,
@@ -386,8 +393,8 @@ impl CoseKey {
         };
 
         // Parse crv (-1) — required
-        let crv_val = get_int(-1)
-            .ok_or_else(|| MdocError::Cose("COSE_Key missing crv (-1)".into()))?;
+        let crv_val =
+            get_int(-1).ok_or_else(|| MdocError::Cose("COSE_Key missing crv (-1)".into()))?;
         let crv = match crv_val {
             1 => Curve::P256,
             2 => Curve::P384,
@@ -398,8 +405,7 @@ impl CoseKey {
         };
 
         // Parse x (-2) — required
-        let x = get_bytes(-2)
-            .ok_or_else(|| MdocError::Cose("COSE_Key missing x (-2)".into()))?;
+        let x = get_bytes(-2).ok_or_else(|| MdocError::Cose("COSE_Key missing x (-2)".into()))?;
 
         // Parse y (-3) — optional (required for EC2)
         let y = get_bytes(-3);
@@ -642,9 +648,18 @@ mod tests {
     #[test]
     fn parse_unsupported_kty_fails() {
         let val = ciborium::Value::Map(vec![
-            (ciborium::Value::Integer(1.into()), ciborium::Value::Integer(99.into())),
-            (ciborium::Value::Integer((-1).into()), ciborium::Value::Integer(1.into())),
-            (ciborium::Value::Integer((-2).into()), ciborium::Value::Bytes(vec![0; 32])),
+            (
+                ciborium::Value::Integer(1.into()),
+                ciborium::Value::Integer(99.into()),
+            ),
+            (
+                ciborium::Value::Integer((-1).into()),
+                ciborium::Value::Integer(1.into()),
+            ),
+            (
+                ciborium::Value::Integer((-2).into()),
+                ciborium::Value::Bytes(vec![0; 32]),
+            ),
         ]);
         assert!(CoseKey::from_cbor_value(&val).is_err());
     }
@@ -652,10 +667,16 @@ mod tests {
     #[test]
     fn default_algorithm() {
         let p256 = CoseKey::new_p256(vec![0; 32], vec![0; 32]).unwrap();
-        assert_eq!(p256.default_algorithm(), Some(coset::iana::Algorithm::ES256));
+        assert_eq!(
+            p256.default_algorithm(),
+            Some(coset::iana::Algorithm::ES256)
+        );
 
         let p384 = CoseKey::new_p384(vec![0; 48], vec![0; 48]).unwrap();
-        assert_eq!(p384.default_algorithm(), Some(coset::iana::Algorithm::ES384));
+        assert_eq!(
+            p384.default_algorithm(),
+            Some(coset::iana::Algorithm::ES384)
+        );
 
         let ed = CoseKey::new_ed25519(vec![0; 32]).unwrap();
         assert_eq!(ed.default_algorithm(), Some(coset::iana::Algorithm::EdDSA));

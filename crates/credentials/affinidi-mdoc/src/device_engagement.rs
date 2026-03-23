@@ -148,10 +148,7 @@ impl DeviceEngagement {
         ]);
 
         // DeviceEngagement = [version, security, ?deviceRetrievalMethods, ...]
-        let mut arr = vec![
-            ciborium::Value::Text(self.version.clone()),
-            security,
-        ];
+        let mut arr = vec![ciborium::Value::Text(self.version.clone()), security];
 
         // Optional fields use positional encoding — must include nulls for gaps
         match &self.device_retrieval_methods {
@@ -205,16 +202,26 @@ impl DeviceEngagement {
     pub fn from_cbor_value(value: &ciborium::Value) -> Result<Self> {
         let arr = match value {
             ciborium::Value::Array(a) => a,
-            _ => return Err(MdocError::Cbor("DeviceEngagement must be a CBOR array".into())),
+            _ => {
+                return Err(MdocError::Cbor(
+                    "DeviceEngagement must be a CBOR array".into(),
+                ));
+            }
         };
 
         if arr.len() < 2 {
-            return Err(MdocError::Cbor("DeviceEngagement requires at least 2 elements".into()));
+            return Err(MdocError::Cbor(
+                "DeviceEngagement requires at least 2 elements".into(),
+            ));
         }
 
         let version = match &arr[0] {
             ciborium::Value::Text(s) => s.clone(),
-            _ => return Err(MdocError::Cbor("DeviceEngagement version must be tstr".into())),
+            _ => {
+                return Err(MdocError::Cbor(
+                    "DeviceEngagement version must be tstr".into(),
+                ));
+            }
         };
 
         // Parse Security = [cipherSuiteIdentifier, eDeviceKeyBytes]
@@ -235,7 +242,11 @@ impl DeviceEngagement {
             ciborium::Value::Tag(24, inner) => {
                 let inner_bytes = match inner.as_ref() {
                     ciborium::Value::Bytes(b) => b.clone(),
-                    _ => return Err(MdocError::Cbor("eDeviceKeyBytes Tag24 inner must be bytes".into())),
+                    _ => {
+                        return Err(MdocError::Cbor(
+                            "eDeviceKeyBytes Tag24 inner must be bytes".into(),
+                        ));
+                    }
                 };
                 let inner_value: ciborium::Value = ciborium::from_reader(&inner_bytes[..])
                     .map_err(|e| MdocError::Cbor(format!("eDeviceKeyBytes decode: {e}")))?;
@@ -252,7 +263,11 @@ impl DeviceEngagement {
                     inner_bytes: b.clone(),
                 }
             }
-            _ => return Err(MdocError::Cbor("eDeviceKeyBytes must be Tag24 or bytes".into())),
+            _ => {
+                return Err(MdocError::Cbor(
+                    "eDeviceKeyBytes must be Tag24 or bytes".into(),
+                ));
+            }
         };
 
         // Parse optional device retrieval methods
@@ -296,11 +311,19 @@ impl DeviceEngagement {
         };
 
         let server_retrieval_methods = arr.get(3).and_then(|v| {
-            if matches!(v, ciborium::Value::Null) { None } else { Some(v.clone()) }
+            if matches!(v, ciborium::Value::Null) {
+                None
+            } else {
+                Some(v.clone())
+            }
         });
 
         let protocol_info = arr.get(4).and_then(|v| {
-            if matches!(v, ciborium::Value::Null) { None } else { Some(v.clone()) }
+            if matches!(v, ciborium::Value::Null) {
+                None
+            } else {
+                Some(v.clone())
+            }
         });
 
         Ok(DeviceEngagement {

@@ -16,7 +16,7 @@
  * - **Hash**: SHA-512 (internal to Ed25519)
  */
 
-use ed25519_dalek::{Signer, Verifier, SigningKey, VerifyingKey, Signature};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 use crate::cose::{CoseSigner, CoseVerifier};
 use crate::error::{MdocError, Result};
@@ -31,12 +31,12 @@ pub struct EdDsaCoseSigner {
 impl EdDsaCoseSigner {
     /// Create a signer from raw Ed25519 private key bytes (32 bytes).
     pub fn from_bytes(private_key: &[u8]) -> Result<Self> {
-        let bytes: [u8; 32] = private_key
-            .try_into()
-            .map_err(|_| MdocError::Cose(format!(
+        let bytes: [u8; 32] = private_key.try_into().map_err(|_| {
+            MdocError::Cose(format!(
                 "Ed25519 key must be 32 bytes, got {}",
                 private_key.len()
-            )))?;
+            ))
+        })?;
         let signing_key = SigningKey::from_bytes(&bytes);
         Ok(Self {
             signing_key,
@@ -105,12 +105,12 @@ pub struct EdDsaCoseVerifier {
 impl EdDsaCoseVerifier {
     /// Create a verifier from Ed25519 public key bytes (32 bytes).
     pub fn from_bytes(public_key: &[u8]) -> Result<Self> {
-        let bytes: [u8; 32] = public_key
-            .try_into()
-            .map_err(|_| MdocError::Cose(format!(
+        let bytes: [u8; 32] = public_key.try_into().map_err(|_| {
+            MdocError::Cose(format!(
                 "Ed25519 public key must be 32 bytes, got {}",
                 public_key.len()
-            )))?;
+            ))
+        })?;
         let verifying_key = VerifyingKey::from_bytes(&bytes)
             .map_err(|e| MdocError::Cose(format!("invalid Ed25519 public key: {e}")))?;
         Ok(Self { verifying_key })
@@ -227,8 +227,7 @@ mod tests {
 
     #[test]
     fn eddsa_with_kid() {
-        let signer = EdDsaCoseSigner::generate()
-            .with_kid(b"key-ed25519".to_vec());
+        let signer = EdDsaCoseSigner::generate().with_kid(b"key-ed25519".to_vec());
         assert_eq!(signer.kid(), Some(b"key-ed25519".to_vec()));
     }
 }

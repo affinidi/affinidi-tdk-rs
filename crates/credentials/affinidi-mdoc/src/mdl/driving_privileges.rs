@@ -164,7 +164,7 @@ impl DrivingPrivileges {
             _ => {
                 return Err(MdocError::Cbor(
                     "driving_privileges must be a CBOR array".into(),
-                ))
+                ));
             }
         };
 
@@ -195,8 +195,7 @@ impl DrivingPrivilege {
             ));
         }
         if let Some(ref codes) = self.codes {
-            let codes_arr: Vec<ciborium::Value> =
-                codes.iter().map(|c| c.to_cbor_value()).collect();
+            let codes_arr: Vec<ciborium::Value> = codes.iter().map(|c| c.to_cbor_value()).collect();
             entries.push((
                 ciborium::Value::Text("codes".to_string()),
                 ciborium::Value::Array(codes_arr),
@@ -210,7 +209,11 @@ impl DrivingPrivilege {
     pub fn from_cbor_value(value: &ciborium::Value) -> Result<Self> {
         let entries = match value {
             ciborium::Value::Map(m) => m,
-            _ => return Err(MdocError::Cbor("DrivingPrivilege must be a CBOR map".into())),
+            _ => {
+                return Err(MdocError::Cbor(
+                    "DrivingPrivilege must be a CBOR map".into(),
+                ));
+            }
         };
 
         let get_text = |key: &str| -> Option<String> {
@@ -224,16 +227,17 @@ impl DrivingPrivilege {
             })
         };
 
-        let vehicle_category_code = get_text("vehicle_category_code").ok_or_else(|| {
-            MdocError::MissingField("vehicle_category_code".into())
-        })?;
+        let vehicle_category_code = get_text("vehicle_category_code")
+            .ok_or_else(|| MdocError::MissingField("vehicle_category_code".into()))?;
 
         let codes = entries.iter().find_map(|(k, v)| {
             if let ciborium::Value::Text(k_str) = k {
                 if k_str == "codes" {
                     if let ciborium::Value::Array(arr) = v {
-                        let parsed: Result<Vec<DrivingPrivilegeCode>> =
-                            arr.iter().map(DrivingPrivilegeCode::from_cbor_value).collect();
+                        let parsed: Result<Vec<DrivingPrivilegeCode>> = arr
+                            .iter()
+                            .map(DrivingPrivilegeCode::from_cbor_value)
+                            .collect();
                         return Some(parsed);
                     }
                 }
@@ -298,8 +302,7 @@ impl DrivingPrivilegeCode {
             })
         };
 
-        let code = get_text("code")
-            .ok_or_else(|| MdocError::MissingField("code".into()))?;
+        let code = get_text("code").ok_or_else(|| MdocError::MissingField("code".into()))?;
 
         Ok(DrivingPrivilegeCode {
             code,
@@ -388,9 +391,7 @@ mod tests {
 
     #[test]
     fn cbor_bytes_roundtrip() {
-        let dp = DrivingPrivileges::builder()
-            .add_category("C")
-            .build();
+        let dp = DrivingPrivileges::builder().add_category("C").build();
 
         let cbor_val = dp.to_cbor_value();
         let mut buf = Vec::new();
