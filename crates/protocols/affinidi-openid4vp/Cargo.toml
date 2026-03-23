@@ -1,0 +1,24 @@
+[package]
+name = "affinidi-openid4vp"
+description = "OpenID for Verifiable Presentations (OpenID4VP) implementation."
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+readme = "README.md"
+homepage.workspace = true
+license.workspace = true
+keywords = ["ssi", "affinidi", "openid4vp", "verifiable-presentations"]
+repository.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+affinidi-oid4vc-core = { version = "0.1", path = "../affinidi-oid4vc-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
