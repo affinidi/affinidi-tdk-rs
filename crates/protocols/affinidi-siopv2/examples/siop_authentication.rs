@@ -33,7 +33,7 @@ fn main() {
 
     request.validate().expect("Request should be valid");
 
-    let req_json = serde_json::to_string_pretty(&request).unwrap();
+    let _req_json = serde_json::to_string_pretty(&request).unwrap();
     println!("  Response type: {}", request.response_type);
     println!("  Client ID: {}", request.client_id);
     println!("  Nonce: {}", request.nonce);
