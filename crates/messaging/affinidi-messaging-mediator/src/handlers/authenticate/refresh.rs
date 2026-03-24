@@ -40,7 +40,7 @@ pub async fn authentication_refresh(
             )
         })?;
 
-        let mut envelope = match MetaEnvelope::new(&s, &state.did_resolver).await {
+        let envelope = match MetaEnvelope::new(&s, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
                 return Err(MediatorError::problem_with_log(

@@ -1,7 +1,7 @@
 //! Database operations for the FORWARD_Q Redis stream (standalone processor version)
 //! Uses DatabaseHandler directly instead of the mediator's Database wrapper.
 
-use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::ProcessorError};
+use affinidi_messaging_mediator_common::errors::ProcessorError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{debug, warn};
@@ -173,7 +173,7 @@ impl ForwardingProcessor {
     }
 
     /// Claim stale messages from crashed/timed-out consumers
-    pub(crate) async fn autoclaim_entries(
+    pub(crate) async fn _autoclaim_entries(
         &self,
         min_idle_ms: u64,
     ) -> Result<Vec<ForwardQueueEntry>, ProcessorError> {
