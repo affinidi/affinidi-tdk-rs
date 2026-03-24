@@ -1,6 +1,6 @@
 //! Sends a message from Alice to Bob and then retrieves it.
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::{
     errors::ATMError,
     profiles::ATMProfile,
@@ -150,8 +150,8 @@ async fn main() -> Result<(), ATMError> {
         .as_secs();
 
     let msg = Message::build(
-        Uuid::new_v4().into(),
-        "Chatty Alice".into(),
+        Uuid::new_v4().to_string(),
+        "Chatty Alice".to_string(),
         json!("Hello Bob!"),
     )
     .to(atm_bob.inner.did.clone())
@@ -174,7 +174,6 @@ async fn main() -> Result<(), ATMError> {
             &atm_bob.inner.did,
             Some(&atm_alice.inner.did),
             Some(&atm_alice.inner.did),
-            None,
         )
         .await?;
 

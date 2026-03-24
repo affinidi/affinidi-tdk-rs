@@ -61,12 +61,12 @@ async fn echo_handler(
         config.server_name,
         count,
         ctx.sender_did.as_deref().unwrap_or("<anon>"),
-        message.type_
+        message.typ
     );
 
     let response_body = json!({
         "echo": message.body,
-        "original_type": message.type_,
+        "original_type": message.typ,
         "server": config.server_name,
         "message_count": count,
     });
@@ -95,11 +95,11 @@ async fn fallback_handler(
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     warn!(
         "Unhandled message type '{}' from {}",
-        message.type_,
+        message.typ,
         ctx.sender_did.as_deref().unwrap_or("<anon>")
     );
     Ok(Some(DIDCommResponse::problem_report(
-        ProblemReport::bad_request(format!("Unsupported message type: {}", message.type_)),
+        ProblemReport::bad_request(format!("Unsupported message type: {}", message.typ)),
     )))
 }
 

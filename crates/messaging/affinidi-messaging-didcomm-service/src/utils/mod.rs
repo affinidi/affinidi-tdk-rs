@@ -23,12 +23,12 @@ mod tests {
     use std::collections::HashSet;
 
     fn build_msg(id: &str, thid: Option<&str>, pthid: Option<&str>) -> Message {
-        let mut b = Message::build(id.into(), "test/type".into(), json!({}));
+        let mut b = Message::build(id.to_string(), "test/type".to_string(), json!({}));
         if let Some(t) = thid {
-            b = b.thid(t.into());
+            b = b.thid(t.to_string());
         }
         if let Some(p) = pthid {
-            b = b.pthid(p.into());
+            b = b.pthid(p.to_string());
         }
         b.finalize()
     }

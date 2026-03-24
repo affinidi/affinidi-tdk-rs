@@ -1,5 +1,5 @@
 use affinidi_did_authentication::errors::DIDAuthError;
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_tdk_common::errors::TDKError;
 use thiserror::Error;
 
@@ -45,7 +45,7 @@ pub enum ATMError {
 impl ATMError {
     /// Creates an ATM Error from a DIDComm Problem Report Error Message
     pub fn from_problem_report(message: &Message) -> Self {
-        if let Ok(MessageType::ProblemReport) = message.type_.parse::<MessageType>() {
+        if let Ok(MessageType::ProblemReport) = message.typ.parse::<MessageType>() {
             let body: ProblemReport = match serde_json::from_value(message.body.clone()) {
                 Ok(body) => body,
                 Err(err) => {
@@ -66,7 +66,7 @@ impl ATMError {
             // Handling for non-Problem Report messages
             ATMError::SDKError(format!(
                 "Internal error handling error. Expecting a DIDComm Problem Report message. Received instead ({})",
-                message.type_
+                message.typ
             ))
         }
     }
@@ -97,8 +97,8 @@ mod tests {
     #[test]
     fn test_from_problem_report_works() {
         let message = Message::build(
-            "example-1".into(),
-            "https://didcomm.org/report-problem/2.0/problem-report".into(),
+            "example-1".to_string(),
+            "https://didcomm.org/report-problem/2.0/problem-report".to_string(),
             serde_json::json!({
                 "code": "test-code",
                 "comment": "Test one {1} two {2} three {3}",
@@ -123,8 +123,8 @@ mod tests {
     #[test]
     fn test_from_problem_report_wrong_type() {
         let message = Message::build(
-            "example-1".into(),
-            "https://didcomm.org/NOT-A-PROBLEM/2.0/problem-report".into(),
+            "example-1".to_string(),
+            "https://didcomm.org/NOT-A-PROBLEM/2.0/problem-report".to_string(),
             serde_json::json!({
                 "code": "test-code",
                 "comment": "Test one {1} two {2} three {3}",
@@ -145,8 +145,8 @@ mod tests {
     #[test]
     fn test_from_problem_report_wrong_body() {
         let message = Message::build(
-            "example-1".into(),
-            "https://didcomm.org/NOT-A-PROBLEM/2.0/problem-report".into(),
+            "example-1".to_string(),
+            "https://didcomm.org/NOT-A-PROBLEM/2.0/problem-report".to_string(),
             serde_json::json!({}),
         )
         .finalize();

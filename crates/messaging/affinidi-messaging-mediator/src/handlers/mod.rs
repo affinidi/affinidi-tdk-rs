@@ -9,20 +9,21 @@ use axum::{
 };
 use http::StatusCode;
 
+#[cfg(feature = "didcomm")]
 pub mod authenticate;
 pub mod inbox_fetch;
 pub mod message_delete;
+#[cfg(feature = "didcomm")]
 pub mod message_inbound;
 pub mod message_list;
 pub mod message_outbound;
+#[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
 pub mod websocket;
 pub mod well_known_did_fetch;
 
 pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router {
     let mut app = Router::new()
-        // Inbound message handling from ATM clients
-        .route("/inbound", post(message_inbound::message_inbound_handler))
         // Outbound message handling to ATM clients
         .route(
             "/outbound",
@@ -36,32 +37,37 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
         )
         // Delete/remove messages stored in ATM
         .route("/delete", delete(message_delete::message_delete_handler))
-        // Authentication step 1/2 - Client requests challenge from server
-        .route(
-            "/authenticate/challenge",
-            post(authenticate::authentication_challenge),
-        )
-        // Authentication step 2/2 - Client sends encrypted challenge to server
-        .route("/authenticate", post(authenticate::authentication_response))
-        .route(
-            "/authenticate/refresh",
-            post(authenticate::authentication_refresh),
-        )
         // Websocket endpoint for ATM clients
         .route("/ws", get(websocket::websocket_handler))
-        // Out Of Band Discovery Routes
-        // POST   :: /oob - Client can post a plaintext DIDComm message here to create a shortened OOB URL
-        // GET    :: /oob?<id> - Unauthenticated endpoint to retrieve an OOB Invitation request
-        // DELETE :: /oob?<id> - Remove the Invitation URL
-        .route("/oob", post(oob_discovery::oob_invite_handler))
-        .route("/oob", get(oob_discovery::oobid_handler))
-        .route("/oob", delete(oob_discovery::delete_oobid_handler))
         // Helps to test if you are who you think you are
         .route("/whoami", get(whoami_handler))
         .route(
             "/.well-known/did",
             get(well_known_did_fetch::well_known_did_fetch_handler),
         );
+
+    // DIDComm-specific routes
+    #[cfg(feature = "didcomm")]
+    {
+        app = app
+            // Inbound message handling from ATM clients
+            .route("/inbound", post(message_inbound::message_inbound_handler))
+            // Authentication step 1/2 - Client requests challenge from server
+            .route(
+                "/authenticate/challenge",
+                post(authenticate::authentication_challenge),
+            )
+            // Authentication step 2/2 - Client sends encrypted challenge to server
+            .route("/authenticate", post(authenticate::authentication_response))
+            .route(
+                "/authenticate/refresh",
+                post(authenticate::authentication_refresh),
+            )
+            // Out Of Band Discovery Routes
+            .route("/oob", post(oob_discovery::oob_invite_handler))
+            .route("/oob", get(oob_discovery::oobid_handler))
+            .route("/oob", delete(oob_discovery::delete_oobid_handler));
+    }
 
     let has_prefix = api_prefix.is_empty() || api_prefix == "/";
 
@@ -99,6 +105,144 @@ pub async fn health_checker_handler(State(state): State<SharedData>) -> impl Int
         "message": message,
     });
     Json(response_json)
+}
+
+/// Deep readiness check that verifies the mediator can serve traffic.
+/// Checks Redis connectivity, queue health, and shutdown state.
+pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResponse {
+    let mut checks: Vec<serde_json::Value> = Vec::new();
+    let mut all_ok = true;
+
+    // Check if shutdown has been initiated
+    if state.shutdown_token.is_cancelled() {
+        all_ok = false;
+        checks.push(serde_json::json!({
+            "name": "shutdown",
+            "status": "fail",
+            "message": "Shutdown in progress"
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "shutdown",
+            "status": "pass"
+        }));
+    }
+
+    // Check Redis circuit breaker state
+    let cb_state = state.database.circuit_breaker_state();
+    if cb_state != "closed" {
+        all_ok = false;
+        checks.push(serde_json::json!({
+            "name": "redis_circuit_breaker",
+            "status": "fail",
+            "state": cb_state,
+            "message": "Redis circuit breaker is not closed"
+        }));
+    } else {
+        checks.push(serde_json::json!({
+            "name": "redis_circuit_breaker",
+            "status": "pass",
+            "state": cb_state
+        }));
+    }
+
+    // Check Redis connectivity
+    match state.database.get_db_metadata().await {
+        Ok(_) => {
+            checks.push(serde_json::json!({
+                "name": "redis",
+                "status": "pass"
+            }));
+        }
+        Err(e) => {
+            all_ok = false;
+            checks.push(serde_json::json!({
+                "name": "redis",
+                "status": "fail",
+                "message": format!("Redis check failed: {e}")
+            }));
+        }
+    }
+
+    // Check FORWARD_Q length
+    match state.database.get_forward_tasks_len().await {
+        Ok(len) => {
+            let queue_status = if len >= state.config.limits.forward_task_queue {
+                all_ok = false;
+                "warn"
+            } else {
+                "pass"
+            };
+            checks.push(serde_json::json!({
+                "name": "forward_queue",
+                "status": queue_status,
+                "length": len,
+                "limit": state.config.limits.forward_task_queue
+            }));
+        }
+        Err(e) => {
+            all_ok = false;
+            checks.push(serde_json::json!({
+                "name": "forward_queue",
+                "status": "fail",
+                "message": format!("Queue check failed: {e}")
+            }));
+        }
+    }
+
+    let status_code = if all_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let response = serde_json::json!({
+        "status": if all_ok { "ready" } else { "not_ready" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": (chrono::Utc::now() - state.service_start_timestamp).num_seconds(),
+        "checks": checks,
+    });
+
+    (status_code, Json(response))
+}
+
+/// Determine the current load state of the mediator.
+/// Used for load shedding decisions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LoadState {
+    /// Normal operation
+    Normal,
+    /// Elevated load — non-essential operations may be deferred
+    Elevated,
+    /// Critical load — only essential operations allowed
+    Critical,
+}
+
+impl LoadState {
+    pub async fn current(state: &SharedData) -> Self {
+        // Check circuit breaker
+        if state.database.circuit_breaker_state() != "closed" {
+            return LoadState::Critical;
+        }
+
+        // Check shutdown
+        if state.shutdown_token.is_cancelled() {
+            return LoadState::Critical;
+        }
+
+        // Check queue depth
+        if let Ok(queue_len) = state.database.get_forward_tasks_len().await {
+            let limit = state.config.limits.forward_task_queue;
+            if queue_len >= limit {
+                return LoadState::Critical;
+            }
+            if queue_len >= limit * 80 / 100 {
+                return LoadState::Elevated;
+            }
+        }
+
+        LoadState::Normal
+    }
 }
 
 /// Handler that returns the DID registered for this session

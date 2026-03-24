@@ -3,8 +3,9 @@ use super::State;
 use crate::state_store::actions::chat_list::ChatStatus;
 use crate::state_store::actions::invitation::create_new_profile;
 use crate::state_store::chat_message::{ChatEffect, ChatMessage, ChatMessageType};
-use affinidi_messaging_didcomm::{Attachment, AttachmentData, Message, UnpackMetadata};
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_sdk::ATM;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
@@ -68,8 +69,8 @@ async fn _handle_connection_setup(
     // Unpack the attachment vcard if it exists
     let mut new_chat_name = if let Some(attachment) = message.attachments.as_ref() {
         if let Some(vcard) = attachment.first() {
-            if let AttachmentData::Base64 { value } = &vcard.data {
-                let vcard_decoded = BASE64_URL_SAFE_NO_PAD.decode(value.base64.clone()).unwrap();
+            if let Some(b64) = &vcard.data.base64 {
+                let vcard_decoded = BASE64_URL_SAFE_NO_PAD.decode(b64.clone()).unwrap();
                 let vcard: VCard = match serde_json::from_slice(&vcard_decoded) {
                     Ok(vcard) => vcard,
                     Err(e) => {
@@ -244,7 +245,7 @@ async fn _handle_connection_setup(
     };
     let vcard = serde_json::to_string(&vcard).unwrap();
     let attachment = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(vcard))
-        .id(Uuid::new_v4().into())
+        .id(Uuid::new_v4().to_string())
         .description(format!(
             "{}'s vCard Info",
             state.settings.our_name.clone().unwrap()
@@ -272,7 +273,6 @@ async fn _handle_connection_setup(
             message.from.as_ref().unwrap(),
             Some(&from),
             Some(&from),
-            None,
         )
         .await;
 
@@ -385,7 +385,7 @@ pub async fn handle_message(
         return;
     };
 
-    match message.type_.as_str() {
+    match message.typ.as_str() {
         "https://affinidi.com/atm/client-actions/connection-setup" => {
             // Completes an inbound OOB Invitation flow (after sharing a QR Code)
             _handle_connection_setup(atm, state, message, meta).await;
@@ -552,48 +552,44 @@ pub async fn handle_message(
             // Received a message pickup delivery message
             if let Some(attachments) = &message.attachments {
                 for attachment in attachments {
-                    match &attachment.data {
-                        AttachmentData::Base64 { value } => {
-                            let decoded = match BASE64_URL_SAFE_NO_PAD.decode(value.base64.clone())
-                            {
-                                Ok(decoded) => match String::from_utf8(decoded) {
-                                    Ok(decoded) => decoded,
-                                    Err(e) => {
-                                        warn!(
-                                            "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
-                                            e, attachment.id
-                                        );
-                                        continue;
-                                    }
-                                },
+                    if let Some(b64) = &attachment.data.base64 {
+                        let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
+                            Ok(decoded) => match String::from_utf8(decoded) {
+                                Ok(decoded) => decoded,
                                 Err(e) => {
                                     warn!(
-                                        "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                        "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
                                         e, attachment.id
                                     );
                                     continue;
                                 }
-                            };
+                            },
+                            Err(e) => {
+                                warn!(
+                                    "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                    e, attachment.id
+                                );
+                                continue;
+                            }
+                        };
 
-                            match atm.unpack(&decoded).await {
-                                Ok((mut m, meta)) => {
-                                    info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
-                                    if let Some(attachment_id) = &attachment.id {
-                                        m.id = attachment_id.to_string();
-                                    }
-                                    Box::pin(handle_message(atm, state, &m, &meta)).await;
+                        match atm.unpack(&decoded).await {
+                            Ok((mut m, meta)) => {
+                                info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
+                                if let Some(attachment_id) = &attachment.id {
+                                    m.id = attachment_id.to_string();
                                 }
-                                Err(e) => {
-                                    warn!("Error unpacking message: ({:?})", e);
-                                    continue;
-                                }
-                            };
-                        }
-                        _ => {
-                            warn!("Attachment type not supported: {:?}", attachment.data);
-                            continue;
-                        }
-                    };
+                                Box::pin(handle_message(atm, state, &m, &meta)).await;
+                            }
+                            Err(e) => {
+                                warn!("Error unpacking message: ({:?})", e);
+                                continue;
+                            }
+                        };
+                    } else {
+                        warn!("Attachment type not supported: {:?}", attachment.data);
+                        continue;
+                    }
                 }
             }
             return; // ephemeral status message - no need to delete it
@@ -612,9 +608,8 @@ pub async fn handle_message(
 
             let mut new_chat_name = if let Some(attachment) = message.attachments.as_ref() {
                 if let Some(vcard) = attachment.first() {
-                    if let AttachmentData::Base64 { value } = &vcard.data {
-                        let vcard_decoded =
-                            BASE64_URL_SAFE_NO_PAD.decode(value.base64.clone()).unwrap();
+                    if let Some(b64) = &vcard.data.base64 {
+                        let vcard_decoded = BASE64_URL_SAFE_NO_PAD.decode(b64.clone()).unwrap();
                         let vcard: VCard = serde_json::from_slice(&vcard_decoded).unwrap();
                         let first = if let Some(first) = vcard.n.given.as_ref() {
                             first
@@ -794,7 +789,7 @@ pub async fn handle_message(
             ));
         }
         _ => {
-            warn!("Unknown message type: {}", message.type_);
+            warn!("Unknown message type: {}", message.typ);
         }
     }
     // Do we need to delete the message after processing?

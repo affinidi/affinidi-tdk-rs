@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-mediator"
 version = "0.12.3"
-description = "DIDComm Mediator service for Affinidi Messaging"
+description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -16,10 +16,22 @@ repository.workspace = true
 name = "mediator"
 path = "src/main.rs"
 
+[features]
+default = ["didcomm"]
+didcomm = [
+    "dep:affinidi-messaging-didcomm",
+    "dep:affinidi-encoding",
+]
+tsp = [
+    "dep:affinidi-tsp",
+]
+
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = "0.15"
-affinidi-messaging-didcomm = "0.12"
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", optional = true }
+affinidi-encoding = { version = "0.1", optional = true }
 affinidi-messaging-mediator-processors = { version = "0.12", path = "affinidi-messaging-mediator-processors" }
 affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messaging-mediator-common" }
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
@@ -61,9 +73,14 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 subtle = "2.6"
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
+tokio-util = "0.7"
+governor = "0.8"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
 toml = "1"
+tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [
@@ -73,9 +90,11 @@ tracing-subscriber = { version = "0.3", features = [
   "valuable",
 ] }
 uuid = { version = "1.22", features = ["v4", "fast-rng"] }
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 console = "0.16"
 dialoguer = "0.12"
 lazy_static = "1.5"
-reqwest = { version = "0.13", features = ["rustls", "json"] }

@@ -1,10 +1,10 @@
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{
-    AttachmentData, Message, UnpackMetadata, UnpackOptions, envelope::MetaEnvelope,
-};
+use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_mediator::didcomm_compat;
 use affinidi_messaging_sdk::{
     messages::{
-        GetMessagesResponse, MessageListElement, SuccessResponse, sending::InboundMessageResponse,
+        GetMessagesResponse, MessageListElement, SuccessResponse, compat::UnpackMetadata,
+        sending::InboundMessageResponse,
     },
     protocols::message_pickup::MessagePickupStatusReply,
     transports::SendMessageResponse,
@@ -31,14 +31,9 @@ pub async fn validate_status_reply<S>(
             panic!();
         };
 
-        let (message, _) = Message::unpack_string(
-            &message,
-            did_resolver,
-            secrets_resolver,
-            &UnpackOptions::default(),
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         let status: MessagePickupStatusReply =
             serde_json::from_value(message.body.clone()).unwrap();
 
@@ -70,14 +65,9 @@ where
             panic!();
         };
 
-        let (message, _) = Message::unpack_string(
-            &message,
-            did_resolver,
-            secrets_resolver,
-            &UnpackOptions::default(),
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
 
         let messages = _handle_delivery(&message, did_resolver, secrets_resolver).await;
         let mut to_delete_ids: Vec<String> = Vec::new();
@@ -108,49 +98,33 @@ where
 
     if let Some(attachments) = &message.attachments {
         for attachment in attachments {
-            match &attachment.data {
-                AttachmentData::Base64 { value } => {
-                    let decoded = match BASE64_URL_SAFE_NO_PAD.decode(value.base64.clone()) {
-                        Ok(decoded) => match String::from_utf8(decoded) {
-                            Ok(decoded) => decoded,
-                            Err(e) => {
-                                panic!("{:?}", e);
-                            }
-                        },
+            if let Some(ref b64) = attachment.data.base64 {
+                let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
+                    Ok(decoded) => match String::from_utf8(decoded) {
+                        Ok(decoded) => decoded,
                         Err(e) => {
                             panic!("{:?}", e);
                         }
-                    };
-                    let mut envelope = match MetaEnvelope::new(&decoded, did_resolver).await {
-                        Ok(envelope) => envelope,
-                        Err(e) => {
-                            panic!("{:?}", e);
-                        }
-                    };
+                    },
+                    Err(e) => {
+                        panic!("{:?}", e);
+                    }
+                };
 
-                    match Message::unpack(
-                        &mut envelope,
-                        did_resolver,
-                        secrets_resolver,
-                        &UnpackOptions::default(),
-                    )
-                    .await
-                    {
-                        Ok((mut m, u)) => {
-                            if let Some(attachment_id) = &attachment.id {
-                                m.id = attachment_id.to_string();
-                            }
-                            response.push((m, u))
+                match didcomm_compat::unpack(&decoded, did_resolver, secrets_resolver).await {
+                    Ok((mut m, u)) => {
+                        if let Some(attachment_id) = &attachment.id {
+                            m.id = attachment_id.to_string();
                         }
-                        Err(e) => {
-                            panic!("{:?}", e);
-                        }
-                    };
-                }
-                _ => {
-                    panic!();
-                }
-            };
+                        response.push((m, u))
+                    }
+                    Err(e) => {
+                        panic!("{:?}", e);
+                    }
+                };
+            } else {
+                panic!("Expected base64 attachment data");
+            }
         }
     }
 
@@ -175,14 +149,9 @@ pub async fn validate_message_received_status_reply<S>(
             panic!();
         };
 
-        let (message, _) = Message::unpack_string(
-            &message,
-            did_resolver,
-            secrets_resolver,
-            &UnpackOptions::default(),
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         let status: MessagePickupStatusReply =
             serde_json::from_value(message.body.clone()).unwrap();
 
@@ -222,14 +191,9 @@ pub async fn validate_get_message_response<S>(
 {
     for msg in list.success {
         assert_eq!(msg.to_address.unwrap(), digest(actor_did));
-        let _ = Message::unpack_string(
-            &msg.msg.unwrap(),
-            did_resolver,
-            secrets_resolver,
-            &UnpackOptions::default(),
-        )
-        .await
-        .unwrap();
+        let _ = didcomm_compat::unpack(&msg.msg.unwrap(), did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         println!("Msg id: {}", msg.msg_id);
     }
 }

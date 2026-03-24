@@ -1,20 +1,31 @@
 use crate::{
     SharedData,
-    common::config::init,
+    common::{
+        config::init,
+        did_rate_limiter::DidRateLimiter,
+        metrics::{self, metrics_handler},
+        rate_limiter::{RateLimitLayer, RateLimiterState},
+        request_id::RequestIdLayer,
+    },
     database::Database,
-    handlers::{application_routes, health_checker_handler},
-    tasks::{statistics::statistics, websocket_streaming::StreamingTask},
+    handlers::{application_routes, health_checker_handler, readiness_handler},
+    tasks::{
+        forwarding_processor::ForwardingProcessor, statistics::statistics,
+        websocket_streaming::StreamingTask,
+    },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
+#[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
 use axum_server::tls_rustls::RustlsConfig;
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc, sync::atomic::AtomicUsize};
+use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
-use tracing::{Level, event};
+use tracing::{Level, error, info, warn};
 
 pub async fn start() {
     let ansi = env::var("LOCAL").is_ok();
@@ -55,17 +66,27 @@ pub async fn start() {
         .expect("Couldn't initialize mediator!");
 
     // Start setting up the database durability and handling
-    let database = match DatabaseHandler::new(&config.database).await {
-        Ok(db) => db,
-        Err(err) => {
-            event!(Level::ERROR, "Error opening database: {}", err);
-            event!(Level::ERROR, "Exiting...");
+    let database = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        DatabaseHandler::new(&config.database),
+    )
+    .await
+    {
+        Ok(Ok(db)) => db,
+        Ok(Err(err)) => {
+            error!("Error opening database: {}", err);
+            error!("Exiting...");
+            std::process::exit(1);
+        }
+        Err(_) => {
+            error!("Database connection timed out after 30 seconds");
+            error!("Exiting...");
             std::process::exit(1);
         }
     };
 
     // Convert from the common generic DatabaseHandler to the Mediator specific Database
-    let database = Database(database);
+    let database = Database::new(database);
 
     database
         .initialize(&config)
@@ -73,40 +94,88 @@ pub async fn start() {
         .expect("Error initializing database");
 
     if let Some(functions_file) = &config.database.functions_file {
-        event!(
-            Level::INFO,
+        info!(
             "Loading LUA scripts into the database from file: {}",
             functions_file
         );
-        database.load_scripts(functions_file).await.unwrap();
+        if let Err(e) = database.load_scripts(functions_file).await {
+            error!("Failed to load LUA scripts: {}", e);
+            return;
+        }
     } else {
-        event!(
-            Level::INFO,
-            "No LUA scripts file specified in the configuration. Skipping loading LUA scripts."
-        );
+        info!("No LUA scripts file specified in the configuration. Skipping loading LUA scripts.");
         return;
     }
+
+    // Create a cancellation token for coordinated graceful shutdown
+    let shutdown_token = CancellationToken::new();
+
+    // Spawn signal handler for graceful shutdown
+    let signal_token = shutdown_token.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        info!("Shutdown signal received, initiating graceful shutdown...");
+        signal_token.cancel();
+    });
+
+    // Initialize Prometheus metrics recorder
+    let metrics_handle = metrics::init_metrics();
 
     // Start the statistics thread
     let _stats_database = database.clone(); // Clone the database handler for the statistics thread
     let tags = config.tags.clone(); // Clone the tags config for the statistics thread
+    let stats_token = shutdown_token.clone();
 
     tokio::spawn(async move {
-        statistics(_stats_database, tags)
-            .await
-            .expect("Error starting statistics thread");
+        tokio::select! {
+            result = statistics(_stats_database, tags) => {
+                if let Err(e) = result {
+                    error!("Statistics thread error: {}", e);
+                }
+            }
+            _ = stats_token.cancelled() => {
+                info!("Statistics thread shutting down");
+            }
+        }
     });
 
     // Start the message expiry cleanup thread if required
     if config.processors.message_expiry_cleanup.enabled {
-        let _database = database.0.clone(); // Clone the database handler for the message expiry cleanup thread
+        let _database = database.handler.clone(); // Clone the DatabaseHandler for the message expiry cleanup thread
         let _config = config.processors.message_expiry_cleanup.clone();
+        let cleanup_token = shutdown_token.clone();
         tokio::spawn(async move {
             let _processor = MessageExpiryCleanupProcessor::new(_config, _database);
-            _processor
-                .start()
-                .await
-                .expect("Error starting message expiry cleanup processor");
+            tokio::select! {
+                result = _processor.start() => {
+                    if let Err(e) = result {
+                        error!("Message expiry cleanup error: {}", e);
+                    }
+                }
+                _ = cleanup_token.cancelled() => {
+                    info!("Message expiry cleanup shutting down");
+                }
+            }
+        });
+    }
+
+    // Start the forwarding processor if enabled
+    if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
+        let _database = database.clone();
+        let _config = config.processors.forwarding.clone();
+        let fwd_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            let processor = ForwardingProcessor::new(_config, _database);
+            tokio::select! {
+                result = processor.start() => {
+                    if let Err(e) = result {
+                        error!("Forwarding processor error: {}", e);
+                    }
+                }
+                _ = fwd_token.cancelled() => {
+                    info!("Forwarding processor shutting down");
+                }
+            }
         });
     }
 
@@ -123,11 +192,16 @@ pub async fn start() {
     };
 
     // Create the DID Resolver
-    let did_resolver = DIDCacheClient::new(config.did_resolver_config.clone())
-        .await
-        .unwrap();
+    let did_resolver = match DIDCacheClient::new(config.did_resolver_config.clone()).await {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to create DID resolver: {}", e);
+            return;
+        }
+    };
 
     // Create the Discover Feature Protocol set for the mediator
+    #[cfg(feature = "didcomm")]
     let discover_features = Arc::new(DiscoverFeatures {
         protocols: vec![
             "https://didcomm.org/discover-features/2.0".to_string(),
@@ -144,6 +218,18 @@ pub async fn start() {
         ..Default::default()
     });
 
+    // Set up per-DID rate limiting for authenticated endpoints
+    let did_rate_limiter = DidRateLimiter::new(
+        config.limits.did_rate_limit_per_second,
+        config.limits.did_rate_limit_burst,
+    );
+    if config.limits.did_rate_limit_per_second > 0 {
+        info!(
+            "Per-DID rate limiting enabled: {} req/s per DID, burst: {}",
+            config.limits.did_rate_limit_per_second, config.limits.did_rate_limit_burst,
+        );
+    }
+
     // Create the shared application State
     let shared_state = SharedData {
         config: config.clone(),
@@ -151,11 +237,27 @@ pub async fn start() {
         did_resolver,
         database,
         streaming_task,
+        #[cfg(feature = "didcomm")]
         discover_features,
+        active_websocket_count: Arc::new(AtomicUsize::new(0)),
+        did_rate_limiter,
+        shutdown_token: shutdown_token.clone(),
     };
 
     // build our application routes
     let app: Router = application_routes(&config.api_prefix, &shared_state);
+
+    // Set up per-IP rate limiting
+    let rate_limiter = RateLimiterState::new(
+        config.limits.rate_limit_per_ip,
+        config.limits.rate_limit_burst,
+    );
+    if config.limits.rate_limit_per_ip > 0 {
+        info!(
+            "Rate limiting enabled: {} req/s per IP, burst: {}",
+            config.limits.rate_limit_per_ip, config.limits.rate_limit_burst,
+        );
+    }
 
     // Add middleware to all routes
     let app = Router::new()
@@ -167,17 +269,33 @@ pub async fn start() {
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(RequestBodyLimitLayer::new(config.limits.http_size as usize))
+        .layer(RateLimitLayer::new(rate_limiter))
+        .layer(RequestIdLayer::new())
         // Add the healthcheck route after the tracing so we don't fill up logs with healthchecks
         .route(
             format!("{}healthchecker", &config.api_prefix).as_str(),
-            get(health_checker_handler).with_state(shared_state),
+            get(health_checker_handler).with_state(shared_state.clone()),
+        )
+        // Deep readiness check for load balancers and orchestrators
+        .route(
+            format!("{}readyz", &config.api_prefix).as_str(),
+            get(readiness_handler).with_state(shared_state),
         );
 
+    // Add Prometheus metrics endpoint if metrics recorder is available
+    let app = if let Some(handle) = metrics_handle {
+        app.route(
+            format!("{}metrics", &config.api_prefix).as_str(),
+            get(metrics_handler).with_state(handle),
+        )
+    } else {
+        app
+    };
+
+    let server_shutdown_token = shutdown_token.clone();
+
     if config.security.use_ssl {
-        event!(
-            Level::INFO,
-            "This mediator is using SSL/TLS for secure communication."
-        );
+        info!("This mediator is using SSL/TLS for secure communication.");
         // configure certificate and private key used by https
         // TODO: Build a proper TLS Config
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -194,26 +312,81 @@ pub async fn start() {
         .await
         .expect("bad certificate/key");
 
-        axum_server::bind_rustls(
-            config
-                .listen_address
-                .parse::<std::net::SocketAddr>()
-                .unwrap(),
-            ssl_config,
-        )
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            server_shutdown_token.cancelled().await;
+            info!("Gracefully shutting down HTTP server...");
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+
+        let addr = match config.listen_address.parse::<std::net::SocketAddr>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                error!("Invalid listen_address '{}': {}", config.listen_address, e);
+                return;
+            }
+        };
+
+        info!("Mediator listening on {}", config.listen_address);
+
+        axum_server::bind_rustls(addr, ssl_config)
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
     } else {
-        event!(Level::WARN, "**** WARNING: Running without SSL/TLS ****");
-        axum_server::bind(
-            config
-                .listen_address
-                .parse::<std::net::SocketAddr>()
-                .unwrap(),
-        )
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+        warn!("**** WARNING: Running without SSL/TLS ****");
+
+        let handle = axum_server::Handle::new();
+        let shutdown_handle = handle.clone();
+        tokio::spawn(async move {
+            server_shutdown_token.cancelled().await;
+            info!("Gracefully shutting down HTTP server...");
+            shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
+        });
+
+        let addr = match config.listen_address.parse::<std::net::SocketAddr>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                error!("Invalid listen_address '{}': {}", config.listen_address, e);
+                return;
+            }
+        };
+
+        info!("Mediator listening on {}", config.listen_address);
+
+        axum_server::bind(addr)
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
+    }
+
+    info!("Mediator shutdown complete.");
+}
+
+/// Wait for a shutdown signal (SIGINT or SIGTERM).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }

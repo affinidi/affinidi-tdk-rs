@@ -14,7 +14,7 @@
  *
  * */
 
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::{errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{TDK, common::config::TDKConfig, did_authentication::AuthorizationTokens};
 use clap::Parser;
@@ -192,7 +192,7 @@ async fn main() -> Result<(), ATMError> {
         .as_secs();
 
     let bad_msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/mediator/1.0/admin-management".to_owned(),
         json!({"admin_add": [digest(&atm_mallory.inner.did)]}),
     )
@@ -207,9 +207,7 @@ async fn main() -> Result<(), ATMError> {
     );
 
     info!("Packing message anonymously - don't link it to Mallory");
-    let (msg, _) = atm
-        .pack_encrypted(&bad_msg, &mediator, None, None, None)
-        .await?;
+    let (msg, _) = atm.pack_encrypted(&bad_msg, &mediator, None, None).await?;
 
     info!("Sending bad admin message to mediator");
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;
@@ -246,7 +244,7 @@ async fn main() -> Result<(), ATMError> {
         .as_secs();
 
     let bad_msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/mediator/1.0/admin-management".to_owned(),
         json!({"admin_add": [digest(&atm_mallory.inner.did)]}),
     )
@@ -268,7 +266,6 @@ async fn main() -> Result<(), ATMError> {
             &mediator,
             Some(atm_mallory.dids()?.0),
             Some(atm_mallory.dids()?.0),
-            None,
         )
         .await?;
 
@@ -307,7 +304,7 @@ async fn main() -> Result<(), ATMError> {
         .as_secs();
 
     let bad_msg = Message::build(
-        Uuid::new_v4().into(),
+        Uuid::new_v4().to_string(),
         "https://didcomm.org/mediator/1.0/admin-management".to_owned(),
         json!({"admin_add": [digest(&atm_mallory.inner.did)]}),
     )
@@ -328,7 +325,6 @@ async fn main() -> Result<(), ATMError> {
             &mediator,
             Some(atm_admin.dids()?.0),
             Some(atm_admin.dids()?.0),
-            None,
         )
         .await?;
 

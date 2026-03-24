@@ -1,6 +1,7 @@
 [workspace]
 members = [
-  # Core: encoding, cryptography, key management
+  # Core: encoding, cryptography, key management, CESR
+  "crates/core/affinidi-cesr",
   "crates/core/affinidi-encoding",
   "crates/core/affinidi-crypto",
   "crates/core/affinidi-secrets-resolver",
@@ -31,8 +32,10 @@ members = [
   "crates/protocols/affinidi-openid4vci",
   "crates/protocols/affinidi-openid4vp",
 
-  # Messaging: DIDComm, SDK, mediator
+  # Messaging: core, DIDComm, TSP, SDK, mediator
+  "crates/messaging/affinidi-messaging-core",
   "crates/messaging/affinidi-messaging-didcomm",
+  "crates/messaging/affinidi-tsp",
   "crates/messaging/affinidi-messaging-sdk",
   "crates/messaging/affinidi-messaging-helpers",
   "crates/messaging/affinidi-messaging-didcomm-service",
@@ -66,20 +69,26 @@ publish = true
 rust-version = "1.90.0"
 
 [workspace.dependencies]
+tokio = "1.50"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.
 opt-level = "s"
 lto = true
 
+# Redirect crates.io deps to local workspace crates so all members use the same version.
+# Only needed for crates that are referenced by version (not path) in other workspace members.
 [patch.crates-io]
+affinidi-secrets-resolver = { path = "crates/core/affinidi-secrets-resolver" }
 affinidi-did-resolver-cache-sdk = { path = "crates/identity/affinidi-did-resolver-cache-sdk" }
 affinidi-did-common = { path = "crates/identity/affinidi-did-common" }
-affinidi-did-resolver-traits = { path = "crates/identity/affinidi-did-resolver-traits" }
-affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
+affinidi-crypto = { path = "crates/core/affinidi-crypto" }
+affinidi-encoding = { path = "crates/core/affinidi-encoding" }
+affinidi-data-integrity = { path = "crates/credentials/affinidi-data-integrity" }
+affinidi-messaging-didcomm = { path = "crates/messaging/affinidi-messaging-didcomm" }
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
-affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
-affinidi-messaging-didcomm-service = { path = "crates/messaging/affinidi-messaging-didcomm-service" }
+affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
+affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"

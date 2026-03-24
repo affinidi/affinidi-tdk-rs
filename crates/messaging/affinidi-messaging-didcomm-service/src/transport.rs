@@ -55,7 +55,6 @@ pub async fn send_response(
             recipient,
             Some(&ctx.profile.inner.did),
             Some(&ctx.profile.inner.did),
-            None,
         )
         .await?;
 

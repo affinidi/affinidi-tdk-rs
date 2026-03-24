@@ -101,7 +101,7 @@
 //! ```
 
 use crate::{ATM, errors::ATMError};
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{fmt::Display, sync::Arc, time::SystemTime};
@@ -209,7 +209,7 @@ impl DiscoverFeatures {
             .as_secs();
 
         Ok(Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/discover-features/2.0/queries".to_owned(),
             json!(query_body),
         )
@@ -265,7 +265,7 @@ impl DiscoverFeatures {
         };
 
         Ok(Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://didcomm.org/discover-features/2.0/disclose".to_owned(),
             json!(body),
         )

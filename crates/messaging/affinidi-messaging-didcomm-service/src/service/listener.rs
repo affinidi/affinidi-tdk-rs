@@ -16,6 +16,22 @@ use crate::response::DIDCommResponse;
 use crate::transport;
 use crate::utils::{get_parent_thread_id, get_thread_id};
 
+/// Convert SDK compat UnpackMetadata to didcomm crate UnpackMetadata
+pub(crate) fn convert_meta(
+    sdk_meta: affinidi_messaging_sdk::messages::compat::UnpackMetadata,
+) -> affinidi_messaging_didcomm::UnpackMetadata {
+    affinidi_messaging_didcomm::UnpackMetadata {
+        encrypted: sdk_meta.encrypted,
+        authenticated: sdk_meta.authenticated,
+        non_repudiation: sdk_meta.non_repudiation,
+        anonymous_sender: sdk_meta.anonymous_sender,
+        re_wrapped_in_forward: sdk_meta.re_wrapped_in_forward,
+        encrypted_from_kid: sdk_meta.encrypted_from_kid,
+        encrypted_to_kids: sdk_meta.encrypted_to_kids,
+        sign_from: sdk_meta.sign_from,
+    }
+}
+
 const ATM_OPERATION_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) struct Listener {
@@ -166,7 +182,7 @@ impl Listener {
             .map_err(DIDCommServiceError::ATM)?;
 
         if let Some((message, meta)) = next {
-            let meta = *meta;
+            let meta = convert_meta(*meta);
             let atm = atm.clone();
             let profile = profile.clone();
             let handler = self.handler.clone();

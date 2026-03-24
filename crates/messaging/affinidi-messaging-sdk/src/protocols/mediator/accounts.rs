@@ -1,4 +1,4 @@
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::message::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha256::digest;
@@ -201,7 +201,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_get":  did_hash}),
             )
@@ -214,15 +214,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -277,7 +271,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_add": {"did_hash": did_hash, "acls": acls.map(|a| a.to_u64())}}),
             )
@@ -290,15 +284,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -346,7 +334,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_remove":  did_hash}),
             )
@@ -359,15 +347,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -425,7 +407,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_list": {"cursor": cursor.unwrap_or(0), "limit": limit.unwrap_or(100)}}),
             )
@@ -438,15 +420,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -505,7 +481,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_change_type": {"did_hash": did_hash, "type": new_type}}),
             )
@@ -518,15 +494,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -591,7 +561,7 @@ impl Mediator {
                 .as_secs();
 
             let msg = Message::build(
-                Uuid::new_v4().into(),
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/mediator/1.0/account-management".to_owned(),
                 json!({"account_change_queue_limits": {"did_hash": did_hash, "send_queue_limit": send_queue_limit, "receive_queue_limit": receive_queue_limit}}),
             )
@@ -604,15 +574,9 @@ impl Mediator {
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 

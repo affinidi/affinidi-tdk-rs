@@ -1,15 +1,13 @@
+use crate::common::time::unix_timestamp_secs;
 use crate::{
     SharedData,
     database::session::Session,
     messages::{ProcessMessageResponse, WrapperType},
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
-use std::time::SystemTime;
 use tracing::{debug, info, span};
 
 /// Process a Discover Features queries message and generates a response
@@ -24,28 +22,22 @@ pub(crate) fn process(
         session_id = session.session_id.as_str()
     )
     .entered();
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = unix_timestamp_secs();
 
     if let Some(expires) = msg.expires_time
         && expires <= now
     {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem_with_log(
             31,
             session.session_id.to_string(),
             Some(msg.id.to_string()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "message.expired".into(),
-                "Message has expired: {1}".into(),
-                vec![expires.to_string()],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Message has expired".to_string(),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "message.expired",
+            "Message has expired: {1}",
+            vec![expires.to_string()],
+            StatusCode::BAD_REQUEST,
+            "Message has expired",
         ));
     }
 
@@ -53,58 +45,45 @@ pub(crate) fn process(
         if let Some(first) = to.first() {
             first.to_owned()
         } else {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 51,
                 session.session_id.to_string(),
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "message.to".into(),
-                    "Invalid to: header, couldn't get first DID from the field.".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Invalid to: header, couldn't get first DID from the field.".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "message.to",
+                "Invalid to: header, couldn't get first DID from the field.",
+                vec![],
+                StatusCode::BAD_REQUEST,
             ));
         }
     } else {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             51,
             session.session_id.to_string(),
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "message.to".into(),
-                "Missing to: header in message".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Missing to: header in message".to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.to",
+            "Missing to: header in message",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ));
     };
 
     let from = if let Some(from) = &msg.from {
         from.to_owned()
     } else {
-        return Err(MediatorError::MediatorError(
+        return Err(MediatorError::problem(
             50,
             session.session_id.to_string(),
             Some(msg.id.clone()),
-            Box::new(ProblemReport::new(
-                ProblemReportSorter::Warning,
-                ProblemReportScope::Message,
-                "message.anonymous".into(),
-                "Anonymous Trust-Ping is asking for a response, this is an invalid request!".into(),
-                vec![],
-                None,
-            )),
-            StatusCode::BAD_REQUEST.as_u16(),
-            "Anonymous Trust-Ping is asking for a response, this is an invalid request!"
-                .to_string(),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "message.anonymous",
+            "Discover Features requires a from: header to generate a response",
+            vec![],
+            StatusCode::BAD_REQUEST,
         ));
     };
 
@@ -119,20 +98,17 @@ pub(crate) fn process(
     {
         Ok(response) => response,
         Err(e) => {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem_with_log(
                 89,
                 session.session_id.to_string(),
                 Some(msg.id.clone()),
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.discover_features.queries.parse".into(),
-                    "Couldn't parse message body: {1}".into(),
-                    vec![e.to_string()],
-                    None,
-                )),
-                StatusCode::BAD_REQUEST.as_u16(),
-                "Couldn't parse message body".to_string(),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.discover_features.queries.parse",
+                "Couldn't parse message body: {1}",
+                vec![e.to_string()],
+                StatusCode::BAD_REQUEST,
+                "Couldn't parse message body",
             ));
         }
     };

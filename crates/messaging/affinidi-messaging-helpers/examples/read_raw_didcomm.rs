@@ -4,8 +4,7 @@
  * To read the DIDComm messages, you will need access to the Secrets for the DID Recipients
  */
 
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_messaging_didcomm::{AttachmentData, envelope::MetaEnvelope};
+use affinidi_messaging_didcomm::jwe::envelope::Jwe;
 use affinidi_messaging_sdk::{ATM, config::ATMConfig, errors::ATMError, profiles::ATMProfile};
 use affinidi_tdk::{
     common::TDKSharedState,
@@ -34,13 +33,6 @@ async fn main() -> Result<(), ATMError> {
     let config = ATMConfig::builder();
     let tdk = Arc::new(TDKSharedState::default().await);
     let atm = ATM::new(config.build()?, tdk).await?;
-
-    // Local DID Resolver
-    let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-        .await
-        .map_err(|e| {
-            ATMError::DIDError(format!("Couldn't instantiate DID Resolver. Reason: {}", e))
-        })?;
 
     // Load the DIDComm message
     println!("{}", style("Raw DIDComm Message troubleshooting").green(),);
@@ -71,35 +63,40 @@ async fn main() -> Result<(), ATMError> {
         style("Reading the DIDComm message envelope...").blue()
     );
 
-    let envelope = MetaEnvelope::new(&didcomm_raw_message, &did_resolver)
-        .await
-        .map_err(|e| {
-            ATMError::DidcommError(
-                "NA".to_string(),
-                format!("Couldn't read DIDComm raw message: {}", e),
-            )
-        })?;
+    // Parse the JWE envelope to extract recipient information
+    let jwe: Jwe = serde_json::from_str(&didcomm_raw_message).map_err(|e| {
+        ATMError::DidcommError(
+            "NA".to_string(),
+            format!("Couldn't parse JWE envelope: {}", e),
+        )
+    })?;
 
-    println!(
-        "{}",
-        style(format!("\tFrom DID: {:?}", envelope.from_did)).cyan()
-    );
-    println!(
-        "{}",
-        style(format!("\t  To DID: {:?}", envelope.to_did)).cyan()
-    );
-    println!(
-        "{}",
-        style(format!("\tMSG Hash: {}", envelope.sha256_hash)).cyan()
-    );
-
-    let Some(to_did) = envelope.to_did else {
+    // Extract recipient DID from the first recipient's kid
+    let to_did = if let Some(recipient) = jwe.recipients.first() {
+        // kid format is typically "did:...#key-id", extract the DID part
+        let kid = &recipient.header.kid;
+        if let Some(hash_pos) = kid.find('#') {
+            kid[..hash_pos].to_string()
+        } else {
+            kid.clone()
+        }
+    } else {
         println!(
             "{}",
             style("Couldn't find the recipient DID. Exiting...").red()
         );
         return Ok(());
     };
+
+    println!("{}", style(format!("\t  To DID: {}", to_did)).cyan());
+    println!(
+        "{}",
+        style(format!(
+            "\tMSG Hash: {}",
+            sha256::digest(&didcomm_raw_message)
+        ))
+        .cyan()
+    );
 
     // Grab the secrets
     let stdin = io::stdin();
@@ -157,37 +154,29 @@ async fn main() -> Result<(), ATMError> {
 
     // >>>>> Additional processing of the message can be done here <<<<<
 
-    if inner_message.type_ == "https://didcomm.org/routing/2.0/forward" {
+    if inner_message.typ == "https://didcomm.org/routing/2.0/forward" {
         println!();
         println!("{}", style("Forwarded Message").green());
         if let Some(attachments) = inner_message.attachments {
             let attachment = attachments.first().unwrap();
-            let data = match attachment.data {
-                AttachmentData::Base64 { ref value } => {
-                    String::from_utf8(BASE64_URL_SAFE_NO_PAD.decode(&value.base64).unwrap())
-                        .unwrap()
-                }
-                AttachmentData::Json { ref value } => {
-                    if value.jws.is_some() {
-                        println!("{}", style("JWS is not supported").red());
-                        return Ok(());
-                    } else {
-                        match serde_json::to_string(&value.json) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                println!(
-                                    "{}",
-                                    style(format!("Error converting JSON: {}", e)).red()
-                                );
-                                return Ok(());
-                            }
+            let data = if let Some(ref b64) = attachment.data.base64 {
+                String::from_utf8(BASE64_URL_SAFE_NO_PAD.decode(b64).unwrap()).unwrap()
+            } else if let Some(ref json_val) = attachment.data.json {
+                if attachment.data.jws.is_some() {
+                    println!("{}", style("JWS is not supported").red());
+                    return Ok(());
+                } else {
+                    match serde_json::to_string(json_val) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            println!("{}", style(format!("Error converting JSON: {}", e)).red());
+                            return Ok(());
                         }
                     }
                 }
-                _ => {
-                    println!("{}", style("Unsupported attachment type").red());
-                    return Ok(());
-                }
+            } else {
+                println!("{}", style("Unsupported attachment type").red());
+                return Ok(());
             };
             println!("{}", style("Forwarded message found").green());
             println!();

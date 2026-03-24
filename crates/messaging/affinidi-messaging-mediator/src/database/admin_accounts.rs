@@ -25,7 +25,7 @@ impl Database {
             debug!("Admin account doesn't exist, creating: {}", admin_did_hash);
             self.account_add(admin_did_hash, acls, None).await?;
         }
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         debug!(
             "Admin DID ({}) == hash ({})",
@@ -49,9 +49,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!(
-                        "error in setup of admin account for ({admin_did_hash}). Reason: {err}"
-                    ),
+                    format!("Failed to set up admin account for ({admin_did_hash}). Reason: {err}"),
                 )
             })?;
 
@@ -62,7 +60,7 @@ impl Database {
     /// Checks if the provided DID is an admin level account
     /// Returns true if the DID is an admin account, false otherwise
     pub(crate) async fn check_admin_account(&self, did_hash: &str) -> Result<bool, MediatorError> {
-        let mut con = self.0.get_async_connection().await?;
+        let mut con = self.get_connection().await?;
 
         let (exists, role_type): (u32, u32) = deadpool_redis::redis::pipe()
             .atomic()
@@ -78,7 +76,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("error in check of admin account for ({did_hash}). Reason: {err}"),
+                    format!("Failed to check admin account for ({did_hash}). Reason: {err}"),
                 )
             })?;
 
@@ -150,7 +148,7 @@ impl Database {
                 ));
             }
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let mut tx = deadpool_redis::redis::pipe();
             let mut tx = tx.atomic().cmd("SREM").arg("ADMINS");
@@ -174,7 +172,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!("Remove failed. Reason: {err}"),
+                    format!("Failed to remove admin account. Reason: {err}"),
                 )
             })?;
             debug!("Admin accounts removed successfully: {:?}", result);
@@ -204,7 +202,7 @@ impl Database {
             debug!("Requesting list of Admin accounts from mediator");
             let limit = if limit > 100 { 100 } else { limit };
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let result: Vec<Value> = deadpool_redis::redis::pipe()
                 .atomic()
@@ -219,37 +217,72 @@ impl Database {
                     MediatorError::DatabaseError(
                         14,
                         "NA".to_string(),
-                        format!("SSCAN cursor ({cursor}) failed. Reason: {err}"),
+                        format!("Failed to scan admin list at cursor ({cursor}). Reason: {err}"),
                     )
                 })?;
 
             let mut new_cursor: u32 = 0;
             let mut admins: Vec<String> = vec![];
             for item in &result {
-                let value: Vec<Value> = from_redis_value(item.clone()).unwrap();
+                let value: Vec<Value> = from_redis_value(item.clone()).map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list scan result. Reason: {err}"),
+                    )
+                })?;
                 if value.len() != 2 {
                     return Err(MediatorError::DatabaseError(
                         17,
                         "NA".to_string(),
-                        "SSCAN result is not a tuple".to_string(),
+                        "Failed to parse admin list scan result: expected tuple".to_string(),
                     ));
                 }
-                new_cursor = from_redis_value::<String>(value.first().unwrap().clone())
-                    .map_err(|err| {
-                        MediatorError::DatabaseError(
-                            17,
-                            "NA".into(),
-                            format!("cursor could not be correctly parsed. Reason: {err}"),
-                        )
-                    })?
-                    .parse::<u32>()
-                    .unwrap();
+                new_cursor = from_redis_value::<String>(
+                    value
+                        .first()
+                        .ok_or_else(|| {
+                            MediatorError::DatabaseError(
+                                17,
+                                "NA".into(),
+                                "Failed to parse admin list scan result: missing cursor".into(),
+                            )
+                        })?
+                        .clone(),
+                )
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list cursor. Reason: {err}"),
+                    )
+                })?
+                .parse::<u32>()
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list cursor: not an integer. Reason: {err}"),
+                    )
+                })?;
 
-                admins = from_redis_value(value.last().unwrap().clone()).map_err(|err| {
+                admins = from_redis_value(
+                    value
+                        .last()
+                        .ok_or_else(|| {
+                            MediatorError::DatabaseError(
+                                17,
+                                "NA".into(),
+                                "Failed to parse admin list scan result: missing data".into(),
+                            )
+                        })?
+                        .clone(),
+                )
+                .map_err(|err| {
                     MediatorError::DatabaseError(
                         17,
                         "NA".to_string(),
-                        format!("admin list could not be correctly parsed. Reason: {err}"),
+                        format!("Failed to parse admin list. Reason: {err}"),
                     )
                 })?;
             }

@@ -53,10 +53,13 @@ Explore the [examples folder](./examples/) for available examples, including:
 - `mediator_ping` — Send a trust ping to the mediator
 - Sending and receiving messages
 - Message pickup
+- `protocol_comparison` — Benchmark comparing [TSP](../affinidi-tsp/) vs [DIDComm](../affinidi-messaging-didcomm/) message packing
+- `unified_messaging` — Demonstrates [messaging-core](../affinidi-messaging-core/) trait abstraction across both protocols
 
 ## Related Crates
 
 - [`affinidi-messaging-sdk`](../affinidi-messaging-sdk/) — Messaging SDK (dependency)
+- [`affinidi-tsp`](../affinidi-tsp/) — Trust Spanning Protocol
 - [`affinidi-messaging-mediator`](../affinidi-messaging-mediator/) — Mediator service
 - [`affinidi-tdk`](../../affinidi-tdk/affinidi-tdk/) — Unified TDK entry point (dependency)
 

@@ -1,7 +1,7 @@
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     GetMessagesRequest, GetMessagesResponse,
-    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    problem_report::{ProblemReportScope, ProblemReportSorter},
 };
 use axum::{Json, extract::State};
 use http::StatusCode;
@@ -26,20 +26,16 @@ pub async fn message_outbound_handler(
     async move {
         // ACL Check
         if !session.acls.get_local() {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 40,
                 session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.local".into(),
-                    "DID isn't local to the mediator".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID isn't local to the mediator".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.local",
+                "DID isn't local to the mediator",
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -62,7 +58,7 @@ pub async fn message_outbound_handler(
                         debug!("Deleting message: {}", msg_id);
                         match state
                             .database
-                            .0
+                            .handler
                             .delete_message(
                                 Some(&session.session_id),
                                 &session.did_hash,
@@ -99,10 +95,10 @@ pub async fn message_outbound_handler(
         Ok((
             StatusCode::OK,
             Json(SuccessResponse {
-                sessionId: session.session_id,
-                httpCode: StatusCode::OK.as_u16(),
-                errorCode: 0,
-                errorCodeStr: "NA".to_string(),
+                session_id: session.session_id,
+                http_code: StatusCode::OK.as_u16(),
+                error_code: 0,
+                error_code_str: "NA".to_string(),
                 message: "Success".to_string(),
                 data: Some(messages),
             }),

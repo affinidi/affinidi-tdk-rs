@@ -1,18 +1,9 @@
 # Affinidi TDK Changelog
 
-## 22nd March 2026
+## 10th March 2026
 
-- **FEATURE:** `TDKSharedState::new(config)` constructor added to `affinidi-tdk-common`
-  - Respects `TDKConfig.did_resolver` (pre-built) and `TDKConfig.did_resolver_config` (custom config)
-  - Falls back to default local-mode resolver when neither is provided
-  - Returns `Result<Self, TDKError>` for proper error propagation
-  - Enables custom resolver configurations (e.g., network mode for Nitro Enclave deployments)
-- **FEATURE:** `TDKConfigBuilder::with_did_resolver_config()` setter added
-  - The `did_resolver_config` field existed but had no builder method
-- **FEATURE:** `TDKError::Config` variant added for configuration-related errors
-- **IMPROVEMENT:** `TDKSharedState::default()` now delegates to `new()`, using
-  `config.authentication_cache_limit` and `config.custom_auth_handlers` instead of hardcoded values
-- **VERSION:** `affinidi-tdk-common` bumped to 0.5.0, `affinidi-tdk` bumped to 0.6.1
+- **CHORE:** Updated `affinidi-messaging-didcomm` re-export to 0.13.0
+  - Import path changed from `affinidi_didcomm` to `affinidi_messaging_didcomm`
 
 ## 3rd March 2026
 

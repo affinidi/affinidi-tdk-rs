@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.6.1"
+version = "0.6.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -22,24 +22,24 @@ data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.3"
-affinidi-messaging-sdk = { version = "0.15.1", optional = true }
-affinidi-messaging-didcomm = "0.12"
+affinidi-messaging-sdk = { version = "0.15", optional = true }
+affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.13" }
 affinidi-did-authentication = "0.3"
 affinidi-tdk-common = "0.5"
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.1"
 affinidi-meeting-place = { version = "0.3", optional = true }
-affinidi-data-integrity = { version = "0.5", optional = true }
+affinidi-data-integrity = { version = "0.5",  optional = true }
 
 # External Crates
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = "1.0"
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",

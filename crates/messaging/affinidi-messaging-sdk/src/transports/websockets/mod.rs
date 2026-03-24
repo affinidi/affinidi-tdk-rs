@@ -10,8 +10,11 @@ Roles:
    - Mediator: The DIDComm Mediator that the websocket connects to
 */
 
-use affinidi_messaging_didcomm::{Message as DidcommMessage, UnpackMetadata};
+use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 
+use crate::messages::compat::UnpackMetadata;
+
+pub(crate) mod proxy;
 pub(crate) mod websocket;
 pub(crate) mod ws_cache;
 

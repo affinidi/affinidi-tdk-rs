@@ -17,7 +17,7 @@ impl Database {
     ) -> Result<Option<MessageListElement>, MediatorError> {
         let _span = span!(Level::DEBUG, "get_message", msg_id = msg_id,);
         async move {
-            let mut conn = self.0.get_async_connection().await?;
+            let mut conn = self.get_connection().await?;
 
             let (didcomm_message, meta_data): (Value, Vec<String>) = deadpool_redis::redis::pipe()
                 .atomic()

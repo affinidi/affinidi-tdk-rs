@@ -14,9 +14,14 @@
  * This needs to be refactored in the future when the services align on implementation
  */
 
-use affinidi_did_common::Document;
+use affinidi_did_common::{
+    Document, document::DocumentExt, verification_method::VerificationRelationship,
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::{Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::crypto::key_agreement::{
+    Curve, PrivateKeyAgreement, PublicKeyAgreement,
+};
+use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use chrono::DateTime;
@@ -122,11 +127,16 @@ pub struct MPAuthorizationTokens {
     pub refresh_expires_at: String,
 }
 
-/// Refresh tokens response from the authentication service
+/// Refresh tokens response from the authentication service.
+/// Includes rotated refresh token (one-time use).
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct AuthRefreshResponse {
     pub access_token: String,
     pub access_expires_at: u64,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub refresh_expires_at: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -365,16 +375,14 @@ impl DIDAuthentication {
                 serde_json::to_string_pretty(&auth_response).unwrap()
             );
 
-            let (auth_msg, _) = auth_response
-                .pack_encrypted(
-                    endpoint_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    did_resolver,
-                    secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
-                .await?;
+            let auth_msg = _pack_encrypted_for_did(
+                &auth_response,
+                profile_did,
+                endpoint_did,
+                did_resolver,
+                secrets_resolver,
+            )
+            .await?;
 
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
@@ -454,7 +462,7 @@ impl DIDAuthentication {
             .as_secs();
 
         let refresh_message = Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://affinidi.com/atm/1.0/authenticate/refresh".to_string(),
             json!({"refresh_token": refresh_token}),
         )
@@ -464,22 +472,19 @@ impl DIDAuthentication {
         .expires_time(now + 60)
         .finalize();
 
-        match refresh_message
-            .pack_encrypted(
-                endpoint_did,
-                Some(profile_did),
-                Some(profile_did),
-                did_resolver,
-                secrets_resolver,
-                &PackEncryptedOptions::default(),
-            )
-            .await
-        {
-            Ok((refresh_msg, _)) => Ok(refresh_msg),
-            Err(err) => Err(DIDAuthError::Authentication(format!(
+        _pack_encrypted_for_did(
+            &refresh_message,
+            profile_did,
+            endpoint_did,
+            did_resolver,
+            secrets_resolver,
+        )
+        .await
+        .map_err(|err| {
+            DIDAuthError::Authentication(format!(
                 "Couldn't pack authentication refresh message: {err:?}"
-            ))),
-        }
+            ))
+        })
     }
 
     /// Refresh the access tokens as required
@@ -552,6 +557,11 @@ impl DIDAuthentication {
 
                 tokens.access_token = new_tokens.data.access_token;
                 tokens.access_expires_at = new_tokens.data.access_expires_at;
+                // Update rotated refresh token if provided
+                if !new_tokens.data.refresh_token.is_empty() {
+                    tokens.refresh_token = new_tokens.data.refresh_token;
+                    tokens.refresh_expires_at = new_tokens.data.refresh_expires_at;
+                }
 
                 debug!("JWT successfully refreshed");
                 Ok(())
@@ -591,7 +601,7 @@ impl DIDAuthentication {
         };
 
         Ok(Message::build(
-            Uuid::new_v4().into(),
+            Uuid::new_v4().to_string(),
             "https://affinidi.com/atm/1.0/authenticate".to_owned(),
             body,
         )
@@ -640,6 +650,124 @@ where
     serde_json::from_str::<T>(&response_body).map_err(|e| {
         DIDAuthError::Authentication(format!("Couldn't deserialize AuthorizationResponse: {e}"))
     })
+}
+
+/// Bridge helper: pack a DIDComm message encrypted for a recipient DID.
+///
+/// Resolves both DIDs to get key agreement keys, looks up the sender's
+/// private key from the secrets resolver, and calls authcrypt.
+async fn _pack_encrypted_for_did<S>(
+    msg: &Message,
+    sender_did: &str,
+    recipient_did: &str,
+    did_resolver: &DIDCacheClient,
+    secrets_resolver: &S,
+) -> Result<String>
+where
+    S: SecretsResolver,
+{
+    // 1. Resolve recipient DID and get their key agreement public key
+    let recipient_doc = did_resolver
+        .resolve(recipient_did)
+        .await
+        .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
+    let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
+    let recipient_kid = recipient_ka_kids
+        .first()
+        .ok_or_else(|| DIDAuthError::DIDComm("recipient has no key agreement key".into()))?;
+
+    let recipient_pub = _resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
+
+    // 2. Resolve sender DID and find their key agreement key ID
+    let sender_doc = did_resolver
+        .resolve(sender_did)
+        .await
+        .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
+    let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
+    let sender_kid = sender_ka_kids
+        .first()
+        .ok_or_else(|| DIDAuthError::DIDComm("sender has no key agreement key".into()))?;
+
+    // 3. Get sender's private key from secrets resolver
+    let sender_secret = secrets_resolver
+        .get_secret(&sender_kid.to_string())
+        .await
+        .ok_or_else(|| DIDAuthError::Secrets(format!("no secret found for {sender_kid}")))?;
+
+    let sender_curve = _key_type_to_curve(sender_secret.get_key_type())?;
+    let sender_private =
+        PrivateKeyAgreement::from_raw_bytes(sender_curve, sender_secret.get_private_bytes())
+            .map_err(|e| DIDAuthError::DIDComm(format!("invalid sender private key: {e}")))?;
+
+    // 4. Pack with authcrypt
+    pack::pack_encrypted_authcrypt(
+        msg,
+        sender_kid,
+        &sender_private,
+        &[(recipient_kid, &recipient_pub)],
+    )
+    .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
+}
+
+/// Extract a PublicKeyAgreement from a DID Document's verification method.
+fn _resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyAgreement> {
+    // Find the verification method — check embedded in key_agreement first, then top-level
+    let vm = doc
+        .key_agreement
+        .iter()
+        .filter_map(|ka| match ka {
+            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => {
+                Some(vm.as_ref())
+            }
+            _ => None,
+        })
+        .next()
+        .or_else(|| doc.get_verification_method(kid))
+        .ok_or_else(|| DIDAuthError::DIDComm(format!("verification method not found: {kid}")))?;
+
+    // Try publicKeyJwk first
+    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {
+        return PublicKeyAgreement::from_jwk(jwk_value)
+            .map_err(|e| DIDAuthError::DIDComm(format!("invalid JWK: {e}")));
+    }
+
+    // Try publicKeyMultibase (Multikey format)
+    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
+        && let Some(multibase_str) = multibase_value.as_str()
+    {
+        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
+            .map_err(|e| DIDAuthError::DIDComm(format!("invalid multikey: {e}")))?;
+
+        let curve = match codec {
+            affinidi_encoding::X25519_PUB => Curve::X25519,
+            affinidi_encoding::P256_PUB => Curve::P256,
+            affinidi_encoding::SECP256K1_PUB => Curve::K256,
+            _ => {
+                return Err(DIDAuthError::DIDComm(format!(
+                    "unsupported multicodec for key agreement: 0x{codec:x}"
+                )));
+            }
+        };
+
+        return PublicKeyAgreement::from_raw_bytes(curve, &key_bytes)
+            .map_err(|e| DIDAuthError::DIDComm(format!("invalid key bytes: {e}")));
+    }
+
+    Err(DIDAuthError::DIDComm(format!(
+        "no supported key material in verification method: {kid}"
+    )))
+}
+
+/// Map from secrets resolver KeyType to DIDComm Curve.
+fn _key_type_to_curve(key_type: affinidi_secrets_resolver::secrets::KeyType) -> Result<Curve> {
+    match key_type {
+        affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
+        affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
+        affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
+        other => Err(DIDAuthError::DIDComm(format!(
+            "unsupported key type for key agreement: {other:?}"
+        ))),
+    }
 }
 
 /// Possible responses from checking authentication JWT tokens

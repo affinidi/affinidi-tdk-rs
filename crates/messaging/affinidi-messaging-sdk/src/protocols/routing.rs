@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::{ATM, errors::ATMError, profiles::ATMProfile};
-use affinidi_messaging_didcomm::{Attachment, Message, PackEncryptedOptions};
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use base64::prelude::*;
 use serde_json::{Number, Value, json};
 use tracing::{Instrument, Level, span};
@@ -68,24 +68,18 @@ impl Routing {
             if let Some(expires_time) = expires_time {
                 forwarded = forwarded.expires_time(expires_time);
             }
+            let mut forwarded = forwarded.finalize();
             if let Some(delay_milli) = delay_milli {
-                forwarded = forwarded.header(
+                forwarded.extra.insert(
                     "delay_milli".to_string(),
                     Value::Number(Number::from(delay_milli)),
                 );
             }
-            let forwarded = forwarded.finalize();
 
             // Pack the message
-            let (msg, _) = forwarded
-                .pack_encrypted(
-                    target_did,
-                    from_did,
-                    from_did,
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&forwarded, target_did, from_did)
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 

@@ -1,4 +1,4 @@
-use affinidi_messaging_didcomm::MessageBuilder;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::{
     errors::ATMError,
     messages::{DeleteMessageRequest, FetchDeletePolicy, Folder, fetch::FetchOptions},
@@ -180,7 +180,7 @@ async fn main() -> Result<(), ATMError> {
 
     // Send a message to Alice from Bob
 
-    let message = MessageBuilder::new(
+    let message = Message::build(
         Uuid::new_v4().to_string(),
         "test".to_string(),
         json!("Hello Alice"),
@@ -198,7 +198,6 @@ async fn main() -> Result<(), ATMError> {
             &atm_alice.inner.did,
             Some(&atm_bob.inner.did),
             Some(&atm_bob.inner.did),
-            None,
         )
         .await?;
 

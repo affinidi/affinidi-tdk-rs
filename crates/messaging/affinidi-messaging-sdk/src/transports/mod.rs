@@ -4,7 +4,7 @@ use crate::{
     messages::{GenericDataStruct, GetMessagesRequest, known::MessageType},
     profiles::ATMProfile,
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use serde_json::Value;
 use sha256::digest;
 use std::{sync::Arc, time::Duration};
@@ -102,7 +102,7 @@ impl ATM {
                     .await?;
 
                 if let Some((message, _)) = response {
-                    let type_ = message.type_.parse::<MessageType>()?;
+                    let type_ = message.typ.parse::<MessageType>()?;
                     if let MessageType::ProblemReport = type_ {
                         Err(ATMError::from_problem_report(&message))
                     } else {

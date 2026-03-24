@@ -1,7 +1,7 @@
 use crate::{SharedData, database::session::Session, messages::inbound::handle_inbound};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
-    problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
+    problem_report::{ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
 };
 use axum::{Json, extract::State};
@@ -45,20 +45,16 @@ pub async fn message_inbound_handler(
     async move {
         // ACL Check
         if !session.acls.get_send_messages().0 {
-            return Err(MediatorError::MediatorError(
+            return Err(MediatorError::problem(
                 44,
                 session.session_id,
                 None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.send".into(),
-                    "DID isn't allowed to send messages through this mediator".into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::FORBIDDEN.as_u16(),
-                "DID isn't allowed to send messages through this mediator".to_string(),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.send",
+                "DID isn't allowed to send messages through this mediator",
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -66,20 +62,17 @@ pub async fn message_inbound_handler(
         let s = match serde_json::to_string(&body) {
             Ok(s) => s,
             Err(e) => {
-                return Err(MediatorError::MediatorError(
+                return Err(MediatorError::problem_with_log(
                     19,
                     session.session_id,
                     None,
-                    Box::new(ProblemReport::new(
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "message.serialize".into(),
-                        "Couldn't serialize DIDComm message envelope. Reason: {1}".into(),
-                        vec![e.to_string()],
-                        None,
-                    )),
-                    StatusCode::BAD_REQUEST.as_u16(),
-                    "Couldn't serialize DIDComm message envelope".to_string(),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "message.serialize",
+                    "Couldn't serialize DIDComm message envelope. Reason: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
+                    "Couldn't serialize DIDComm message envelope",
                 )
                 .into());
             }
@@ -90,10 +83,10 @@ pub async fn message_inbound_handler(
         Ok((
             StatusCode::OK,
             Json(SuccessResponse {
-                sessionId: session.session_id,
-                httpCode: StatusCode::OK.as_u16(),
-                errorCode: 0,
-                errorCodeStr: "NA".to_string(),
+                session_id: session.session_id,
+                http_code: StatusCode::OK.as_u16(),
+                error_code: 0,
+                error_code_str: "NA".to_string(),
                 message: "Success".to_string(),
                 data: Some(response),
             }),

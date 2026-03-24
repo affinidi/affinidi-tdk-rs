@@ -8,7 +8,7 @@ use crate::{
     find_mediator_service_endpoints,
     vcard::Vcard,
 };
-use affinidi_messaging_didcomm::Message;
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_tdk_common::{TDKSharedState, profiles::TDKProfile};
 use base64::prelude::*;
 use chrono::{Local, TimeDelta};

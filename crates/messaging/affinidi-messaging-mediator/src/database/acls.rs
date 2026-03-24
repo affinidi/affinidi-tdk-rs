@@ -23,7 +23,7 @@ impl Database {
         async move {
             debug!("Setting ACL for ({}) DID in mediator", did_hash);
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             deadpool_redis::redis::Cmd::hset(
                 format!("DID:{did_hash}"),
@@ -57,7 +57,7 @@ impl Database {
         async move {
             debug!("Requesting ACL for ({}) DID from mediator", did_hash);
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let acl: Option<String> =
                 deadpool_redis::redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
@@ -103,7 +103,7 @@ impl Database {
                 ));
             }
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
 
             let mut query = Pipeline::new();
             query.atomic();
@@ -148,7 +148,7 @@ impl Database {
     ///
     /// Returns true if it exists, false otherwise
     pub async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
-        let Ok(mut con) = self.0.get_async_connection().await else {
+        let Ok(mut con) = self.get_connection().await else {
             warn!("Failed to get database connection");
             return false;
         };
@@ -232,7 +232,7 @@ impl Database {
         async move {
             debug!("Requesting Access List");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             let (new_cursor, hashes): (u64, Vec<String>) = deadpool_redis::redis::cmd("SSCAN")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .arg(cursor)
@@ -267,7 +267,7 @@ impl Database {
         async move {
             debug!("Requesting Access List Count");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             deadpool_redis::redis::cmd("SCARD")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .query_async(&mut con)
@@ -315,7 +315,7 @@ impl Database {
                 hashes
             };
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             let mut query = deadpool_redis::redis::cmd("SADD");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 
@@ -360,7 +360,7 @@ impl Database {
         async move {
             debug!("Removing from Access List");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             let mut query = deadpool_redis::redis::cmd("SREM");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 
@@ -390,7 +390,7 @@ impl Database {
         async move {
             debug!("Clearing Access List");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             deadpool_redis::redis::cmd("DEL")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .exec_async(&mut con)
@@ -427,7 +427,7 @@ impl Database {
         async move {
             debug!("Getting from Access List");
 
-            let mut con = self.0.get_async_connection().await?;
+            let mut con = self.get_connection().await?;
             let mut query = deadpool_redis::redis::cmd("SMISMEMBER");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 

@@ -30,8 +30,11 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
   "did_example",
 ] }
 affinidi-did-common = "0.3"
-affinidi-messaging-didcomm = "0.12"
-affinidi-messaging-sdk = "0.15"
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", features = ["messaging-core"] }
+affinidi-messaging-core = { path = "../affinidi-messaging-core" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
+affinidi-secrets-resolver = "0.5"
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
 
 didwebvh-rs = "0.3.1"
@@ -51,7 +54,7 @@ serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 sha256 = "1.6"
 time = "0.3"
-tokio = { version = "1.50", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 toml = "1.0"
 tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = [

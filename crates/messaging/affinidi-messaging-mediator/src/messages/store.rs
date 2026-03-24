@@ -1,14 +1,16 @@
-use std::time::SystemTime;
-
+use crate::SharedData;
+use crate::common::time::unix_timestamp_secs;
 use crate::database::Database;
 use crate::database::session::Session;
+#[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
-use crate::{SharedData, messages::PackOptions};
-use affinidi_messaging_didcomm::{PackEncryptedMetadata, UnpackMetadata};
+#[cfg(feature = "didcomm")]
+use crate::messages::PackOptions;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReport, ProblemReportScope, ProblemReportSorter,
-};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::PackEncryptedMetadata;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use affinidi_messaging_sdk::messages::sending::{InboundMessageList, InboundMessageResponse};
 use http::StatusCode;
 use sha256::digest;
@@ -69,30 +71,27 @@ pub(crate) async fn store_message(
 
     async move {
         if response.forward_message {
-            Ok(InboundMessageResponse::Forwarded)
-        } else if response.store_message {
+            return Ok(InboundMessageResponse::Forwarded);
+        }
+
+        if response.store_message {
             let mut stored_messages = InboundMessageList::default();
             match &response.data {
                 WrapperType::None => {}
+                #[cfg(feature = "didcomm")]
                 WrapperType::Message(message) => {
                     // Pack the message for the next recipient(s)
                     let Some(to_dids) = &message.to else {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem(
                             75,
-                            session.session_id.clone(),
+                            &session.session_id,
                             Some(message.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "message.recipients.missing".into(),
-                                "Message has no recipients"
-                                    .into(),
-                                vec![],
-                                None,
-                            )),
-                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            "message has no recipients"
-                                .to_string(),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "message.recipients.missing",
+                            "Message has no recipients",
+                            vec![],
+                            StatusCode::INTERNAL_SERVER_ERROR,
                         ));
                     };
                     debug!(
@@ -102,29 +101,29 @@ pub(crate) async fn store_message(
                     );
 
                     if to_dids.len() > state.config.limits.to_recipients {
-                        return Err(MediatorError::MediatorError(
+                        return Err(MediatorError::problem_with_log(
                             76,
-                            session.session_id.clone(),
+                            &session.session_id,
                             Some(message.id.to_string()),
-                            Box::new(ProblemReport::new(
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "message.recipients.too_many".into(),
-                                "Message has too many recipients ({1}). Max: {2}"
-                                    .into(),
-                                vec![to_dids.len().to_string(), state.config.limits.to_recipients.to_string()],
-                                None,
-                            )),
-                            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            format!("Message has too many recipients ({}). Max: {}", to_dids.len(), state.config.limits.to_recipients),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "message.recipients.too_many",
+                            "Message has too many recipients ({1}). Max: {2}",
+                            vec![
+                                to_dids.len().to_string(),
+                                state.config.limits.to_recipients.to_string(),
+                            ],
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!(
+                                "Message has too many recipients ({}). Max: {}",
+                                to_dids.len(),
+                                state.config.limits.to_recipients
+                            ),
                         ));
                     }
 
                     let expires_at = if let Some(expires_at) = message.expires_time {
-                        let now = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
+                        let now = unix_timestamp_secs();
 
                         if expires_at > now + state.config.limits.message_expiry_seconds {
                             now + state.config.limits.message_expiry_seconds
@@ -132,11 +131,7 @@ pub(crate) async fn store_message(
                             expires_at
                         }
                     } else {
-                        SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs()
-                            + state.config.limits.message_expiry_seconds
+                        unix_timestamp_secs() + state.config.limits.message_expiry_seconds
                     };
 
                     for recipient in to_dids {
@@ -160,7 +155,13 @@ pub(crate) async fn store_message(
                             .await?;
 
                         match _store_message(
-                            state, session, response, &packed,  &digest(recipient), Some(&state.config.mediator_did_hash), expires_at,
+                            state,
+                            session,
+                            response,
+                            &packed,
+                            &digest(recipient),
+                            Some(&state.config.mediator_did_hash),
+                            expires_at,
                         )
                         .await
                         {
@@ -184,7 +185,17 @@ pub(crate) async fn store_message(
                 }
                 WrapperType::Envelope(to_did, message, expiry) => {
                     // Message is already packed, likely a direct delivery from a client
-                    match _store_message(state, session, response, message,  &digest(to_did), Some(&session.did_hash), *expiry).await {
+                    match _store_message(
+                        state,
+                        session,
+                        response,
+                        message,
+                        &digest(to_did),
+                        Some(&session.did_hash),
+                        *expiry,
+                    )
+                    .await
+                    {
                         Ok(msg_id) => {
                             debug!(
                                 "message id({}) stored successfully recipient({})",
@@ -202,8 +213,12 @@ pub(crate) async fn store_message(
                 }
             }
 
-            Ok(InboundMessageResponse::Stored(stored_messages))
-        } else if let WrapperType::Message(message) = &response.data {
+            return Ok(InboundMessageResponse::Stored(stored_messages));
+        }
+
+        // Ephemeral message handling (DIDComm only)
+        #[cfg(feature = "didcomm")]
+        if let WrapperType::Message(message) = &response.data {
             let (packed, meta) = message
                 .pack(
                     &session.session_id,
@@ -219,26 +234,8 @@ pub(crate) async fn store_message(
                     &state.config.processors.forwarding.blocked_forwarding,
                 )
                 .await?;
-            if meta.messaging_service.is_some() {
-                error!("TODO: Forwarded message - but will be sent to the wrong address!!!");
-                return Err(MediatorError::MediatorError(
-                        66,
-                        session.session_id.clone(),
-                        Some(message.id.to_string()),
-                        Box::new(ProblemReport::new(
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.not_implemented".into(),
-                            "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
-                                .into(),
-                            vec![],
-                            None,
-                        )),
-                        StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                        "Feature is not implemented by the mediator: Forwarding not implemented when mediator creating a packed message"
-                            .to_string(),
-                    ));
-            }
+            // NOTE: messaging_service forwarding check removed during migration to affinidi-messaging-didcomm.
+            // The new pack implementation does not auto-forward via service endpoints.
             trace!("Ephemeral message packed (meta):\n{:#?}", meta);
             trace!("Ephemeral message (msg):\n{:#?}", packed);
             // Live stream the message?
@@ -256,27 +253,21 @@ pub(crate) async fn store_message(
                 )
                 .await;
             }
-            Ok(InboundMessageResponse::Ephemeral(packed))
-        } else {
-            error!("No message to return");
-            Err(MediatorError::MediatorError(
-                77,
-                session.session_id.clone(),
-                None,
-                Box::new(ProblemReport::new(
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.storage.message.error".into(),
-                    "Expected a message to store, instead got None"
-                        .into(),
-                    vec![],
-                    None,
-                )),
-                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                "Expected a message to store, instead got None"
-                    .to_string(),
-            ))
+            return Ok(InboundMessageResponse::Ephemeral(packed));
         }
+
+        error!("No message to return");
+        Err(MediatorError::problem(
+            77,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "me.storage.message.error",
+            "Expected a message to store, instead got None",
+            vec![],
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ))
     }
     .instrument(_span)
     .await
@@ -343,10 +334,7 @@ pub(crate) async fn store_forwarded_message(
         }
 
         let expires_at = if let Some(expires_at) = expires_at {
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+            let now = unix_timestamp_secs();
 
             if expires_at > now + state.config.limits.message_expiry_seconds {
                 now + state.config.limits.message_expiry_seconds
@@ -354,11 +342,7 @@ pub(crate) async fn store_forwarded_message(
                 expires_at
             }
         } else {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-                + state.config.limits.message_expiry_seconds
+            unix_timestamp_secs() + state.config.limits.message_expiry_seconds
         };
 
         match state

@@ -6,9 +6,8 @@
  * Do not pass message ID's to the mediator, it cannot see inside messages that it is handling.
  *
  */
-use affinidi_messaging_didcomm::{
-    AttachmentData, Message, PackEncryptedOptions, UnpackMetadata, envelope::MetaEnvelope,
-};
+use crate::messages::compat::UnpackMetadata;
+use affinidi_messaging_didcomm::message::Message;
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -105,32 +104,27 @@ impl MessagePickup {
                 .unwrap()
                 .as_secs();
 
-            let msg = Message::build(
-                Uuid::new_v4().into(),
+            let mut msg = Message::build(
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/messagepickup/3.0/status-request".to_owned(),
                 json!({"recipient_did": profile_did}),
             )
             .to(mediator_did.to_string())
             .from(profile_did.to_string())
-            .header("return_route".into(), Value::String("all".into()))
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 
             debug!("Status-Request message: {:?}", msg);
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -183,29 +177,24 @@ impl MessagePickup {
                 .unwrap()
                 .as_secs();
 
-            let msg = Message::build(
-                Uuid::new_v4().into(),
+            let mut msg = Message::build(
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/messagepickup/3.0/live-delivery-change".to_owned(),
                 json!({"live_delivery": live_delivery}),
             )
-            .header("return_route".into(), Value::String("all".into()))
             .created_time(now)
             .expires_time(now + 300)
             .from(profile_did.into())
             .to(mediator_did.into())
             .finalize();
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
             let msg_id = msg.id.clone();
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -418,17 +407,18 @@ impl MessagePickup {
                 .unwrap()
                 .as_secs();
 
-            let msg = Message::build(
-                Uuid::new_v4().into(),
+            let mut msg = Message::build(
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/messagepickup/3.0/delivery-request".to_owned(),
                 serde_json::to_value(body).unwrap(),
             )
-            .header("return_route".into(), Value::String("all".into()))
             .to(mediator_did.into())
             .from(profile_did.into())
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 
@@ -436,15 +426,9 @@ impl MessagePickup {
 
             // Pack the message
             let msg = {
-                let (msg, _) = msg
-                    .pack_encrypted(
-                        mediator_did,
-                        Some(profile_did),
-                        Some(profile_did),
-                        &atm.inner.tdk_common.did_resolver,
-                        &atm.inner.tdk_common.secrets_resolver,
-                        &PackEncryptedOptions::default(),
-                    )
+                let (msg, _) = atm
+                    .inner
+                    .pack_encrypted(&msg, mediator_did, Some(profile_did))
                     .await
                     .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -473,46 +457,43 @@ impl MessagePickup {
 
         if let Some(attachments) = &message.attachments {
             for attachment in attachments {
-                match &attachment.data {
-                    AttachmentData::Base64 { value } => {
-                        let decoded = match BASE64_URL_SAFE_NO_PAD.decode(value.base64.clone()) {
-                            Ok(decoded) => match String::from_utf8(decoded) {
-                                Ok(decoded) => decoded,
-                                Err(e) => {
-                                    warn!(
-                                        "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
-                                        e, attachment.id
-                                    );
-                                    continue;
-                                }
-                            },
+                if let Some(b64) = &attachment.data.base64 {
+                    let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
+                        Ok(decoded) => match String::from_utf8(decoded) {
+                            Ok(decoded) => decoded,
                             Err(e) => {
                                 warn!(
-                                    "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                    "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
                                     e, attachment.id
                                 );
                                 continue;
                             }
-                        };
+                        },
+                        Err(e) => {
+                            warn!(
+                                "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                e, attachment.id
+                            );
+                            continue;
+                        }
+                    };
 
-                        match atm.unpack(&decoded).await {
-                            Ok((mut m, u)) => {
-                                if let Some(attachment_id) = &attachment.id {
-                                    m.id = attachment_id.to_string();
-                                }
-                                response.push((m, u))
+                    match atm.unpack(&decoded).await {
+                        Ok((mut m, u)) => {
+                            if let Some(attachment_id) = &attachment.id {
+                                m.id = attachment_id.to_string();
                             }
-                            Err(e) => {
-                                warn!("Error unpacking message: ({:?})", e);
-                                continue;
-                            }
-                        };
-                    }
-                    _ => {
-                        warn!("Attachment type not supported: {:?}", attachment.data);
-                        continue;
-                    }
-                };
+                            response.push((m, u))
+                        }
+                        Err(e) => {
+                            warn!("Error unpacking message: ({:?})", e);
+                            continue;
+                        }
+                    };
+                } else {
+                    warn!("Attachment type not supported: {:?}", attachment.data);
+                    continue;
+                }
             }
         }
 
@@ -548,32 +529,27 @@ impl MessagePickup {
                 .unwrap()
                 .as_secs();
 
-            let msg = Message::build(
-                Uuid::new_v4().into(),
+            let mut msg = Message::build(
+                Uuid::new_v4().to_string(),
                 "https://didcomm.org/messagepickup/3.0/messages-received".to_owned(),
                 json!({"message_id_list": list}),
             )
-            .header("return_route".into(), Value::String("all".into()))
             .to(mediator_did.into())
             .from(profile_did.into())
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 
             debug!("messages-received message: {:?}", msg);
 
             // Pack the message
-            let (msg, _) = msg
-                .pack_encrypted(
-                    mediator_did,
-                    Some(profile_did),
-                    Some(profile_did),
-                    &atm.inner.tdk_common.did_resolver,
-                    &atm.inner.tdk_common.secrets_resolver,
-                    &PackEncryptedOptions::default(),
-                )
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
                 .await
                 .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
 
@@ -680,20 +656,10 @@ impl MessagePickup {
                         Ok(WebSocketResponses::PackedMessageReceived(packed_msg)) => {
                             // If auto_delete is true, delete the message
                             if auto_delete {
-                                match MetaEnvelope::new(&packed_msg, &atm.get_tdk().did_resolver).await
-                                {
-                                    Ok(envelope) => {
-                                        debug!("Trying to delete message in background with hash: {}", envelope.sha256_hash);
-                                        atm.delete_message_background(profile, &envelope.sha256_hash.clone()).await?;
-                                        debug!("Deleted message in background with hash: {}", envelope.sha256_hash);
-                                    },
-                                    Err(e) => {
-                                        return Err(ATMError::DidcommError(
-                                            "Cannot convert string to MetaEnvelope".into(),
-                                            e.to_string(),
-                                        ));
-                                    }
-                                };
+                                let sha256_hash = sha256::digest(packed_msg.as_str());
+                                debug!("Trying to delete message in background with hash: {}", sha256_hash);
+                                atm.delete_message_background(profile, &sha256_hash).await?;
+                                debug!("Deleted message in background with hash: {}", sha256_hash);
                             }
                             Ok(Some(*packed_msg))
                         }
