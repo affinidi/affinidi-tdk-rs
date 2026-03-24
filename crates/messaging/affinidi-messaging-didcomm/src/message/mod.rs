@@ -141,10 +141,9 @@ impl Message {
 
     /// Deserialize from JSON bytes.
     pub fn from_json(data: &[u8]) -> Result<Self, crate::error::DIDCommError> {
-        serde_json::from_slice(data)
-            .map_err(|e| {
-                crate::error::DIDCommError::InvalidMessage(format!("invalid message: {e}"))
-            })
+        serde_json::from_slice(data).map_err(|e| {
+            crate::error::DIDCommError::InvalidMessage(format!("invalid message: {e}"))
+        })
     }
 }
 
@@ -426,17 +425,21 @@ mod tests {
         assert_eq!(msg.id, "msg-1");
         assert_eq!(msg.typ, "test/v1");
         assert_eq!(msg.from.as_deref(), Some("did:example:alice"));
-        assert_eq!(msg.to.as_deref(), Some(vec!["did:example:bob".to_string()].as_slice()));
+        assert_eq!(
+            msg.to.as_deref(),
+            Some(vec!["did:example:bob".to_string()].as_slice())
+        );
         assert_eq!(msg.created_time, Some(1234567890));
     }
 
     #[test]
     fn message_with_attachments() {
-        let msg = Message::new("test", serde_json::json!({}))
-            .attachments(vec![
-                Attachment::json(serde_json::json!({"inner": "data"})).finalize(),
-                Attachment::base64("SGVsbG8=".into()).id("att-1".into()).finalize(),
-            ]);
+        let msg = Message::new("test", serde_json::json!({})).attachments(vec![
+            Attachment::json(serde_json::json!({"inner": "data"})).finalize(),
+            Attachment::base64("SGVsbG8=".into())
+                .id("att-1".into())
+                .finalize(),
+        ]);
 
         let json = msg.to_json().unwrap();
         let parsed = Message::from_json(&json).unwrap();

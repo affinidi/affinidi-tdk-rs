@@ -92,27 +92,28 @@ async fn connect_via_proxy(
         .parse()
         .map_err(|e| ATMError::TransportError(format!("Invalid proxy URL '{proxy_url}': {e}")))?;
 
-    let proxy_host = proxy_uri.host().ok_or_else(|| {
-        ATMError::TransportError(format!("Proxy URL '{proxy_url}' has no host"))
-    })?;
-    let proxy_port = proxy_uri.port_u16().unwrap_or(match proxy_uri.scheme_str() {
-        Some("https") => 443,
-        _ => 8080,
-    });
+    let proxy_host = proxy_uri
+        .host()
+        .ok_or_else(|| ATMError::TransportError(format!("Proxy URL '{proxy_url}' has no host")))?;
+    let proxy_port = proxy_uri
+        .port_u16()
+        .unwrap_or(match proxy_uri.scheme_str() {
+            Some("https") => 443,
+            _ => 8080,
+        });
 
     debug!(
         "Connecting to proxy {}:{} for tunnel to {}:{}",
         proxy_host, proxy_port, target_host, target_port
     );
 
-    let mut stream =
-        TcpStream::connect((proxy_host, proxy_port))
-            .await
-            .map_err(|e| {
-                ATMError::TransportError(format!(
-                    "Failed to connect to proxy {proxy_host}:{proxy_port}: {e}"
-                ))
-            })?;
+    let mut stream = TcpStream::connect((proxy_host, proxy_port))
+        .await
+        .map_err(|e| {
+            ATMError::TransportError(format!(
+                "Failed to connect to proxy {proxy_host}:{proxy_port}: {e}"
+            ))
+        })?;
 
     // Build CONNECT request
     let target = format!("{target_host}:{target_port}");
@@ -214,9 +215,9 @@ where
 
         Ok((ws, response))
     } else {
-        let (ws, response) = connect_async(request).await.map_err(|e| {
-            ATMError::TransportError(format!("WebSocket connection failed: {e}"))
-        })?;
+        let (ws, response) = connect_async(request)
+            .await
+            .map_err(|e| ATMError::TransportError(format!("WebSocket connection failed: {e}")))?;
 
         Ok((ws, response))
     }

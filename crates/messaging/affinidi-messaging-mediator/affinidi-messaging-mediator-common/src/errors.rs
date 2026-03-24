@@ -665,7 +665,9 @@ pub fn create_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
+    use affinidi_messaging_sdk::messages::problem_report::{
+        ProblemReportScope, ProblemReportSorter,
+    };
     use axum::http::StatusCode;
 
     #[test]

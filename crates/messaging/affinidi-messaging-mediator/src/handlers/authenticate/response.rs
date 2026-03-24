@@ -1,12 +1,9 @@
+use super::super::message_inbound::InboundMessage;
 use super::AuthenticationChallenge;
 use super::helpers::{_create_access_token, _create_refresh_token, create_random_string};
-use crate::{
-    SharedData,
-    common::acl_checks::ACLCheck,
-    database::session::SessionState,
-};
-use super::super::message_inbound::InboundMessage;
+use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::{self, MetaEnvelope};
+use crate::{SharedData, common::acl_checks::ACLCheck, database::session::SessionState};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
     messages::{
@@ -19,7 +16,6 @@ use affinidi_messaging_sdk::{
 use axum::{Json, extract::State};
 use http::StatusCode;
 use sha256::digest;
-use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, Level, debug, info, span};
 
 /// POST /authenticate
@@ -36,10 +32,15 @@ pub async fn authentication_response(
     async move {
         let s = serde_json::to_string(&body).map_err(|e| {
             MediatorError::problem_with_log(
-                37, "", None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
-                "message.serialize", "Failed to serialize request body: {1}",
-                vec![e.to_string()], StatusCode::BAD_REQUEST,
+                37,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.serialize",
+                "Failed to serialize request body: {1}",
+                vec![e.to_string()],
+                StatusCode::BAD_REQUEST,
                 format!("Failed to serialize request body: {e}"),
             )
         })?;
@@ -67,19 +68,25 @@ pub async fn authentication_response(
         if envelope.metadata.authenticated && envelope.metadata.encrypted {
             debug!("Authenticated messages is properly signed and encrypted")
         } else {
-                return Err(MediatorError::problem_with_log(
-                    86,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authentication.message.not_signed_or_encrypted",
-                    "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
-                    vec![envelope.metadata.authenticated.to_string(), envelope.metadata.encrypted.to_string()],
-                    StatusCode::BAD_REQUEST,
-                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", envelope.metadata.authenticated, envelope.metadata.encrypted),
-                )
-                .into());
+            return Err(MediatorError::problem_with_log(
+                86,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.message.not_signed_or_encrypted",
+                "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
+                vec![
+                    envelope.metadata.authenticated.to_string(),
+                    envelope.metadata.encrypted.to_string(),
+                ],
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction",
+                    envelope.metadata.authenticated, envelope.metadata.encrypted
+                ),
+            )
+            .into());
         }
 
         let from_did = match &envelope.from_did {
@@ -167,37 +174,43 @@ pub async fn authentication_response(
         if unpack_metadata.authenticated && unpack_metadata.encrypted {
             debug!("Authentication message is properly signed and encrypted")
         } else {
-                return Err(MediatorError::problem_with_log(
-                    86,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authentication.message.not_signed_or_encrypted",
-                    "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
-                    vec![unpack_metadata.authenticated.to_string(), unpack_metadata.encrypted.to_string()],
-                    StatusCode::BAD_REQUEST,
-                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", unpack_metadata.authenticated, unpack_metadata.encrypted),
-                )
-                .into());
+            return Err(MediatorError::problem_with_log(
+                86,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.message.not_signed_or_encrypted",
+                "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
+                vec![
+                    unpack_metadata.authenticated.to_string(),
+                    unpack_metadata.encrypted.to_string(),
+                ],
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction",
+                    unpack_metadata.authenticated, unpack_metadata.encrypted
+                ),
+            )
+            .into());
         }
 
         // Check that the inner plaintext from matches the envelope skid
         if let Some(msg_from) = &msg.from {
             if msg_from != envelope.from_did.as_ref().unwrap_or(&String::new()) {
                 // Inner and outer envelope don't match
-            return Err(MediatorError::problem(
-                85,
-                "",
-                None,
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "message.from.incorrect",
-                "Inner DIDComm plaintext from field does NOT match signing or encryption DID",
-                vec![],
-                StatusCode::BAD_REQUEST,
-            )
-            .into());
+                return Err(MediatorError::problem(
+                    85,
+                    "",
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.from.incorrect",
+                    "Inner DIDComm plaintext from field does NOT match signing or encryption DID",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
+                )
+                .into());
             }
         } else {
             return Err(MediatorError::problem(
@@ -322,23 +335,25 @@ pub async fn authentication_response(
         };
 
         // check that the DID matches from what was given for the initial challenge request to what was used for the message response
-        if let Some(from_did) = &msg.from && from_did != &session.did {
-                return Err(MediatorError::problem_with_log(
-                    33,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authentication.session.mismatch",
-                    "DID mismatch during authentication process",
-                    vec![],
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "DID mismatch during authentication process: first_did({}) second_did({})",
-                        session.did, from_did
-                    ),
-                )
-                .into());
+        if let Some(from_did) = &msg.from
+            && from_did != &session.did
+        {
+            return Err(MediatorError::problem_with_log(
+                33,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.session.mismatch",
+                "DID mismatch during authentication process",
+                vec![],
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "DID mismatch during authentication process: first_did({}) second_did({})",
+                    session.did, from_did
+                ),
+            )
+            .into());
         }
 
         // Check that this isn't a replay attack
@@ -369,8 +384,8 @@ pub async fn authentication_response(
             &state.config.security.jwt_encoding_key,
         )?;
 
-        let refresh_expiry = state.config.security.jwt_refresh_expiry
-            - state.config.security.jwt_access_expiry;
+        let refresh_expiry =
+            state.config.security.jwt_refresh_expiry - state.config.security.jwt_access_expiry;
         let (refresh_token, refresh_expires_at, refresh_token_hash) = _create_refresh_token(
             &session.did,
             &session.session_id,
@@ -418,7 +433,8 @@ pub async fn authentication_response(
         metrics::counter!(crate::common::metrics::names::AUTH_SUCCESS_TOTAL).increment(1);
         info!(
             "{}: Authentication successful for DID({})",
-            session.session_id, digest(&session.did)
+            session.session_id,
+            digest(&session.did)
         );
 
         Ok((

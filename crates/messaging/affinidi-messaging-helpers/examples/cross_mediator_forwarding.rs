@@ -28,7 +28,10 @@ use tracing_subscriber::filter;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Cross-mediator forwarding example with latency measurement")]
+#[command(
+    version,
+    about = "Cross-mediator forwarding example with latency measurement"
+)]
 struct Args {
     /// Environment name for Alice (must have Alice profile and mediator configured)
     #[arg(long, default_value = "alice")]
@@ -78,19 +81,19 @@ async fn main() -> Result<(), ATMError> {
     let alice_env = &alice_tdk.get_shared_state().environment;
     let alice_atm = alice_tdk.atm.clone().unwrap();
 
-    let tdk_alice = alice_env
-        .profiles
-        .get("Alice")
-        .ok_or_else(|| {
-            ATMError::ConfigError(format!(
-                "Alice profile not found in environment: {}",
-                args.alice_environment
-            ))
-        })?;
+    let tdk_alice = alice_env.profiles.get("Alice").ok_or_else(|| {
+        ATMError::ConfigError(format!(
+            "Alice profile not found in environment: {}",
+            args.alice_environment
+        ))
+    })?;
 
     alice_tdk.add_profile(tdk_alice).await;
     let atm_alice = alice_atm
-        .profile_add(&ATMProfile::from_tdk_profile(&alice_atm, tdk_alice).await?, true)
+        .profile_add(
+            &ATMProfile::from_tdk_profile(&alice_atm, tdk_alice).await?,
+            true,
+        )
         .await?;
 
     let alice_mediator_did = tdk_alice.mediator.clone().unwrap_or_default();
@@ -109,19 +112,19 @@ async fn main() -> Result<(), ATMError> {
     let bob_env = &bob_tdk.get_shared_state().environment;
     let bob_atm = bob_tdk.atm.clone().unwrap();
 
-    let tdk_bob = bob_env
-        .profiles
-        .get("Bob")
-        .ok_or_else(|| {
-            ATMError::ConfigError(format!(
-                "Bob profile not found in environment: {}",
-                args.bob_environment
-            ))
-        })?;
+    let tdk_bob = bob_env.profiles.get("Bob").ok_or_else(|| {
+        ATMError::ConfigError(format!(
+            "Bob profile not found in environment: {}",
+            args.bob_environment
+        ))
+    })?;
 
     bob_tdk.add_profile(tdk_bob).await;
     let atm_bob = bob_atm
-        .profile_add(&ATMProfile::from_tdk_profile(&bob_atm, tdk_bob).await?, true)
+        .profile_add(
+            &ATMProfile::from_tdk_profile(&bob_atm, tdk_bob).await?,
+            true,
+        )
         .await?;
 
     let bob_mediator_did = tdk_bob.mediator.clone().unwrap_or_default();

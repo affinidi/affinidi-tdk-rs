@@ -70,14 +70,14 @@ where
         response: SendMessageResponse::EmptyResponse,
     };
     let (msg, _) = didcomm_compat::pack_encrypted(
-            &msg,
-            to_did,
-            from_did.as_deref(),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        &msg,
+        to_did,
+        from_did.as_deref(),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .unwrap();
 
     msg_info.message_hash = digest(&msg).to_string();
     msg_info.bytes = msg.len() as u32;
@@ -109,17 +109,18 @@ where
     .expires_time(now + 300)
     .finalize();
 
-    msg.extra.insert("return_route".into(), Value::String("all".into()));
+    msg.extra
+        .insert("return_route".into(), Value::String("all".into()));
 
     let (msg, _) = didcomm_compat::pack_encrypted(
-            &msg,
-            to_did,
-            Some(&recipient_did),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        &msg,
+        to_did,
+        Some(&recipient_did),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .unwrap();
 
     msg
 }
@@ -153,18 +154,19 @@ where
     .expires_time(now + 300)
     .finalize();
 
-    msg.extra.insert("return_route".into(), Value::String("all".into()));
+    msg.extra
+        .insert("return_route".into(), Value::String("all".into()));
 
     // Pack the message
     let (msg, _) = didcomm_compat::pack_encrypted(
-            &msg,
-            to_did,
-            Some(&recipient_did),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        &msg,
+        to_did,
+        Some(&recipient_did),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .unwrap();
 
     msg
 }
@@ -197,18 +199,19 @@ where
     .expires_time(now + 300)
     .finalize();
 
-    msg.extra.insert("return_route".into(), Value::String("all".into()));
+    msg.extra
+        .insert("return_route".into(), Value::String("all".into()));
 
     // Pack the message
     let (msg, _) = didcomm_compat::pack_encrypted(
-            &msg,
-            to_did,
-            Some(&recipient_did),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        &msg,
+        to_did,
+        Some(&recipient_did),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .unwrap();
 
     msg
 }
@@ -245,14 +248,14 @@ where
 
     // Pack the message
     let (msg, _) = didcomm_compat::pack_encrypted(
-            &msg,
-            mediator_did,
-            Some(&actor_did),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        &msg,
+        mediator_did,
+        Some(&actor_did),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .unwrap();
     msg
 }
 

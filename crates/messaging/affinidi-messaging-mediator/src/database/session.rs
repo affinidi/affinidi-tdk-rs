@@ -395,7 +395,9 @@ impl Database {
                 MediatorError::SessionError(
                     14,
                     session_id.into(),
-                    format!("Failed to get refresh token hash for session ({session_id}). Reason: {err}"),
+                    format!(
+                        "Failed to get refresh token hash for session ({session_id}). Reason: {err}"
+                    ),
                 )
             })?;
 

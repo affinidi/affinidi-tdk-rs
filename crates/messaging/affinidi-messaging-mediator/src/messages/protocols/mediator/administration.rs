@@ -2,8 +2,8 @@
 //! Must be a administrator to use this protocol
 use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReportScope, ProblemReportSorter},
     protocols::mediator::administration::MediatorAdminRequest,

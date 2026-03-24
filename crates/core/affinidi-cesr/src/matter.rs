@@ -57,8 +57,7 @@ impl Matter {
         }
 
         let code = &qb64[..hs];
-        let sizage =
-            matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+        let sizage = matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
 
         if sizage.fs > 0 {
             // Fixed-length
@@ -128,8 +127,7 @@ impl Matter {
         }
 
         let code = &sniff_b64[..hs];
-        let sizage =
-            matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
+        let sizage = matter_sizage(code).ok_or_else(|| CesrError::UnknownCode(code.to_string()))?;
 
         if sizage.fs > 0 {
             // Fixed-length: binary size = fs * 3 / 4

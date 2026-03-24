@@ -27,11 +27,15 @@ pub async fn message_outbound_handler(
         // ACL Check
         if !session.acls.get_local() {
             return Err(MediatorError::problem(
-                40, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                40,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "authorization.local",
                 "DID isn't local to the mediator",
-                vec![], StatusCode::FORBIDDEN,
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -53,7 +57,8 @@ pub async fn message_outbound_handler(
                     if body.delete {
                         debug!("Deleting message: {}", msg_id);
                         match state
-                            .database.handler
+                            .database
+                            .handler
                             .delete_message(
                                 Some(&session.session_id),
                                 &session.did_hash,

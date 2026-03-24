@@ -79,7 +79,8 @@ mod tests {
 
     #[test]
     fn forward_roundtrip() {
-        let inner_jwe = r#"{"protected":"abc","recipients":[],"iv":"def","ciphertext":"ghi","tag":"jkl"}"#;
+        let inner_jwe =
+            r#"{"protected":"abc","recipients":[],"iv":"def","ciphertext":"ghi","tag":"jkl"}"#;
 
         let forward = wrap_in_forward("did:example:bob", inner_jwe).unwrap();
         assert_eq!(forward.typ, FORWARD_MESSAGE_TYPE);

@@ -49,9 +49,7 @@ impl Database {
                 MediatorError::DatabaseError(
                     14,
                     "NA".to_string(),
-                    format!(
-                        "Failed to set up admin account for ({admin_did_hash}). Reason: {err}"
-                    ),
+                    format!("Failed to set up admin account for ({admin_did_hash}). Reason: {err}"),
                 )
             })?;
 
@@ -226,7 +224,13 @@ impl Database {
             let mut new_cursor: u32 = 0;
             let mut admins: Vec<String> = vec![];
             for item in &result {
-                let value: Vec<Value> = from_redis_value(item.clone()).map_err(|err| MediatorError::DatabaseError(17, "NA".into(), format!("Failed to parse admin list scan result. Reason: {err}")))?;
+                let value: Vec<Value> = from_redis_value(item.clone()).map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list scan result. Reason: {err}"),
+                    )
+                })?;
                 if value.len() != 2 {
                     return Err(MediatorError::DatabaseError(
                         17,
@@ -234,18 +238,47 @@ impl Database {
                         "Failed to parse admin list scan result: expected tuple".to_string(),
                     ));
                 }
-                new_cursor = from_redis_value::<String>(value.first().ok_or_else(|| MediatorError::DatabaseError(17, "NA".into(), "Failed to parse admin list scan result: missing cursor".into()))?.clone())
-                    .map_err(|err| {
-                        MediatorError::DatabaseError(
-                            17,
-                            "NA".into(),
-                            format!("Failed to parse admin list cursor. Reason: {err}"),
-                        )
-                    })?
-                    .parse::<u32>()
-                    .map_err(|err| MediatorError::DatabaseError(17, "NA".into(), format!("Failed to parse admin list cursor: not an integer. Reason: {err}")))?;
+                new_cursor = from_redis_value::<String>(
+                    value
+                        .first()
+                        .ok_or_else(|| {
+                            MediatorError::DatabaseError(
+                                17,
+                                "NA".into(),
+                                "Failed to parse admin list scan result: missing cursor".into(),
+                            )
+                        })?
+                        .clone(),
+                )
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list cursor. Reason: {err}"),
+                    )
+                })?
+                .parse::<u32>()
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        17,
+                        "NA".into(),
+                        format!("Failed to parse admin list cursor: not an integer. Reason: {err}"),
+                    )
+                })?;
 
-                admins = from_redis_value(value.last().ok_or_else(|| MediatorError::DatabaseError(17, "NA".into(), "Failed to parse admin list scan result: missing data".into()))?.clone()).map_err(|err| {
+                admins = from_redis_value(
+                    value
+                        .last()
+                        .ok_or_else(|| {
+                            MediatorError::DatabaseError(
+                                17,
+                                "NA".into(),
+                                "Failed to parse admin list scan result: missing data".into(),
+                            )
+                        })?
+                        .clone(),
+                )
+                .map_err(|err| {
                     MediatorError::DatabaseError(
                         17,
                         "NA".to_string(),

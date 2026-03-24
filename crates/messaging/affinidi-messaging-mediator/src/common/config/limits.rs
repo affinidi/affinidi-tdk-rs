@@ -96,18 +96,30 @@ pub(crate) struct LimitsConfigRaw {
     pub did_rate_limit_burst: String,
 }
 
-fn default_rate_limit_per_ip() -> String { "100".to_string() }
-fn default_rate_limit_burst() -> String { "50".to_string() }
-fn default_max_websocket_connections() -> String { "10000".to_string() }
-fn default_did_rate_limit_per_second() -> String { "0".to_string() }
-fn default_did_rate_limit_burst() -> String { "10".to_string() }
+fn default_rate_limit_per_ip() -> String {
+    "100".to_string()
+}
+fn default_rate_limit_burst() -> String {
+    "50".to_string()
+}
+fn default_max_websocket_connections() -> String {
+    "10000".to_string()
+}
+fn default_did_rate_limit_per_second() -> String {
+    "0".to_string()
+}
+fn default_did_rate_limit_burst() -> String {
+    "10".to_string()
+}
 
 impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
     type Error = MediatorError;
 
     fn try_from(raw: LimitsConfigRaw) -> Result<Self, Self::Error> {
         let warn_default = |field: &str, default: &str| {
-            eprintln!("WARN: Could not parse limits.{field} config value, using default: {default}");
+            eprintln!(
+                "WARN: Could not parse limits.{field} config value, using default: {default}"
+            );
         };
 
         Ok(LimitsConfig {
@@ -158,14 +170,18 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
                 warn_default("queued_send_messages_hard", "1000");
                 1_000
             }),
-            queued_receive_messages_soft: raw.queued_receive_messages_soft.parse().unwrap_or_else(|_| {
-                warn_default("queued_receive_messages_soft", "200");
-                200
-            }),
-            queued_receive_messages_hard: raw.queued_receive_messages_hard.parse().unwrap_or_else(|_| {
-                warn_default("queued_receive_messages_hard", "1000");
-                1_000
-            }),
+            queued_receive_messages_soft: raw.queued_receive_messages_soft.parse().unwrap_or_else(
+                |_| {
+                    warn_default("queued_receive_messages_soft", "200");
+                    200
+                },
+            ),
+            queued_receive_messages_hard: raw.queued_receive_messages_hard.parse().unwrap_or_else(
+                |_| {
+                    warn_default("queued_receive_messages_hard", "1000");
+                    1_000
+                },
+            ),
             to_keys_per_recipient: raw.to_keys_per_recipient.parse().unwrap_or_else(|_| {
                 warn_default("to_keys_per_recipient", "100");
                 100

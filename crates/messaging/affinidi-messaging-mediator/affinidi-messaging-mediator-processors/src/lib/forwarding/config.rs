@@ -37,16 +37,36 @@ pub struct ForwardingProcessorConfig {
     pub max_endpoints: usize,
 }
 
-fn default_300() -> u64 { 300 }
-fn default_1() -> u64 { 1 }
-fn default_60() -> u64 { 60 }
-fn default_50() -> usize { 50 }
-fn default_1000_usize() -> usize { 1000 }
-fn default_5() -> u32 { 5 }
-fn default_1000() -> u64 { 1000 }
-fn default_60000() -> u64 { 60000 }
-fn default_forwarding_group() -> String { "forwarding".to_string() }
-fn default_true() -> bool { true }
+fn default_300() -> u64 {
+    300
+}
+fn default_1() -> u64 {
+    1
+}
+fn default_60() -> u64 {
+    60
+}
+fn default_50() -> usize {
+    50
+}
+fn default_1000_usize() -> usize {
+    1000
+}
+fn default_5() -> u32 {
+    5
+}
+fn default_1000() -> u64 {
+    1000
+}
+fn default_60000() -> u64 {
+    60000
+}
+fn default_forwarding_group() -> String {
+    "forwarding".to_string()
+}
+fn default_true() -> bool {
+    true
+}
 
 impl Default for ForwardingProcessorConfig {
     fn default() -> Self {
@@ -91,14 +111,30 @@ pub struct ForwardingProcessorConfigRaw {
     pub max_endpoints: String,
 }
 
-fn default_300_str() -> String { "300".to_string() }
-fn default_1_str() -> String { "1".to_string() }
-fn default_60_str() -> String { "60".to_string() }
-fn default_50_str() -> String { "50".to_string() }
-fn default_5_str() -> String { "5".to_string() }
-fn default_1000_str() -> String { "1000".to_string() }
-fn default_60000_str() -> String { "60000".to_string() }
-fn default_true_str() -> String { "true".to_string() }
+fn default_300_str() -> String {
+    "300".to_string()
+}
+fn default_1_str() -> String {
+    "1".to_string()
+}
+fn default_60_str() -> String {
+    "60".to_string()
+}
+fn default_50_str() -> String {
+    "50".to_string()
+}
+fn default_5_str() -> String {
+    "5".to_string()
+}
+fn default_1000_str() -> String {
+    "1000".to_string()
+}
+fn default_60000_str() -> String {
+    "60000".to_string()
+}
+fn default_true_str() -> String {
+    "true".to_string()
+}
 
 impl std::convert::TryFrom<ForwardingProcessorConfigRaw> for ForwardingProcessorConfig {
     type Error = ProcessorError;

@@ -117,14 +117,16 @@ pub fn unpack(
     // 3. Extract ciphertext length and ciphertext
     let ct_len_start = enc_start + 32;
     if ct_len_start + 4 > wire.len() {
-        return Err(TspError::InvalidMessage("ciphertext length truncated".into()));
+        return Err(TspError::InvalidMessage(
+            "ciphertext length truncated".into(),
+        ));
     }
     let ct_len =
         u32::from_be_bytes(wire[ct_len_start..ct_len_start + 4].try_into().unwrap()) as usize;
     if ct_len > MAX_MESSAGE_SIZE {
-        return Err(TspError::InvalidMessage(
-            format!("ciphertext length {ct_len} exceeds maximum allowed size of {MAX_MESSAGE_SIZE} bytes"),
-        ));
+        return Err(TspError::InvalidMessage(format!(
+            "ciphertext length {ct_len} exceeds maximum allowed size of {MAX_MESSAGE_SIZE} bytes"
+        )));
     }
     let ct_start = ct_len_start + 4;
     if ct_start + ct_len > wire.len() {
@@ -253,13 +255,15 @@ mod tests {
         let mid = tampered.len() / 2;
         tampered[mid] ^= 0xFF;
 
-        assert!(unpack(
-            &tampered,
-            &keys.receiver_enc_sk,
-            &keys.sender_enc_pk,
-            &keys.sender_sign_pk,
-        )
-        .is_err());
+        assert!(
+            unpack(
+                &tampered,
+                &keys.receiver_enc_sk,
+                &keys.sender_enc_pk,
+                &keys.sender_sign_pk,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -278,13 +282,15 @@ mod tests {
         )
         .unwrap();
 
-        assert!(unpack(
-            &packed.bytes,
-            &wrong_sk.to_bytes(),
-            &keys.sender_enc_pk,
-            &keys.sender_sign_pk,
-        )
-        .is_err());
+        assert!(
+            unpack(
+                &packed.bytes,
+                &wrong_sk.to_bytes(),
+                &keys.sender_enc_pk,
+                &keys.sender_sign_pk,
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -91,8 +91,8 @@ impl ForwardingProcessor {
             .build()
             .expect("Failed to create HTTP client");
 
-        let max_endpoints = NonZeroUsize::new(config.max_endpoints)
-            .unwrap_or(NonZeroUsize::new(1000).unwrap());
+        let max_endpoints =
+            NonZeroUsize::new(config.max_endpoints).unwrap_or(NonZeroUsize::new(1000).unwrap());
 
         Self {
             config,
@@ -143,12 +143,15 @@ impl ForwardingProcessor {
         }
     }
 
-    async fn process_endpoint_batch(&mut self, endpoint_url: &str, messages: Vec<ForwardQueueEntry>) {
+    async fn process_endpoint_batch(
+        &mut self,
+        endpoint_url: &str,
+        messages: Vec<ForwardQueueEntry>,
+    ) {
         let now_secs = crate::unix_epoch_now().as_secs();
 
-        let (active, expired): (Vec<_>, Vec<_>) = messages
-            .into_iter()
-            .partition(|m| m.expires_at > now_secs);
+        let (active, expired): (Vec<_>, Vec<_>) =
+            messages.into_iter().partition(|m| m.expires_at > now_secs);
 
         // ACK and delete expired messages
         if !expired.is_empty() {
@@ -183,11 +186,14 @@ impl ForwardingProcessor {
 
         // Update rate tracker (get_or_insert into LRU cache)
         if self.endpoints.get(endpoint_url).is_none() {
-            self.endpoints.put(endpoint_url.to_string(), EndpointState {
-                rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
-                last_activity: Instant::now(),
-                consecutive_failures: 0,
-            });
+            self.endpoints.put(
+                endpoint_url.to_string(),
+                EndpointState {
+                    rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
+                    last_activity: Instant::now(),
+                    consecutive_failures: 0,
+                },
+            );
         }
         let state = self.endpoints.get_mut(endpoint_url).expect("just inserted");
         for _ in 0..ready.len() {
@@ -416,7 +422,11 @@ mod tests {
     // --- calculate_backoff tests ---
 
     /// Replicates the backoff formula to test without needing a full ForwardingProcessor.
-    fn compute_backoff(initial_backoff_ms: u64, max_backoff_ms: u64, consecutive_failures: u32) -> Duration {
+    fn compute_backoff(
+        initial_backoff_ms: u64,
+        max_backoff_ms: u64,
+        consecutive_failures: u32,
+    ) -> Duration {
         let base = initial_backoff_ms;
         let max = max_backoff_ms;
         let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));

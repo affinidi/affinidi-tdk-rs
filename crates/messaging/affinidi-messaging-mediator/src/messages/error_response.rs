@@ -42,7 +42,9 @@ pub(crate) fn generate_error_response(
     .created_time(now)
     .expires_time(now + 300)
     .finalize();
-    error_msg.extra.insert("ack".into(), json!([thid.to_owned()]));
+    error_msg
+        .extra
+        .insert("ack".into(), json!([thid.to_owned()]));
 
     Ok(ProcessMessageResponse {
         store_message,

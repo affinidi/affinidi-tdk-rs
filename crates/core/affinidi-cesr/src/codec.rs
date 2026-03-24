@@ -3,8 +3,7 @@
 use crate::error::CesrError;
 
 /// URL-safe Base64 alphabet (RFC 4648 §5) without padding.
-const B64_CHARS: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// Decode table: ASCII byte -> 6-bit value (255 = invalid).
 const B64_DECODE: [u8; 128] = {

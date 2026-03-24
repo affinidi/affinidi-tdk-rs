@@ -4,6 +4,7 @@
  * NOTE: All messages generated from this protocol are ephemeral and are not stored in the database
  * They are fire and forget messages
  */
+use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::{
@@ -22,7 +23,6 @@ use itertools::Itertools;
 use redis::{Value, from_redis_value};
 use serde_json::json;
 use sha256::digest;
-use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
 
@@ -467,7 +467,8 @@ pub(crate) async fn messages_received(
                     debug!("Got message: {:?}", msg);
                     debug!("Deleting message: {}", msg_id);
                     match state
-                        .database.handler
+                        .database
+                        .handler
                         .delete_message(
                             Some(&session.session_id),
                             &session.did_hash,
@@ -490,8 +491,7 @@ pub(crate) async fn messages_received(
             }
         }
 
-        generate_status_reply(state, session, &session.did_hash, &thid, false, None)
-                .await
+        generate_status_reply(state, session, &session.did_hash, &thid, false, None).await
     }
     .instrument(_span)
     .await

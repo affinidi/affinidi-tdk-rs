@@ -50,8 +50,7 @@ pub fn unpack(
             DIDCommError::InvalidMessage("recipient_private required for JWE".into())
         })?;
 
-        let decrypted =
-            crate::jwe::decrypt::decrypt(input, kid, private, sender_public)?;
+        let decrypted = crate::jwe::decrypt::decrypt(input, kid, private, sender_public)?;
 
         let message = Message::from_json(&decrypted.plaintext)?;
 
@@ -95,8 +94,7 @@ mod tests {
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
 
-        let msg = Message::new("test", serde_json::json!({"data": 1}))
-            .from("did:example:alice");
+        let msg = Message::new("test", serde_json::json!({"data": 1})).from("did:example:alice");
 
         let packed = pack::pack_encrypted_authcrypt(
             &msg,

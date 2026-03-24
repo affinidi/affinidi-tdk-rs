@@ -61,8 +61,7 @@ impl Counter {
             (code.to_string(), 2usize)
         };
 
-        let sizage =
-            counter_sizage(&code).ok_or_else(|| CesrError::UnknownCode(code.clone()))?;
+        let sizage = counter_sizage(&code).ok_or_else(|| CesrError::UnknownCode(code.clone()))?;
 
         if qb64.len() < sizage.fs {
             return Err(CesrError::UnexpectedEnd);

@@ -169,14 +169,22 @@ impl SecurityConfigRaw {
                 .local_direct_delivery_allowed
                 .parse()
                 .unwrap_or_else(|_| {
-                    warn_default("local_direct_delivery_allowed", &self.local_direct_delivery_allowed, "false");
+                    warn_default(
+                        "local_direct_delivery_allowed",
+                        &self.local_direct_delivery_allowed,
+                        "false",
+                    );
                     false
                 }),
             local_direct_delivery_allow_anon: self
                 .local_direct_delivery_allow_anon
                 .parse()
                 .unwrap_or_else(|_| {
-                    warn_default("local_direct_delivery_allow_anon", &self.local_direct_delivery_allow_anon, "false");
+                    warn_default(
+                        "local_direct_delivery_allow_anon",
+                        &self.local_direct_delivery_allow_anon,
+                        "false",
+                    );
                     false
                 }),
             use_ssl: self.use_ssl.parse().unwrap_or_else(|_| {
@@ -197,15 +205,27 @@ impl SecurityConfigRaw {
                 .block_anonymous_outer_envelope
                 .parse()
                 .unwrap_or_else(|_| {
-                    warn_default("block_anonymous_outer_envelope", &self.block_anonymous_outer_envelope, "true");
+                    warn_default(
+                        "block_anonymous_outer_envelope",
+                        &self.block_anonymous_outer_envelope,
+                        "true",
+                    );
                     true
                 }),
             force_session_did_match: self.force_session_did_match.parse().unwrap_or_else(|_| {
-                warn_default("force_session_did_match", &self.force_session_did_match, "true");
+                warn_default(
+                    "force_session_did_match",
+                    &self.force_session_did_match,
+                    "true",
+                );
                 true
             }),
             block_remote_admin_msgs: self.block_remote_admin_msgs.parse().unwrap_or_else(|_| {
-                warn_default("block_remote_admin_msgs", &self.block_remote_admin_msgs, "true");
+                warn_default(
+                    "block_remote_admin_msgs",
+                    &self.block_remote_admin_msgs,
+                    "true",
+                );
                 true
             }),
             admin_messages_expiry: self.admin_messages_expiry.parse().unwrap_or_else(|_| {

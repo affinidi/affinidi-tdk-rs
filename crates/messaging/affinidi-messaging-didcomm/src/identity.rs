@@ -65,9 +65,8 @@ impl PrivateIdentity {
 
     /// Get the Ed25519 verifying key bytes (if available).
     pub fn verifying_key(&self) -> Option<[u8; 32]> {
-        self.signing_private.map(|sk| {
-            crate::crypto::signing::public_key_from_private(&sk)
-        })
+        self.signing_private
+            .map(|sk| crate::crypto::signing::public_key_from_private(&sk))
     }
 
     /// Create a resolved identity (public-only) from this private identity.

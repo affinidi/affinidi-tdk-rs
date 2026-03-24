@@ -14,9 +14,13 @@
  * This needs to be refactored in the future when the services align on implementation
  */
 
-use affinidi_did_common::{Document, document::DocumentExt, verification_method::VerificationRelationship};
+use affinidi_did_common::{
+    Document, document::DocumentExt, verification_method::VerificationRelationship,
+};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_messaging_didcomm::crypto::key_agreement::{
+    Curve, PrivateKeyAgreement, PublicKeyAgreement,
+};
 use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
@@ -372,13 +376,13 @@ impl DIDAuthentication {
             );
 
             let auth_msg = _pack_encrypted_for_did(
-                    &auth_response,
-                    profile_did,
-                    endpoint_did,
-                    did_resolver,
-                    secrets_resolver,
-                )
-                .await?;
+                &auth_response,
+                profile_did,
+                endpoint_did,
+                did_resolver,
+                secrets_resolver,
+            )
+            .await?;
 
             debug!("Successfully packed auth message\n{:#?}", auth_msg);
 
@@ -696,28 +700,30 @@ where
             .map_err(|e| DIDAuthError::DIDComm(format!("invalid sender private key: {e}")))?;
 
     // 4. Pack with authcrypt
-    pack::pack_encrypted_authcrypt(msg, sender_kid, &sender_private, &[(recipient_kid, &recipient_pub)])
-        .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
+    pack::pack_encrypted_authcrypt(
+        msg,
+        sender_kid,
+        &sender_private,
+        &[(recipient_kid, &recipient_pub)],
+    )
+    .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
 }
 
 /// Extract a PublicKeyAgreement from a DID Document's verification method.
-fn _resolve_public_key_agreement(
-    doc: &Document,
-    kid: &str,
-) -> Result<PublicKeyAgreement> {
+fn _resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyAgreement> {
     // Find the verification method — check embedded in key_agreement first, then top-level
     let vm = doc
         .key_agreement
         .iter()
         .filter_map(|ka| match ka {
-            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => Some(vm.as_ref()),
+            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => {
+                Some(vm.as_ref())
+            }
             _ => None,
         })
         .next()
         .or_else(|| doc.get_verification_method(kid))
-        .ok_or_else(|| {
-            DIDAuthError::DIDComm(format!("verification method not found: {kid}"))
-        })?;
+        .ok_or_else(|| DIDAuthError::DIDComm(format!("verification method not found: {kid}")))?;
 
     // Try publicKeyJwk first
     if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {

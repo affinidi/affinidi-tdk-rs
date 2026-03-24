@@ -12,12 +12,12 @@ use std::time::{Duration, Instant};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 
+use affinidi_messaging_didcomm::DIDCommAgent;
 use affinidi_messaging_didcomm::identity::PrivateIdentity;
 use affinidi_messaging_didcomm::message::Message;
-use affinidi_messaging_didcomm::DIDCommAgent;
 
-use affinidi_tsp::vid::PrivateVid;
 use affinidi_tsp::TspAgent;
+use affinidi_tsp::vid::PrivateVid;
 use serde_json::json;
 
 /// Number of iterations per payload size.
@@ -61,13 +61,16 @@ impl SizeResult {
         let dc_pack_avg = self.didcomm_pack / self.iterations as u32;
         let dc_unpack_avg = self.didcomm_unpack / self.iterations as u32;
 
-        let pack_ratio =
-            self.didcomm_pack.as_nanos() as f64 / self.tsp_pack.as_nanos() as f64;
+        let pack_ratio = self.didcomm_pack.as_nanos() as f64 / self.tsp_pack.as_nanos() as f64;
         let unpack_ratio =
             self.didcomm_unpack.as_nanos() as f64 / self.tsp_unpack.as_nanos() as f64;
 
         let pack_winner = if pack_ratio >= 1.0 { "TSP" } else { "DIDComm" };
-        let unpack_winner = if unpack_ratio >= 1.0 { "TSP" } else { "DIDComm" };
+        let unpack_winner = if unpack_ratio >= 1.0 {
+            "TSP"
+        } else {
+            "DIDComm"
+        };
 
         let size_overhead_tsp = self.tsp_packed_size as f64 - self.payload_size as f64;
         let size_overhead_dc = self.didcomm_packed_size as f64 - self.payload_size as f64;
@@ -78,8 +81,14 @@ impl SizeResult {
         );
         println!("│");
         println!("│  {:>20} {:>14} {:>14}", "", "TSP", "DIDComm");
-        println!("│  {:>20} {:>14.2?} {:>14.2?}", "Pack avg:", tsp_pack_avg, dc_pack_avg);
-        println!("│  {:>20} {:>14.2?} {:>14.2?}", "Unpack avg:", tsp_unpack_avg, dc_unpack_avg);
+        println!(
+            "│  {:>20} {:>14.2?} {:>14.2?}",
+            "Pack avg:", tsp_pack_avg, dc_pack_avg
+        );
+        println!(
+            "│  {:>20} {:>14.2?} {:>14.2?}",
+            "Unpack avg:", tsp_unpack_avg, dc_unpack_avg
+        );
         println!(
             "│  {:>20} {:>13} {:>13}",
             "Packed size:",
@@ -95,11 +104,19 @@ impl SizeResult {
         println!("│");
         println!(
             "│  Pack winner:   {pack_winner} ({:.2}x)",
-            if pack_ratio >= 1.0 { pack_ratio } else { 1.0 / pack_ratio }
+            if pack_ratio >= 1.0 {
+                pack_ratio
+            } else {
+                1.0 / pack_ratio
+            }
         );
         println!(
             "│  Unpack winner: {unpack_winner} ({:.2}x)",
-            if unpack_ratio >= 1.0 { unpack_ratio } else { 1.0 / unpack_ratio }
+            if unpack_ratio >= 1.0 {
+                unpack_ratio
+            } else {
+                1.0 / unpack_ratio
+            }
         );
         println!("└────────────────────────────────────────────────────");
     }

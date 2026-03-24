@@ -40,8 +40,9 @@ pub fn decrypt(
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWE JSON: {e}")))?;
 
     // Decode protected header
-    let header_bytes = Base64UrlUnpadded::decode_vec(&jwe.protected)
-        .map_err(|e| DIDCommError::InvalidMessage(format!("invalid protected header base64: {e}")))?;
+    let header_bytes = Base64UrlUnpadded::decode_vec(&jwe.protected).map_err(|e| {
+        DIDCommError::InvalidMessage(format!("invalid protected header base64: {e}"))
+    })?;
     let header: ProtectedHeader = serde_json::from_slice(&header_bytes)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid protected header JSON: {e}")))?;
 
@@ -191,13 +192,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
-            &jwe_str,
-            "did:example:bob#key-1",
-            &recipient,
-            None,
-        )
-        .unwrap();
+        let result = decrypt(&jwe_str, "did:example:bob#key-1", &recipient, None).unwrap();
 
         assert_eq!(result.plaintext, b"Hello anoncrypt!");
         assert!(!result.authenticated);
@@ -237,13 +232,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = decrypt(
-            &jwe_str,
-            "did:example:bob#k256-key",
-            &recipient,
-            None,
-        )
-        .unwrap();
+        let result = decrypt(&jwe_str, "did:example:bob#k256-key", &recipient, None).unwrap();
 
         assert_eq!(result.plaintext, b"K-256 anoncrypt");
     }
@@ -262,12 +251,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(decrypt(
-            &jwe_str,
-            "did:example:bob#key-1",
-            &wrong,
-            Some(&sender.public_key()),
-        )
-        .is_err());
+        assert!(
+            decrypt(
+                &jwe_str,
+                "did:example:bob#key-1",
+                &wrong,
+                Some(&sender.public_key()),
+            )
+            .is_err()
+        );
     }
 }

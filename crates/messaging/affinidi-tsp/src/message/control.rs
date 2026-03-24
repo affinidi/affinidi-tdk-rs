@@ -124,9 +124,7 @@ impl ControlMessage {
     /// Decode a control message from bytes.
     pub fn decode(data: &[u8]) -> Result<Self, TspError> {
         if data.len() < 2 {
-            return Err(TspError::InvalidMessage(
-                "control message too short".into(),
-            ));
+            return Err(TspError::InvalidMessage("control message too short".into()));
         }
 
         let control_type = ControlType::from_byte(data[0])?;
@@ -142,9 +140,7 @@ impl ControlMessage {
             let len = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
             offset += 2;
             if data.len() < offset + len {
-                return Err(TspError::InvalidMessage(
-                    "thread_id data truncated".into(),
-                ));
+                return Err(TspError::InvalidMessage("thread_id data truncated".into()));
             }
             let tid = Some(data[offset..offset + len].to_vec());
             offset += len;
@@ -159,9 +155,7 @@ impl ControlMessage {
             offset += 1;
             if has_nonce {
                 if data.len() < offset + 16 {
-                    return Err(TspError::InvalidMessage(
-                        "nonce data truncated".into(),
-                    ));
+                    return Err(TspError::InvalidMessage("nonce data truncated".into()));
                 }
                 let mut n = [0u8; 16];
                 n.copy_from_slice(&data[offset..offset + 16]);
@@ -204,10 +198,7 @@ mod tests {
         let encoded = msg.encode();
         let decoded = ControlMessage::decode(&encoded).unwrap();
         assert_eq!(decoded, msg);
-        assert_eq!(
-            decoded.control_type,
-            ControlType::RelationshipFormingAccept
-        );
+        assert_eq!(decoded.control_type, ControlType::RelationshipFormingAccept);
         assert_eq!(decoded.thread_id.unwrap(), digest);
         assert!(decoded.nonce.is_some());
         assert_eq!(decoded.nonce.unwrap().len(), 16);

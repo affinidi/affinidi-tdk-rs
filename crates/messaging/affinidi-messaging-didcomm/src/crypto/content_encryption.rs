@@ -60,7 +60,8 @@ pub fn encrypt(
     // AES-256-CBC encrypt
     let enc_key_arr: [u8; 32] = enc_key.try_into().unwrap();
     let encryptor = Aes256CbcEnc::new(&enc_key_arr.into(), iv.into());
-    let ciphertext = encryptor.encrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&padded);
+    let ciphertext =
+        encryptor.encrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&padded);
 
     // HMAC-SHA-512 over: AAD || IV || ciphertext || AAD_len_bits (big-endian u64)
     let aad_len_bits = (aad.len() as u64) * 8;

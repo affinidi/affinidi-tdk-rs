@@ -29,14 +29,14 @@ use tracing::{Level, error, event, info, warn};
 pub struct TokenPayload {
     pub aud: Vec<String>, // Intended Audience
     pub client_id: String,
-    pub exp: u64,         // What does this JWT Expire
-    pub iat: u64,         // Issued at this time
-    pub iss: String,      // Who issued this JWT?
-    pub jti: String,      // JWT ID
-    pub nbf: u64,         // JWT is not valid before this time
+    pub exp: u64,    // What does this JWT Expire
+    pub iat: u64,    // Issued at this time
+    pub iss: String, // Who issued this JWT?
+    pub jti: String, // JWT ID
+    pub nbf: u64,    // JWT is not valid before this time
     /// OAuth2 scopes (reserved for future use)
     pub scp: Vec<String>,
-    pub sub: String,      // subject - who this JWT refers to
+    pub sub: String, // subject - who this JWT refers to
 }
 
 #[derive(Debug)]

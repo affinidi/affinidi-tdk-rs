@@ -195,25 +195,20 @@ impl Indexer {
     /// Get the raw signature size for a given indexer code.
     fn raw_size_from_code(code: &str) -> Result<usize, CesrError> {
         match code {
-            "A" | "B" | "C" | "D" | "E" | "F" => Ok(64),       // 64-byte signatures
+            "A" | "B" | "C" | "D" | "E" | "F" => Ok(64), // 64-byte signatures
             "2A" | "2B" | "2C" | "2D" | "2E" | "2F" => Ok(64), // big variants, same sig size
-            "3A" | "3B" => Ok(114),                              // Ed448 signatures
+            "3A" | "3B" => Ok(114),                      // Ed448 signatures
             _ => Err(CesrError::UnknownCode(code.to_string())),
         }
     }
 
     /// Extract raw bytes from qb64.
-    fn extract_raw(
-        qb64: &str,
-        sizage: &crate::tables::Sizage,
-    ) -> Result<Vec<u8>, CesrError> {
+    fn extract_raw(qb64: &str, sizage: &crate::tables::Sizage) -> Result<Vec<u8>, CesrError> {
         let full = &qb64[..sizage.fs];
         let all_bytes = codec::b64_decode(full)?;
 
         // Use the known raw sizes for each code
-        let raw_size = Self::raw_size_from_code(
-            &qb64[..sizage.hs],
-        )?;
+        let raw_size = Self::raw_size_from_code(&qb64[..sizage.hs])?;
 
         if all_bytes.len() < raw_size {
             return Err(CesrError::InvalidRawSize {

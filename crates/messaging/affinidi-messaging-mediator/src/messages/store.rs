@@ -1,18 +1,16 @@
+use crate::SharedData;
 use crate::common::time::unix_timestamp_secs;
 use crate::database::Database;
 use crate::database::session::Session;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
-use crate::SharedData;
 #[cfg(feature = "didcomm")]
 use crate::messages::PackOptions;
+use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::PackEncryptedMetadata;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
-use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use affinidi_messaging_sdk::messages::sending::{InboundMessageList, InboundMessageResponse};
 use http::StatusCode;
 use sha256::digest;
@@ -111,9 +109,16 @@ pub(crate) async fn store_message(
                             ProblemReportScope::Protocol,
                             "message.recipients.too_many",
                             "Message has too many recipients ({1}). Max: {2}",
-                            vec![to_dids.len().to_string(), state.config.limits.to_recipients.to_string()],
+                            vec![
+                                to_dids.len().to_string(),
+                                state.config.limits.to_recipients.to_string(),
+                            ],
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Message has too many recipients ({}). Max: {}", to_dids.len(), state.config.limits.to_recipients),
+                            format!(
+                                "Message has too many recipients ({}). Max: {}",
+                                to_dids.len(),
+                                state.config.limits.to_recipients
+                            ),
                         ));
                     }
 
@@ -126,8 +131,7 @@ pub(crate) async fn store_message(
                             expires_at
                         }
                     } else {
-                        unix_timestamp_secs()
-                            + state.config.limits.message_expiry_seconds
+                        unix_timestamp_secs() + state.config.limits.message_expiry_seconds
                     };
 
                     for recipient in to_dids {
@@ -151,7 +155,13 @@ pub(crate) async fn store_message(
                             .await?;
 
                         match _store_message(
-                            state, session, response, &packed,  &digest(recipient), Some(&state.config.mediator_did_hash), expires_at,
+                            state,
+                            session,
+                            response,
+                            &packed,
+                            &digest(recipient),
+                            Some(&state.config.mediator_did_hash),
+                            expires_at,
                         )
                         .await
                         {
@@ -175,7 +185,17 @@ pub(crate) async fn store_message(
                 }
                 WrapperType::Envelope(to_did, message, expiry) => {
                     // Message is already packed, likely a direct delivery from a client
-                    match _store_message(state, session, response, message,  &digest(to_did), Some(&session.did_hash), *expiry).await {
+                    match _store_message(
+                        state,
+                        session,
+                        response,
+                        message,
+                        &digest(to_did),
+                        Some(&session.did_hash),
+                        *expiry,
+                    )
+                    .await
+                    {
                         Ok(msg_id) => {
                             debug!(
                                 "message id({}) stored successfully recipient({})",
@@ -322,8 +342,7 @@ pub(crate) async fn store_forwarded_message(
                 expires_at
             }
         } else {
-            unix_timestamp_secs()
-                + state.config.limits.message_expiry_seconds
+            unix_timestamp_secs() + state.config.limits.message_expiry_seconds
         };
 
         match state

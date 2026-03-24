@@ -1,9 +1,7 @@
 use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;

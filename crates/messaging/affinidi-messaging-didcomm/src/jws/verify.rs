@@ -19,10 +19,7 @@ pub struct VerifiedJws {
 /// # Arguments
 /// * `jws_str` - The JWS JSON string
 /// * `public_key` - The signer's Ed25519 public key (32 bytes)
-pub fn verify_ed25519(
-    jws_str: &str,
-    public_key: &[u8; 32],
-) -> Result<VerifiedJws, DIDCommError> {
+pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJws, DIDCommError> {
     let jws: Jws = serde_json::from_str(jws_str)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid JWS JSON: {e}")))?;
 
@@ -83,7 +80,10 @@ mod tests {
 
         let result = verify_ed25519(&jws_str, &pk).unwrap();
         assert_eq!(result.payload, payload);
-        assert_eq!(result.signer_kid.as_deref(), Some("did:example:alice#key-1"));
+        assert_eq!(
+            result.signer_kid.as_deref(),
+            Some("did:example:alice#key-1")
+        );
     }
 
     #[test]

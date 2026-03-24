@@ -125,9 +125,9 @@ impl PublicKeyAgreement {
                     .ok_or_else(|| DIDCommError::KeyAgreement("missing x in X25519 JWK".into()))?;
                 let bytes = Base64UrlUnpadded::decode_vec(x)
                     .map_err(|e| DIDCommError::KeyAgreement(format!("invalid x: {e}")))?;
-                let arr: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|_| DIDCommError::KeyAgreement("X25519 key must be 32 bytes".into()))?;
+                let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+                    DIDCommError::KeyAgreement("X25519 key must be 32 bytes".into())
+                })?;
                 Ok(PublicKeyAgreement::X25519(arr))
             }
             "P-256" => {
@@ -209,7 +209,9 @@ impl PrivateKeyAgreement {
                 let arr: [u8; 32] = bytes.try_into().map_err(|_| {
                     DIDCommError::KeyAgreement("X25519 private key must be 32 bytes".into())
                 })?;
-                Ok(PrivateKeyAgreement::X25519(x25519_dalek::StaticSecret::from(arr)))
+                Ok(PrivateKeyAgreement::X25519(
+                    x25519_dalek::StaticSecret::from(arr),
+                ))
             }
             Curve::P256 => {
                 let sk = p256::SecretKey::from_slice(bytes).map_err(|e| {
@@ -243,12 +245,8 @@ impl PrivateKeyAgreement {
             PrivateKeyAgreement::X25519(sk) => {
                 PublicKeyAgreement::X25519(x25519_dalek::PublicKey::from(sk).to_bytes())
             }
-            PrivateKeyAgreement::P256(sk) => {
-                PublicKeyAgreement::P256(sk.public_key())
-            }
-            PrivateKeyAgreement::K256(sk) => {
-                PublicKeyAgreement::K256(sk.public_key())
-            }
+            PrivateKeyAgreement::P256(sk) => PublicKeyAgreement::P256(sk.public_key()),
+            PrivateKeyAgreement::K256(sk) => PublicKeyAgreement::K256(sk.public_key()),
         }
     }
 

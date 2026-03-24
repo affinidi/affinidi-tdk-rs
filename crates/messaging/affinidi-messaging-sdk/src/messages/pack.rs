@@ -60,8 +60,7 @@ impl SharedState {
                     "recipient has no key agreement key".into(),
                 )
             })?;
-            let recipient_pub =
-                resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
+            let recipient_pub = resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
 
             if let Some(sender_did) = from {
                 // Authcrypt: resolve sender, get private key, encrypt
@@ -128,16 +127,14 @@ impl SharedState {
                 Ok((packed, metadata))
             } else {
                 // Anoncrypt
-                let packed = pack::pack_encrypted_anoncrypt(
-                    message,
-                    &[(recipient_kid, &recipient_pub)],
-                )
-                .map_err(|e| {
-                    ATMError::DidcommError(
-                        "SDK".to_string(),
-                        format!("pack_encrypted() anoncrypt failed. Reason: {e}"),
-                    )
-                })?;
+                let packed =
+                    pack::pack_encrypted_anoncrypt(message, &[(recipient_kid, &recipient_pub)])
+                        .map_err(|e| {
+                            ATMError::DidcommError(
+                                "SDK".to_string(),
+                                format!("pack_encrypted() anoncrypt failed. Reason: {e}"),
+                            )
+                        })?;
 
                 let metadata = PackEncryptedMetadata {
                     from_kid: None,
@@ -171,10 +168,7 @@ impl SharedState {
 }
 
 /// Extract a PublicKeyAgreement from a DID Document's verification method.
-fn resolve_public_key_agreement(
-    doc: &Document,
-    kid: &str,
-) -> Result<PublicKeyAgreement, ATMError> {
+fn resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyAgreement, ATMError> {
     // Find the verification method
     let vm = doc
         .key_agreement
@@ -205,8 +199,8 @@ fn resolve_public_key_agreement(
     if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
         && let Some(multibase_str) = multibase_value.as_str()
     {
-        let (codec, key_bytes) =
-            affinidi_encoding::decode_multikey_with_codec(multibase_str).map_err(|e| {
+        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
+            .map_err(|e| {
                 ATMError::DidcommError("resolve_key".into(), format!("invalid multikey: {e}"))
             })?;
 

@@ -44,10 +44,7 @@ pub struct EnvelopeMetadata {
 impl MetaEnvelope {
     /// Parse a raw message string to extract envelope metadata.
     /// This replaces the old `MetaEnvelope::new(&str, &DIDCacheClient)`.
-    pub async fn new(
-        message: &str,
-        did_resolver: &DIDCacheClient,
-    ) -> Result<Self, String> {
+    pub async fn new(message: &str, did_resolver: &DIDCacheClient) -> Result<Self, String> {
         let sha256_hash = sha256::digest(message);
 
         let value: serde_json::Value = serde_json::from_str(message)
@@ -77,7 +74,9 @@ impl MetaEnvelope {
             // Check protected header for sender info (authcrypt)
             if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str()) {
                 if let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64) {
-                    if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&protected_bytes) {
+                    if let Ok(header) =
+                        serde_json::from_slice::<serde_json::Value>(&protected_bytes)
+                    {
                         // Check algorithm for authcrypt
                         if let Some(alg) = header.get("alg").and_then(|a| a.as_str()) {
                             if alg.contains("1PU") {
@@ -101,7 +100,9 @@ impl MetaEnvelope {
                 // Try apu (agreement party u-info) which sometimes contains the sender kid
                 if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str()) {
                     if let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64) {
-                        if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&protected_bytes) {
+                        if let Ok(header) =
+                            serde_json::from_slice::<serde_json::Value>(&protected_bytes)
+                        {
                             if let Some(apu) = header.get("apu").and_then(|a| a.as_str()) {
                                 if let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu) {
                                     if let Ok(apu_str) = String::from_utf8(apu_bytes) {
@@ -176,12 +177,19 @@ pub async fn unpack<S: SecretsResolver>(
 ) -> Result<(Message, UnpackMetadata), String> {
     let sha256_hash = sha256::digest(message);
 
-    let value: serde_json::Value = serde_json::from_str(message)
-        .map_err(|e| format!("Cannot parse message as JSON: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(message).map_err(|e| format!("Cannot parse message as JSON: {e}"))?;
 
     if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
         // JWE — encrypted message
-        unpack_jwe(message, &value, &sha256_hash, did_resolver, secrets_resolver).await
+        unpack_jwe(
+            message,
+            &value,
+            &sha256_hash,
+            did_resolver,
+            secrets_resolver,
+        )
+        .await
     } else if value.get("payload").is_some() && value.get("signatures").is_some() {
         // JWS — signed message
         unpack_jws(message, &sha256_hash)
@@ -234,8 +242,7 @@ async fn unpack_jwe<S: SecretsResolver>(
         }
     }
 
-    let recipient_private = recipient_private
-        .ok_or("No local secret matches any JWE recipient")?;
+    let recipient_private = recipient_private.ok_or("No local secret matches any JWE recipient")?;
 
     // Try to detect sender for authcrypt
     let sender_public = try_resolve_sender_public(msg_string, did_resolver).await;
@@ -264,22 +271,20 @@ async fn unpack_jwe<S: SecretsResolver>(
     Ok((msg, metadata))
 }
 
-fn unpack_jws(
-    msg_string: &str,
-    sha256_hash: &str,
-) -> Result<(Message, UnpackMetadata), String> {
-    let value: serde_json::Value = serde_json::from_str(msg_string)
-        .map_err(|e| format!("Cannot parse JWS: {e}"))?;
+fn unpack_jws(msg_string: &str, sha256_hash: &str) -> Result<(Message, UnpackMetadata), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(msg_string).map_err(|e| format!("Cannot parse JWS: {e}"))?;
 
     let payload_b64 = value["payload"]
         .as_str()
         .ok_or("Invalid JWS: missing payload")?;
 
-    let payload_bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64)
+    let payload_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(payload_b64)
         .map_err(|e| format!("Invalid JWS payload base64: {e}"))?;
 
-    let msg = Message::from_json(&payload_bytes)
-        .map_err(|e| format!("Cannot parse JWS payload: {e}"))?;
+    let msg =
+        Message::from_json(&payload_bytes).map_err(|e| format!("Cannot parse JWS payload: {e}"))?;
 
     let metadata = UnpackMetadata {
         non_repudiation: true,
@@ -335,7 +340,8 @@ async fn try_resolve_sender_public(
     if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
         && let Some(multibase_str) = multibase_value.as_str()
     {
-        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
+        let (codec, key_bytes) =
+            affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
         let curve = match codec {
             affinidi_encoding::X25519_PUB => Curve::X25519,
             affinidi_encoding::P256_PUB => Curve::P256,
@@ -372,7 +378,8 @@ fn resolve_public_key(
     if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
         && let Some(multibase_str) = multibase_value.as_str()
     {
-        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
+        let (codec, key_bytes) =
+            affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
         let curve = match codec {
             affinidi_encoding::X25519_PUB => Curve::X25519,
             affinidi_encoding::P256_PUB => Curve::P256,
@@ -395,10 +402,13 @@ pub async fn pack_encrypted<S: SecretsResolver>(
     secrets_resolver: &S,
 ) -> Result<(String, PackEncryptedMetadata), String> {
     // Resolve recipient's key agreement public key
-    let recipient_doc = did_resolver.resolve(to_did).await
+    let recipient_doc = did_resolver
+        .resolve(to_did)
+        .await
         .map_err(|e| format!("Failed to resolve recipient DID: {e}"))?;
     let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
-    let recipient_kid = recipient_ka_kids.first()
+    let recipient_kid = recipient_ka_kids
+        .first()
         .ok_or("Recipient has no key agreement key")?;
     let recipient_public = resolve_public_key(&recipient_doc.doc, recipient_kid)
         .ok_or("Failed to resolve recipient public key")?;
@@ -407,14 +417,19 @@ pub async fn pack_encrypted<S: SecretsResolver>(
 
     if let Some(from) = from_did {
         // Authcrypt: resolve sender's private key
-        let sender_doc = did_resolver.resolve(from).await
+        let sender_doc = did_resolver
+            .resolve(from)
+            .await
             .map_err(|e| format!("Failed to resolve sender DID: {e}"))?;
         let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
-        let sender_kid = sender_ka_kids.first()
+        let sender_kid = sender_ka_kids
+            .first()
             .ok_or("Sender has no key agreement key")?;
 
         // Find the sender's private key from secrets
-        let secret = secrets_resolver.get_secret(sender_kid).await
+        let secret = secrets_resolver
+            .get_secret(sender_kid)
+            .await
             .ok_or(format!("No secret found for sender kid: {sender_kid}"))?;
 
         let curve = match secret.get_key_type() {
@@ -427,13 +442,8 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         let sender_private = PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes())
             .map_err(|e| format!("Failed to load sender private key: {e}"))?;
 
-        let packed = pack_encrypted_authcrypt(
-            message,
-            sender_kid,
-            &sender_private,
-            &recipients,
-        )
-        .map_err(|e| format!("Failed to pack authcrypt: {e}"))?;
+        let packed = pack_encrypted_authcrypt(message, sender_kid, &sender_private, &recipients)
+            .map_err(|e| format!("Failed to pack authcrypt: {e}"))?;
 
         let metadata = PackEncryptedMetadata {
             from_kid: Some(sender_kid.to_string()),
@@ -444,11 +454,8 @@ pub async fn pack_encrypted<S: SecretsResolver>(
         Ok((packed, metadata))
     } else {
         // Anoncrypt: no sender key needed
-        let packed = pack_encrypted_anoncrypt(
-            message,
-            &recipients,
-        )
-        .map_err(|e| format!("Failed to pack anoncrypt: {e}"))?;
+        let packed = pack_encrypted_anoncrypt(message, &recipients)
+            .map_err(|e| format!("Failed to pack anoncrypt: {e}"))?;
 
         let metadata = PackEncryptedMetadata {
             to_kids: vec![recipient_kid.to_string()],

@@ -1,11 +1,11 @@
-pub mod security;
+pub mod helpers;
 pub mod limits;
 pub mod processors;
-pub mod helpers;
+pub mod security;
 
-pub use security::*;
 pub use limits::*;
 pub use processors::*;
+pub use security::*;
 
 use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::{
@@ -23,12 +23,7 @@ use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
 use serde::{Deserialize, Serialize};
 use sha256::digest;
-use std::{
-    collections::HashMap,
-    env,
-    fmt,
-    sync::Arc,
-};
+use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
@@ -372,13 +367,17 @@ pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, Mediator
         .with_env_filter(filter);
 
     println!("Switching to tracing subscriber for all logging...");
-    if config.log_json.parse().unwrap_or_else(|_: std::str::ParseBoolError| {
-        eprintln!(
-            "WARN: Could not parse log_json value '{}', using default: true",
-            config.log_json
-        );
-        true
-    }) {
+    if config
+        .log_json
+        .parse()
+        .unwrap_or_else(|_: std::str::ParseBoolError| {
+            eprintln!(
+                "WARN: Could not parse log_json value '{}', using default: true",
+                config.log_json
+            );
+            true
+        })
+    {
         let subscriber = subscriber
             .json()
             // Build the subscriber

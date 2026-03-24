@@ -40,9 +40,10 @@ pub struct ForwardQueueEntry {
 impl ForwardingProcessor {
     /// Ensure the consumer group exists for FORWARD_Q.
     pub(crate) async fn ensure_group(&self) -> Result<(), ProcessorError> {
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let result: Result<String, _> = deadpool_redis::redis::cmd("XGROUP")
             .arg("CREATE")
@@ -55,13 +56,19 @@ impl ForwardingProcessor {
 
         match result {
             Ok(_) => {
-                debug!("Created consumer group '{}' for FORWARD_Q", self.config.consumer_group);
+                debug!(
+                    "Created consumer group '{}' for FORWARD_Q",
+                    self.config.consumer_group
+                );
                 Ok(())
             }
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("BUSYGROUP") {
-                    debug!("Consumer group '{}' already exists", self.config.consumer_group);
+                    debug!(
+                        "Consumer group '{}' already exists",
+                        self.config.consumer_group
+                    );
                     Ok(())
                 } else {
                     Err(ProcessorError::ForwardingError(format!(
@@ -77,9 +84,10 @@ impl ForwardingProcessor {
         &self,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, ProcessorError> {
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
             deadpool_redis::redis::cmd("XREADGROUP")
@@ -124,18 +132,19 @@ impl ForwardingProcessor {
             return Ok(());
         }
 
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let mut cmd = deadpool_redis::redis::cmd("XACK");
         cmd.arg("FORWARD_Q").arg(&self.config.consumer_group);
         for id in stream_ids {
             cmd.arg(*id);
         }
-        cmd.exec_async(&mut conn).await.map_err(|err| {
-            ProcessorError::ForwardingError(format!("XACK error: {err}"))
-        })?;
+        cmd.exec_async(&mut conn)
+            .await
+            .map_err(|err| ProcessorError::ForwardingError(format!("XACK error: {err}")))?;
 
         Ok(())
     }
@@ -146,18 +155,19 @@ impl ForwardingProcessor {
             return Ok(());
         }
 
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let mut cmd = deadpool_redis::redis::cmd("XDEL");
         cmd.arg("FORWARD_Q");
         for id in stream_ids {
             cmd.arg(*id);
         }
-        cmd.exec_async(&mut conn).await.map_err(|err| {
-            ProcessorError::ForwardingError(format!("XDEL error: {err}"))
-        })?;
+        cmd.exec_async(&mut conn)
+            .await
+            .map_err(|err| ProcessorError::ForwardingError(format!("XDEL error: {err}")))?;
 
         Ok(())
     }
@@ -167,9 +177,10 @@ impl ForwardingProcessor {
         &self,
         min_idle_ms: u64,
     ) -> Result<Vec<ForwardQueueEntry>, ProcessorError> {
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let result: (String, Vec<(String, HashMap<String, String>)>, Vec<String>) =
             deadpool_redis::redis::cmd("XAUTOCLAIM")
@@ -204,9 +215,10 @@ impl ForwardingProcessor {
         &self,
         entry: &ForwardQueueEntry,
     ) -> Result<String, ProcessorError> {
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let stream_id: String = deadpool_redis::redis::cmd("XADD")
             .arg("FORWARD_Q")
@@ -235,9 +247,7 @@ impl ForwardingProcessor {
             .arg(entry.hop_count.to_string())
             .query_async(&mut conn)
             .await
-            .map_err(|err| {
-                ProcessorError::ForwardingError(format!("XADD error: {err}"))
-            })?;
+            .map_err(|err| ProcessorError::ForwardingError(format!("XADD error: {err}")))?;
 
         debug!("Re-enqueued forward message: stream_id={}", stream_id);
         Ok(stream_id)
@@ -250,9 +260,10 @@ impl ForwardingProcessor {
         to_did_hash: &str,
         expires_at: u64,
     ) -> Result<(), ProcessorError> {
-        let mut conn = self.database.get_async_connection().await.map_err(|e| {
-            ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-        })?;
+        let mut conn =
+            self.database.get_async_connection().await.map_err(|e| {
+                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
+            })?;
 
         let message_hash = sha256::digest(message.as_bytes());
 
@@ -285,10 +296,7 @@ fn parse_forward_entry(
 ) -> Result<ForwardQueueEntry, String> {
     Ok(ForwardQueueEntry {
         stream_id,
-        message: fields
-            .get("MESSAGE")
-            .ok_or("missing MESSAGE")?
-            .clone(),
+        message: fields.get("MESSAGE").ok_or("missing MESSAGE")?.clone(),
         to_did_hash: fields
             .get("TO_DID_HASH")
             .ok_or("missing TO_DID_HASH")?
@@ -297,14 +305,8 @@ fn parse_forward_entry(
             .get("FROM_DID_HASH")
             .ok_or("missing FROM_DID_HASH")?
             .clone(),
-        from_did: fields
-            .get("FROM_DID")
-            .unwrap_or(&String::new())
-            .clone(),
-        to_did: fields
-            .get("TO_DID")
-            .ok_or("missing TO_DID")?
-            .clone(),
+        from_did: fields.get("FROM_DID").unwrap_or(&String::new()).clone(),
+        to_did: fields.get("TO_DID").ok_or("missing TO_DID")?.clone(),
         endpoint_url: fields
             .get("ENDPOINT_URL")
             .ok_or("missing ENDPOINT_URL")?

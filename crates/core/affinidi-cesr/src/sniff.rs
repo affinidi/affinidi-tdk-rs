@@ -55,10 +55,7 @@ pub fn has_version_string(data: &[u8]) -> bool {
 
     // Check for known protocol prefixes
     let prefix = &data[..4];
-    matches!(
-        prefix,
-        b"KERI" | b"ACDC" | b"SAID"
-    )
+    matches!(prefix, b"KERI" | b"ACDC" | b"SAID")
 }
 
 /// Extract the serialization size from a KERI version string.
@@ -74,8 +71,9 @@ pub fn version_string_size(data: &[u8]) -> Result<usize, CesrError> {
     let size_str = std::str::from_utf8(&data[10..16])
         .map_err(|_| CesrError::Conversion("invalid version string".into()))?;
 
-    usize::from_str_radix(size_str, 16)
-        .map_err(|_| CesrError::Conversion(format!("invalid hex size in version string: {size_str}")))
+    usize::from_str_radix(size_str, 16).map_err(|_| {
+        CesrError::Conversion(format!("invalid hex size in version string: {size_str}"))
+    })
 }
 
 #[cfg(test)]
@@ -84,7 +82,10 @@ mod tests {
 
     #[test]
     fn test_sniff_json() {
-        assert_eq!(sniff(b"{\"v\":\"KERI10JSON\"}").unwrap(), StreamFormat::Json);
+        assert_eq!(
+            sniff(b"{\"v\":\"KERI10JSON\"}").unwrap(),
+            StreamFormat::Json
+        );
     }
 
     #[test]

@@ -14,7 +14,8 @@ use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
 use tower::{Layer, Service};
 use tracing::warn;
 
-type KeyedLimiter = RateLimiter<std::net::IpAddr, DashMapStateStore<std::net::IpAddr>, DefaultClock>;
+type KeyedLimiter =
+    RateLimiter<std::net::IpAddr, DashMapStateStore<std::net::IpAddr>, DefaultClock>;
 
 /// Shared rate limiter state
 #[derive(Clone)]
@@ -29,8 +30,10 @@ impl RateLimiterState {
             return Self { limiter: None };
         }
 
-        let quota = Quota::per_second(NonZeroU32::new(per_second).expect("per_second checked non-zero above"))
-            .allow_burst(NonZeroU32::new(burst.max(1)).expect("burst.max(1) is always non-zero"));
+        let quota = Quota::per_second(
+            NonZeroU32::new(per_second).expect("per_second checked non-zero above"),
+        )
+        .allow_burst(NonZeroU32::new(burst.max(1)).expect("burst.max(1) is always non-zero"));
 
         Self {
             limiter: Some(Arc::new(RateLimiter::keyed(quota))),

@@ -1,11 +1,11 @@
+use crate::common::time::unix_timestamp_secs;
+use crate::database::session::SessionClaims;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
-use crate::database::session::SessionClaims;
 use http::StatusCode;
 use jsonwebtoken::{EncodingKey, Header, encode};
 use rand::{RngExt, distr::Alphanumeric};
 use sha256::digest;
-use crate::common::time::unix_timestamp_secs;
 
 /// creates a random string of up to length characters
 pub fn create_random_string(length: usize) -> String {

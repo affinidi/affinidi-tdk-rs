@@ -1,5 +1,5 @@
-use super::{AuthenticationChallenge, ChallengeBody};
 use super::helpers::create_random_string;
+use super::{AuthenticationChallenge, ChallengeBody};
 use crate::{
     SharedData,
     common::acl_checks::ACLCheck,

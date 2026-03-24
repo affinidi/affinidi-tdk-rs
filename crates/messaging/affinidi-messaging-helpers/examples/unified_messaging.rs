@@ -8,13 +8,13 @@
 
 use affinidi_messaging_core::{MessagingProtocol, RelationshipManager};
 
+use affinidi_messaging_didcomm::DIDCommAgent;
 use affinidi_messaging_didcomm::adapter::DIDCommAdapter;
 use affinidi_messaging_didcomm::identity::PrivateIdentity;
-use affinidi_messaging_didcomm::DIDCommAgent;
 
+use affinidi_tsp::TspAgent;
 use affinidi_tsp::adapter::TspAdapter;
 use affinidi_tsp::vid::PrivateVid;
-use affinidi_tsp::TspAgent;
 
 /// A protocol-agnostic messaging demo.
 ///
@@ -63,7 +63,11 @@ async fn demo_conversation(
     match alice.pack_anonymous(b"Anonymous test", bob_id).await {
         Ok(anon_packed) => {
             let anon_received = bob.unpack(&anon_packed).await.unwrap();
-            println!("  Anonymous message: {} ({} bytes)", !anon_received.verified, anon_packed.len());
+            println!(
+                "  Anonymous message: {} ({} bytes)",
+                !anon_received.verified,
+                anon_packed.len()
+            );
         }
         Err(e) => {
             println!("  Anonymous: not supported ({e})");

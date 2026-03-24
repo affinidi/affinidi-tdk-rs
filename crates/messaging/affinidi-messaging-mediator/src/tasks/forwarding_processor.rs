@@ -15,9 +15,11 @@
 //! - Connection failures: retry with exponential backoff
 //! - Rejection from remote mediator: send problem report to sender, drop message
 
-use crate::{common::config::ForwardingConfig, database::Database, database::forwarding::ForwardQueueEntry};
-use futures_util::{SinkExt, StreamExt};
 use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
+use crate::{
+    common::config::ForwardingConfig, database::Database, database::forwarding::ForwardQueueEntry,
+};
+use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -90,7 +92,9 @@ struct HttpClientPool {
 impl HttpClientPool {
     fn new(accept_invalid_certs: bool) -> Result<Self, String> {
         if accept_invalid_certs {
-            warn!("HTTP client configured to accept invalid TLS certificates — NOT safe for production");
+            warn!(
+                "HTTP client configured to accept invalid TLS certificates — NOT safe for production"
+            );
         }
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -158,8 +162,11 @@ impl ForwardingProcessor {
 
         info!(
             "ForwardingProcessor started: consumer={}, group={}, batch_size={}, ws_threshold={} msgs/10s, ws_idle_timeout={}s",
-            self.consumer_name, self.config.consumer_group, self.config.batch_size,
-            self.config.ws_threshold_msgs_per_10s, self.config.ws_idle_timeout_seconds
+            self.consumer_name,
+            self.config.consumer_group,
+            self.config.batch_size,
+            self.config.ws_threshold_msgs_per_10s,
+            self.config.ws_idle_timeout_seconds
         );
 
         // Spawn a background task to periodically reclaim stale messages
@@ -196,7 +203,11 @@ impl ForwardingProcessor {
                 let before = pool.len();
                 pool.retain(|endpoint, ws| {
                     if now.duration_since(ws.last_used) > idle_timeout {
-                        info!("Closing idle WebSocket to {} (idle {}s)", endpoint, now.duration_since(ws.last_used).as_secs());
+                        info!(
+                            "Closing idle WebSocket to {} (idle {}s)",
+                            endpoint,
+                            now.duration_since(ws.last_used).as_secs()
+                        );
                         // Dropping the writer closes the connection
                         false
                     } else {
@@ -205,7 +216,11 @@ impl ForwardingProcessor {
                 });
                 let closed = before - pool.len();
                 if closed > 0 {
-                    debug!("Closed {} idle WebSocket connections ({} remaining)", closed, pool.len());
+                    debug!(
+                        "Closed {} idle WebSocket connections ({} remaining)",
+                        closed,
+                        pool.len()
+                    );
                 }
             }
         });
@@ -263,9 +278,8 @@ impl ForwardingProcessor {
         // Check if any messages have expired
         let now_secs = unix_timestamp_secs();
 
-        let (active, expired): (Vec<_>, Vec<_>) = messages
-            .into_iter()
-            .partition(|m| m.expires_at > now_secs);
+        let (active, expired): (Vec<_>, Vec<_>) =
+            messages.into_iter().partition(|m| m.expires_at > now_secs);
 
         // ACK and delete expired messages
         if !expired.is_empty() {
@@ -327,13 +341,13 @@ impl ForwardingProcessor {
         // Update rate tracker and decide transport
         let use_websocket = {
             let mut endpoints = self.endpoints.write().await;
-            let state = endpoints.entry(endpoint_url.to_string()).or_insert_with(|| {
-                EndpointState {
+            let state = endpoints
+                .entry(endpoint_url.to_string())
+                .or_insert_with(|| EndpointState {
                     rate_tracker: EndpointRateTracker::new(self.config.rate_window_seconds),
                     last_activity: Instant::now(),
                     consecutive_failures: 0,
-                }
-            });
+                });
 
             for _ in 0..ready.len() {
                 state.rate_tracker.record_and_rate();
@@ -611,7 +625,10 @@ impl ForwardingProcessor {
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Pooled WebSocket send failed for {}: {}. Reconnecting...", endpoint_url, e);
+                    warn!(
+                        "Pooled WebSocket send failed for {}: {}. Reconnecting...",
+                        endpoint_url, e
+                    );
                     pool.remove(endpoint_url);
                 }
             }
@@ -759,7 +776,11 @@ mod tests {
 
     /// Helper to test calculate_backoff without needing a full ForwardingProcessor.
     /// Replicates the same formula: base * 2^min(failures, 10), capped at max.
-    fn compute_backoff(initial_backoff_ms: u64, max_backoff_ms: u64, consecutive_failures: u32) -> Duration {
+    fn compute_backoff(
+        initial_backoff_ms: u64,
+        max_backoff_ms: u64,
+        consecutive_failures: u32,
+    ) -> Duration {
         let base = initial_backoff_ms;
         let max = max_backoff_ms;
         let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));

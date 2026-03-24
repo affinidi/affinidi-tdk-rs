@@ -10,9 +10,7 @@
 */
 use crate::database::Database;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use ahash::AHashMap as HashMap;
 use http::StatusCode;
 use redis::aio::PubSub;

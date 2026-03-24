@@ -20,14 +20,18 @@ pub fn authcrypt(
         return Err(DIDCommError::InvalidMessage("no recipients".into()));
     }
     if sender_kid.is_empty() {
-        return Err(DIDCommError::InvalidMessage("sender KID must not be empty".into()));
+        return Err(DIDCommError::InvalidMessage(
+            "sender KID must not be empty".into(),
+        ));
     }
 
     let curve = recipients[0].1.curve();
     // Validate all recipients use the same curve
     for (kid, pk) in recipients {
         if kid.is_empty() {
-            return Err(DIDCommError::InvalidMessage("recipient KID must not be empty".into()));
+            return Err(DIDCommError::InvalidMessage(
+                "recipient KID must not be empty".into(),
+            ));
         }
         if pk.curve() != curve {
             return Err(DIDCommError::KeyAgreement(format!(
@@ -62,7 +66,8 @@ pub fn authcrypt(
     let protected_b64 = Base64UrlUnpadded::encode_string(protected_str.as_bytes());
 
     // Encrypt plaintext with CEK
-    let (ciphertext, tag) = content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
+    let (ciphertext, tag) =
+        content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
     // Wrap CEK for each recipient using ECDH-1PU (with tag-in-KDF)
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
@@ -92,8 +97,7 @@ pub fn authcrypt(
         tag: Base64UrlUnpadded::encode_string(&tag),
     };
 
-    serde_json::to_string(&jwe)
-        .map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
+    serde_json::to_string(&jwe).map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
 }
 
 /// Encrypt a plaintext payload for one or more recipients using anoncrypt (ECDH-ES).
@@ -111,7 +115,9 @@ pub fn anoncrypt(
     // Validate all recipients use the same curve and have non-empty KIDs
     for (kid, pk) in recipients {
         if kid.is_empty() {
-            return Err(DIDCommError::InvalidMessage("recipient KID must not be empty".into()));
+            return Err(DIDCommError::InvalidMessage(
+                "recipient KID must not be empty".into(),
+            ));
         }
         if pk.curve() != curve {
             return Err(DIDCommError::KeyAgreement(format!(
@@ -141,7 +147,8 @@ pub fn anoncrypt(
         .map_err(|e| DIDCommError::Serialization(format!("protected header: {e}")))?;
     let protected_b64 = Base64UrlUnpadded::encode_string(protected_str.as_bytes());
 
-    let (ciphertext, tag) = content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
+    let (ciphertext, tag) =
+        content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
     for (kid, recipient_pub) in recipients {
@@ -163,8 +170,7 @@ pub fn anoncrypt(
         tag: Base64UrlUnpadded::encode_string(&tag),
     };
 
-    serde_json::to_string(&jwe)
-        .map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
+    serde_json::to_string(&jwe).map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
 }
 
 /// Compute APV: SHA-256 of sorted, dot-joined recipient KIDs.

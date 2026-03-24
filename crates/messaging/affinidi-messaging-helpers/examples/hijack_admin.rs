@@ -207,9 +207,7 @@ async fn main() -> Result<(), ATMError> {
     );
 
     info!("Packing message anonymously - don't link it to Mallory");
-    let (msg, _) = atm
-        .pack_encrypted(&bad_msg, &mediator, None, None)
-        .await?;
+    let (msg, _) = atm.pack_encrypted(&bad_msg, &mediator, None, None).await?;
 
     info!("Sending bad admin message to mediator");
     http_post(&tdk, &atm_mallory, &msg, &admin_tokens).await;

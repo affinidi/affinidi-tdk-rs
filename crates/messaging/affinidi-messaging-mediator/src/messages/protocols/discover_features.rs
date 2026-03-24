@@ -1,3 +1,4 @@
+use crate::common::time::unix_timestamp_secs;
 use crate::{
     SharedData,
     database::session::Session,
@@ -5,11 +6,8 @@ use crate::{
 };
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{
-    ProblemReportScope, ProblemReportSorter,
-};
+use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
-use crate::common::time::unix_timestamp_secs;
 use tracing::{debug, info, span};
 
 /// Process a Discover Features queries message and generates a response

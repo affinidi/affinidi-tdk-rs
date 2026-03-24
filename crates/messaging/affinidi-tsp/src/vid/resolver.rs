@@ -198,8 +198,7 @@ mod tests {
             }
         }
 
-        let resolver = DelegatingVidResolver::new()
-            .with_did_resolver(Box::new(MockDidResolver));
+        let resolver = DelegatingVidResolver::new().with_did_resolver(Box::new(MockDidResolver));
 
         let resolved = resolver.resolve("did:key:z6Mk_test").unwrap();
         assert_eq!(resolved.signing_key, [5u8; 32]);

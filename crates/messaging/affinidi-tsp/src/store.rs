@@ -59,7 +59,10 @@ impl TspStore {
             .write()
             .unwrap()
             .insert(resolved.id.clone(), resolved);
-        self.private_vids.write().unwrap().insert(vid.id.clone(), vid);
+        self.private_vids
+            .write()
+            .unwrap()
+            .insert(vid.id.clone(), vid);
     }
 
     /// Get a private VID by identifier.
@@ -81,7 +84,10 @@ impl TspStore {
 
     /// Register a known remote VID.
     pub fn add_remote_vid(&self, vid: ResolvedVid) {
-        self.remote_vids.write().unwrap().insert(vid.id.clone(), vid);
+        self.remote_vids
+            .write()
+            .unwrap()
+            .insert(vid.id.clone(), vid);
     }
 
     /// Get a remote VID by identifier.
@@ -123,9 +129,7 @@ impl TspStore {
             .unwrap_or(RelationshipState::None);
 
         let new_state = current.transition(event).map_err(|e| {
-            TspError::Relationship(format!(
-                "{our_vid} → {their_vid} via {event:?}: {e}"
-            ))
+            TspError::Relationship(format!("{our_vid} → {their_vid} via {event:?}: {e}"))
         })?;
 
         if new_state == RelationshipState::None {

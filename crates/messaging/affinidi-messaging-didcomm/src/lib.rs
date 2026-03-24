@@ -29,8 +29,8 @@ pub mod adapter;
 
 // Re-export core types at crate root for convenience and legacy API compat.
 pub use crate::error::DIDCommError;
-pub use crate::message::{Attachment, AttachmentData, Message, MessageBuilder};
 pub use crate::message::unpack::UnpackResult;
+pub use crate::message::{Attachment, AttachmentData, Message, MessageBuilder};
 
 use crate::identity::{PrivateIdentity, ResolvedIdentity};
 use crate::message::forward;
@@ -187,11 +187,7 @@ impl DIDCommAgent {
     }
 
     /// Pack a signed message.
-    pub fn pack_signed(
-        &self,
-        msg: &Message,
-        signer_did: &str,
-    ) -> Result<String, DIDCommError> {
+    pub fn pack_signed(&self, msg: &Message, signer_did: &str) -> Result<String, DIDCommError> {
         let signer = self.store.get_local(signer_did)?;
         let kid = signer
             .signing_kid
@@ -335,15 +331,15 @@ mod tests {
 
         let msg = Message::new("test", serde_json::json!({"anon": true}));
 
-        let packed = alice_agent
-            .pack_anoncrypt(&msg, "did:example:bob")
-            .unwrap();
+        let packed = alice_agent.pack_anoncrypt(&msg, "did:example:bob").unwrap();
 
         let result = bob_agent.unpack(&packed, None).unwrap();
 
         match result {
             UnpackResult::Encrypted {
-                authenticated, message, ..
+                authenticated,
+                message,
+                ..
             } => {
                 assert!(!authenticated);
                 assert_eq!(message.body["anon"], true);
@@ -361,8 +357,8 @@ mod tests {
         bob_agent.add_peer(alice.to_resolved());
         alice_agent.add_identity(alice);
 
-        let msg = Message::new("test", serde_json::json!({"signed": true}))
-            .from("did:example:alice");
+        let msg =
+            Message::new("test", serde_json::json!({"signed": true})).from("did:example:alice");
 
         let packed = alice_agent.pack_signed(&msg, "did:example:alice").unwrap();
 

@@ -10,8 +10,7 @@ use crate::{
     database::Database,
     handlers::{application_routes, health_checker_handler, readiness_handler},
     tasks::{
-        forwarding_processor::ForwardingProcessor,
-        statistics::statistics,
+        forwarding_processor::ForwardingProcessor, statistics::statistics,
         websocket_streaming::StreamingTask,
     },
 };
@@ -104,9 +103,7 @@ pub async fn start() {
             return;
         }
     } else {
-        info!(
-            "No LUA scripts file specified in the configuration. Skipping loading LUA scripts."
-        );
+        info!("No LUA scripts file specified in the configuration. Skipping loading LUA scripts.");
         return;
     }
 
@@ -229,8 +226,7 @@ pub async fn start() {
     if config.limits.did_rate_limit_per_second > 0 {
         info!(
             "Per-DID rate limiting enabled: {} req/s per DID, burst: {}",
-            config.limits.did_rate_limit_per_second,
-            config.limits.did_rate_limit_burst,
+            config.limits.did_rate_limit_per_second, config.limits.did_rate_limit_burst,
         );
     }
 
@@ -259,8 +255,7 @@ pub async fn start() {
     if config.limits.rate_limit_per_ip > 0 {
         info!(
             "Rate limiting enabled: {} req/s per IP, burst: {}",
-            config.limits.rate_limit_per_ip,
-            config.limits.rate_limit_burst,
+            config.limits.rate_limit_per_ip, config.limits.rate_limit_burst,
         );
     }
 
@@ -335,14 +330,11 @@ pub async fn start() {
 
         info!("Mediator listening on {}", config.listen_address);
 
-        axum_server::bind_rustls(
-            addr,
-            ssl_config,
-        )
-        .handle(handle)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+        axum_server::bind_rustls(addr, ssl_config)
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
     } else {
         warn!("**** WARNING: Running without SSL/TLS ****");
 
@@ -365,10 +357,10 @@ pub async fn start() {
         info!("Mediator listening on {}", config.listen_address);
 
         axum_server::bind(addr)
-        .handle(handle)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .unwrap();
+            .handle(handle)
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+            .await
+            .unwrap();
     }
 
     info!("Mediator shutdown complete.");

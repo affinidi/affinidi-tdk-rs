@@ -4,8 +4,8 @@ use crate::state_store::actions::chat_list::ChatStatus;
 use crate::state_store::actions::invitation::create_new_profile;
 use crate::state_store::chat_message::{ChatEffect, ChatMessage, ChatMessageType};
 use affinidi_messaging_didcomm::message::{Attachment, Message};
-use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::ATM;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::protocols::message_pickup::{MessagePickup, MessagePickupStatusReply};
@@ -553,43 +553,42 @@ pub async fn handle_message(
             if let Some(attachments) = &message.attachments {
                 for attachment in attachments {
                     if let Some(b64) = &attachment.data.base64 {
-                            let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone())
-                            {
-                                Ok(decoded) => match String::from_utf8(decoded) {
-                                    Ok(decoded) => decoded,
-                                    Err(e) => {
-                                        warn!(
-                                            "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
-                                            e, attachment.id
-                                        );
-                                        continue;
-                                    }
-                                },
+                        let decoded = match BASE64_URL_SAFE_NO_PAD.decode(b64.clone()) {
+                            Ok(decoded) => match String::from_utf8(decoded) {
+                                Ok(decoded) => decoded,
                                 Err(e) => {
                                     warn!(
-                                        "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                        "Error encoding vec[u8] to string: ({:?}). Attachment ID ({:?})",
                                         e, attachment.id
                                     );
                                     continue;
                                 }
-                            };
+                            },
+                            Err(e) => {
+                                warn!(
+                                    "Error decoding base64: ({:?}). Attachment ID ({:?})",
+                                    e, attachment.id
+                                );
+                                continue;
+                            }
+                        };
 
-                            match atm.unpack(&decoded).await {
-                                Ok((mut m, meta)) => {
-                                    info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
-                                    if let Some(attachment_id) = &attachment.id {
-                                        m.id = attachment_id.to_string();
-                                    }
-                                    Box::pin(handle_message(atm, state, &m, &meta)).await;
+                        match atm.unpack(&decoded).await {
+                            Ok((mut m, meta)) => {
+                                info!("Delivered message: id({:?})\n {:#?}", attachment.id, m);
+                                if let Some(attachment_id) = &attachment.id {
+                                    m.id = attachment_id.to_string();
                                 }
-                                Err(e) => {
-                                    warn!("Error unpacking message: ({:?})", e);
-                                    continue;
-                                }
-                            };
+                                Box::pin(handle_message(atm, state, &m, &meta)).await;
+                            }
+                            Err(e) => {
+                                warn!("Error unpacking message: ({:?})", e);
+                                continue;
+                            }
+                        };
                     } else {
-                            warn!("Attachment type not supported: {:?}", attachment.data);
-                            continue;
+                        warn!("Attachment type not supported: {:?}", attachment.data);
+                        continue;
                     }
                 }
             }
@@ -610,8 +609,7 @@ pub async fn handle_message(
             let mut new_chat_name = if let Some(attachment) = message.attachments.as_ref() {
                 if let Some(vcard) = attachment.first() {
                     if let Some(b64) = &vcard.data.base64 {
-                        let vcard_decoded =
-                            BASE64_URL_SAFE_NO_PAD.decode(b64.clone()).unwrap();
+                        let vcard_decoded = BASE64_URL_SAFE_NO_PAD.decode(b64.clone()).unwrap();
                         let vcard: VCard = serde_json::from_slice(&vcard_decoded).unwrap();
                         let first = if let Some(first) = vcard.n.given.as_ref() {
                             first

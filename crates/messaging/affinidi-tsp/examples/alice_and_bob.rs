@@ -134,10 +134,7 @@ fn main() {
         .expect("Bob failed to receive RFI");
 
     assert_eq!(rfi_received.message_type, MessageType::Control);
-    println!(
-        "Bob received RFI from {}",
-        rfi_received.sender
-    );
+    println!("Bob received RFI from {}", rfi_received.sender);
     println!(
         "  Bob's state:   {:?}",
         bob_agent.relationship_state("did:example:bob", "did:example:alice")
@@ -162,10 +159,7 @@ fn main() {
         .expect("Alice failed to receive RFA");
 
     assert_eq!(rfa_received.message_type, MessageType::Control);
-    println!(
-        "Alice received RFA from {}",
-        rfa_received.sender
-    );
+    println!("Alice received RFA from {}", rfa_received.sender);
     println!(
         "\n  Alice's state: {:?}",
         alice_agent.relationship_state("did:example:alice", "did:example:bob")
@@ -266,10 +260,7 @@ fn main() {
         .expect("Bob failed to receive second message");
 
     assert_eq!(received3.payload, message3);
-    println!(
-        "\nAlice sent: \"{}\"",
-        String::from_utf8_lossy(message3)
-    );
+    println!("\nAlice sent: \"{}\"", String::from_utf8_lossy(message3));
     println!(
         "Bob received: \"{}\"",
         String::from_utf8_lossy(&received3.payload)

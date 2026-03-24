@@ -478,20 +478,20 @@ where
     S: SecretsResolver,
 {
     let (auth_msg, _) = didcomm_compat::pack_encrypted(
-            &auth_response,
-            atm_did,
-            Some(actor_did),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .map_err(|e| {
-            ATMError::MsgSendError(format!(
-                "Couldn't pack authentication response message: {:?}",
-                e
-            ))
-        })
-        .unwrap();
+        &auth_response,
+        atm_did,
+        Some(actor_did),
+        did_resolver,
+        secrets_resolver,
+    )
+    .await
+    .map_err(|e| {
+        ATMError::MsgSendError(format!(
+            "Couldn't pack authentication response message: {:?}",
+            e
+        ))
+    })
+    .unwrap();
 
     let res = client
         .post(format!("{}/authenticate", MEDIATOR_API))

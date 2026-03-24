@@ -39,8 +39,8 @@ pub mod vid;
 pub use error::TspError;
 pub use message::MessageType;
 pub use relationship::RelationshipState;
-pub use vid::{PrivateVid, ResolvedVid};
 pub use vid::resolver::VidResolver;
+pub use vid::{PrivateVid, ResolvedVid};
 
 use message::control::ControlMessage;
 use message::direct::{self, PackedMessage};
@@ -184,11 +184,7 @@ impl TspAgent {
     ///
     /// Returns the decrypted payload along with sender/receiver metadata.
     /// For control messages, also updates the relationship state.
-    pub fn receive(
-        &self,
-        our_vid: &str,
-        wire: &[u8],
-    ) -> Result<ReceivedMessage, TspError> {
+    pub fn receive(&self, our_vid: &str, wire: &[u8]) -> Result<ReceivedMessage, TspError> {
         // Parse envelope to get sender VID (before full unpack)
         let (envelope, _) = message::envelope::Envelope::decode(wire)?;
 
@@ -405,9 +401,7 @@ mod tests {
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
         // Now Alice can send a message
-        let msg = alice
-            .send(&alice_id, &bob_id, b"Hello Bob!")
-            .unwrap();
+        let msg = alice.send(&alice_id, &bob_id, b"Hello Bob!").unwrap();
 
         let received = bob.receive(&bob_id, &msg.bytes).unwrap();
         assert_eq!(received.payload, b"Hello Bob!");
@@ -437,9 +431,7 @@ mod tests {
         alice.receive(&alice_id, &rfa.bytes).unwrap();
 
         // Alice cancels
-        let cancel = alice
-            .send_relationship_cancel(&alice_id, &bob_id)
-            .unwrap();
+        let cancel = alice.send_relationship_cancel(&alice_id, &bob_id).unwrap();
         assert_eq!(
             alice.relationship_state(&alice_id, &bob_id),
             RelationshipState::None

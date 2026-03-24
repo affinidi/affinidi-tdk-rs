@@ -6,13 +6,13 @@
 //! NOTE: The mediator is NOT used in this example.
 
 use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PrivateKeyAgreement};
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_didcomm::message::pack::{pack_encrypted_authcrypt, unpack_encrypted};
 use affinidi_messaging_didcomm::message::unpack;
-use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_sdk::errors::ATMError;
 use serde_json::json;
 use std::time::SystemTime;
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::filter;
 use uuid::Uuid;
 
@@ -72,19 +72,17 @@ async fn main() -> Result<(), ATMError> {
     let bob_device2_pub = bob_device2_private.public_key();
     let bob_device3_pub = bob_device3_private.public_key();
 
-    let recipients_ref: Vec<(&str, &affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement)> = vec![
+    let recipients_ref: Vec<(
+        &str,
+        &affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement,
+    )> = vec![
         (bob_device1_kid, &bob_device1_pub),
         (bob_device2_kid, &bob_device2_pub),
         (bob_device3_kid, &bob_device3_pub),
     ];
 
-    let packed_msg = pack_encrypted_authcrypt(
-        &msg,
-        alice_kid,
-        &alice_private,
-        &recipients_ref,
-    )
-    .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{}", e)))?;
+    let packed_msg = pack_encrypted_authcrypt(&msg, alice_kid, &alice_private, &recipients_ref)
+        .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{}", e)))?;
 
     info!(
         "Packed encrypted+signed message from Alice to Bob:\n{}",
@@ -103,7 +101,10 @@ async fn main() -> Result<(), ATMError> {
 
     let unpacked1 = Message::from_json(&decrypted1.plaintext)
         .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
-    info!("Message unpacked successfully with device 1: {}", unpacked1.body);
+    info!(
+        "Message unpacked successfully with device 1: {}",
+        unpacked1.body
+    );
 
     // Test using 2nd key only
     info!("Unpack message using Bob's device 2 key");
@@ -117,7 +118,10 @@ async fn main() -> Result<(), ATMError> {
 
     let unpacked2 = Message::from_json(&decrypted2.plaintext)
         .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
-    info!("Message unpacked successfully with device 2: {}", unpacked2.body);
+    info!(
+        "Message unpacked successfully with device 2: {}",
+        unpacked2.body
+    );
 
     // Test using 3rd key only
     info!("Unpack message using Bob's device 3 key");
@@ -131,7 +135,10 @@ async fn main() -> Result<(), ATMError> {
 
     let unpacked3 = Message::from_json(&decrypted3.plaintext)
         .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
-    info!("Message unpacked successfully with device 3: {}", unpacked3.body);
+    info!(
+        "Message unpacked successfully with device 3: {}",
+        unpacked3.body
+    );
 
     // Also test the generic unpack function
     info!("Test generic unpack with device 1");
@@ -145,7 +152,11 @@ async fn main() -> Result<(), ATMError> {
     .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{}", e)))?;
 
     match result {
-        unpack::UnpackResult::Encrypted { message, authenticated, .. } => {
+        unpack::UnpackResult::Encrypted {
+            message,
+            authenticated,
+            ..
+        } => {
             info!(
                 "Generic unpack successful. Authenticated: {}. Body: {}",
                 authenticated, message.body

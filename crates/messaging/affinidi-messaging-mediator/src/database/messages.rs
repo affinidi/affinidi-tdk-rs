@@ -61,7 +61,11 @@ impl Database {
                     .query_async(&mut con)
                     .await
                     .map_err(|e| {
-                        MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to read messages for purge. Reason: {e}"))
+                        MediatorError::DatabaseError(
+                            14,
+                            session.session_id.clone(),
+                            format!("Failed to read messages for purge. Reason: {e}"),
+                        )
                     })?;
 
             let (stream_id, message) = if message.is_empty() {
@@ -125,7 +129,11 @@ impl Database {
             .exec_async(&mut con)
             .await
             .map_err(|e| {
-                MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to delete stream record. Reason: {e}"))
+                MediatorError::DatabaseError(
+                    14,
+                    session.session_id.clone(),
+                    format!("Failed to delete stream record. Reason: {e}"),
+                )
             })
     }
 
@@ -148,7 +156,11 @@ impl Database {
             .exec_async(&mut con)
             .await
             .map_err(|e| {
-                MediatorError::DatabaseError(14, session.session_id.clone(), format!("Failed to delete folder stream. Reason: {e}"))
+                MediatorError::DatabaseError(
+                    14,
+                    session.session_id.clone(),
+                    format!("Failed to delete folder stream. Reason: {e}"),
+                )
             })
     }
 }

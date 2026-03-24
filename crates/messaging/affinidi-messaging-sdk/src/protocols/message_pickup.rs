@@ -6,8 +6,8 @@
  * Do not pass message ID's to the mediator, it cannot see inside messages that it is handling.
  *
  */
-use affinidi_messaging_didcomm::message::Message;
 use crate::messages::compat::UnpackMetadata;
+use affinidi_messaging_didcomm::message::Message;
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -114,7 +114,8 @@ impl MessagePickup {
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
-            msg.extra.insert("return_route".to_string(), Value::String("all".into()));
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 
@@ -186,7 +187,8 @@ impl MessagePickup {
             .from(profile_did.into())
             .to(mediator_did.into())
             .finalize();
-            msg.extra.insert("return_route".to_string(), Value::String("all".into()));
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
             let msg_id = msg.id.clone();
 
             // Pack the message
@@ -415,7 +417,8 @@ impl MessagePickup {
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
-            msg.extra.insert("return_route".to_string(), Value::String("all".into()));
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 
@@ -536,7 +539,8 @@ impl MessagePickup {
             .created_time(now)
             .expires_time(now + 300)
             .finalize();
-            msg.extra.insert("return_route".to_string(), Value::String("all".into()));
+            msg.extra
+                .insert("return_route".to_string(), Value::String("all".into()));
 
             let msg_id = msg.id.clone();
 

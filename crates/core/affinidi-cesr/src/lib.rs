@@ -7,7 +7,7 @@ pub mod sniff;
 
 pub mod tables;
 
-pub use error::CesrError;
-pub use matter::Matter;
 pub use counter::Counter;
+pub use error::CesrError;
 pub use indexer::Indexer;
+pub use matter::Matter;

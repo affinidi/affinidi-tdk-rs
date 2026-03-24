@@ -12,7 +12,11 @@ pub fn sign(data: &[u8], private_key: &[u8; 32]) -> Result<[u8; 64], DIDCommErro
 }
 
 /// Verify an Ed25519 signature.
-pub fn verify(data: &[u8], signature: &[u8; 64], public_key: &[u8; 32]) -> Result<(), DIDCommError> {
+pub fn verify(
+    data: &[u8],
+    signature: &[u8; 64],
+    public_key: &[u8; 32],
+) -> Result<(), DIDCommError> {
     let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(public_key)
         .map_err(|e| DIDCommError::Verification(format!("invalid public key: {e}")))?;
     let sig = ed25519_dalek::Signature::from_bytes(signature);

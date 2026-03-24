@@ -46,11 +46,15 @@ pub async fn message_inbound_handler(
         // ACL Check
         if !session.acls.get_send_messages().0 {
             return Err(MediatorError::problem(
-                44, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                44,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "authorization.send",
                 "DID isn't allowed to send messages through this mediator",
-                vec![], StatusCode::FORBIDDEN,
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -59,11 +63,15 @@ pub async fn message_inbound_handler(
             Ok(s) => s,
             Err(e) => {
                 return Err(MediatorError::problem_with_log(
-                    19, session.session_id, None,
-                    ProblemReportSorter::Warning, ProblemReportScope::Message,
+                    19,
+                    session.session_id,
+                    None,
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
                     "message.serialize",
                     "Couldn't serialize DIDComm message envelope. Reason: {1}",
-                    vec![e.to_string()], StatusCode::BAD_REQUEST,
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
                     "Couldn't serialize DIDComm message envelope",
                 )
                 .into());

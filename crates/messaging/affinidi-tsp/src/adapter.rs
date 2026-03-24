@@ -9,9 +9,9 @@ use affinidi_messaging_core::{
     RelationshipManager, RelationshipState, ResolvedIdentity,
 };
 
+use crate::TspAgent;
 use crate::message::direct;
 use crate::vid::resolver::VidResolver;
-use crate::TspAgent;
 
 /// TSP adapter implementing the unified messaging traits.
 ///
@@ -88,11 +88,9 @@ impl MessagingProtocol for TspAdapter {
             .map_err(|e| MessagingError::Unpack(e.to_string()))?;
 
         Ok(ReceivedMessage {
-            id: hex::encode(direct::message_digest(
-                &direct::PackedMessage {
-                    bytes: packed.to_vec(),
-                },
-            )),
+            id: hex::encode(direct::message_digest(&direct::PackedMessage {
+                bytes: packed.to_vec(),
+            })),
             sender: Some(received.sender),
             recipient: received.receiver,
             payload: received.payload,
@@ -222,9 +220,7 @@ mod tests {
     #[tokio::test]
     async fn anonymous_not_supported() {
         let (alice, _) = setup();
-        let result = alice
-            .pack_anonymous(b"test", "did:example:bob")
-            .await;
+        let result = alice.pack_anonymous(b"test", "did:example:bob").await;
         assert!(result.is_err());
     }
 

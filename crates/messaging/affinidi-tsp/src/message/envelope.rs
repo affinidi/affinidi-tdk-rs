@@ -26,7 +26,11 @@ pub struct Envelope {
 
 impl Envelope {
     /// Create a new envelope.
-    pub fn new(message_type: MessageType, sender: impl Into<String>, receiver: impl Into<String>) -> Self {
+    pub fn new(
+        message_type: MessageType,
+        sender: impl Into<String>,
+        receiver: impl Into<String>,
+    ) -> Self {
         Self {
             version: TSP_VERSION,
             message_type,
@@ -52,9 +56,7 @@ impl Envelope {
         let sender_qb2 = sender.qb2()?;
         let receiver_qb2 = receiver.qb2()?;
 
-        let mut buf = Vec::with_capacity(
-            header_qb2.len() + sender_qb2.len() + receiver_qb2.len(),
-        );
+        let mut buf = Vec::with_capacity(header_qb2.len() + sender_qb2.len() + receiver_qb2.len());
         buf.extend_from_slice(&header_qb2);
         buf.extend_from_slice(&sender_qb2);
         buf.extend_from_slice(&receiver_qb2);
@@ -130,11 +132,7 @@ mod tests {
 
     #[test]
     fn envelope_encode_decode_roundtrip() {
-        let env = Envelope::new(
-            MessageType::Direct,
-            "did:example:alice",
-            "did:example:bob",
-        );
+        let env = Envelope::new(MessageType::Direct, "did:example:alice", "did:example:bob");
 
         let encoded = env.encode().unwrap();
         let (decoded, consumed) = Envelope::decode(&encoded).unwrap();

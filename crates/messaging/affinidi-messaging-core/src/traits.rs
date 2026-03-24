@@ -101,4 +101,3 @@ pub trait RelationshipManager: Send + Sync {
         their_id: &str,
     ) -> Result<RelationshipState, MessagingError>;
 }
-

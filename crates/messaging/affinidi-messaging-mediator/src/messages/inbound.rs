@@ -1,17 +1,15 @@
-use crate::{
-    SharedData,
-    database::session::Session,
-    messages::store::store_message,
-};
 #[cfg(feature = "didcomm")]
-use crate::messages::MessageHandler;
-#[cfg(feature = "didcomm")]
-use affinidi_messaging_didcomm::message::Message;
-#[cfg(feature = "didcomm")]
-use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
+use crate::common::time::unix_timestamp_secs;
 #[cfg(feature = "didcomm")]
 use crate::didcomm_compat::{self, MetaEnvelope};
+#[cfg(feature = "didcomm")]
+use crate::messages::MessageHandler;
+use crate::{SharedData, database::session::Session, messages::store::store_message};
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},
     sending::InboundMessageResponse,
@@ -19,8 +17,6 @@ use affinidi_messaging_sdk::messages::{
 use http::StatusCode;
 #[cfg(feature = "didcomm")]
 use sha256::digest;
-#[cfg(feature = "didcomm")]
-use crate::common::time::unix_timestamp_secs;
 use tracing::{Instrument, debug, span};
 
 use super::{ProcessMessageResponse, WrapperType};

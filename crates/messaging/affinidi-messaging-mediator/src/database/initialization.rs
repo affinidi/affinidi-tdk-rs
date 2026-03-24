@@ -22,7 +22,8 @@ impl Database {
         self.setup_admin_account(
             &config.mediator_did_hash,
             AccountType::Mediator,
-            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").expect("hardcoded ACL ruleset is valid"),
+            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED")
+                .expect("hardcoded ACL ruleset is valid"),
         )
         .await
         .expect("Could not setup mediator account! exiting...");
@@ -81,7 +82,9 @@ impl Database {
                     "Database schema version ({}) doesn't match mediator version ({}).",
                     schema_version, mediator_version
                 );
-                if schema_version < Version::parse("0.10.0").expect("hardcoded version string is valid") {
+                if schema_version
+                    < Version::parse("0.10.0").expect("hardcoded version string is valid")
+                {
                     // Upgrade the database schema to 0.10.0
                     self.upgrade_0_10_0(&config.security.global_acl_default)
                         .await?;

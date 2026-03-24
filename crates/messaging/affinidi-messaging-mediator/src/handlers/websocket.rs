@@ -1,3 +1,7 @@
+use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
+use crate::common::time::unix_timestamp_secs;
+#[cfg(feature = "didcomm")]
+use crate::didcomm_compat;
 use crate::{
     SharedData,
     database::session::Session,
@@ -6,8 +10,6 @@ use crate::{
 };
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
-#[cfg(feature = "didcomm")]
-use crate::didcomm_compat;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
@@ -21,14 +23,12 @@ use axum::{
 };
 use http::StatusCode;
 use serde_json::json;
-use crate::common::time::unix_timestamp_secs;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::{
     select,
     sync::mpsc::{self, Receiver, Sender},
 };
-use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
 
@@ -51,11 +51,15 @@ pub async fn websocket_handler(
             .await
     } else {
         let error: AppError = MediatorError::problem(
-            40, session.session_id, None,
-            ProblemReportSorter::Error, ProblemReportScope::Protocol,
+            40,
+            session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
             "authorization.local",
             "DID isn't local to the mediator",
-            vec![], StatusCode::FORBIDDEN,
+            vec![],
+            StatusCode::FORBIDDEN,
         )
         .into();
 
@@ -322,20 +326,20 @@ async fn _package_problem_report(
     }
 
     let (packed, _) = didcomm_compat::pack_encrypted(
-            &pr_msg.finalize(),
-            &session.did,
-            Some(&state.config.mediator_did),
-            &state.did_resolver,
-            &*state.config.security.mediator_secrets,
+        &pr_msg.finalize(),
+        &session.did,
+        Some(&state.config.mediator_did),
+        &state.did_resolver,
+        &*state.config.security.mediator_secrets,
+    )
+    .await
+    .map_err(|err| {
+        MediatorError::MessagePackError(
+            47,
+            session.session_id.clone(),
+            format!("Couldn't pack DIDComm message. Reason: {err}"),
         )
-        .await
-        .map_err(|err| {
-            MediatorError::MessagePackError(
-                47,
-                session.session_id.clone(),
-                format!("Couldn't pack DIDComm message. Reason: {err}"),
-            )
-        })?;
+    })?;
 
     Ok(packed)
 }

@@ -88,13 +88,14 @@ async fn main() -> Result<(), ATMError> {
         return Ok(());
     };
 
+    println!("{}", style(format!("\t  To DID: {}", to_did)).cyan());
     println!(
         "{}",
-        style(format!("\t  To DID: {}", to_did)).cyan()
-    );
-    println!(
-        "{}",
-        style(format!("\tMSG Hash: {}", sha256::digest(&didcomm_raw_message))).cyan()
+        style(format!(
+            "\tMSG Hash: {}",
+            sha256::digest(&didcomm_raw_message)
+        ))
+        .cyan()
     );
 
     // Grab the secrets
@@ -159,28 +160,24 @@ async fn main() -> Result<(), ATMError> {
         if let Some(attachments) = inner_message.attachments {
             let attachment = attachments.first().unwrap();
             let data = if let Some(ref b64) = attachment.data.base64 {
-                    String::from_utf8(BASE64_URL_SAFE_NO_PAD.decode(b64).unwrap())
-                        .unwrap()
-                } else if let Some(ref json_val) = attachment.data.json {
-                    if attachment.data.jws.is_some() {
-                        println!("{}", style("JWS is not supported").red());
-                        return Ok(());
-                    } else {
-                        match serde_json::to_string(json_val) {
-                            Ok(data) => data,
-                            Err(e) => {
-                                println!(
-                                    "{}",
-                                    style(format!("Error converting JSON: {}", e)).red()
-                                );
-                                return Ok(());
-                            }
+                String::from_utf8(BASE64_URL_SAFE_NO_PAD.decode(b64).unwrap()).unwrap()
+            } else if let Some(ref json_val) = attachment.data.json {
+                if attachment.data.jws.is_some() {
+                    println!("{}", style("JWS is not supported").red());
+                    return Ok(());
+                } else {
+                    match serde_json::to_string(json_val) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            println!("{}", style(format!("Error converting JSON: {}", e)).red());
+                            return Ok(());
                         }
                     }
-                } else {
-                    println!("{}", style("Unsupported attachment type").red());
-                    return Ok(());
-                };
+                }
+            } else {
+                println!("{}", style("Unsupported attachment type").red());
+                return Ok(());
+            };
             println!("{}", style("Forwarded message found").green());
             println!();
             println!("{}", style(data).green());

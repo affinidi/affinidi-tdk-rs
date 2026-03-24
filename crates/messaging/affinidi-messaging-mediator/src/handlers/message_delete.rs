@@ -1,6 +1,6 @@
 use crate::{SharedData, database::session::Session};
-use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
     DeleteMessageRequest, DeleteMessageResponse, GenericDataStruct,
     problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -35,11 +35,15 @@ pub async fn message_delete_handler(
         // ACL Check
         if !session.acls.get_local() {
             return Err(MediatorError::problem(
-                40, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                40,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "authorization.local",
                 "DID isn't local to the mediator",
-                vec![], StatusCode::FORBIDDEN,
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -47,11 +51,15 @@ pub async fn message_delete_handler(
         debug!("Deleting ({}) messages", body.message_ids.len());
         if body.message_ids.len() > state.config.limits.deleted_messages {
             return Err(MediatorError::problem_with_log(
-                43, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                43,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "api.message_delete.limit",
                 "Invalid limit ({1}). Maximum of 100 messages can be deleted per transaction",
-                vec![body.message_ids.len().to_string()], StatusCode::BAD_REQUEST,
+                vec![body.message_ids.len().to_string()],
+                StatusCode::BAD_REQUEST,
                 "Invalid limit",
             )
             .into());
@@ -61,7 +69,8 @@ pub async fn message_delete_handler(
         for message in &body.message_ids {
             debug!("Deleting message: message_id({})", message);
             let result = state
-                .database.handler
+                .database
+                .handler
                 .delete_message(Some(&session.session_id), &session.did_hash, message, None)
                 .await;
 

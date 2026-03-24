@@ -229,14 +229,28 @@ mod tests {
         let ephemeral = PrivateKeyAgreement::generate(Curve::X25519);
 
         let kek1 = derive_key_1pu(
-            &ephemeral, &sender, &recipient.public_key(),
-            b"ECDH-1PU+A256KW", b"", b"apv", &[0x01; 32], 256,
-        ).unwrap();
+            &ephemeral,
+            &sender,
+            &recipient.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"",
+            b"apv",
+            &[0x01; 32],
+            256,
+        )
+        .unwrap();
 
         let kek2 = derive_key_1pu(
-            &ephemeral, &sender, &recipient.public_key(),
-            b"ECDH-1PU+A256KW", b"", b"apv", &[0x02; 32], 256,
-        ).unwrap();
+            &ephemeral,
+            &sender,
+            &recipient.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"",
+            b"apv",
+            &[0x02; 32],
+            256,
+        )
+        .unwrap();
 
         assert_ne!(kek1, kek2);
     }

@@ -5,10 +5,7 @@
 //! This implements only the specific HPKE suite required by TSP, built from
 //! standard cryptographic primitives rather than a generic HPKE library.
 
-use aes_gcm::{
-    Aes128Gcm, AeadInPlace, KeyInit,
-    aead::generic_array::GenericArray,
-};
+use aes_gcm::{AeadInPlace, Aes128Gcm, KeyInit, aead::generic_array::GenericArray};
 use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use sha2::Sha256;
@@ -183,10 +180,7 @@ fn auth_decap(
 }
 
 /// KEM ExtractAndExpand (RFC 9180 §4.1)
-fn extract_and_expand(
-    dh: &[u8],
-    kem_context: &[u8],
-) -> Result<[u8; N_SECRET], TspError> {
+fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> Result<[u8; N_SECRET], TspError> {
     let kem_suite_id = KEM_SUITE_ID;
 
     // prk = LabeledExtract("", "shared_secret", dh)
@@ -231,7 +225,13 @@ fn key_schedule(
 
     // base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
     let mut base_nonce = [0u8; N_N];
-    labeled_expand(&suite_id, &secret, b"base_nonce", &ks_context, &mut base_nonce)?;
+    labeled_expand(
+        &suite_id,
+        &secret,
+        b"base_nonce",
+        &ks_context,
+        &mut base_nonce,
+    )?;
 
     Ok((key, base_nonce))
 }

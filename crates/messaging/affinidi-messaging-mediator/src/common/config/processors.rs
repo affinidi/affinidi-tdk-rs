@@ -101,23 +101,45 @@ pub(crate) struct ForwardingConfigRaw {
     pub max_hops: String,
 }
 
-fn default_300() -> String { "300".to_string() }
-fn default_1() -> String { "1".to_string() }
-fn default_60() -> String { "60".to_string() }
-fn default_50() -> String { "50".to_string() }
-fn default_5() -> String { "5".to_string() }
-fn default_1000() -> String { "1000".to_string() }
-fn default_60000() -> String { "60000".to_string() }
-fn default_forwarding_group() -> String { "forwarding".to_string() }
-fn default_false() -> String { "false".to_string() }
-fn default_10() -> String { "10".to_string() }
+fn default_300() -> String {
+    "300".to_string()
+}
+fn default_1() -> String {
+    "1".to_string()
+}
+fn default_60() -> String {
+    "60".to_string()
+}
+fn default_50() -> String {
+    "50".to_string()
+}
+fn default_5() -> String {
+    "5".to_string()
+}
+fn default_1000() -> String {
+    "1000".to_string()
+}
+fn default_60000() -> String {
+    "60000".to_string()
+}
+fn default_forwarding_group() -> String {
+    "forwarding".to_string()
+}
+fn default_false() -> String {
+    "false".to_string()
+}
+fn default_10() -> String {
+    "10".to_string()
+}
 
 impl std::convert::TryFrom<ForwardingConfigRaw> for ForwardingConfig {
     type Error = MediatorError;
 
     fn try_from(raw: ForwardingConfigRaw) -> Result<Self, Self::Error> {
         let warn_default = |field: &str, default: &str| {
-            eprintln!("WARN: Could not parse processors.forwarding.{field} config value, using default: {default}");
+            eprintln!(
+                "WARN: Could not parse processors.forwarding.{field} config value, using default: {default}"
+            );
         };
 
         Ok(ForwardingConfig {

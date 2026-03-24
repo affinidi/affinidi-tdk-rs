@@ -53,8 +53,7 @@ pub fn pack_signed(
 
 /// Pack a message as plaintext JSON.
 pub fn pack_plaintext(msg: &Message) -> Result<String, DIDCommError> {
-    serde_json::to_string(msg)
-        .map_err(|e| DIDCommError::Serialization(format!("plaintext: {e}")))
+    serde_json::to_string(msg).map_err(|e| DIDCommError::Serialization(format!("plaintext: {e}")))
 }
 
 /// Unpack an encrypted message (convenience re-export of decrypt).
@@ -107,19 +106,12 @@ mod tests {
 
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
 
-        let packed = pack_encrypted_anoncrypt(
-            &msg,
-            &[("did:example:bob#key-1", &recipient.public_key())],
-        )
-        .unwrap();
+        let packed =
+            pack_encrypted_anoncrypt(&msg, &[("did:example:bob#key-1", &recipient.public_key())])
+                .unwrap();
 
-        let decrypted = unpack_encrypted(
-            &packed,
-            "did:example:bob#key-1",
-            &recipient,
-            None,
-        )
-        .unwrap();
+        let decrypted =
+            unpack_encrypted(&packed, "did:example:bob#key-1", &recipient, None).unwrap();
 
         let unpacked = Message::from_json(&decrypted.plaintext).unwrap();
         assert_eq!(unpacked.body["content"], "Anonymous!");
@@ -130,11 +122,8 @@ mod tests {
     fn pack_signed_roundtrip() {
         let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
 
-        let msg = Message::new(
-            "test-type",
-            serde_json::json!({"data": 42}),
-        )
-        .from("did:example:alice");
+        let msg =
+            Message::new("test-type", serde_json::json!({"data": 42})).from("did:example:alice");
 
         let packed = pack_signed(&msg, "did:example:alice#key-1", &sk.to_bytes()).unwrap();
 
@@ -146,10 +135,7 @@ mod tests {
 
     #[test]
     fn pack_plaintext_roundtrip() {
-        let msg = Message::new(
-            "test-type",
-            serde_json::json!({"hello": "world"}),
-        );
+        let msg = Message::new("test-type", serde_json::json!({"hello": "world"}));
 
         let packed = pack_plaintext(&msg).unwrap();
         let unpacked: Message = serde_json::from_str(&packed).unwrap();

@@ -102,10 +102,7 @@ impl Database {
 
     /// Ensure the consumer group exists for FORWARD_Q.
     /// Creates the group if it doesn't exist; ignores "BUSYGROUP" errors.
-    pub async fn forward_queue_ensure_group(
-        &self,
-        group_name: &str,
-    ) -> Result<(), MediatorError> {
+    pub async fn forward_queue_ensure_group(&self, group_name: &str) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
         // XGROUP CREATE FORWARD_Q <group> 0 MKSTREAM
@@ -215,21 +212,14 @@ impl Database {
         }
         cmd.exec_async(&mut conn).await.map_err(|err| {
             event!(Level::ERROR, "XACK error: {}", err);
-            MediatorError::DatabaseError(
-                93,
-                "forwarding".into(),
-                format!("XACK error: {err}"),
-            )
+            MediatorError::DatabaseError(93, "forwarding".into(), format!("XACK error: {err}"))
         })?;
 
         Ok(())
     }
 
     /// Delete acknowledged messages from the stream to free memory
-    pub async fn forward_queue_delete(
-        &self,
-        stream_ids: &[&str],
-    ) -> Result<(), MediatorError> {
+    pub async fn forward_queue_delete(&self, stream_ids: &[&str]) -> Result<(), MediatorError> {
         if stream_ids.is_empty() {
             return Ok(());
         }
@@ -243,11 +233,7 @@ impl Database {
         }
         cmd.exec_async(&mut conn).await.map_err(|err| {
             event!(Level::ERROR, "XDEL error: {}", err);
-            MediatorError::DatabaseError(
-                94,
-                "forwarding".into(),
-                format!("XDEL error: {err}"),
-            )
+            MediatorError::DatabaseError(94, "forwarding".into(), format!("XDEL error: {err}"))
         })?;
 
         Ok(())
@@ -306,10 +292,7 @@ fn parse_forward_entry(
 ) -> Result<ForwardQueueEntry, String> {
     Ok(ForwardQueueEntry {
         stream_id,
-        message: fields
-            .get("MESSAGE")
-            .ok_or("missing MESSAGE")?
-            .clone(),
+        message: fields.get("MESSAGE").ok_or("missing MESSAGE")?.clone(),
         to_did_hash: fields
             .get("TO_DID_HASH")
             .ok_or("missing TO_DID_HASH")?
@@ -318,14 +301,8 @@ fn parse_forward_entry(
             .get("FROM_DID_HASH")
             .ok_or("missing FROM_DID_HASH")?
             .clone(),
-        from_did: fields
-            .get("FROM_DID")
-            .unwrap_or(&String::new())
-            .clone(),
-        to_did: fields
-            .get("TO_DID")
-            .ok_or("missing TO_DID")?
-            .clone(),
+        from_did: fields.get("FROM_DID").unwrap_or(&String::new()).clone(),
+        to_did: fields.get("TO_DID").ok_or("missing TO_DID")?.clone(),
         endpoint_url: fields
             .get("ENDPOINT_URL")
             .ok_or("missing ENDPOINT_URL")?

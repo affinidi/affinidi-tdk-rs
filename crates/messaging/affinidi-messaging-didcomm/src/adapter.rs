@@ -11,9 +11,9 @@ use affinidi_messaging_core::{
     RelationshipManager, RelationshipState, ResolvedIdentity,
 };
 
+use crate::DIDCommAgent;
 use crate::message::forward;
 use crate::message::unpack::UnpackResult;
-use crate::DIDCommAgent;
 
 /// DIDComm adapter implementing the unified messaging traits.
 ///
@@ -124,7 +124,11 @@ impl MessagingProtocol for DIDCommAdapter {
                         .to
                         .and_then(|t| t.into_iter().next())
                         .unwrap_or_else(|| {
-                            recipient_kid.split('#').next().unwrap_or(&recipient_kid).to_string()
+                            recipient_kid
+                                .split('#')
+                                .next()
+                                .unwrap_or(&recipient_kid)
+                                .to_string()
                         }),
                     payload,
                     protocol: Protocol::DIDComm,
@@ -320,7 +324,10 @@ mod tests {
         alice_agent.add_identity(alice);
         bob_agent.add_identity(bob);
 
-        (DIDCommAdapter::new(alice_agent), DIDCommAdapter::new(bob_agent))
+        (
+            DIDCommAdapter::new(alice_agent),
+            DIDCommAdapter::new(bob_agent),
+        )
     }
 
     #[tokio::test]
@@ -334,7 +341,11 @@ mod tests {
         let (alice, bob) = setup();
 
         let packed = alice
-            .pack(b"Hello from messaging-core!", "did:example:alice", "did:example:bob")
+            .pack(
+                b"Hello from messaging-core!",
+                "did:example:alice",
+                "did:example:bob",
+            )
             .await
             .unwrap();
 

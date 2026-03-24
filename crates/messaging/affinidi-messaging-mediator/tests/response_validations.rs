@@ -3,8 +3,7 @@ use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator::didcomm_compat;
 use affinidi_messaging_sdk::{
     messages::{
-        GetMessagesResponse, MessageListElement, SuccessResponse,
-        compat::UnpackMetadata,
+        GetMessagesResponse, MessageListElement, SuccessResponse, compat::UnpackMetadata,
         sending::InboundMessageResponse,
     },
     protocols::message_pickup::MessagePickupStatusReply,
@@ -32,13 +31,9 @@ pub async fn validate_status_reply<S>(
             panic!();
         };
 
-        let (message, _) = didcomm_compat::unpack(
-            &message,
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         let status: MessagePickupStatusReply =
             serde_json::from_value(message.body.clone()).unwrap();
 
@@ -70,13 +65,9 @@ where
             panic!();
         };
 
-        let (message, _) = didcomm_compat::unpack(
-            &message,
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
 
         let messages = _handle_delivery(&message, did_resolver, secrets_resolver).await;
         let mut to_delete_ids: Vec<String> = Vec::new();
@@ -120,13 +111,7 @@ where
                     }
                 };
 
-                match didcomm_compat::unpack(
-                    &decoded,
-                    did_resolver,
-                    secrets_resolver,
-                )
-                .await
-                {
+                match didcomm_compat::unpack(&decoded, did_resolver, secrets_resolver).await {
                     Ok((mut m, u)) => {
                         if let Some(attachment_id) = &attachment.id {
                             m.id = attachment_id.to_string();
@@ -164,13 +149,9 @@ pub async fn validate_message_received_status_reply<S>(
             panic!();
         };
 
-        let (message, _) = didcomm_compat::unpack(
-            &message,
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        let (message, _) = didcomm_compat::unpack(&message, did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         let status: MessagePickupStatusReply =
             serde_json::from_value(message.body.clone()).unwrap();
 
@@ -210,13 +191,9 @@ pub async fn validate_get_message_response<S>(
 {
     for msg in list.success {
         assert_eq!(msg.to_address.unwrap(), digest(actor_did));
-        let _ = didcomm_compat::unpack(
-            &msg.msg.unwrap(),
-            did_resolver,
-            secrets_resolver,
-        )
-        .await
-        .unwrap();
+        let _ = didcomm_compat::unpack(&msg.msg.unwrap(), did_resolver, secrets_resolver)
+            .await
+            .unwrap();
         println!("Msg id: {}", msg.msg_id);
     }
 }

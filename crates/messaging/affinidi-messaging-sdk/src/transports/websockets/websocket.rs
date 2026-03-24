@@ -536,17 +536,18 @@ impl WebSocketTransport {
         };
 
         let host = uri.host().unwrap_or_default().to_string();
-        let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") {
-            443
-        } else {
-            80
-        });
+        let port = uri
+            .port_u16()
+            .unwrap_or(if uri.scheme_str() == Some("wss") {
+                443
+            } else {
+                80
+            });
 
         let builder = ClientRequestBuilder::new(uri)
             .with_header("Authorization", ["Bearer ", &tokens.access_token].concat());
 
-        let (web_socket, _) =
-            super::proxy::connect_websocket(builder, &host, port).await?;
+        let (web_socket, _) = super::proxy::connect_websocket(builder, &host, port).await?;
 
         debug!("Completed websocket connection");
 

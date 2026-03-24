@@ -1,6 +1,6 @@
 use crate::{SharedData, database::session::Session};
-use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
     Folder, GenericDataStruct, MessageList,
     problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -44,11 +44,15 @@ pub async fn message_list_handler(
         // ACL Check
         if !session.acls.get_local() {
             return Err(MediatorError::problem(
-                40, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                40,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "authorization.local",
                 "DID isn't local to the mediator",
-                vec![], StatusCode::FORBIDDEN,
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }
@@ -63,11 +67,15 @@ pub async fn message_list_handler(
             == 0
         {
             return Err(MediatorError::problem(
-                45, session.session_id, None,
-                ProblemReportSorter::Error, ProblemReportScope::Protocol,
+                45,
+                session.session_id,
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
                 "authorization.permission",
                 "DID hash does not match authenticated session",
-                vec![], StatusCode::FORBIDDEN,
+                vec![],
+                StatusCode::FORBIDDEN,
             )
             .into());
         }

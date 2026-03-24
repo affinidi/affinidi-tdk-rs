@@ -3,7 +3,7 @@
 //! Wraps and unwraps a content encryption key (CEK) using a key wrapping key (KEK).
 
 use aes::Aes256;
-use aes::cipher::{BlockEncrypt, BlockDecrypt, KeyInit};
+use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 
 use crate::error::DIDCommError;
 

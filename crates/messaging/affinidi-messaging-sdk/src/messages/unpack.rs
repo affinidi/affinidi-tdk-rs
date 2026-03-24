@@ -44,42 +44,36 @@ impl SharedState {
                 let sha256_hash = sha256::digest(&msg_string);
 
                 // Parse as JSON to detect format
-                let value: serde_json::Value =
-                    serde_json::from_str(&msg_string).map_err(|e| {
-                        ATMError::DidcommError(
-                            "Cannot parse message as JSON".into(),
-                            e.to_string(),
-                        )
-                    })?;
+                let value: serde_json::Value = serde_json::from_str(&msg_string).map_err(|e| {
+                    ATMError::DidcommError("Cannot parse message as JSON".into(), e.to_string())
+                })?;
 
-                let (msg, metadata) = if value.get("ciphertext").is_some()
-                    && value.get("recipients").is_some()
-                {
-                    // JWE — encrypted message
-                    self.unpack_jwe(&msg_string, &value, &sha256_hash).await?
-                } else if value.get("payload").is_some() && value.get("signatures").is_some()
-                {
-                    // JWS — signed message (not yet fully supported, parse plaintext from payload)
-                    self.unpack_jws(&msg_string, &sha256_hash)?
-                } else if value.get("type").is_some() {
-                    // Plaintext DIDComm message
-                    let msg = Message::from_json(msg_string.as_bytes()).map_err(|e| {
-                        ATMError::DidcommError(
-                            "Cannot parse plaintext message".into(),
-                            e.to_string(),
-                        )
-                    })?;
-                    let metadata = UnpackMetadata {
-                        sha256_hash,
-                        ..Default::default()
+                let (msg, metadata) =
+                    if value.get("ciphertext").is_some() && value.get("recipients").is_some() {
+                        // JWE — encrypted message
+                        self.unpack_jwe(&msg_string, &value, &sha256_hash).await?
+                    } else if value.get("payload").is_some() && value.get("signatures").is_some() {
+                        // JWS — signed message (not yet fully supported, parse plaintext from payload)
+                        self.unpack_jws(&msg_string, &sha256_hash)?
+                    } else if value.get("type").is_some() {
+                        // Plaintext DIDComm message
+                        let msg = Message::from_json(msg_string.as_bytes()).map_err(|e| {
+                            ATMError::DidcommError(
+                                "Cannot parse plaintext message".into(),
+                                e.to_string(),
+                            )
+                        })?;
+                        let metadata = UnpackMetadata {
+                            sha256_hash,
+                            ..Default::default()
+                        };
+                        (msg, metadata)
+                    } else {
+                        return Err(ATMError::DidcommError(
+                            "Cannot detect message format".into(),
+                            "expected JWE, JWS, or plaintext".into(),
+                        ));
                     };
-                    (msg, metadata)
-                } else {
-                    return Err(ATMError::DidcommError(
-                        "Cannot detect message format".into(),
-                        "expected JWE, JWS, or plaintext".into(),
-                    ));
-                };
 
                 debug!("message unpacked:\n{:#?}", msg);
 
@@ -114,14 +108,9 @@ impl SharedState {
         use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
 
         // Extract recipient KIDs from the JWE
-        let recipients = value["recipients"]
-            .as_array()
-            .ok_or_else(|| {
-                ATMError::DidcommError(
-                    "Invalid JWE".into(),
-                    "no recipients array".into(),
-                )
-            })?;
+        let recipients = value["recipients"].as_array().ok_or_else(|| {
+            ATMError::DidcommError("Invalid JWE".into(), "no recipients array".into())
+        })?;
 
         // Find a local secret matching one of the recipient KIDs
         let mut recipient_kid_str = String::new();
@@ -129,12 +118,7 @@ impl SharedState {
 
         for recipient in recipients {
             if let Some(kid) = recipient["header"]["kid"].as_str() {
-                if let Some(secret) = self
-                    .tdk_common
-                    .secrets_resolver
-                    .get_secret(kid)
-                    .await
-                {
+                if let Some(secret) = self.tdk_common.secrets_resolver.get_secret(kid).await {
                     let curve = match secret.get_key_type() {
                         affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
                         affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
@@ -171,17 +155,11 @@ impl SharedState {
             sender_public.as_ref(),
         )
         .map_err(|e| {
-            ATMError::DidcommError(
-                "Couldn't unpack incoming message".into(),
-                e.to_string(),
-            )
+            ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
         })?;
 
         let msg = Message::from_json(&decrypted.plaintext).map_err(|e| {
-            ATMError::DidcommError(
-                "Cannot parse decrypted message".into(),
-                e.to_string(),
-            )
+            ATMError::DidcommError("Cannot parse decrypted message".into(), e.to_string())
         })?;
 
         let metadata = UnpackMetadata {
@@ -226,19 +204,28 @@ impl SharedState {
         };
 
         // Resolve the sender DID and get their key agreement public key
-        let sender_doc = self.tdk_common.did_resolver.resolve(sender_did).await.ok()?;
+        let sender_doc = self
+            .tdk_common
+            .did_resolver
+            .resolve(sender_did)
+            .await
+            .ok()?;
         let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
         let sender_kid = sender_ka_kids.first()?;
 
         // Use the resolve_public_key_agreement logic inline
-        use affinidi_did_common::{document::DocumentExt, verification_method::VerificationRelationship};
+        use affinidi_did_common::{
+            document::DocumentExt, verification_method::VerificationRelationship,
+        };
 
         let vm = sender_doc
             .doc
             .key_agreement
             .iter()
             .filter_map(|ka| match ka {
-                VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == *sender_kid => {
+                VerificationRelationship::VerificationMethod(vm)
+                    if vm.id.as_str() == *sender_kid =>
+                {
                     Some(vm.as_ref())
                 }
                 _ => None,
@@ -253,11 +240,18 @@ impl SharedState {
         if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
             && let Some(multibase_str) = multibase_value.as_str()
         {
-            let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
+            let (codec, key_bytes) =
+                affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
             let curve = match codec {
-                affinidi_encoding::X25519_PUB => affinidi_messaging_didcomm::crypto::key_agreement::Curve::X25519,
-                affinidi_encoding::P256_PUB => affinidi_messaging_didcomm::crypto::key_agreement::Curve::P256,
-                affinidi_encoding::SECP256K1_PUB => affinidi_messaging_didcomm::crypto::key_agreement::Curve::K256,
+                affinidi_encoding::X25519_PUB => {
+                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::X25519
+                }
+                affinidi_encoding::P256_PUB => {
+                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::P256
+                }
+                affinidi_encoding::SECP256K1_PUB => {
+                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::K256
+                }
                 _ => return None,
             };
             return affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok();
@@ -274,15 +268,12 @@ impl SharedState {
     ) -> Result<(Message, UnpackMetadata), ATMError> {
         // For JWS, we parse the payload directly without verification for now
         // Full JWS verification would require resolving the signer's public key
-        let value: serde_json::Value = serde_json::from_str(_msg_string).map_err(|e| {
-            ATMError::DidcommError("Cannot parse JWS".into(), e.to_string())
-        })?;
+        let value: serde_json::Value = serde_json::from_str(_msg_string)
+            .map_err(|e| ATMError::DidcommError("Cannot parse JWS".into(), e.to_string()))?;
 
-        let payload_b64 = value["payload"]
-            .as_str()
-            .ok_or_else(|| {
-                ATMError::DidcommError("Invalid JWS".into(), "missing payload".into())
-            })?;
+        let payload_b64 = value["payload"].as_str().ok_or_else(|| {
+            ATMError::DidcommError("Invalid JWS".into(), "missing payload".into())
+        })?;
 
         use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
         let payload_bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64).map_err(|e| {
@@ -434,7 +425,9 @@ mod tests {
     /// Wraps inner_json in a forward envelope with a JSON attachment.
     fn wrap_in_forward_json(inner_json: &str, expires_time: Option<u64>) -> Message {
         let inner_value: serde_json::Value = serde_json::from_str(inner_json).unwrap();
-        let attachment = Attachment::json(inner_value).id("fwd-1".to_string()).finalize();
+        let attachment = Attachment::json(inner_value)
+            .id("fwd-1".to_string())
+            .finalize();
         let mut builder = Message::build(
             "fwd-msg-1".to_string(),
             FORWARD_TYPE.to_string(),
@@ -450,7 +443,9 @@ mod tests {
     /// Wraps inner_json in a forward envelope with a Base64 attachment.
     fn wrap_in_forward_base64(inner_json: &str, expires_time: Option<u64>) -> Message {
         let encoded = BASE64_URL_SAFE.encode(inner_json.as_bytes());
-        let attachment = Attachment::base64(encoded).id("fwd-1".to_string()).finalize();
+        let attachment = Attachment::base64(encoded)
+            .id("fwd-1".to_string())
+            .finalize();
         let mut builder = Message::build(
             "fwd-msg-1".to_string(),
             FORWARD_TYPE.to_string(),
@@ -665,10 +660,12 @@ mod tests {
 
     #[test]
     fn extract_forward_payload_unsupported_format() {
-        let attachment =
-            Attachment::links(vec!["https://example.com/msg".to_string()], "abc123hash".to_string())
-                .id("fwd-link".to_string())
-                .finalize();
+        let attachment = Attachment::links(
+            vec!["https://example.com/msg".to_string()],
+            "abc123hash".to_string(),
+        )
+        .id("fwd-link".to_string())
+        .finalize();
         let msg = Message::build(
             "fwd-links".to_string(),
             FORWARD_TYPE.to_string(),
