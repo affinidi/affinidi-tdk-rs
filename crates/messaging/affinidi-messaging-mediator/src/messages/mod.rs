@@ -277,11 +277,11 @@ impl MessageHandler for Message {
         &self,
         session_id: &str,
         to_did: &str,
-        mediator_did: &str,
+        _mediator_did: &str,
         metadata: &UnpackMetadata,
         secrets_resolver: &S,
         did_resolver: &DIDCacheClient,
-        pack_options: &PackOptions,
+        _pack_options: &PackOptions,
         forward_locals: &HashSet<String>,
     ) -> Result<(String, PackEncryptedMetadata), MediatorError>
     where
@@ -319,7 +319,7 @@ impl MessageHandler for Message {
             forward_locals.contains(uri)
         }
 
-        let mut forward_loopback = to_doc.doc.service.iter().any(|service| {
+        let _forward_loopback = to_doc.doc.service.iter().any(|service| {
             if let Endpoint::Map(endpoints) = &service.service_endpoint {
                 if endpoints.is_array() {
                     endpoints
@@ -336,14 +336,6 @@ impl MessageHandler for Message {
                 false
             }
         });
-
-        // Flip the forward loopback flag if the message is not meant to be forwarded
-        forward_loopback = !forward_loopback;
-
-        // If the pack option was not to forward, then force forward loopback to false
-        if !pack_options.forward {
-            forward_loopback = false;
-        }
 
         if metadata.encrypted {
             // Respond with an encrypted message

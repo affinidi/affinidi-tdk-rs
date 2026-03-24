@@ -5,8 +5,6 @@ use crate::didcomm_compat::{self, MetaEnvelope};
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 use crate::{SharedData, database::session::Session, messages::store::store_message};
-#[cfg(feature = "didcomm")]
-use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
@@ -62,7 +60,7 @@ async fn handle_inbound_didcomm(
     );
 
     async move {
-        let mut envelope = match MetaEnvelope::new(message, &state.did_resolver).await {
+        let envelope = match MetaEnvelope::new(message, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
                 return Err(MediatorError::problem_with_log(

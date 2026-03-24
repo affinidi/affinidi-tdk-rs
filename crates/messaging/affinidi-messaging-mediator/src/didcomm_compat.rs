@@ -44,7 +44,7 @@ pub struct EnvelopeMetadata {
 impl MetaEnvelope {
     /// Parse a raw message string to extract envelope metadata.
     /// This replaces the old `MetaEnvelope::new(&str, &DIDCacheClient)`.
-    pub async fn new(message: &str, did_resolver: &DIDCacheClient) -> Result<Self, String> {
+    pub async fn new(message: &str, _did_resolver: &DIDCacheClient) -> Result<Self, String> {
         let sha256_hash = sha256::digest(message);
 
         let value: serde_json::Value = serde_json::from_str(message)
