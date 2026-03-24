@@ -19,7 +19,7 @@ use tokio::{
     time::{Interval, interval_at},
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async,
+    MaybeTlsStream, WebSocketStream,
     tungstenite::{Bytes, ClientRequestBuilder, Message, error::ProtocolError, http::Uri},
 };
 use tracing::{Instrument, Level, debug, error, span, warn};
@@ -535,18 +535,18 @@ impl WebSocketTransport {
             }
         };
 
+        let host = uri.host().unwrap_or_default().to_string();
+        let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        });
+
         let builder = ClientRequestBuilder::new(uri)
             .with_header("Authorization", ["Bearer ", &tokens.access_token].concat());
 
-        let web_socket = match connect_async(builder).await {
-            Ok((web_socket, _)) => web_socket,
-            Err(err) => {
-                warn!("WebSocket failed. Reason: {}", err);
-                return Err(ATMError::TransportError(format!(
-                    "Websocket connection failed: {err}"
-                )));
-            }
-        };
+        let (web_socket, _) =
+            super::proxy::connect_websocket(builder, &host, port).await?;
 
         debug!("Completed websocket connection");
 

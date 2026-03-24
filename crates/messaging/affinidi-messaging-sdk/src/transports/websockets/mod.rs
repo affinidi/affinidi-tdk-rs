@@ -14,6 +14,7 @@ use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 
 use crate::messages::compat::UnpackMetadata;
 
+pub(crate) mod proxy;
 pub(crate) mod websocket;
 pub(crate) mod ws_cache;
 
