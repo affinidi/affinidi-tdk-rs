@@ -4,6 +4,7 @@ use crate::{
     algorithms::AuthCryptAlg,
     error::{ErrorKind, Result, ResultExt, err_msg},
     jwe,
+    jwk::ToJwkValue,
     utils::crypto::{AsKnownKeyPairSecret, KnownKeyPair},
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
@@ -99,6 +100,20 @@ where
                 jwe::EncAlgorithm::A256cbcHs512,
             ) => {
                 envelope.metadata.enc_alg_auth = Some(AuthCryptAlg::A256cbcHs512Ecdh1puA256kw);
+
+                event!(Level::DEBUG,
+                    "Attempting X25519 ECDH-1PU decrypt: from_kid={}, to_kid={}",
+                    envelope.from_kid.as_deref().unwrap_or("?"),
+                    to_kid
+                );
+
+                // Log sender public key for debugging
+                if let Ok(from_jwk) = from_key.to_jwk_public_value() {
+                    event!(Level::DEBUG, "Sender (from) public key JWK: {}", from_jwk);
+                }
+                if let Ok(to_jwk) = to_key.to_jwk_public_value() {
+                    event!(Level::DEBUG, "Recipient (to) public key JWK: {}", to_jwk);
+                }
 
                 jwe.decrypt::<
                     AesKey<A256CbcHs512>,

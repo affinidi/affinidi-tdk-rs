@@ -270,6 +270,7 @@ pub async fn authentication_response(
         };
 
         // Unpack the message
+        debug!("RAW_JWE_AUTHENTICATE: {}", s);
         let (msg, _) = match Message::unpack(
             &mut envelope,
             &state.did_resolver,

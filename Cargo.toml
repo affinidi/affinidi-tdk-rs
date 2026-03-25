@@ -56,6 +56,7 @@ lto = true
 affinidi-did-resolver-cache-sdk = { path = "crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk" }
 affinidi-tdk-common = { path = "crates/affinidi-tdk/common/affinidi-tdk-common" }
 affinidi-messaging-sdk = { path = "crates/affinidi-messaging/affinidi-messaging-sdk" }
+affinidi-messaging-didcomm = { path = "crates/affinidi-messaging/affinidi-messaging-didcomm" }
 affinidi-meeting-place = { path = "crates/affinidi-meeting-place" }
 affinidi-messaging-didcomm-service = { path = "crates/affinidi-messaging/affinidi-messaging-didcomm-service" }
 

@@ -66,13 +66,12 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
     let has_prefix = api_prefix.is_empty() || api_prefix == "/";
 
     app = if shared_data.config.mediator_did_doc.is_some() {
-        let well_known_prefix = if has_prefix { "/.well-known" } else { "" };
         app.route(
-            &format!("{}/did.json", well_known_prefix),
+            "/.well-known/did.json",
             get(well_known_did_fetch::well_known_did_doc_handler),
         )
         .route(
-            &format!("{}/did.jsonl", well_known_prefix),
+            "/.well-known/did.jsonl",
             get(well_known_did_fetch::well_known_did_doc_handler),
         )
     } else {

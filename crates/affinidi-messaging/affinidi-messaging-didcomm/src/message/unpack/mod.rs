@@ -192,7 +192,7 @@ impl Message {
                     // NOTE: It is ok if there is no from field, as the authentication check above will
                     // catch if it is a signed message
                 }
-            } else {
+            } else if !envelope.metadata.anonymous_sender {
                 return Err(err_msg(
                     ErrorKind::InvalidState,
                     "Encrypted message missing 'encrypted_from_kid'",

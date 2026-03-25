@@ -38,7 +38,7 @@ api_prefix = "${API_PREFIX:/mediator/v1/}"
 ### NOTE: It is strongly recommended to NOT use the same DID as the mediator! 
 ###       This causes more use cases where the secrets of the mediator itself can be exposed in administration tasks.
 ### NOTE: You can add additional Mediator admin DIDs after mediator has started by using the Affinidi Mediator admin DIDComm protocol
-admin_did = "${ADMIN_DID:did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3}"
+admin_did = "${ADMIN_DID:did://did:peer:2.Vz6MkrERkkAtbMKBbvbriaWd4sUFL6EPBzZzovy7fHnYG7upn.EzQ3shZoLhvsYSVvsM6tgmjTtBwWKEuaJRg41REYrqN9fvxNjV}"
 
 ### did_web_self_hosted: <DID Document Path> Path to the self-hosted DID Document
 ### Default: None
@@ -80,7 +80,7 @@ database_timeout = "${DATABASE_TIMEOUT:2}"
 ### Options:
 ###    - explicit_deny: Mediator will allow any DID to connect and forward/deliver messages unless explicitly denied
 ###    - explicit_allow: Mediator will deny all DIDs except for what has been explicitly allowed
-mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_allow}"
+mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_deny}"
 
 ### global_acl_default: Default ACL that is applied to new/unknown DIDs that connect to the mediator
 ### Default: DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES
@@ -120,7 +120,7 @@ mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_allow}"
 ###    - SELF_MANAGE_SEND_QUEUE_LIMIT: DID can set their send queue limits (between the queued_messages_soft and queued_messages_hard)
 ###    - SELF_MANAGE_RECEIVE_QUEUE_LIMIT: DID can set their receive queue limits (between the queued_messages_soft and queued_messages_hard)
 ###  NOTE: Can be comma separated to allow multiple options. ALLOW_ALL or DENY_ALL must always be first!
-global_acl_default = "${GLOBAL_DEFAULT_ACL:DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES}"
+global_acl_default = "${GLOBAL_DEFAULT_ACL:ALLOW_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES}"
 
 ### local_direct_delivery_allowed: If true, messages that are addressed to a local DID directly will be delivered
 ### Default: false (all messages must be addressed to the mediator)
@@ -161,7 +161,7 @@ ssl_key_file = "${SSL_KEY_FILE:conf/keys/end.key}"
 ### Supported Formats:
 ### - string://<key> - Use the key as is
 ### - aws_secrets://<secret_name> - Load the key from AWS Secrets Manager
-jwt_authorization_secret = "${JWT_AUTHORIZATION_SECRET:string://MFECAQEwBQYDK2VwBCIEIIsgJfWwqWvy-_EbTy1OMMY1t5fex1UGUXVDfjdd30I6gSEArzZVXBELy8m4ICDLe9mIkr7qLJMxmEpDrE8WpfdcLeA}"
+jwt_authorization_secret = "${JWT_AUTHORIZATION_SECRET:string://MFECAQEwBQYDK2VwBCIEIBaqzi8T5ouBQRzGcJ4hfzgMz28hdLZWbBUykKwV_IrtgSEAZ6Cl-E2yDfqvE999n-brclKvT0sWT78FzrOVNW5uvKs}"
 
 ### jwt_access_expiry: Expiry time in seconds for JWT access tokens
 ### Default: 900 (15 Minutes)
@@ -183,14 +183,14 @@ jwt_refresh_expiry = "${JWT_REFRESH_EXPIRY:86_400}"
 ### Default: true
 ### NOTE: Setting this to false allows for anonymous messages to be sent to the mediator itself
 ### NOTE: You can still send an anonymous message to a recipient; It must wrapped in a signed forwarding wrapper
-block_anonymous_outer_envelope = "${BLOCK_ANONYMOUS_OUTER_ENVELOPE:true}"
+block_anonymous_outer_envelope = "${BLOCK_ANONYMOUS_OUTER_ENVELOPE:false}"
 
 ### force_session_did_match: If true, the signing DID in the outer envelope MUST match the Session DID
 ### Default: true
 ### NOTE: This is a security feature to prevent a malicious actor from sending messages on behalf of another DID
 ### NOTE: Inner messages can still be signed by a different DID, but the outer envelope must match the session DID
 ### NOTE: This option MUST be set to false if `block_anonymous_outer_envelope` is set to false. Mediator will not start otherwise!
-force_session_did_match = "${FORCE_SESSION_DID_MATCH:true}"
+force_session_did_match = "${FORCE_SESSION_DID_MATCH:false}"
 
 ### block_remote_admin_msgs: If true, any admin messages must be delivered to the mediator by the admin DID
 ### Default: true

@@ -11,6 +11,7 @@ use askar_crypto::{
     repr::{KeyGen, KeySecretBytes},
 };
 use base64::prelude::*;
+use tracing::debug;
 
 impl ParsedJWE {
     pub(crate) fn decrypt<CE, KDF, KE, KW>(
@@ -70,7 +71,22 @@ impl ParsedJWE {
 
         let cek: CE = kw
             .unwrap_key(&encrypted_key)
-            .kind(ErrorKind::Malformed, "Unable unwrap cek")?;
+            .map_err(|e| {
+                // Log diagnostic info for debugging ECDH-1PU failures
+                debug!(
+                    "ECDH-1PU unwrap failed.\n  alg={}\n  apu={}\n  apv={}\n  tag_len={}\n  tag={}\n  epk_jwk={}\n  encrypted_key={}\n  to_kid={}\n  from_skid={:?}",
+                    self.protected.alg.as_str(),
+                    self.apu.as_deref().map(|a| String::from_utf8_lossy(a).to_string()).unwrap_or_default(),
+                    BASE64_URL_SAFE_NO_PAD.encode(&self.apv),
+                    tag.len(),
+                    BASE64_URL_SAFE_NO_PAD.encode(&tag),
+                    serde_json::to_string(&self.protected.epk).unwrap_or_default(),
+                    BASE64_URL_SAFE_NO_PAD.encode(&encrypted_key),
+                    kid,
+                    skid,
+                );
+                Error::msg(ErrorKind::Malformed, format!("Unable unwrap cek: {}", e))
+            })?;
 
         let ciphertext = BASE64_URL_SAFE_NO_PAD
             .decode(&self.jwe.ciphertext)
