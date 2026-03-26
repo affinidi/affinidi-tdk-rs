@@ -22,7 +22,7 @@ data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.3"
-affinidi-messaging-sdk = { version = "0.15", optional = true }
+affinidi-messaging-sdk = { version = "0.16", optional = true }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.13" }
 affinidi-did-authentication = "0.3"
 affinidi-tdk-common = "0.5"
