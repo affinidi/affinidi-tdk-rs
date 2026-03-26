@@ -380,7 +380,7 @@ impl SharedState {
 mod tests {
     use super::*;
     use crate::config::ATMConfig;
-    use affinidi_messaging_didcomm::message::{Attachment, AttachmentData};
+    use affinidi_messaging_didcomm::message::Attachment;
     use affinidi_tdk_common::TDKSharedState;
     use serde_json::json;
     use std::sync::Arc;

@@ -28,9 +28,9 @@ tsp = [
 
 [dependencies]
 # Affinidi Crates
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", optional = true }
-affinidi-tsp = { path = "../affinidi-tsp", optional = true }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.15" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", optional = true }
+affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 affinidi-encoding = { version = "0.1", optional = true }
 affinidi-messaging-mediator-processors = { version = "0.12", path = "affinidi-messaging-mediator-processors" }
 affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messaging-mediator-common" }
