@@ -462,7 +462,10 @@ mod tests {
             .await
             .expect("pack_encrypted should succeed");
 
-        assert!(pack_meta.from_kid.is_some(), "authcrypt should have from_kid");
+        assert!(
+            pack_meta.from_kid.is_some(),
+            "authcrypt should have from_kid"
+        );
 
         // Unpack on recipient side
         let (unpacked, unpack_meta) = recipient_atm
@@ -474,7 +477,10 @@ mod tests {
         assert_eq!(unpacked.typ, "example/v1");
         assert_eq!(unpacked.body, json!({"hello": "encrypted world"}));
         assert!(unpack_meta.encrypted);
-        assert!(unpack_meta.authenticated, "authcrypt should be authenticated");
+        assert!(
+            unpack_meta.authenticated,
+            "authcrypt should be authenticated"
+        );
     }
 
     /// Test: verifies the skid bug — when the sender has multiple keys (V + E),
@@ -577,8 +583,7 @@ mod tests {
     /// second key, and verifies unpack resolves the correct sender public key.
     #[tokio::test]
     async fn authcrypt_multi_key_sender_skid_must_match() {
-        let (sender_did, _sender_secret_1, sender_secret_2) =
-            generate_peer_did_with_two_x25519();
+        let (sender_did, _sender_secret_1, sender_secret_2) = generate_peer_did_with_two_x25519();
         let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
 
         // Verify sender has 2 key_agreement keys
@@ -623,16 +628,13 @@ mod tests {
         let (codec, key_bytes) =
             affinidi_encoding::decode_multikey_with_codec(recipient_multibase).unwrap();
         assert_eq!(codec, affinidi_encoding::X25519_PUB);
-        let recipient_pub =
-            PublicKeyAgreement::from_raw_bytes(Curve::X25519, &key_bytes).unwrap();
+        let recipient_pub = PublicKeyAgreement::from_raw_bytes(Curve::X25519, &key_bytes).unwrap();
 
         // Use sender's SECOND key (#key-2) to pack
         let sender_kid_2 = &format!("{sender_did}#key-2");
-        let sender_private_2 = PrivateKeyAgreement::from_raw_bytes(
-            Curve::X25519,
-            sender_secret_2.get_private_bytes(),
-        )
-        .unwrap();
+        let sender_private_2 =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, sender_secret_2.get_private_bytes())
+                .unwrap();
 
         let packed = pack::pack_encrypted_authcrypt(
             &msg,
@@ -698,7 +700,10 @@ mod tests {
             .await
             .expect("anoncrypt pack should succeed");
 
-        assert!(pack_meta.from_kid.is_none(), "anoncrypt should have no from_kid");
+        assert!(
+            pack_meta.from_kid.is_none(),
+            "anoncrypt should have no from_kid"
+        );
 
         let (unpacked, meta) = recipient_atm
             .unpack(&packed)
