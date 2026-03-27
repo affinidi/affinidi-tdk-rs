@@ -2,12 +2,6 @@
 
 ## Changelog history
 
-## 28th March 2026
-
-### 0.12.3
-
-- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
-
 ## 10th March 2026
 
 ### 0.12.2

@@ -10,27 +10,25 @@ tooling.
 
 ## 28th March 2026
 
-### DIDComm Service (0.1.3)
-
-- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
-
-### Mediator (0.12.5)
-
-- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
-- **CHORE:** Updated `affinidi-messaging-mediator-common` dependency to 0.12.3
-- **CHORE:** Updated `affinidi-messaging-mediator-processors` dependency to 0.12.2
-
 ### Helpers (0.12.2)
 
-- **CHORE:** Added explicit version specifiers for `affinidi-messaging-sdk` (0.16.1)
-  and `affinidi-messaging-didcomm` (0.13) path dependencies
-- **CHORE:** Updated `affinidi-tdk` dependency to 0.6.4
+- **CHORE:** Added explicit `major.minor` version specifiers for `affinidi-messaging-sdk`
+  and `affinidi-messaging-didcomm` path dependencies
 
 ### Text Client (0.12.1)
 
-- **CHORE:** Added explicit version specifiers for `affinidi-messaging-sdk` (0.16.1)
-  and `affinidi-messaging-didcomm` (0.13) path dependencies
-- **CHORE:** Updated `affinidi-tdk` dependency to 0.6.4
+- **CHORE:** Added explicit `major.minor` version specifiers for `affinidi-messaging-sdk`
+  and `affinidi-messaging-didcomm` path dependencies
+
+### Mediator Processors (0.12.2)
+
+- **CHORE:** Normalized `affinidi-messaging-mediator-common` version specifier
+  to `major.minor` format
+
+### DIDComm (0.13.0), TSP (0.1.0)
+
+- **CHORE:** Normalized internal affinidi dependency version specifiers
+  to `major.minor` format (removed unnecessary patch pins)
 
 ## 27th March 2026
 

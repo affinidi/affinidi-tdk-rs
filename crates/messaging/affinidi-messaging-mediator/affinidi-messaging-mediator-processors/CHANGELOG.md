@@ -6,7 +6,8 @@
 
 ### 0.12.2
 
-- **CHORE:** Updated `affinidi-messaging-mediator-common` dependency to 0.12.3
+- **CHORE:** Normalized `affinidi-messaging-mediator-common` version specifier
+  to `major.minor` format
 
 ## 5th March 2026
 
