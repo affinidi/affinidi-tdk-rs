@@ -1,5 +1,9 @@
 # Affinidi TDK Changelog
 
+## 28th March 2026
+
+- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
+
 ## 10th March 2026
 
 - **CHORE:** Updated `affinidi-messaging-didcomm` re-export to 0.13.0

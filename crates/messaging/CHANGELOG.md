@@ -8,6 +8,30 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 28th March 2026
+
+### DIDComm Service (0.1.3)
+
+- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
+
+### Mediator (0.12.5)
+
+- **CHORE:** Updated `affinidi-messaging-sdk` dependency to 0.16.1
+- **CHORE:** Updated `affinidi-messaging-mediator-common` dependency to 0.12.3
+- **CHORE:** Updated `affinidi-messaging-mediator-processors` dependency to 0.12.2
+
+### Helpers (0.12.2)
+
+- **CHORE:** Added explicit version specifiers for `affinidi-messaging-sdk` (0.16.1)
+  and `affinidi-messaging-didcomm` (0.13) path dependencies
+- **CHORE:** Updated `affinidi-tdk` dependency to 0.6.4
+
+### Text Client (0.12.1)
+
+- **CHORE:** Added explicit version specifiers for `affinidi-messaging-sdk` (0.16.1)
+  and `affinidi-messaging-didcomm` (0.13) path dependencies
+- **CHORE:** Updated `affinidi-tdk` dependency to 0.6.4
+
 ## 27th March 2026
 
 ### SDK (0.16.1)

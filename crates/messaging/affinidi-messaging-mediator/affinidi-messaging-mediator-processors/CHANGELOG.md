@@ -2,6 +2,12 @@
 
 ## Changelog history
 
+## 28th March 2026
+
+### 0.12.2
+
+- **CHORE:** Updated `affinidi-messaging-mediator-common` dependency to 0.12.3
+
 ## 5th March 2026
 
 ### 0.12.1
