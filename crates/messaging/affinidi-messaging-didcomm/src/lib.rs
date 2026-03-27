@@ -276,6 +276,7 @@ impl Default for DIDCommAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::key_agreement::Curve;
 
     #[test]
     fn agent_authcrypt_roundtrip() {
@@ -343,6 +344,146 @@ mod tests {
             } => {
                 assert!(!authenticated);
                 assert_eq!(message.body["anon"], true);
+            }
+            _ => panic!("expected Encrypted"),
+        }
+    }
+
+    #[test]
+    fn agent_authcrypt_roundtrip_p256() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let alice = PrivateIdentity::generate_with_curve("did:example:alice", Curve::P256);
+        let bob = PrivateIdentity::generate_with_curve("did:example:bob", Curve::P256);
+
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+
+        alice_agent.add_identity(alice);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new(
+            "https://didcomm.org/basicmessage/2.0/message",
+            serde_json::json!({"content": "P-256 agent authcrypt"}),
+        )
+        .from("did:example:alice")
+        .to(vec!["did:example:bob".into()]);
+
+        let packed = alice_agent
+            .pack_authcrypt(&msg, "did:example:alice", "did:example:bob")
+            .unwrap();
+
+        let result = bob_agent
+            .unpack(&packed, Some("did:example:alice"))
+            .unwrap();
+
+        match result {
+            UnpackResult::Encrypted {
+                message,
+                authenticated,
+                ..
+            } => {
+                assert!(authenticated);
+                assert_eq!(message.body["content"], "P-256 agent authcrypt");
+            }
+            _ => panic!("expected Encrypted"),
+        }
+    }
+
+    #[test]
+    fn agent_authcrypt_roundtrip_k256() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let alice = PrivateIdentity::generate_with_curve("did:example:alice", Curve::K256);
+        let bob = PrivateIdentity::generate_with_curve("did:example:bob", Curve::K256);
+
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_peer(alice.to_resolved());
+
+        alice_agent.add_identity(alice);
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new(
+            "https://didcomm.org/basicmessage/2.0/message",
+            serde_json::json!({"content": "K-256 agent authcrypt"}),
+        )
+        .from("did:example:alice")
+        .to(vec!["did:example:bob".into()]);
+
+        let packed = alice_agent
+            .pack_authcrypt(&msg, "did:example:alice", "did:example:bob")
+            .unwrap();
+
+        let result = bob_agent
+            .unpack(&packed, Some("did:example:alice"))
+            .unwrap();
+
+        match result {
+            UnpackResult::Encrypted {
+                message,
+                authenticated,
+                ..
+            } => {
+                assert!(authenticated);
+                assert_eq!(message.body["content"], "K-256 agent authcrypt");
+            }
+            _ => panic!("expected Encrypted"),
+        }
+    }
+
+    #[test]
+    fn agent_anoncrypt_roundtrip_p256() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let bob = PrivateIdentity::generate_with_curve("did:example:bob", Curve::P256);
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("test", serde_json::json!({"curve": "P-256"}));
+
+        let packed = alice_agent.pack_anoncrypt(&msg, "did:example:bob").unwrap();
+
+        let result = bob_agent.unpack(&packed, None).unwrap();
+
+        match result {
+            UnpackResult::Encrypted {
+                authenticated,
+                message,
+                ..
+            } => {
+                assert!(!authenticated);
+                assert_eq!(message.body["curve"], "P-256");
+            }
+            _ => panic!("expected Encrypted"),
+        }
+    }
+
+    #[test]
+    fn agent_anoncrypt_roundtrip_k256() {
+        let mut alice_agent = DIDCommAgent::new();
+        let mut bob_agent = DIDCommAgent::new();
+
+        let bob = PrivateIdentity::generate_with_curve("did:example:bob", Curve::K256);
+        alice_agent.add_peer(bob.to_resolved());
+        bob_agent.add_identity(bob);
+
+        let msg = Message::new("test", serde_json::json!({"curve": "K-256"}));
+
+        let packed = alice_agent.pack_anoncrypt(&msg, "did:example:bob").unwrap();
+
+        let result = bob_agent.unpack(&packed, None).unwrap();
+
+        match result {
+            UnpackResult::Encrypted {
+                authenticated,
+                message,
+                ..
+            } => {
+                assert!(!authenticated);
+                assert_eq!(message.body["curve"], "K-256");
             }
             _ => panic!("expected Encrypted"),
         }

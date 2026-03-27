@@ -231,6 +231,149 @@ mod tests {
     }
 
     #[test]
+    fn authcrypt_produces_valid_jwe_p256() {
+        let sender = PrivateKeyAgreement::generate(Curve::P256);
+        let recipient = PrivateKeyAgreement::generate(Curve::P256);
+        let recipient_pub = recipient.public_key();
+
+        let jwe_str = authcrypt(
+            b"P-256 message",
+            "did:example:alice#p256",
+            &sender,
+            &[("did:example:bob#p256", &recipient_pub)],
+        )
+        .unwrap();
+
+        let jwe: Jwe = serde_json::from_str(&jwe_str).unwrap();
+        assert_eq!(jwe.recipients.len(), 1);
+
+        let header_json = Base64UrlUnpadded::decode_vec(&jwe.protected).unwrap();
+        let header: ProtectedHeader = serde_json::from_slice(&header_json).unwrap();
+        assert_eq!(header.alg, "ECDH-1PU+A256KW");
+        assert_eq!(header.enc, "A256CBC-HS512");
+        assert_eq!(header.epk["crv"], "P-256");
+    }
+
+    #[test]
+    fn authcrypt_produces_valid_jwe_k256() {
+        let sender = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient_pub = recipient.public_key();
+
+        let jwe_str = authcrypt(
+            b"K-256 message",
+            "did:example:alice#k256",
+            &sender,
+            &[("did:example:bob#k256", &recipient_pub)],
+        )
+        .unwrap();
+
+        let jwe: Jwe = serde_json::from_str(&jwe_str).unwrap();
+        assert_eq!(jwe.recipients.len(), 1);
+
+        let header_json = Base64UrlUnpadded::decode_vec(&jwe.protected).unwrap();
+        let header: ProtectedHeader = serde_json::from_slice(&header_json).unwrap();
+        assert_eq!(header.alg, "ECDH-1PU+A256KW");
+        assert_eq!(header.epk["crv"], "secp256k1");
+    }
+
+    #[test]
+    fn anoncrypt_produces_valid_jwe_p256() {
+        let recipient = PrivateKeyAgreement::generate(Curve::P256);
+        let recipient_pub = recipient.public_key();
+
+        let jwe_str =
+            anoncrypt(b"P-256 anon", &[("did:example:bob#p256", &recipient_pub)]).unwrap();
+
+        let jwe: Jwe = serde_json::from_str(&jwe_str).unwrap();
+        let header_json = Base64UrlUnpadded::decode_vec(&jwe.protected).unwrap();
+        let header: ProtectedHeader = serde_json::from_slice(&header_json).unwrap();
+        assert_eq!(header.alg, "ECDH-ES+A256KW");
+        assert_eq!(header.epk["crv"], "P-256");
+    }
+
+    #[test]
+    fn anoncrypt_produces_valid_jwe_k256() {
+        let recipient = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient_pub = recipient.public_key();
+
+        let jwe_str =
+            anoncrypt(b"K-256 anon", &[("did:example:bob#k256", &recipient_pub)]).unwrap();
+
+        let jwe: Jwe = serde_json::from_str(&jwe_str).unwrap();
+        let header_json = Base64UrlUnpadded::decode_vec(&jwe.protected).unwrap();
+        let header: ProtectedHeader = serde_json::from_slice(&header_json).unwrap();
+        assert_eq!(header.alg, "ECDH-ES+A256KW");
+        assert_eq!(header.epk["crv"], "secp256k1");
+    }
+
+    #[test]
+    fn multi_recipient_anoncrypt() {
+        let r1 = PrivateKeyAgreement::generate(Curve::X25519);
+        let r2 = PrivateKeyAgreement::generate(Curve::X25519);
+        let r3 = PrivateKeyAgreement::generate(Curve::X25519);
+
+        let jwe_str = anoncrypt(
+            b"Multi anon",
+            &[
+                ("did:example:a#key-1", &r1.public_key()),
+                ("did:example:b#key-1", &r2.public_key()),
+                ("did:example:c#key-1", &r3.public_key()),
+            ],
+        )
+        .unwrap();
+
+        let jwe: Jwe = serde_json::from_str(&jwe_str).unwrap();
+        assert_eq!(jwe.recipients.len(), 3);
+        assert!(
+            jwe.recipients
+                .iter()
+                .any(|r| r.header.kid == "did:example:a#key-1")
+        );
+        assert!(
+            jwe.recipients
+                .iter()
+                .any(|r| r.header.kid == "did:example:b#key-1")
+        );
+        assert!(
+            jwe.recipients
+                .iter()
+                .any(|r| r.header.kid == "did:example:c#key-1")
+        );
+    }
+
+    #[test]
+    fn authcrypt_empty_recipients_fails() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let result = authcrypt(b"msg", "did:example:alice#key-1", &sender, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn anoncrypt_empty_recipients_fails() {
+        let result = anoncrypt(b"msg", &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn authcrypt_mixed_curves_fails() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let r1 = PrivateKeyAgreement::generate(Curve::X25519);
+        let r2 = PrivateKeyAgreement::generate(Curve::P256);
+
+        let result = authcrypt(
+            b"mixed",
+            "did:example:alice#key-1",
+            &sender,
+            &[
+                ("did:example:bob#x25519", &r1.public_key()),
+                ("did:example:carol#p256", &r2.public_key()),
+            ],
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn multi_recipient_authcrypt() {
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let r1 = PrivateKeyAgreement::generate(Curve::X25519);

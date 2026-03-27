@@ -142,6 +142,35 @@ mod tests {
     }
 
     #[test]
+    fn ecdh_es_k256_roundtrip() {
+        let ephemeral = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient = PrivateKeyAgreement::generate(Curve::K256);
+
+        let sender_kek = derive_key_es(
+            &ephemeral,
+            &recipient.public_key(),
+            b"ECDH-ES+A256KW",
+            b"",
+            b"apv",
+            256,
+        )
+        .unwrap();
+
+        let recipient_kek = derive_key_es_recipient(
+            &recipient,
+            &ephemeral.public_key(),
+            b"ECDH-ES+A256KW",
+            b"",
+            b"apv",
+            256,
+        )
+        .unwrap();
+
+        assert_eq!(sender_kek, recipient_kek);
+        assert_eq!(sender_kek.len(), 32);
+    }
+
+    #[test]
     fn ecdh_es_p256_roundtrip() {
         let ephemeral = PrivateKeyAgreement::generate(Curve::P256);
         let recipient = PrivateKeyAgreement::generate(Curve::P256);
