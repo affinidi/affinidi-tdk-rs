@@ -223,6 +223,42 @@ mod tests {
     }
 
     #[test]
+    fn ecdh_1pu_k256_roundtrip() {
+        let sender = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient = PrivateKeyAgreement::generate(Curve::K256);
+        let ephemeral = PrivateKeyAgreement::generate(Curve::K256);
+
+        let cc_tag = [0xBB; 32];
+
+        let sender_kek = derive_key_1pu(
+            &ephemeral,
+            &sender,
+            &recipient.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"sender-kid",
+            b"apv",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+
+        let recipient_kek = derive_key_1pu_recipient(
+            &recipient,
+            &sender.public_key(),
+            &ephemeral.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"sender-kid",
+            b"apv",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+
+        assert_eq!(sender_kek, recipient_kek);
+        assert_eq!(sender_kek.len(), 32);
+    }
+
+    #[test]
     fn different_tag_produces_different_key() {
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);

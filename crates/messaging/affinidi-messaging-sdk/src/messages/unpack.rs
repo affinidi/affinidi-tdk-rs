@@ -716,6 +716,184 @@ mod tests {
         assert!(meta.anonymous_sender);
     }
 
+    /// Helper: generate a did:peer:2 with Ed25519 (V) + P-256 (E) keys.
+    fn generate_peer_did_with_p256() -> (String, Secret) {
+        let p256_secret = Secret::generate_p256(Some("temp"), None).unwrap();
+        let p256_multibase = p256_secret.get_public_keymultibase().unwrap();
+
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, p256_multibase),
+        ];
+        let (did, _created_keys) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+
+        let correct_kid = format!("{did_string}#key-2");
+        let mut secret = p256_secret;
+        secret.id = correct_kid;
+
+        (did_string, secret)
+    }
+
+    /// Helper: generate a did:peer:2 with Ed25519 (V) + secp256k1 (E) keys.
+    fn generate_peer_did_with_secp256k1() -> (String, Secret) {
+        let k256_secret = Secret::generate_secp256k1(Some("temp"), None).unwrap();
+        let k256_multibase = k256_secret.get_public_keymultibase().unwrap();
+
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, k256_multibase),
+        ];
+        let (did, _created_keys) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+
+        let correct_kid = format!("{did_string}#key-2");
+        let mut secret = k256_secret;
+        secret.id = correct_kid;
+
+        (did_string, secret)
+    }
+
+    /// Test: authcrypt pack/unpack round-trip with P-256 keys.
+    #[tokio::test]
+    async fn authcrypt_roundtrip_did_peer_p256() {
+        let (sender_did, sender_secret) = generate_peer_did_with_p256();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_p256();
+
+        let sender_atm = create_atm_with_secrets(vec![sender_secret.clone()]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-p256-authcrypt-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "P-256 encrypted"}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        let (packed, pack_meta) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, Some(&sender_did), None)
+            .await
+            .expect("P-256 authcrypt pack should succeed");
+
+        assert!(
+            pack_meta.from_kid.is_some(),
+            "authcrypt should have from_kid"
+        );
+
+        let (unpacked, unpack_meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("P-256 authcrypt unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-p256-authcrypt-1");
+        assert_eq!(unpacked.body, json!({"hello": "P-256 encrypted"}));
+        assert!(unpack_meta.encrypted);
+        assert!(
+            unpack_meta.authenticated,
+            "authcrypt should be authenticated"
+        );
+    }
+
+    /// Test: anoncrypt pack/unpack round-trip with P-256 keys.
+    #[tokio::test]
+    async fn anoncrypt_roundtrip_did_peer_p256() {
+        let (recipient_did, recipient_secret) = generate_peer_did_with_p256();
+
+        let sender_atm = create_atm_with_secrets(vec![]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-p256-anon-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "P-256 anonymous"}),
+        )
+        .to(recipient_did.clone())
+        .finalize();
+
+        let (packed, _) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, None, None)
+            .await
+            .expect("P-256 anoncrypt pack should succeed");
+
+        let (unpacked, meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("P-256 anoncrypt unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-p256-anon-1");
+        assert!(meta.encrypted);
+        assert!(!meta.authenticated);
+    }
+
+    /// Test: authcrypt pack/unpack round-trip with secp256k1 keys.
+    #[tokio::test]
+    async fn authcrypt_roundtrip_did_peer_secp256k1() {
+        let (sender_did, sender_secret) = generate_peer_did_with_secp256k1();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_secp256k1();
+
+        let sender_atm = create_atm_with_secrets(vec![sender_secret.clone()]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-k256-authcrypt-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "secp256k1 encrypted"}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        let (packed, pack_meta) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, Some(&sender_did), None)
+            .await
+            .expect("secp256k1 authcrypt pack should succeed");
+
+        assert!(pack_meta.from_kid.is_some());
+
+        let (unpacked, unpack_meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("secp256k1 authcrypt unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-k256-authcrypt-1");
+        assert_eq!(unpacked.body, json!({"hello": "secp256k1 encrypted"}));
+        assert!(unpack_meta.encrypted);
+        assert!(unpack_meta.authenticated);
+    }
+
+    /// Test: anoncrypt pack/unpack round-trip with secp256k1 keys.
+    #[tokio::test]
+    async fn anoncrypt_roundtrip_did_peer_secp256k1() {
+        let (recipient_did, recipient_secret) = generate_peer_did_with_secp256k1();
+
+        let sender_atm = create_atm_with_secrets(vec![]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-k256-anon-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "secp256k1 anonymous"}),
+        )
+        .to(recipient_did.clone())
+        .finalize();
+
+        let (packed, _) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, None, None)
+            .await
+            .expect("secp256k1 anoncrypt pack should succeed");
+
+        let (unpacked, meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("secp256k1 anoncrypt unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-k256-anon-1");
+        assert!(meta.encrypted);
+        assert!(!meta.authenticated);
+    }
+
     const FORWARD_TYPE: &str = "https://didcomm.org/routing/2.0/forward";
 
     /// Creates an ATM instance with default config (unpack_forwards=true).

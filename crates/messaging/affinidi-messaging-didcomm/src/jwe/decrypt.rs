@@ -238,6 +238,273 @@ mod tests {
     }
 
     #[test]
+    fn authcrypt_roundtrip_k256() {
+        let sender = PrivateKeyAgreement::generate(Curve::K256);
+        let recipient = PrivateKeyAgreement::generate(Curve::K256);
+
+        let jwe_str = encrypt::authcrypt(
+            b"K-256 authcrypt",
+            "did:example:alice#k256-key",
+            &sender,
+            &[("did:example:bob#k256-key", &recipient.public_key())],
+        )
+        .unwrap();
+
+        let result = decrypt(
+            &jwe_str,
+            "did:example:bob#k256-key",
+            &recipient,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+
+        assert_eq!(result.plaintext, b"K-256 authcrypt");
+        assert!(result.authenticated);
+    }
+
+    #[test]
+    fn anoncrypt_roundtrip_p256() {
+        let recipient = PrivateKeyAgreement::generate(Curve::P256);
+
+        let jwe_str = encrypt::anoncrypt(
+            b"P-256 anoncrypt",
+            &[("did:example:bob#p256-key", &recipient.public_key())],
+        )
+        .unwrap();
+
+        let result = decrypt(&jwe_str, "did:example:bob#p256-key", &recipient, None).unwrap();
+
+        assert_eq!(result.plaintext, b"P-256 anoncrypt");
+        assert!(!result.authenticated);
+    }
+
+    #[test]
+    fn multi_recipient_anoncrypt_x25519() {
+        let r1 = PrivateKeyAgreement::generate(Curve::X25519);
+        let r2 = PrivateKeyAgreement::generate(Curve::X25519);
+
+        let jwe_str = encrypt::anoncrypt(
+            b"multi-recipient anoncrypt",
+            &[
+                ("did:example:bob#key-1", &r1.public_key()),
+                ("did:example:carol#key-1", &r2.public_key()),
+            ],
+        )
+        .unwrap();
+
+        // Both recipients should be able to decrypt
+        let result1 = decrypt(&jwe_str, "did:example:bob#key-1", &r1, None).unwrap();
+        assert_eq!(result1.plaintext, b"multi-recipient anoncrypt");
+        assert!(!result1.authenticated);
+
+        let result2 = decrypt(&jwe_str, "did:example:carol#key-1", &r2, None).unwrap();
+        assert_eq!(result2.plaintext, b"multi-recipient anoncrypt");
+    }
+
+    #[test]
+    fn multi_recipient_authcrypt_p256() {
+        let sender = PrivateKeyAgreement::generate(Curve::P256);
+        let r1 = PrivateKeyAgreement::generate(Curve::P256);
+        let r2 = PrivateKeyAgreement::generate(Curve::P256);
+
+        let jwe_str = encrypt::authcrypt(
+            b"multi P-256 authcrypt",
+            "did:example:alice#p256",
+            &sender,
+            &[
+                ("did:example:bob#p256", &r1.public_key()),
+                ("did:example:carol#p256", &r2.public_key()),
+            ],
+        )
+        .unwrap();
+
+        let result1 = decrypt(
+            &jwe_str,
+            "did:example:bob#p256",
+            &r1,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+        assert_eq!(result1.plaintext, b"multi P-256 authcrypt");
+        assert!(result1.authenticated);
+
+        let result2 = decrypt(
+            &jwe_str,
+            "did:example:carol#p256",
+            &r2,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+        assert_eq!(result2.plaintext, b"multi P-256 authcrypt");
+        assert!(result2.authenticated);
+    }
+
+    #[test]
+    fn multi_recipient_authcrypt_k256() {
+        let sender = PrivateKeyAgreement::generate(Curve::K256);
+        let r1 = PrivateKeyAgreement::generate(Curve::K256);
+        let r2 = PrivateKeyAgreement::generate(Curve::K256);
+
+        let jwe_str = encrypt::authcrypt(
+            b"multi K-256 authcrypt",
+            "did:example:alice#k256",
+            &sender,
+            &[
+                ("did:example:bob#k256", &r1.public_key()),
+                ("did:example:carol#k256", &r2.public_key()),
+            ],
+        )
+        .unwrap();
+
+        let result1 = decrypt(
+            &jwe_str,
+            "did:example:bob#k256",
+            &r1,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+        assert_eq!(result1.plaintext, b"multi K-256 authcrypt");
+
+        let result2 = decrypt(
+            &jwe_str,
+            "did:example:carol#k256",
+            &r2,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+        assert_eq!(result2.plaintext, b"multi K-256 authcrypt");
+    }
+
+    #[test]
+    fn multi_recipient_anoncrypt_p256() {
+        let r1 = PrivateKeyAgreement::generate(Curve::P256);
+        let r2 = PrivateKeyAgreement::generate(Curve::P256);
+        let r3 = PrivateKeyAgreement::generate(Curve::P256);
+
+        let jwe_str = encrypt::anoncrypt(
+            b"triple P-256 anoncrypt",
+            &[
+                ("did:example:a#p256", &r1.public_key()),
+                ("did:example:b#p256", &r2.public_key()),
+                ("did:example:c#p256", &r3.public_key()),
+            ],
+        )
+        .unwrap();
+
+        for (kid, key) in [
+            ("did:example:a#p256", &r1),
+            ("did:example:b#p256", &r2),
+            ("did:example:c#p256", &r3),
+        ] {
+            let result = decrypt(&jwe_str, kid, key, None).unwrap();
+            assert_eq!(result.plaintext, b"triple P-256 anoncrypt");
+        }
+    }
+
+    #[test]
+    fn multi_recipient_anoncrypt_k256() {
+        let r1 = PrivateKeyAgreement::generate(Curve::K256);
+        let r2 = PrivateKeyAgreement::generate(Curve::K256);
+
+        let jwe_str = encrypt::anoncrypt(
+            b"multi K-256 anoncrypt",
+            &[
+                ("did:example:bob#k256", &r1.public_key()),
+                ("did:example:carol#k256", &r2.public_key()),
+            ],
+        )
+        .unwrap();
+
+        let result1 = decrypt(&jwe_str, "did:example:bob#k256", &r1, None).unwrap();
+        assert_eq!(result1.plaintext, b"multi K-256 anoncrypt");
+
+        let result2 = decrypt(&jwe_str, "did:example:carol#k256", &r2, None).unwrap();
+        assert_eq!(result2.plaintext, b"multi K-256 anoncrypt");
+    }
+
+    #[test]
+    fn cross_curve_authcrypt_fails() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient = PrivateKeyAgreement::generate(Curve::P256);
+
+        let result = encrypt::authcrypt(
+            b"cross-curve",
+            "did:example:alice#x25519",
+            &sender,
+            &[("did:example:bob#p256", &recipient.public_key())],
+        );
+
+        // Sender (X25519) and ephemeral must match recipient curve (P256),
+        // so the ECDH should fail
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cross_curve_anoncrypt_recipients_fails() {
+        let r1 = PrivateKeyAgreement::generate(Curve::X25519);
+        let r2 = PrivateKeyAgreement::generate(Curve::P256);
+
+        let result = encrypt::anoncrypt(
+            b"mixed curves",
+            &[
+                ("did:example:bob#x25519", &r1.public_key()),
+                ("did:example:carol#p256", &r2.public_key()),
+            ],
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn authcrypt_wrong_sender_key_fails() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let wrong_sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient = PrivateKeyAgreement::generate(Curve::X25519);
+
+        let jwe_str = encrypt::authcrypt(
+            b"secret",
+            "did:example:alice#key-1",
+            &sender,
+            &[("did:example:bob#key-1", &recipient.public_key())],
+        )
+        .unwrap();
+
+        // Decrypt with wrong sender public key should fail
+        let result = decrypt(
+            &jwe_str,
+            "did:example:bob#key-1",
+            &recipient,
+            Some(&wrong_sender.public_key()),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn authcrypt_large_payload() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient = PrivateKeyAgreement::generate(Curve::X25519);
+        let payload = vec![0x42u8; 100_000]; // 100KB payload
+
+        let jwe_str = encrypt::authcrypt(
+            &payload,
+            "did:example:alice#key-1",
+            &sender,
+            &[("did:example:bob#key-1", &recipient.public_key())],
+        )
+        .unwrap();
+
+        let result = decrypt(
+            &jwe_str,
+            "did:example:bob#key-1",
+            &recipient,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+
+        assert_eq!(result.plaintext, payload);
+    }
+
+    #[test]
     fn wrong_recipient_key_fails() {
         let sender = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient = PrivateKeyAgreement::generate(Curve::X25519);
