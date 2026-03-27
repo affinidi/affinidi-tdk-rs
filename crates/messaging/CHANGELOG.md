@@ -8,6 +8,24 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 27th March 2026
+
+### SDK (0.16.1)
+
+- **FIX:** Resolved authcrypt key mismatch when sender DID has multiple
+  encryption keys. `try_resolve_sender_public()` now uses the full `skid`
+  (including `#fragment`) from the JWE protected header to look up the specific
+  sender key agreement key, instead of stripping the fragment and blindly
+  picking the first key from the resolved DID document. This caused
+  `key unwrap integrity check failed` errors for DIDs with more than one
+  encryption key.
+- **TEST:** Added 4 encrypted pack/unpack tests:
+  - `authcrypt_roundtrip_did_peer_x25519` — basic authcrypt round-trip
+  - `authcrypt_sender_skid_resolves_correct_key` — verifies skid fragment usage
+  - `authcrypt_multi_key_sender_skid_must_match` — regression test for
+    multi-key sender DIDs (the case that triggered the bug)
+  - `anoncrypt_roundtrip_did_peer_x25519` — anoncrypt round-trip
+
 ## 15th March 2026
 
 ### Mediator (0.12.3)
