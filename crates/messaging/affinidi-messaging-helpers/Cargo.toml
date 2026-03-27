@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.12.1"
+version = "0.12.2"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -30,9 +30,9 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
   "did_example",
 ] }
 affinidi-did-common = "0.3"
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", features = ["messaging-core"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", features = ["messaging-core"] }
 affinidi-messaging-core = { path = "../affinidi-messaging-core" }
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
 affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
 affinidi-secrets-resolver = "0.5"
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }

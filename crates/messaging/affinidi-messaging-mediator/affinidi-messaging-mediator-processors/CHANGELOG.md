@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+## 28th March 2026
+
+### 0.12.2
+
+- **CHORE:** Normalized `affinidi-messaging-mediator-common` version specifier
+  to `major.minor` format
+
 ## 5th March 2026
 
 ### 0.12.1

@@ -23,8 +23,8 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 
 [dependencies]
 # Affinidi crates
-affinidi-cesr = { path = "../../core/affinidi-cesr", version = "0.1.0" }
-affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1.0", optional = true }
+affinidi-cesr = { path = "../../core/affinidi-cesr", version = "0.1" }
+affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }
 
 # Optional Affinidi crates (for DID-based VID resolution)
 affinidi-did-resolver-cache-sdk = { path = "../../identity/affinidi-did-resolver-cache-sdk", version = "0.8", optional = true }

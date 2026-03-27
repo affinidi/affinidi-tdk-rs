@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.12.1"
+version = "0.12.2"
 description = "Affinidi Messaging Mediator Processors"
 edition.workspace = true
 authors.workspace = true
@@ -24,7 +24,7 @@ name = "forwarding_processor"
 path = "src/forwarding/main.rs"
 
 [dependencies]
-affinidi-messaging-mediator-common = { version = "0.12.2", path = "../affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.12", path = "../affinidi-messaging-mediator-common" }
 clap = { version = "4.5", features = ["derive"] }
 deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 lru = "0.12"

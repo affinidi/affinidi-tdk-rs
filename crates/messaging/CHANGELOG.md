@@ -8,6 +8,28 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 28th March 2026
+
+### Helpers (0.12.2)
+
+- **CHORE:** Added explicit `major.minor` version specifiers for `affinidi-messaging-sdk`
+  and `affinidi-messaging-didcomm` path dependencies
+
+### Text Client (0.12.1)
+
+- **CHORE:** Added explicit `major.minor` version specifiers for `affinidi-messaging-sdk`
+  and `affinidi-messaging-didcomm` path dependencies
+
+### Mediator Processors (0.12.2)
+
+- **CHORE:** Normalized `affinidi-messaging-mediator-common` version specifier
+  to `major.minor` format
+
+### DIDComm (0.13.0), TSP (0.1.0)
+
+- **CHORE:** Normalized internal affinidi dependency version specifiers
+  to `major.minor` format (removed unnecessary patch pins)
+
 ## 27th March 2026
 
 ### SDK (0.16.1)
