@@ -37,7 +37,7 @@ affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
 affinidi-secrets-resolver = "0.5"
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
 
-didwebvh-rs = "0.3.1"
+didwebvh-rs = "0.4.0"
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }

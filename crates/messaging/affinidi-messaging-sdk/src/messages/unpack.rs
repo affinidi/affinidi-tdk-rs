@@ -203,19 +203,28 @@ impl SharedState {
             skid
         };
 
-        // Resolve the sender DID and get their key agreement public key
+        // Resolve the sender DID document
         let sender_doc = self
             .tdk_common
             .did_resolver
             .resolve(sender_did)
             .await
             .ok()?;
-        let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
-        let sender_kid = sender_ka_kids.first()?;
 
-        // Use the resolve_public_key_agreement logic inline
         use affinidi_did_common::{
             document::DocumentExt, verification_method::VerificationRelationship,
+        };
+
+        // Use the full skid (with fragment) to look up the specific key that was
+        // used to encrypt. Only fall back to the first key_agreement key when the
+        // skid has no fragment (bare DID).
+        let sender_kid_owned: String;
+        let sender_kid: &str = if skid.contains('#') {
+            skid
+        } else {
+            let kids = sender_doc.doc.find_key_agreement(None);
+            sender_kid_owned = kids.first()?.to_string();
+            &sender_kid_owned
         };
 
         let vm = sender_doc
@@ -224,7 +233,7 @@ impl SharedState {
             .iter()
             .filter_map(|ka| match ka {
                 VerificationRelationship::VerificationMethod(vm)
-                    if vm.id.as_str() == *sender_kid =>
+                    if vm.id.as_str() == sender_kid =>
                 {
                     Some(vm.as_ref())
                 }
@@ -385,6 +394,327 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
+    use affinidi_messaging_didcomm::message::Message as DcMessage;
+    use affinidi_secrets_resolver::SecretsResolver;
+    use affinidi_secrets_resolver::secrets::Secret;
+
+    /// Helper: generate a did:peer:2 with Ed25519 (V) + X25519 (E) keys,
+    /// returning (did_string, x25519_secret_with_correct_kid).
+    fn generate_peer_did_with_x25519() -> (String, Secret) {
+        // Generate an X25519 key pair for key agreement
+        let x25519_secret = Secret::generate_x25519(Some("temp"), None).unwrap();
+        let x25519_multibase = x25519_secret.get_public_keymultibase().unwrap();
+
+        // Create did:peer:2 with V (Ed25519, auto-generated) + E (X25519, pre-existing)
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x25519_multibase),
+        ];
+        let (did, _created_keys) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+
+        // The E key is the second key in the did:peer, so it gets #key-2
+        let correct_kid = format!("{did_string}#key-2");
+        let mut secret = x25519_secret;
+        secret.id = correct_kid;
+
+        (did_string, secret)
+    }
+
+    /// Helper: create an ATM instance with secrets pre-loaded for the given party.
+    async fn create_atm_with_secrets(secrets: Vec<Secret>) -> ATM {
+        let config = ATMConfig::builder().build().unwrap();
+        let tdk = Arc::new(TDKSharedState::default().await);
+        for secret in &secrets {
+            tdk.secrets_resolver.insert(secret.clone()).await;
+        }
+        ATM::new(config, tdk).await.unwrap()
+    }
+
+    /// Test: authcrypt pack/unpack round-trip with did:peer:2 (Ed25519 + X25519).
+    /// This verifies the basic encrypted messaging flow works end-to-end.
+    #[tokio::test]
+    async fn authcrypt_roundtrip_did_peer_x25519() {
+        let (sender_did, sender_secret) = generate_peer_did_with_x25519();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
+
+        // Sender ATM: needs sender's private key to encrypt
+        let sender_atm = create_atm_with_secrets(vec![sender_secret.clone()]).await;
+
+        // Recipient ATM: needs recipient's private key to decrypt
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        // Build a DIDComm message
+        let msg = DcMessage::build(
+            "test-encrypted-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "encrypted world"}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        // Pack with authcrypt (sender → recipient)
+        let (packed, pack_meta) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, Some(&sender_did), None)
+            .await
+            .expect("pack_encrypted should succeed");
+
+        assert!(
+            pack_meta.from_kid.is_some(),
+            "authcrypt should have from_kid"
+        );
+
+        // Unpack on recipient side
+        let (unpacked, unpack_meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-encrypted-1");
+        assert_eq!(unpacked.typ, "example/v1");
+        assert_eq!(unpacked.body, json!({"hello": "encrypted world"}));
+        assert!(unpack_meta.encrypted);
+        assert!(
+            unpack_meta.authenticated,
+            "authcrypt should be authenticated"
+        );
+    }
+
+    /// Test: verifies the skid bug — when the sender has multiple keys (V + E),
+    /// unpack must use the specific key from the JWE skid header, not blindly
+    /// pick the first key_agreement key from the resolved DID document.
+    ///
+    /// This test would FAIL before the fix because try_resolve_sender_public()
+    /// stripped the #fragment from skid and picked the first key_agreement key,
+    /// which could be a different key than the one actually used to encrypt.
+    #[tokio::test]
+    async fn authcrypt_sender_skid_resolves_correct_key() {
+        let (sender_did, sender_secret) = generate_peer_did_with_x25519();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
+
+        // Verify sender DID has multiple keys (V=key-1, E=key-2)
+        let sender_did_parsed: DID = sender_did.parse().unwrap();
+        let sender_doc = sender_did_parsed.resolve().unwrap();
+        assert!(
+            sender_doc.verification_method.len() >= 2,
+            "sender should have at least 2 verification methods (V + E)"
+        );
+
+        let sender_atm = create_atm_with_secrets(vec![sender_secret.clone()]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-skid-1".to_string(),
+            "example/v1".to_string(),
+            json!({"test": "skid resolution"}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        let (packed, _) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, Some(&sender_did), None)
+            .await
+            .expect("pack should succeed");
+
+        // Verify the JWE contains the correct skid with #key-2 fragment
+        let jwe: serde_json::Value = serde_json::from_str(&packed).unwrap();
+        let protected_b64 = jwe["protected"].as_str().unwrap();
+        let protected_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD
+            .decode(protected_b64)
+            .unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&protected_bytes).unwrap();
+        let skid = header["skid"].as_str().unwrap();
+        assert!(
+            skid.contains("#key-2"),
+            "skid should reference the X25519 key (#key-2), got: {skid}"
+        );
+
+        // This is the critical test: unpack must use skid to find the correct
+        // sender public key, not just pick the first key from the DID document
+        let (unpacked, meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("unpack should succeed with correct skid resolution");
+
+        assert_eq!(unpacked.id, "test-skid-1");
+        assert!(meta.authenticated, "should be authenticated (authcrypt)");
+        assert!(
+            meta.encrypted_from_kid.is_some(),
+            "should have sender kid from skid"
+        );
+    }
+
+    /// Helper: generate a did:peer:2 with TWO X25519 encryption keys (E + E),
+    /// returning (did_string, first_x25519_secret, second_x25519_secret).
+    /// The first E key gets #key-1, the second gets #key-2.
+    fn generate_peer_did_with_two_x25519() -> (String, Secret, Secret) {
+        let x25519_secret_1 = Secret::generate_x25519(Some("temp1"), None).unwrap();
+        let x25519_multibase_1 = x25519_secret_1.get_public_keymultibase().unwrap();
+
+        let x25519_secret_2 = Secret::generate_x25519(Some("temp2"), None).unwrap();
+        let x25519_multibase_2 = x25519_secret_2.get_public_keymultibase().unwrap();
+
+        let keys = vec![
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x25519_multibase_1),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x25519_multibase_2),
+        ];
+        let (did, _) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+
+        let mut secret_1 = x25519_secret_1;
+        secret_1.id = format!("{did_string}#key-1");
+
+        let mut secret_2 = x25519_secret_2;
+        secret_2.id = format!("{did_string}#key-2");
+
+        (did_string, secret_1, secret_2)
+    }
+
+    /// Test: when a sender DID has multiple encryption keys, the pack uses the
+    /// first key (#key-1) but the skid in the JWE header references that key.
+    /// If we encrypt using the SECOND key (#key-2) instead, the unpack side
+    /// must resolve the correct key from skid, not blindly pick the first.
+    ///
+    /// This test creates a sender with two encryption keys, packs using the
+    /// second key, and verifies unpack resolves the correct sender public key.
+    #[tokio::test]
+    async fn authcrypt_multi_key_sender_skid_must_match() {
+        let (sender_did, _sender_secret_1, sender_secret_2) = generate_peer_did_with_two_x25519();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
+
+        // Verify sender has 2 key_agreement keys
+        let sender_did_parsed: DID = sender_did.parse().unwrap();
+        let sender_doc = sender_did_parsed.resolve().unwrap();
+        use affinidi_did_common::DocumentExt;
+        let ka_kids = sender_doc.find_key_agreement(None);
+        assert_eq!(ka_kids.len(), 2, "sender should have 2 key agreement keys");
+
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        // We can't use pack_encrypted directly because it picks the first key
+        // agreement key. Instead, build the JWE manually using the second key.
+        use affinidi_messaging_didcomm::crypto::key_agreement::{
+            Curve, PrivateKeyAgreement, PublicKeyAgreement,
+        };
+        use affinidi_messaging_didcomm::message::pack;
+
+        let msg = DcMessage::build(
+            "test-multi-key-1".to_string(),
+            "example/v1".to_string(),
+            json!({"test": "multi key skid"}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        // Resolve recipient's public key
+        let recipient_did_parsed: DID = recipient_did.parse().unwrap();
+        let recipient_doc = recipient_did_parsed.resolve().unwrap();
+        let recipient_ka_kids = recipient_doc.find_key_agreement(None);
+        let recipient_kid = recipient_ka_kids.first().unwrap();
+        let recipient_vm = recipient_doc
+            .get_verification_method(recipient_kid)
+            .unwrap();
+        let recipient_multibase = recipient_vm
+            .property_set
+            .get("publicKeyMultibase")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let (codec, key_bytes) =
+            affinidi_encoding::decode_multikey_with_codec(recipient_multibase).unwrap();
+        assert_eq!(codec, affinidi_encoding::X25519_PUB);
+        let recipient_pub = PublicKeyAgreement::from_raw_bytes(Curve::X25519, &key_bytes).unwrap();
+
+        // Use sender's SECOND key (#key-2) to pack
+        let sender_kid_2 = &format!("{sender_did}#key-2");
+        let sender_private_2 =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, sender_secret_2.get_private_bytes())
+                .unwrap();
+
+        let packed = pack::pack_encrypted_authcrypt(
+            &msg,
+            sender_kid_2,
+            &sender_private_2,
+            &[(recipient_kid, &recipient_pub)],
+        )
+        .expect("manual authcrypt pack should succeed");
+
+        // Verify skid references #key-2
+        let jwe: serde_json::Value = serde_json::from_str(&packed).unwrap();
+        let protected_b64 = jwe["protected"].as_str().unwrap();
+        let protected_bytes = base64::prelude::BASE64_URL_SAFE_NO_PAD
+            .decode(protected_b64)
+            .unwrap();
+        let header: serde_json::Value = serde_json::from_slice(&protected_bytes).unwrap();
+        let skid = header["skid"].as_str().unwrap();
+        assert!(
+            skid.contains("#key-2"),
+            "skid should reference #key-2, got: {skid}"
+        );
+
+        // NOW: unpack on recipient side. This is where the bug manifests.
+        // If try_resolve_sender_public strips the fragment and picks first key,
+        // it would use #key-1's public key (DIFFERENT from #key-2 that was used
+        // to encrypt), causing a key mismatch in ECDH-1PU derivation.
+        let result = recipient_atm.unpack(&packed).await;
+
+        match &result {
+            Ok((unpacked, meta)) => {
+                assert_eq!(unpacked.id, "test-multi-key-1");
+                assert!(meta.authenticated, "should be authenticated (authcrypt)");
+            }
+            Err(e) => {
+                panic!(
+                    "BUG CONFIRMED: unpack failed because try_resolve_sender_public \
+                     picks the wrong key when sender has multiple encryption keys. \
+                     Error: {e}"
+                );
+            }
+        }
+    }
+
+    /// Test: anoncrypt pack/unpack round-trip (no sender key).
+    #[tokio::test]
+    async fn anoncrypt_roundtrip_did_peer_x25519() {
+        let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
+
+        let sender_atm = create_atm_with_secrets(vec![]).await;
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "test-anon-1".to_string(),
+            "example/v1".to_string(),
+            json!({"hello": "anonymous"}),
+        )
+        .to(recipient_did.clone())
+        .finalize();
+
+        // Pack with anoncrypt (no sender)
+        let (packed, pack_meta) = sender_atm
+            .pack_encrypted(&msg, &recipient_did, None, None)
+            .await
+            .expect("anoncrypt pack should succeed");
+
+        assert!(
+            pack_meta.from_kid.is_none(),
+            "anoncrypt should have no from_kid"
+        );
+
+        let (unpacked, meta) = recipient_atm
+            .unpack(&packed)
+            .await
+            .expect("anoncrypt unpack should succeed");
+
+        assert_eq!(unpacked.id, "test-anon-1");
+        assert!(meta.encrypted);
+        assert!(!meta.authenticated, "anoncrypt should not be authenticated");
+        assert!(meta.anonymous_sender);
+    }
 
     const FORWARD_TYPE: &str = "https://didcomm.org/routing/2.0/forward";
 
