@@ -36,7 +36,16 @@ pub async fn resolve(
             ScidMethod::WebVH(webvh_did) => {
                 debug!("Resolving WebVH DID: {}", webvh_did);
                 let mut method = DIDWebVHState::default();
-                match method.resolve(&webvh_did, timeout, false).await {
+                match method
+                    .resolve(
+                        &webvh_did,
+                        didwebvh_rs::resolve::ResolveOptions {
+                            timeout,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                {
                     Ok((log_entry, _)) => {
                         Ok(serde_json::from_value(log_entry.get_did_document()?)?)
                     }
