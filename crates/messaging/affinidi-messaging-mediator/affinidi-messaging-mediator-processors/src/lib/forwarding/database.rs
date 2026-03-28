@@ -45,7 +45,7 @@ impl ForwardingProcessor {
                 ProcessorError::ForwardingError(format!("DB connection error: {e}"))
             })?;
 
-        let result: Result<String, _> = deadpool_redis::redis::cmd("XGROUP")
+        let result: Result<String, _> = redis::cmd("XGROUP")
             .arg("CREATE")
             .arg("FORWARD_Q")
             .arg(&self.config.consumer_group)
@@ -80,17 +80,18 @@ impl ForwardingProcessor {
     }
 
     /// Blocking read from FORWARD_Q using consumer groups.
+    /// Uses a dedicated connection with no response timeout since the redis crate 1.x
+    /// defaults to 500ms which is shorter than the BLOCK duration.
     pub(crate) async fn read_entries(
         &self,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, ProcessorError> {
-        let mut conn =
-            self.database.get_async_connection().await.map_err(|e| {
-                ProcessorError::ForwardingError(format!("DB connection error: {e}"))
-            })?;
+        let mut conn = self.database.get_blocking_connection().await.map_err(|e| {
+            ProcessorError::ForwardingError(format!("DB blocking connection error: {e}"))
+        })?;
 
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
-            deadpool_redis::redis::cmd("XREADGROUP")
+            redis::cmd("XREADGROUP")
                 .arg("GROUP")
                 .arg(&self.config.consumer_group)
                 .arg(&self.consumer_name)
@@ -137,7 +138,7 @@ impl ForwardingProcessor {
                 ProcessorError::ForwardingError(format!("DB connection error: {e}"))
             })?;
 
-        let mut cmd = deadpool_redis::redis::cmd("XACK");
+        let mut cmd = redis::cmd("XACK");
         cmd.arg("FORWARD_Q").arg(&self.config.consumer_group);
         for id in stream_ids {
             cmd.arg(*id);
@@ -160,7 +161,7 @@ impl ForwardingProcessor {
                 ProcessorError::ForwardingError(format!("DB connection error: {e}"))
             })?;
 
-        let mut cmd = deadpool_redis::redis::cmd("XDEL");
+        let mut cmd = redis::cmd("XDEL");
         cmd.arg("FORWARD_Q");
         for id in stream_ids {
             cmd.arg(*id);
@@ -183,7 +184,7 @@ impl ForwardingProcessor {
             })?;
 
         let result: (String, Vec<(String, HashMap<String, String>)>, Vec<String>) =
-            deadpool_redis::redis::cmd("XAUTOCLAIM")
+            redis::cmd("XAUTOCLAIM")
                 .arg("FORWARD_Q")
                 .arg(&self.config.consumer_group)
                 .arg(&self.consumer_name)
@@ -220,7 +221,7 @@ impl ForwardingProcessor {
                 ProcessorError::ForwardingError(format!("DB connection error: {e}"))
             })?;
 
-        let stream_id: String = deadpool_redis::redis::cmd("XADD")
+        let stream_id: String = redis::cmd("XADD")
             .arg("FORWARD_Q")
             .arg("*")
             .arg("MESSAGE")
@@ -267,7 +268,7 @@ impl ForwardingProcessor {
 
         let message_hash = sha256::digest(message.as_bytes());
 
-        deadpool_redis::redis::cmd("FCALL")
+        redis::cmd("FCALL")
             .arg("store_message")
             .arg(1)
             .arg(&message_hash)

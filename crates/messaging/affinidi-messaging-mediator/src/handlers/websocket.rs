@@ -116,7 +116,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         }
         let auth_timeout = tokio::time::sleep(Duration::from_secs(session.expires_at - epoch));
         tokio::pin!(auth_timeout);
-        debug!("WebSocket will timeout in {:?}", auth_timeout);
+        debug!(expires_in_secs = session.expires_at - epoch, "WebSocket auth timeout set");
 
         // Periodic ping to detect dead connections
         let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
@@ -135,11 +135,9 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                 }
                 value = socket.recv() => {
                     match value { Some(msg) => {
-                        debug!("WebSocket message received");
                         if let Ok(msg) = msg {
                             match msg {
                                 Message::Text(msg) => {
-                                    debug!("ws: Received text message");
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
                                         continue;
@@ -147,12 +145,9 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
                                     // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(_) => {
-                                            debug!("Successful handling of message - finished processing");
-                                            //response
-                                        }
+                                        Ok(_) => {}
                                         Err(e) => {
-                                            warn!("Failed to process WebSocket message: {}", e);
+                                            warn!("WebSocket inbound error: {}", e);
 
                                             // Send a problem report to the sender
                                             #[cfg(feature = "didcomm")]
@@ -160,7 +155,6 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                                 MediatorError::MediatorError(_, _, msg_id, problem_report, _, log_message) => {
                                                     match  _package_problem_report(&state, &session, msg_id, *problem_report).await {
                                                         Ok(msg) => {
-                                                            debug!("Sending problem report to client");
                                                             warn!(log_message);
                                                             if let Err(e) = socket.send(Message::Text(msg.into())).await {
                                                                 warn!("Failed to send message to WebSocket client: {e}");
@@ -190,7 +184,6 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                     // Don't need to do anything
                                 }
                                 Message::Binary(msg) => {
-                                    debug!("ws: Received binary message");
                                     if msg.len() > state.config.limits.ws_size {
                                         warn!("Error processing message, the size is too big. limit is {}, message size is {}", state.config.limits.ws_size, msg.len());
                                         continue;
@@ -204,13 +197,10 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                         }
                                     };
 
-                                    // Process the message, which also takes care of any storing and live-streaming of the message
                                     match handle_inbound(&state, &session, &msg).await {
-                                        Ok(_) => {
-                                            debug!("Successful handling of message - finished processing");
-                                        }
+                                        Ok(_) => {}
                                         Err(e) => {
-                                            warn!("Error processing message: {:?}", e);
+                                            warn!("WebSocket inbound error: {}", e);
                                             continue;
                                         }
                                     };
@@ -248,7 +238,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                         warn!("Failed to send message to WebSocket client: {e}");
                                     }
                                 }
-                                debug!("Received close message from streaming task, closing websocket connection");
+                                debug!("Streaming task requested close (duplicate connection)");
                                 already_deregistered_flag = true;
                                 break;
                             }

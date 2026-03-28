@@ -25,20 +25,16 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            deadpool_redis::redis::Cmd::hset(
-                format!("DID:{did_hash}"),
-                "ACLS",
-                acls.to_hex_string(),
-            )
-            .exec_async(&mut con)
-            .await
-            .map_err(|err| {
-                MediatorError::DatabaseError(
-                    14,
-                    "NA".to_string(),
-                    format!("set_acl failed. Reason: {err}"),
-                )
-            })?;
+            redis::Cmd::hset(format!("DID:{did_hash}"), "ACLS", acls.to_hex_string())
+                .exec_async(&mut con)
+                .await
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        14,
+                        "NA".to_string(),
+                        format!("set_acl failed. Reason: {err}"),
+                    )
+                })?;
 
             Ok(acls.to_owned())
         }
@@ -59,17 +55,16 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let acl: Option<String> =
-                deadpool_redis::redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
-                    .query_async(&mut con)
-                    .await
-                    .map_err(|err| {
-                        MediatorError::DatabaseError(
-                            14,
-                            "NA".to_string(),
-                            format!("get_did_acls failed. Reason: {err}"),
-                        )
-                    })?;
+            let acl: Option<String> = redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
+                .query_async(&mut con)
+                .await
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        14,
+                        "NA".to_string(),
+                        format!("get_did_acls failed. Reason: {err}"),
+                    )
+                })?;
 
             if let Some(acl) = acl {
                 Ok(Some(MediatorACLSet::from_hex_string(&acl).map_err(
@@ -154,7 +149,7 @@ impl Database {
         };
 
         if let Some(from_hash) = from_hash {
-            let (exists, acl): (bool, Option<String>) = match deadpool_redis::redis::pipe()
+            let (exists, acl): (bool, Option<String>) = match redis::pipe()
                 .atomic()
                 .cmd("SISMEMBER")
                 .arg(["ACCESS_LIST:", to_hash].concat())
@@ -233,7 +228,7 @@ impl Database {
             debug!("Requesting Access List");
 
             let mut con = self.get_connection().await?;
-            let (new_cursor, hashes): (u64, Vec<String>) = deadpool_redis::redis::cmd("SSCAN")
+            let (new_cursor, hashes): (u64, Vec<String>) = redis::cmd("SSCAN")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .arg(cursor)
                 .arg("COUNT")
@@ -268,7 +263,7 @@ impl Database {
             debug!("Requesting Access List Count");
 
             let mut con = self.get_connection().await?;
-            deadpool_redis::redis::cmd("SCARD")
+            redis::cmd("SCARD")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .query_async(&mut con)
                 .await
@@ -316,7 +311,7 @@ impl Database {
             };
 
             let mut con = self.get_connection().await?;
-            let mut query = deadpool_redis::redis::cmd("SADD");
+            let mut query = redis::cmd("SADD");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 
             for hash in hashes {
@@ -361,7 +356,7 @@ impl Database {
             debug!("Removing from Access List");
 
             let mut con = self.get_connection().await?;
-            let mut query = deadpool_redis::redis::cmd("SREM");
+            let mut query = redis::cmd("SREM");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 
             for hash in hashes {
@@ -391,7 +386,7 @@ impl Database {
             debug!("Clearing Access List");
 
             let mut con = self.get_connection().await?;
-            deadpool_redis::redis::cmd("DEL")
+            redis::cmd("DEL")
                 .arg(["ACCESS_LIST:", did_hash].concat())
                 .exec_async(&mut con)
                 .await
@@ -428,7 +423,7 @@ impl Database {
             debug!("Getting from Access List");
 
             let mut con = self.get_connection().await?;
-            let mut query = deadpool_redis::redis::cmd("SMISMEMBER");
+            let mut query = redis::cmd("SMISMEMBER");
             let mut query = query.arg(["ACCESS_LIST:", did_hash].concat());
 
             for hash in hashes {

@@ -159,7 +159,7 @@ impl Database {
 
         let sid = format!("SESSION:{}", session.session_id);
 
-        deadpool_redis::redis::pipe()
+        redis::pipe()
             .atomic()
             .cmd("HSET")
             .arg(&sid)
@@ -196,24 +196,23 @@ impl Database {
     pub async fn get_session(&self, session_id: &str, did: &str) -> Result<Session, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        let (session_db, did_db): (HashMap<String, String>, Vec<Option<String>>) =
-            deadpool_redis::redis::pipe()
-                .atomic()
-                .cmd("HGETALL")
-                .arg(format!("SESSION:{session_id}"))
-                .cmd("HMGET")
-                .arg(["DID:", &digest(did)].concat())
-                .arg("ROLE_TYPE")
-                .arg("ACLS")
-                .query_async(&mut con)
-                .await
-                .map_err(|err| {
-                    MediatorError::SessionError(
-                        14,
-                        session_id.into(),
-                        format!("Failed to retrieve session ({session_id}). Reason: {err}"),
-                    )
-                })?;
+        let (session_db, did_db): (HashMap<String, String>, Vec<Option<String>>) = redis::pipe()
+            .atomic()
+            .cmd("HGETALL")
+            .arg(format!("SESSION:{session_id}"))
+            .cmd("HMGET")
+            .arg(["DID:", &digest(did)].concat())
+            .arg("ROLE_TYPE")
+            .arg("ACLS")
+            .query_async(&mut con)
+            .await
+            .map_err(|err| {
+                MediatorError::SessionError(
+                    14,
+                    session_id.into(),
+                    format!("Failed to retrieve session ({session_id}). Reason: {err}"),
+                )
+            })?;
 
         let mut session: Session = Session {
             session_id: session_id.into(),
@@ -322,7 +321,7 @@ impl Database {
         let old_sid = format!("SESSION:{old_session_id}");
         let new_sid = format!("SESSION:{new_session_id}");
 
-        deadpool_redis::redis::pipe()
+        redis::pipe()
             .atomic()
             .cmd("RENAME")
             .arg(&old_sid)
@@ -365,7 +364,7 @@ impl Database {
 
         let sid = format!("SESSION:{session_id}");
 
-        deadpool_redis::redis::Cmd::hset(&sid, "refresh_token_hash", refresh_token_hash)
+        redis::Cmd::hset(&sid, "refresh_token_hash", refresh_token_hash)
             .exec_async(&mut con)
             .await
             .map_err(|err| {
@@ -388,7 +387,7 @@ impl Database {
 
         let sid = format!("SESSION:{session_id}");
 
-        let hash: Option<String> = deadpool_redis::redis::Cmd::hget(&sid, "refresh_token_hash")
+        let hash: Option<String> = redis::Cmd::hget(&sid, "refresh_token_hash")
             .query_async(&mut con)
             .await
             .map_err(|err| {

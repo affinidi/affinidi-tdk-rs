@@ -56,7 +56,7 @@ impl Database {
     ) -> Result<String, MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        let mut cmd = deadpool_redis::redis::cmd("XADD");
+        let mut cmd = redis::cmd("XADD");
         cmd.arg("FORWARD_Q");
         if max_len > 0 {
             cmd.arg("MAXLEN").arg("~").arg(max_len);
@@ -106,7 +106,7 @@ impl Database {
         let mut conn = self.get_connection().await?;
 
         // XGROUP CREATE FORWARD_Q <group> 0 MKSTREAM
-        let result: Result<String, _> = deadpool_redis::redis::cmd("XGROUP")
+        let result: Result<String, _> = redis::cmd("XGROUP")
             .arg("CREATE")
             .arg("FORWARD_Q")
             .arg(group_name)
@@ -147,11 +147,14 @@ impl Database {
         count: usize,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
-        let mut conn = self.get_connection().await?;
+        // Use a dedicated connection with no response timeout for blocking XREADGROUP.
+        // The redis crate 1.x defaults to a 500ms response timeout which is shorter
+        // than the BLOCK duration, causing spurious timeout errors.
+        let mut conn = self.get_blocking_connection().await?;
 
         // XREADGROUP GROUP <group> <consumer> BLOCK <ms> COUNT <n> STREAMS FORWARD_Q >
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
-            deadpool_redis::redis::cmd("XREADGROUP")
+            redis::cmd("XREADGROUP")
                 .arg("GROUP")
                 .arg(group_name)
                 .arg(consumer_name)
@@ -165,7 +168,6 @@ impl Database {
                 .query_async(&mut conn)
                 .await
                 .map_err(|err| {
-                    // Timeout returns nil, which is Ok(None)
                     event!(Level::ERROR, "XREADGROUP error: {}", err);
                     MediatorError::DatabaseError(
                         92,
@@ -205,7 +207,7 @@ impl Database {
 
         let mut conn = self.get_connection().await?;
 
-        let mut cmd = deadpool_redis::redis::cmd("XACK");
+        let mut cmd = redis::cmd("XACK");
         cmd.arg("FORWARD_Q").arg(group_name);
         for id in stream_ids {
             cmd.arg(*id);
@@ -226,7 +228,7 @@ impl Database {
 
         let mut conn = self.get_connection().await?;
 
-        let mut cmd = deadpool_redis::redis::cmd("XDEL");
+        let mut cmd = redis::cmd("XDEL");
         cmd.arg("FORWARD_Q");
         for id in stream_ids {
             cmd.arg(*id);
@@ -253,7 +255,7 @@ impl Database {
         // XAUTOCLAIM FORWARD_Q <group> <consumer> <min-idle-ms> 0 COUNT <n>
         // Returns: [next-start-id, [[id, [field, value, ...]], ...], [deleted-ids]]
         let result: (String, Vec<(String, HashMap<String, String>)>, Vec<String>) =
-            deadpool_redis::redis::cmd("XAUTOCLAIM")
+            redis::cmd("XAUTOCLAIM")
                 .arg("FORWARD_Q")
                 .arg(group_name)
                 .arg(consumer_name)

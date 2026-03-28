@@ -63,7 +63,8 @@ functions_file = "${DATABASE_FUNCTIONS_FILE:./conf/atm-functions.lua}"
 ### Default: redis://127.0.0.1/
 database_url = "${DATABASE_URL:redis://127.0.0.1/}"
 
-### database_pool_size: Number of connections to the database
+### database_pool_size: DEPRECATED - ignored, kept for backwards compatibility.
+### The mediator now uses a single multiplexed Redis connection.
 ### Default: 10
 database_pool_size = "${DATABASE_POOL_SIZE:10}"
 

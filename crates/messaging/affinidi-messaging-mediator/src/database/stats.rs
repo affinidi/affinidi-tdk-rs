@@ -80,7 +80,7 @@ impl Database {
 
         let mut stats = MetadataStats::default();
 
-        let result: Value = deadpool_redis::redis::cmd("HGETALL")
+        let result: Value = redis::cmd("HGETALL")
             .arg("GLOBAL")
             .query_async(&mut conn)
             .await
@@ -131,7 +131,7 @@ impl Database {
     pub async fn update_send_stats(&self, sent_bytes: i64) -> Result<(), MediatorError> {
         let mut con = self.get_connection().await?;
 
-        deadpool_redis::redis::pipe()
+        redis::pipe()
             .atomic()
             .cmd("HINCRBY")
             .arg("GLOBAL")
@@ -157,7 +157,7 @@ impl Database {
     pub async fn global_stats_increment_websocket_open(&self) -> Result<(), MediatorError> {
         let mut con = self.get_connection().await?;
 
-        deadpool_redis::redis::cmd("HINCRBY")
+        redis::cmd("HINCRBY")
             .arg("GLOBAL")
             .arg("WEBSOCKET_OPEN")
             .arg(1)
@@ -178,7 +178,7 @@ impl Database {
     pub async fn global_stats_increment_websocket_close(&self) -> Result<(), MediatorError> {
         let mut con = self.get_connection().await?;
 
-        deadpool_redis::redis::cmd("HINCRBY")
+        redis::cmd("HINCRBY")
             .arg("GLOBAL")
             .arg("WEBSOCKET_CLOSE")
             .arg(1)
@@ -199,7 +199,7 @@ impl Database {
     pub async fn get_forward_tasks_len(&self) -> Result<usize, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        let result: usize = deadpool_redis::redis::cmd("XLEN")
+        let result: usize = redis::cmd("XLEN")
             .arg("FORWARD_Q")
             .query_async(&mut con)
             .await

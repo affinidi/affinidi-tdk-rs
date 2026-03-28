@@ -57,7 +57,7 @@ impl Database {
                 ["SEND_Q:", did_hash].concat()
             };
             let message: Vec<(String, HashMap<String, String>)> =
-                deadpool_redis::redis::Cmd::xrange_count(&key, "-", "+", 1)
+                redis::Cmd::xrange_count(&key, "-", "+", 1)
                     .query_async(&mut con)
                     .await
                     .map_err(|e| {
@@ -125,7 +125,7 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut con = self.get_connection().await?;
 
-        deadpool_redis::redis::Cmd::xdel(key, &[id])
+        redis::Cmd::xdel(key, &[id])
             .exec_async(&mut con)
             .await
             .map_err(|e| {
@@ -152,7 +152,7 @@ impl Database {
             ["SEND_Q:", did_hash].concat()
         };
 
-        deadpool_redis::redis::Cmd::del(key)
+        redis::Cmd::del(key)
             .exec_async(&mut con)
             .await
             .map_err(|e| {

@@ -20,7 +20,7 @@ impl MessageExpiryCleanupProcessor {
 
         let mut conn = self.database.get_async_connection().await?;
 
-        deadpool_redis::redis::cmd("ZRANGE")
+        redis::cmd("ZRANGE")
             .arg("MSG_EXPIRY")
             .arg("-inf")
             .arg(now)
@@ -53,15 +53,15 @@ impl MessageExpiryCleanupProcessor {
         let mut total: u32 = 0;
 
         loop {
-            let msg_id: Option<String> = deadpool_redis::redis::cmd("SPOP")
+            let msg_id: Option<String> = redis::cmd("SPOP")
                 .arg(key)
                 .query_async(&mut conn)
                 .await
                 .map_err(|err| {
-                    ProcessorError::MessageExpiryCleanupError(format!(
-                        "SPOP {key} failed. Reason: {err}"
-                    ))
-                })?;
+                ProcessorError::MessageExpiryCleanupError(format!(
+                    "SPOP {key} failed. Reason: {err}"
+                ))
+            })?;
 
             if let Some(msg_id) = msg_id {
                 if self
@@ -74,7 +74,7 @@ impl MessageExpiryCleanupProcessor {
                 }
                 total += 1;
             } else {
-                deadpool_redis::redis::cmd("ZREM")
+                redis::cmd("ZREM")
                     .arg("MSG_EXPIRY")
                     .arg(key)
                     .exec_async(&mut conn)

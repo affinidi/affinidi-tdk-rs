@@ -22,7 +22,7 @@ impl Database {
 
             let start_id = options.start_id.as_deref().unwrap_or("-");
 
-            let results: Vec<Value> = deadpool_redis::redis::cmd("FCALL")
+            let results: Vec<Value> = redis::cmd("FCALL")
                 .arg("fetch_messages")
                 .arg(1)
                 .arg(did_hash)

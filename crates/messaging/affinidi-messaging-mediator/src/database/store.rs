@@ -39,7 +39,7 @@ impl Database {
             );
 
             let mut conn = self.get_connection().await?;
-            deadpool_redis::redis::cmd("FCALL")
+            redis::cmd("FCALL")
                 .arg("store_message")
                 .arg(1)
                 .arg(&message_hash)
@@ -86,7 +86,7 @@ impl Database {
         );
         async move {
             let mut conn = self.get_connection().await?;
-            let metadata: String = deadpool_redis::redis::cmd("HGET")
+            let metadata: String = redis::cmd("HGET")
                 .arg("MESSAGE_STORE")
                 .arg(["METADATA:", message_hash].concat())
                 .query_async(&mut conn)

@@ -32,7 +32,7 @@ impl Database {
             admin_did_hash, admin_did_hash
         );
 
-        deadpool_redis::redis::pipe()
+        redis::pipe()
             .atomic()
             .cmd("SADD")
             .arg("ADMINS")
@@ -62,7 +62,7 @@ impl Database {
     pub(crate) async fn check_admin_account(&self, did_hash: &str) -> Result<bool, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        let (exists, role_type): (u32, u32) = deadpool_redis::redis::pipe()
+        let (exists, role_type): (u32, u32) = redis::pipe()
             .atomic()
             .cmd("SISMEMBER")
             .arg("ADMINS")
@@ -150,7 +150,7 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let mut tx = deadpool_redis::redis::pipe();
+            let mut tx = redis::pipe();
             let mut tx = tx.atomic().cmd("SREM").arg("ADMINS");
 
             // Remove from the ADMINS Set
@@ -204,7 +204,7 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let result: Vec<Value> = deadpool_redis::redis::pipe()
+            let result: Vec<Value> = redis::pipe()
                 .atomic()
                 .cmd("SSCAN")
                 .arg("ADMINS")
@@ -289,7 +289,7 @@ impl Database {
 
             // Get the corresponding role type for each admin
             let mut response: Vec<AdminAccount> = Vec::with_capacity(admins.len());
-            let mut tx = deadpool_redis::redis::pipe();
+            let mut tx = redis::pipe();
             let mut tx = tx.atomic();
             for admin in &admins {
                 tx = tx

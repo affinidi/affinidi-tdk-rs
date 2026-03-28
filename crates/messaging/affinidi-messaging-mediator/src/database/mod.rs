@@ -2,7 +2,7 @@
 
 use crate::common::circuit_breaker::CircuitBreaker;
 use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::MediatorError};
-use deadpool_redis::Connection;
+use redis::aio::{ConnectionManager, MultiplexedConnection};
 use std::sync::Arc;
 
 pub mod accounts;
@@ -44,9 +44,9 @@ impl Database {
         }
     }
 
-    /// Get a Redis connection with circuit breaker protection.
-    /// If the circuit is open, returns an error immediately without trying Redis.
-    pub async fn get_connection(&self) -> Result<Connection, MediatorError> {
+    /// Get a clone of the auto-reconnecting multiplexed Redis connection.
+    /// Protected by circuit breaker for fast-fail when Redis is unavailable.
+    pub async fn get_connection(&self) -> Result<ConnectionManager, MediatorError> {
         if !self.circuit_breaker.allow_request() {
             return Err(MediatorError::DatabaseError(
                 14,
@@ -56,6 +56,28 @@ impl Database {
         }
 
         match self.handler.get_async_connection().await {
+            Ok(conn) => {
+                self.circuit_breaker.record_success();
+                Ok(conn)
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                Err(e)
+            }
+        }
+    }
+
+    /// Get a dedicated Redis connection with no response timeout for blocking commands.
+    pub async fn get_blocking_connection(&self) -> Result<MultiplexedConnection, MediatorError> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(MediatorError::DatabaseError(
+                14,
+                "circuit_breaker".into(),
+                "Redis circuit breaker is open — failing fast. Redis may be unavailable.".into(),
+            ));
+        }
+
+        match self.handler.get_blocking_connection().await {
             Ok(conn) => {
                 self.circuit_breaker.record_success();
                 Ok(conn)

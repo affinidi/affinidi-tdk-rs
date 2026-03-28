@@ -87,7 +87,7 @@ pub async fn authentication_refresh(
 
         // Authentication messages MUST be signed and authenticated!
         if unpack_metadata.authenticated && unpack_metadata.encrypted {
-            debug!("Authentication message is properly signed and encrypted")
+            debug!("Auth message verified: signed and encrypted")
         } else {
                 return Err(MediatorError::problem_with_log(
                     86,

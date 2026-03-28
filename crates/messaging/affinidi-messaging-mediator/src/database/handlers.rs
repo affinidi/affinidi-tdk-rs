@@ -16,7 +16,7 @@ impl Database {
         })?;
 
         let mut conn = self.get_connection().await?;
-        match deadpool_redis::redis::cmd("FUNCTION")
+        match redis::cmd("FUNCTION")
             .arg("LOAD")
             .arg("REPLACE")
             .arg(lua_scripts)

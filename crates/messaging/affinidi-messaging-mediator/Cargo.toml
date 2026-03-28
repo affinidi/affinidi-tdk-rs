@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.4"
+version = "0.12.5"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -50,14 +50,13 @@ axum-extra = { version = "0.12", features = ["typed-header"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
-deadpool-redis = { version = "0.23", features = ["rt_tokio_1"] }
 hostname = "0.4"
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
 num-format = "0.4.4"
 rand = "0.10"
-redis = { version = "1.0", features = [
+redis = { version = "1.1", features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
   "ahash",

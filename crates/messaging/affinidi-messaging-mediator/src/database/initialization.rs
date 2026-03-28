@@ -42,17 +42,16 @@ impl Database {
     async fn _check_schema_version(&self, config: &Config) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        let schema_version: Option<String> =
-            deadpool_redis::redis::Cmd::hget("GLOBAL", "SCHEMA_VERSION")
-                .query_async(&mut conn)
-                .await
-                .map_err(|e| {
-                    MediatorError::DatabaseError(
-                        14,
-                        "NA".into(),
-                        format!("Couldn't get database SCHEMA_VERSION: {e}"),
-                    )
-                })?;
+        let schema_version: Option<String> = redis::Cmd::hget("GLOBAL", "SCHEMA_VERSION")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".into(),
+                    format!("Couldn't get database SCHEMA_VERSION: {e}"),
+                )
+            })?;
 
         if let Some(schema_version) = schema_version {
             let mediator_version = Version::parse(env!("CARGO_PKG_VERSION")).map_err(|e| {

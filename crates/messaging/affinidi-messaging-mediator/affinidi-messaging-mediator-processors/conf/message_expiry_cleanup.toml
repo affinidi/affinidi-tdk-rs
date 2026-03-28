@@ -3,7 +3,8 @@
 ### Default: redis://127.0.0.1/
 database_url = "redis://127.0.0.1/"
 
-### database_pool_size: Number of connections to the database
+### database_pool_size: DEPRECATED - ignored, kept for backwards compatibility.
+### The mediator now uses a single multiplexed Redis connection.
 ### Default: 10
 database_pool_size = 10
 

@@ -38,10 +38,11 @@ impl MessageExpiryCleanupProcessor {
                     continue;
                 }
             };
-            debug!("# of prior Timeslots: {}", timeslots.len());
             if timeslots.is_empty() {
                 continue;
-            } else if timeslots.len() > 5 {
+            }
+            debug!("Expiry check: {} timeslots pending", timeslots.len());
+            if timeslots.len() > 5 {
                 warn!(
                     "Timeslots are backed up. Current timeslot queue: {}",
                     timeslots.len()

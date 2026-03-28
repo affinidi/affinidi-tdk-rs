@@ -65,13 +65,19 @@ pub(crate) async fn process(
             ));
         }
 
+        // Sender identity: prefer JWS signature, fall back to authcrypt sender
+        let sender_kid = metadata
+            .sign_from
+            .clone()
+            .or(metadata.encrypted_from_kid.clone());
+
         // Check to ensure this account is an admin account
         if !state
             .database
             .check_admin_account(&session.did_hash)
             .await?
             || (state.config.security.block_remote_admin_msgs
-                && !check_admin_signature(session, &metadata.sign_from))
+                && !check_admin_signature(session, &sender_kid))
         {
             warn!("DID ({}) is not an admin account", session.did_hash);
             return Err(MediatorError::problem(

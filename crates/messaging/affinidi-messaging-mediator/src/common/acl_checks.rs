@@ -37,7 +37,6 @@ impl ACLCheck for MediatorACLSet {
             known = true;
             session.acls.clone()
         } else {
-            debug!("Fetching acls from database did_hash({})", did_hash);
             let acls = shared
                 .database
                 .get_did_acls(
@@ -46,18 +45,11 @@ impl ACLCheck for MediatorACLSet {
                 )
                 .await?;
             if let Some(acl) = acls.acl_response.first() {
-                debug!(
-                    "Fetched acl({}) from database for did_hash({})",
-                    acl.acls.to_hex_string(),
-                    did_hash
-                );
+                debug!(did_hash, acl = acl.acls.to_hex_string(), "ACL found");
                 known = true;
                 acl.acls.clone()
             } else {
-                debug!(
-                    "No acl set for did_hash({})! Using default_acl...",
-                    did_hash
-                );
+                debug!(did_hash, "No ACL set, using default");
                 shared.config.security.global_acl_default.clone()
             }
         };
