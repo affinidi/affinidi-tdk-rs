@@ -1,5 +1,10 @@
 # Affinidi DID Authentication
 
+## 28th March 2026 (0.3.1)
+
+- **FIX:** Republish with `affinidi-messaging-didcomm` 0.13 dependency
+  (published 0.3.0 still referenced 0.12 on crates.io)
+
 ## 10th March 2026 (0.2.4)
 
 - **MIGRATION:** Migrated to new `affinidi-messaging-didcomm` 0.13.0

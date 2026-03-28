@@ -1,5 +1,10 @@
 # Meeting Place Changelog
 
+## 28th March 2026 (0.3.2)
+
+- **FIX:** Republish with `affinidi-messaging-didcomm` 0.13 dependency
+  (published 0.3.1 still referenced 0.12 on crates.io)
+
 ## 10th March 2026 (0.2.3)
 
 - **CHORE:** Updated to new `affinidi-messaging-didcomm` 0.13.0
