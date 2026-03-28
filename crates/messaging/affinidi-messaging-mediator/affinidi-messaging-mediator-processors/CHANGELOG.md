@@ -4,6 +4,12 @@
 
 ## 28th March 2026
 
+### 0.12.3
+
+- **FIX:** Replaced `deadpool-redis` with direct `redis` crate dependency
+  - Forwarding processor now uses dedicated blocking connection for XREADGROUP
+  - Fixes spurious timeout errors from redis 1.x's 500ms default response timeout
+
 ### 0.12.2
 
 - **CHORE:** Normalized `affinidi-messaging-mediator-common` version specifier

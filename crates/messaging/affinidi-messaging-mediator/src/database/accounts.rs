@@ -42,7 +42,7 @@ impl Database {
     pub(crate) async fn account_exists(&self, did_hash: &str) -> Result<bool, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        deadpool_redis::redis::cmd("EXISTS")
+        redis::cmd("EXISTS")
             .arg(["DID:", did_hash].concat())
             .query_async(&mut con)
             .await
@@ -66,7 +66,7 @@ impl Database {
         let mut con = self.get_connection().await?;
 
         let (details, access_list_count): (HashMap<String, String>, u32) =
-            deadpool_redis::redis::pipe()
+            redis::pipe()
                 .atomic()
                 .hgetall(["DID:", did_hash].concat())
                 .scard(["ACCESS_LIST:", did_hash].concat())
@@ -106,7 +106,7 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let mut cmd = deadpool_redis::redis::pipe();
+            let mut cmd = redis::pipe();
             let mut cmd = cmd
                 .atomic()
                 .cmd("SADD")
@@ -224,7 +224,7 @@ impl Database {
             // Remove DID Record
             // Remove ACCESS_LIST Set
             let mut con = self.get_connection().await?;
-            deadpool_redis::redis::pipe()
+            redis::pipe()
                 .atomic()
                 .cmd("SREM")
                 .arg("KNOWN_DIDS")
@@ -266,7 +266,7 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let (new_cursor, dids): (u32, Vec<String>) = deadpool_redis::redis::cmd("SSCAN")
+            let (new_cursor, dids): (u32, Vec<String>) = redis::cmd("SSCAN")
                 .arg("KNOWN_DIDS")
                 .arg(cursor)
                 .arg("COUNT")
@@ -347,7 +347,7 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            deadpool_redis::redis::cmd("HSET")
+            redis::cmd("HSET")
                 .arg(["DID:", did_hash].concat())
                 .arg("ROLE_TYPE")
                 .arg::<String>(_type.to_owned().into())
@@ -420,7 +420,7 @@ impl Database {
         match queue_limit {
             None => return Ok(()),
             Some(-2) => {
-                deadpool_redis::redis::cmd("HDEL")
+                redis::cmd("HDEL")
                     .arg(["DID:", did_hash].concat())
                     .arg(queue_name)
                     .exec_async(&mut con)
@@ -434,7 +434,7 @@ impl Database {
                     })?;
             }
             Some(n) => {
-                deadpool_redis::redis::cmd("HSET")
+                redis::cmd("HSET")
                     .arg(["DID:", did_hash].concat())
                     .arg(queue_name)
                     .arg(n)

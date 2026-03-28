@@ -19,7 +19,7 @@ impl Database {
         async move {
             let mut conn = self.get_connection().await?;
 
-            let (didcomm_message, meta_data): (Value, Vec<String>) = deadpool_redis::redis::pipe()
+            let (didcomm_message, meta_data): (Value, Vec<String>) = redis::pipe()
                 .atomic()
                 .cmd("GET")
                 .arg(["MSG:", msg_id].concat())

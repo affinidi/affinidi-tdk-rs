@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+## 28th March 2026
+
+### 0.12.3
+
+- **FIX:** Replaced `deadpool-redis` connection pool with direct `redis` crate
+  `ConnectionManager` (auto-reconnecting multiplexed connection)
+  - Fixes XREADGROUP BLOCK timeout errors caused by redis 1.x's 500ms default
+    response timeout conflicting with blocking commands
+  - `DatabaseHandler` now uses `ConnectionManager` for normal operations and a
+    dedicated `MultiplexedConnection` (no response timeout) for blocking commands
+  - `database_timeout` config now maps to `ConnectionManagerConfig` response/connection timeouts
+  - `database_pool_size` config is deprecated and ignored
+- **CHORE:** Upgraded `redis` from `1.0` to `1.1` with `connection-manager` feature
+
 ## 10th March 2026
 
 ### 0.12.2

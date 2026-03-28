@@ -116,7 +116,7 @@ async fn generate_status_reply(
     async move {
         let mut conn = state.database.get_connection().await?;
 
-        let response: Vec<Value> = deadpool_redis::redis::cmd("FCALL")
+        let response: Vec<Value> = redis::cmd("FCALL")
             .arg("get_status_reply")
             .arg(1)
             .arg(did_hash)

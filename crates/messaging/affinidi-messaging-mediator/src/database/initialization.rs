@@ -43,7 +43,7 @@ impl Database {
         let mut conn = self.get_connection().await?;
 
         let schema_version: Option<String> =
-            deadpool_redis::redis::Cmd::hget("GLOBAL", "SCHEMA_VERSION")
+            redis::Cmd::hget("GLOBAL", "SCHEMA_VERSION")
                 .query_async(&mut conn)
                 .await
                 .map_err(|e| {

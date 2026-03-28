@@ -9,7 +9,7 @@ impl Database {
     pub async fn streaming_clean_start(&self, uuid: &str) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        let response: Vec<Value> = deadpool_redis::redis::pipe()
+        let response: Vec<Value> = redis::pipe()
             .atomic()
             .cmd("FCALL")
             .arg("clean_start_streaming")
@@ -68,7 +68,7 @@ impl Database {
             }
         };
 
-        match deadpool_redis::redis::cmd("HGET")
+        match redis::cmd("HGET")
             .arg("GLOBAL_STREAMING")
             .arg(did_hash)
             .query_async::<Option<String>>(&mut conn)
@@ -150,7 +150,7 @@ impl Database {
 
         let mut conn = self.get_connection().await?;
 
-        match deadpool_redis::redis::cmd("PUBLISH")
+        match redis::cmd("PUBLISH")
             .arg(["CHANNEL:", stream_uuid].concat())
             .arg(record)
             .exec_async(&mut conn)
@@ -190,7 +190,7 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        match deadpool_redis::redis::pipe()
+        match redis::pipe()
             .atomic()
             .cmd("SADD")
             .arg(["STREAMING_SESSIONS:", stream_uuid].concat())
@@ -234,7 +234,7 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        match deadpool_redis::redis::cmd("HSET")
+        match redis::cmd("HSET")
             .arg("GLOBAL_STREAMING")
             .arg(did_hash)
             .arg([stream_uuid, ":", "TRUE"].concat())
@@ -276,7 +276,7 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        match deadpool_redis::redis::cmd("HSET")
+        match redis::cmd("HSET")
             .arg("GLOBAL_STREAMING")
             .arg(did_hash)
             .arg([stream_uuid, ":", "FALSE"].concat())
@@ -318,7 +318,7 @@ impl Database {
     ) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
 
-        match deadpool_redis::redis::pipe()
+        match redis::pipe()
             .atomic()
             .cmd("SREM")
             .arg(["STREAMING_SESSIONS:", stream_uuid].concat())

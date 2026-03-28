@@ -67,7 +67,7 @@ impl Database {
             let invite_hash = digest(&base64_invite);
             let key = Database::to_cache_key(&invite_hash);
 
-            match deadpool_redis::redis::pipe()
+            match redis::pipe()
                 .atomic()
                 .cmd("HMSET")
                 .arg(&key)
@@ -114,7 +114,7 @@ impl Database {
             let mut conn = self.get_connection().await?;
 
             let key = Database::to_cache_key(oob_id);
-            let invitation: Option<(String, String)> = match deadpool_redis::redis::pipe()
+            let invitation: Option<(String, String)> = match redis::pipe()
                 .atomic()
                 .cmd("HMGET")
                 .arg(key)
@@ -164,7 +164,7 @@ impl Database {
             let mut conn = self.get_connection().await?;
 
             let key = Database::to_cache_key(oob_id);
-            let result: bool = match deadpool_redis::redis::cmd("DEL")
+            let result: bool = match redis::cmd("DEL")
                 .arg(key)
                 .query_async::<bool>(&mut conn)
                 .await

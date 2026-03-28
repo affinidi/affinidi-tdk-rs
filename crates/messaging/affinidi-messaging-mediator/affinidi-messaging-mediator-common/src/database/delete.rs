@@ -30,7 +30,7 @@ impl DatabaseHandler {
         );
         async move {
             let mut conn = self.get_async_connection().await?;
-            let response: String = deadpool_redis::redis::cmd("FCALL")
+            let response: String = redis::cmd("FCALL")
                 .arg("delete_message")
                 .arg(1)
                 .arg(message_hash)

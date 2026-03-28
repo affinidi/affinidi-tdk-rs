@@ -2,102 +2,90 @@ use crate::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
 use config::DatabaseConfig;
-use deadpool_redis::Connection;
-use redis::aio::PubSub;
+use redis::AsyncConnectionConfig;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection, PubSub};
+
 use semver::{Version, VersionReq};
 use std::{thread::sleep, time::Duration};
-use tracing::{Level, event, info};
+use tracing::{Level, event, info, warn};
 
 pub mod config;
 pub mod delete;
 
 /// Low-level Redis connection handler used by the mediator.
 ///
-/// Manages a connection pool via `deadpool_redis` and provides methods for
-/// obtaining async connections and pub/sub channels. Created once at startup
-/// after verifying Redis server version compatibility.
+/// Uses a single multiplexed connection (via `ConnectionManager` for auto-reconnect)
+/// instead of a connection pool. `MultiplexedConnection` handles concurrent commands
+/// over one TCP connection, making a pool unnecessary.
 #[derive(Clone)]
 pub struct DatabaseHandler {
-    /// Connection pool for async Redis operations.
-    pub pool: deadpool_redis::Pool,
-    /// Redis connection URL (kept for creating pub/sub connections).
+    /// Auto-reconnecting multiplexed connection for normal Redis operations.
+    connection: ConnectionManager,
+    /// Redis connection URL (kept for creating pub/sub and blocking connections).
     redis_url: String,
 }
 
 const REDIS_VERSION_REQ: &str = ">=7.1, <9.0";
 
 impl DatabaseHandler {
-    /// Creates a new `DatabaseHandler`, establishing a connection pool and verifying
+    /// Creates a new `DatabaseHandler`, establishing a multiplexed connection and verifying
     /// that the Redis server version is compatible. Retries on connection failure.
     pub async fn new(config: &DatabaseConfig) -> Result<Self, MediatorError> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        // Creates initial pool Configuration from the redis database URL
-        let pool = deadpool_redis::Config::from_url(&config.database_url)
-            .builder()
-            .map_err(|err| {
-                MediatorError::problem_with_log(
-                    1,
-                    "NA",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.url",
-                    "Database URL ({1}) is invalid. Reason: {2}",
-                    vec![config.database_url.clone(), err.to_string()],
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!(
-                        "Database URL ({}) is invalid. Reason: {}",
-                        config.database_url, err
-                    ),
-                )
-            })?;
+        if config.database_pool_size != 0 {
+            warn!(
+                "database_pool_size ({}) is deprecated and ignored; using multiplexed connection",
+                config.database_pool_size
+            );
+        }
 
-        // Now that we have a base config, we customise the redis pool config
-        // and create the async pool of redis connections
-        let pool = pool
-            .runtime(deadpool_redis::Runtime::Tokio1)
-            .max_size(config.database_pool_size)
-            .timeouts(deadpool_redis::Timeouts {
-                wait: Some(Duration::from_secs(config.database_timeout.into())),
-                create: Some(Duration::from_secs(config.database_timeout.into())),
-                recycle: Some(Duration::from_secs(config.database_timeout.into())),
-            })
-            .build()
-            .map_err(|err| {
-                MediatorError::problem_with_log(
-                    2,
-                    "NA",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.config",
-                    "Database config is invalid. Reason: {2}",
-                    vec![err.to_string()],
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Database config is invalid. Reason: {err}"),
-                )
-            })?;
+        let client = redis::Client::open(config.database_url.as_str()).map_err(|err| {
+            MediatorError::problem_with_log(
+                1,
+                "NA",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.url",
+                "Database URL ({1}) is invalid. Reason: {2}",
+                vec![config.database_url.clone(), err.to_string()],
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Database URL ({}) is invalid. Reason: {}",
+                    config.database_url, err
+                ),
+            )
+        })?;
 
-        let database = Self {
-            pool,
-            redis_url: config.database_url.clone(),
-        };
-        loop {
-            let mut conn = match database.get_async_connection().await {
-                Ok(conn) => conn,
+        let manager_config = ConnectionManagerConfig::new()
+            .set_response_timeout(Some(Duration::from_secs(config.database_timeout.into())))
+            .set_connection_timeout(Some(Duration::from_secs(config.database_timeout.into())));
+
+        let connection = loop {
+            match client
+                .get_connection_manager_with_config(manager_config.clone())
+                .await
+            {
+                Ok(conn) => break conn,
                 Err(err) => {
-                    event!(Level::WARN, "Error getting connection to database: {}", err);
+                    event!(Level::WARN, "Error connecting to database: {}", err);
                     event!(Level::WARN, "Retrying database connection in 10 seconds");
                     sleep(Duration::from_secs(10));
-                    continue;
                 }
-            };
+            }
+        };
 
-            let pong: Result<String, deadpool_redis::redis::RedisError> =
-                deadpool_redis::redis::cmd("PING")
-                    .query_async(&mut conn)
-                    .await;
+        let database = Self {
+            connection,
+            redis_url: config.database_url.clone(),
+        };
+
+        // Verify connectivity with PING
+        loop {
+            let mut conn = database.connection.clone();
+            let pong: Result<String, redis::RedisError> =
+                redis::cmd("PING").query_async(&mut conn).await;
             match pong {
                 Ok(pong) => {
                     event!(
@@ -122,27 +110,53 @@ impl DatabaseHandler {
         // Check the version of Redis Server
         database.check_server_version().await?;
 
-        //database.get_db_metadata().await?;
         Ok(database)
     }
 
-    /// Returns a redis async database connector or returns an Error
-    /// This is the main method to get a connection to the database
-    pub async fn get_async_connection(&self) -> Result<Connection, MediatorError> {
-        self.pool.get().await.map_err(|err| {
+    /// Returns a clone of the auto-reconnecting multiplexed connection.
+    /// This is cheap (Arc clone internally) and supports concurrent use.
+    pub async fn get_async_connection(&self) -> Result<ConnectionManager, MediatorError> {
+        Ok(self.connection.clone())
+    }
+
+    /// Returns a dedicated Redis connection with no response timeout.
+    /// This must be used for blocking commands (e.g. XREADGROUP BLOCK)
+    /// because the normal connection's response timeout will kill the
+    /// connection before the block period completes.
+    pub async fn get_blocking_connection(&self) -> Result<MultiplexedConnection, MediatorError> {
+        let client = redis::Client::open(self.redis_url.clone()).map_err(|err| {
             MediatorError::problem_with_log(
-                3,
+                10,
                 "NA",
                 None,
                 ProblemReportSorter::Error,
                 ProblemReportScope::Protocol,
-                "me.res.storage.connection",
-                "Can't get database connection. Reason: {1}",
+                "me.res.storage.connection.blocking",
+                "Can't open database connection for blocking ops. Reason: {1}",
                 vec![err.to_string()],
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("Can't get database connection. Reason: {err}"),
+                format!("Can't open database connection for blocking ops. Reason: {err}"),
             )
-        })
+        })?;
+
+        let config = AsyncConnectionConfig::new().set_response_timeout(None);
+        client
+            .get_multiplexed_async_connection_with_config(&config)
+            .await
+            .map_err(|err| {
+                MediatorError::problem_with_log(
+                    11,
+                    "NA",
+                    None,
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.connection.blocking",
+                    "Can't establish blocking database connection. Reason: {1}",
+                    vec![err.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Can't establish blocking database connection. Reason: {err}"),
+                )
+            })
     }
 
     /// Returns a redis database connector or returns an Error
@@ -186,8 +200,8 @@ impl DatabaseHandler {
             Err(err) => panic!("Couldn't process required Redis version. Reason: {err}"),
         };
 
-        let mut conn = self.get_async_connection().await?;
-        let server_info: String = match deadpool_redis::redis::cmd("INFO")
+        let mut conn = self.connection.clone();
+        let server_info: String = match redis::cmd("INFO")
             .arg("SERVER")
             .query_async(&mut conn)
             .await

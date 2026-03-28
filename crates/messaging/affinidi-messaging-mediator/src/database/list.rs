@@ -39,7 +39,7 @@ impl Database {
                 ("-", "+")
             };
 
-            let db_response: Value = deadpool_redis::redis::cmd("XRANGE")
+            let db_response: Value = redis::cmd("XRANGE")
                 .arg(&key)
                 .arg(start)
                 .arg(end)
