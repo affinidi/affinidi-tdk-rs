@@ -113,8 +113,12 @@ async fn handle_inbound_didcomm(
                         "Message unpacked"
                     );
 
-                    // Allow anonymous (unsigned) messages?
-                    if metadata.sign_from.is_none()
+                    // Block truly anonymous messages (no sender authentication).
+                    // A message is considered authenticated if EITHER:
+                    // - authcrypt (ECDH-1PU) was used (metadata.authenticated == true), OR
+                    // - a JWS signature is present (metadata.sign_from.is_some())
+                    if !metadata.authenticated
+                        && metadata.sign_from.is_none()
                         && state.config.security.block_anonymous_outer_envelope
                     {
                         return Err(MediatorError::problem(
@@ -124,15 +128,19 @@ async fn handle_inbound_didcomm(
                             ProblemReportSorter::Warning,
                             ProblemReportScope::Message,
                             "message.anonymous",
-                            "Mediator is not allowing anonymous messages",
+                            "Mediator is not allowing anonymous messages (no authcrypt or JWS signature)",
                             vec![],
                             StatusCode::BAD_REQUEST,
                         ));
                     }
 
-                    // Does the signing key match the session DID?
+                    // Does the sender identity match the session DID?
+                    // The sender can be identified by JWS signing (sign_from) or
+                    // authcrypt encryption (encrypted_from_kid).
                     if state.config.security.force_session_did_match {
-                        check_session_signing_match(session, &msg.id, &metadata.sign_from)?;
+                        let sender_kid =
+                            metadata.sign_from.as_ref().or(metadata.encrypted_from_kid.as_ref());
+                        check_session_sender_match(session, &msg.id, &sender_kid)?;
                     }
 
                     // Process the message
@@ -261,19 +269,24 @@ async fn handle_inbound_didcomm(
     .await
 }
 
-/// Ensure the Session DID and the message signing DID match
+/// Ensure the Session DID and the message sender DID match.
+/// The sender can be identified by either a JWS signature (`sign_from`)
+/// or authcrypt encryption (`encrypted_from_kid`). Both are key IDs
+/// in the form `did:...#key-N` — the DID is extracted from the fragment.
 #[cfg(feature = "didcomm")]
-fn check_session_signing_match(
+fn check_session_sender_match(
     session: &Session,
     msg_id: &str,
-    sign_from: &Option<String>,
+    sender_kid: &Option<&String>,
 ) -> Result<(), MediatorError> {
-    if let Some(sign_from) = sign_from
-        && let Some(sign_did) = sign_from.split_once('#')
-        && sign_did.0 == session.did
+    if let Some(kid) = sender_kid
+        && let Some((did, _fragment)) = kid.split_once('#')
+        && did == session.did
     {
         return Ok(());
     }
+
+    let sender_display = sender_kid.map(|s| s.as_str()).unwrap_or("anonymous");
 
     Err(MediatorError::problem_with_log(
         52,
@@ -282,17 +295,9 @@ fn check_session_signing_match(
         ProblemReportSorter::Error,
         ProblemReportScope::Protocol,
         "authorization.did.session_mismatch",
-        "signing DID ({1}) doesn't match this sessions DID",
-        vec![
-            sign_from
-                .clone()
-                .unwrap_or("Anonymous".to_string())
-                .to_string(),
-        ],
+        "Sender DID ({1}) doesn't match session DID",
+        vec![sender_display.to_string()],
         StatusCode::BAD_REQUEST,
-        format!(
-            "signing DID ({}) doesn't match this sessions DID",
-            sign_from.clone().unwrap_or("Anonymous".to_string())
-        ),
+        format!("Sender DID ({sender_display}) doesn't match session DID"),
     ))
 }

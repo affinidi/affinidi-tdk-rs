@@ -85,6 +85,12 @@ pub(crate) async fn process(
             }
         };
 
+        // Sender identity: prefer JWS signature, fall back to authcrypt sender
+        let sender_kid = metadata
+            .sign_from
+            .clone()
+            .or(metadata.encrypted_from_kid.clone());
+
         // Process the request
         match request {
             MediatorACLRequest::GetACL(dids) => {
@@ -93,7 +99,7 @@ pub(crate) async fn process(
                     session,
                     &dids,
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
@@ -143,7 +149,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
@@ -243,7 +249,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!("List Access List from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
@@ -293,7 +299,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!("Add Access List from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
@@ -372,7 +378,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!(
                         "Remove Access List from DID ({}) failed. ",
@@ -450,7 +456,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!("Clear Access List for DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
@@ -511,7 +517,7 @@ pub(crate) async fn process(
                     session,
                     slice::from_ref(&did_hash),
                     state.config.security.block_remote_admin_msgs,
-                    &metadata.sign_from,
+                    &sender_kid,
                 ) {
                     warn!(
                         "Get from Access List for DID ({}) failed. ",
@@ -562,20 +568,15 @@ pub(crate) async fn process(
 
 /// Helper function to ensure the signing DID matches the session DID
 /// returns true if all ok, false otherwise
-pub(crate) fn check_admin_signature(session: &Session, sign_by: &Option<String>) -> bool {
-    if let Some(sign_by) = sign_by {
-        if let Some(sign_did) = sign_by.split_once('#') {
-            if sign_did.0 != session.did {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    } else {
-        return false;
+/// Check that the sender (identified by JWS signature or authcrypt key ID)
+/// matches the session DID. The `sender_kid` is a key ID like `did:...#key-N`.
+pub(crate) fn check_admin_signature(session: &Session, sender_kid: &Option<String>) -> bool {
+    match sender_kid {
+        Some(kid) => kid
+            .split_once('#')
+            .is_some_and(|(did, _)| did == session.did),
+        None => false,
     }
-
-    true
 }
 
 /// Helper method that determines if an ACL Request can be processed

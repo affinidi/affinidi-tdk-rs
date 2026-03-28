@@ -92,11 +92,17 @@ pub(crate) async fn process(
         };
         debug!("Received Mediator Account request: {:?}", request);
 
+        // Sender identity: prefer JWS signature, fall back to authcrypt sender
+        let sender_kid = metadata
+            .sign_from
+            .clone()
+            .or(metadata.encrypted_from_kid.clone());
+
         // Process the request
         match request {
             MediatorAccountRequest::AccountGet(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &sender_kid) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
                         45,
@@ -234,7 +240,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountRemove(did_hash) => {
                 // Check permissions and ACLs
-                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &sender_kid) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
                         45,
@@ -416,7 +422,7 @@ pub(crate) async fn process(
             }
             MediatorAccountRequest::AccountChangeQueueLimits {did_hash, send_queue_limit, receive_queue_limit } => {
                  // Check permissions and ACLs
-                 if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &metadata.sign_from) {
+                 if !check_permissions(session, slice::from_ref(&did_hash), state.config.security.block_remote_admin_msgs, &sender_kid) {
                     warn!("ACL Request from DID ({}) failed. ", session.did_hash);
                     return Err(MediatorError::problem(
                         45,
