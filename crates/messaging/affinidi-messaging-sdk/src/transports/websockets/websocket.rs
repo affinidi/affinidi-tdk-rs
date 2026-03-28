@@ -336,6 +336,12 @@ impl WebSocketTransport {
                     )
                     .await;
                 }
+                Message::Ping(data) => {
+                    debug!("Received ping message, sending pong");
+                    if let Some(web_socket) = self.web_socket.as_mut() {
+                        let _ = web_socket.send(Message::Pong(data)).await;
+                    }
+                }
                 Message::Pong(_) => {
                     debug!("Received pong message");
                     self.awaiting_pong = false;
