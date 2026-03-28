@@ -732,95 +732,210 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_check_permissions_admin_success() {
-        let session = Session {
-            did: "did:example:123".to_string(),
-            account_type: AccountType::Admin,
-            ..Default::default()
-        };
-        let dids = vec![digest("did:example:123")];
-        assert!(check_permissions(&session, &dids, false, &None));
-    }
+    // --- check_admin_signature tests ---
 
     #[test]
-    fn test_check_permissions_root_admin_success() {
+    fn admin_sig_jws_matching_did() {
         let session = Session {
-            did: "did:example:123".to_string(),
-            did_hash: digest("did:example:123"),
-            account_type: AccountType::RootAdmin,
+            did: "did:example:alice".to_string(),
             ..Default::default()
         };
-        let dids = vec![digest("did:example:1234")];
-        assert!(check_permissions(&session, &dids, false, &None));
-    }
-
-    #[test]
-    fn test_check_permissions_standard_success() {
-        let session = Session {
-            did: "did:example:123".to_string(),
-            did_hash: digest("did:example:123"),
-            account_type: AccountType::Standard,
-            ..Default::default()
-        };
-        let dids = vec![digest("did:example:123")];
-        assert!(check_permissions(&session, &dids, false, &None));
-    }
-
-    #[test]
-    fn test_check_permissions_standard_multiple_dids_failure() {
-        let session = Session {
-            did: "did:example:123".to_string(),
-            did_hash: digest("did:example:123"),
-            account_type: AccountType::Standard,
-            ..Default::default()
-        };
-        let dids = vec![digest("did:example:123"), digest("did:example:hacker")];
-        assert!(!check_permissions(&session, &dids, false, &None));
-    }
-
-    #[test]
-    fn test_check_permissions_standard_wrong_did_failure() {
-        let session = Session {
-            did: "did:example:123".to_string(),
-            account_type: AccountType::Standard,
-            ..Default::default()
-        };
-        let dids = vec![digest("did:example:1234")];
-        assert!(!check_permissions(&session, &dids, false, &None));
-    }
-
-    #[test]
-    fn test_check_permissions_correct_admin_session_match() {
-        let session = Session {
-            did: "did:example:123".to_string(),
-            did_hash: digest("did:example:123"),
-            account_type: AccountType::Admin,
-            ..Default::default()
-        };
-        let dids = vec![digest("did:example:123")];
-        assert!(check_permissions(
+        assert!(check_admin_signature(
             &session,
-            &dids,
-            true,
-            &Some("did:example:123#key1".to_string())
+            &Some("did:example:alice#key-0".to_string())
         ));
     }
 
     #[test]
-    fn test_check_permissions_incorrect_admin_session_match() {
+    fn admin_sig_authcrypt_kid_matching_did() {
+        // Authcrypt sender identified by encrypted_from_kid (same format as JWS)
         let session = Session {
-            did: "did:example:123".to_string(),
-            did_hash: digest("did:example:123"),
+            did: "did:webvh:Qmc572jbs:webvh.example.com:vta".to_string(),
+            ..Default::default()
+        };
+        assert!(check_admin_signature(
+            &session,
+            &Some("did:webvh:Qmc572jbs:webvh.example.com:vta#key-1".to_string())
+        ));
+    }
+
+    #[test]
+    fn admin_sig_mismatched_did() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        assert!(!check_admin_signature(
+            &session,
+            &Some("did:example:mallory#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn admin_sig_none_is_anonymous() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        assert!(!check_admin_signature(&session, &None));
+    }
+
+    #[test]
+    fn admin_sig_kid_without_fragment_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            ..Default::default()
+        };
+        // A key ID without a # fragment is malformed and should be rejected
+        assert!(!check_admin_signature(
+            &session,
+            &Some("did:example:alice".to_string())
+        ));
+    }
+
+    // --- check_permissions tests ---
+
+    #[test]
+    fn perms_admin_any_dids_no_signing_check() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
             account_type: AccountType::Admin,
             ..Default::default()
         };
-        let dids = vec![digest("did:example:123")];
+        let dids = vec![digest("did:example:someone_else")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_root_admin_any_dids() {
+        let session = Session {
+            did: "did:example:root".to_string(),
+            did_hash: digest("did:example:root"),
+            account_type: AccountType::RootAdmin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:other")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_own_did() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice")];
+        assert!(check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_wrong_did_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:bob")];
+        assert!(!check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_standard_multiple_dids_rejected() {
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice"), digest("did:example:bob")];
+        assert!(!check_permissions(&session, &dids, false, &None));
+    }
+
+    #[test]
+    fn perms_admin_with_jws_signing_check_matching() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        assert!(check_permissions(
+            &session,
+            &dids,
+            true,
+            &Some("did:example:admin#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_with_authcrypt_kid_signing_check() {
+        // When check_admin_signing is true and sender is identified by authcrypt kid
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        // This simulates passing encrypted_from_kid as the sender identity
+        assert!(check_permissions(
+            &session,
+            &dids,
+            true,
+            &Some("did:example:admin#key-1".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_signing_check_wrong_did_rejected() {
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
         assert!(!check_permissions(
             &session,
             &dids,
             true,
-            &Some("did:example:mallory#key1".to_string())
+            &Some("did:example:mallory#key-0".to_string())
+        ));
+    }
+
+    #[test]
+    fn perms_admin_signing_check_none_rejected() {
+        // Anonymous message to admin endpoint should fail when signing check enabled
+        let session = Session {
+            did: "did:example:admin".to_string(),
+            did_hash: digest("did:example:admin"),
+            account_type: AccountType::Admin,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:admin")];
+        assert!(!check_permissions(&session, &dids, true, &None));
+    }
+
+    #[test]
+    fn perms_standard_no_signing_check_ignores_sender() {
+        // Standard account with check_admin_signing=false: sender_kid is irrelevant
+        let session = Session {
+            did: "did:example:alice".to_string(),
+            did_hash: digest("did:example:alice"),
+            account_type: AccountType::Standard,
+            ..Default::default()
+        };
+        let dids = vec![digest("did:example:alice")];
+        assert!(check_permissions(&session, &dids, false, &None));
+        assert!(check_permissions(
+            &session,
+            &dids,
+            false,
+            &Some("did:example:mallory#key-0".to_string())
         ));
     }
 }
