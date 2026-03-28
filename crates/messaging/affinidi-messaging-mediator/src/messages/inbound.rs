@@ -106,7 +106,12 @@ async fn handle_inbound_didcomm(
                         }
                     };
 
-                    debug!("message unpacked:\n{:#?}", msg);
+                    debug!(
+                        id = msg.id,
+                        typ = msg.typ,
+                        from = msg.from.as_deref().unwrap_or("anon"),
+                        "Message unpacked"
+                    );
 
                     // Allow anonymous (unsigned) messages?
                     if metadata.sign_from.is_none()
@@ -132,7 +137,7 @@ async fn handle_inbound_didcomm(
 
                     // Process the message
                     let response = msg.process(state, session, &metadata).await?;
-                    debug!("message processed:\n{:#?}", response);
+                    debug!("Message processed successfully");
                     store_message(state, session, &response, &metadata).await
                 } else {
                     // this is a direct delivery method

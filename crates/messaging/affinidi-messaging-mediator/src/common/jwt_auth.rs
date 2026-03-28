@@ -21,7 +21,7 @@ use std::{
     fmt::{Debug, Display},
     net::SocketAddr,
 };
-use tracing::{Level, error, event, info, warn};
+use tracing::{Level, debug, error, event, info, warn};
 
 // Payload contents of the JWT
 // All times are in seconds since UNIX EPOCH
@@ -167,10 +167,7 @@ where
         // Update the expires at time
         saved_session.expires_at = token_data.claims.exp;
 
-        info!(
-            "{}: Protected connection accepted from did_hash({})",
-            &session_id, &did_hash
-        );
+        debug!(session_id, did_hash, "JWT auth accepted");
 
         Ok(saved_session)
     }

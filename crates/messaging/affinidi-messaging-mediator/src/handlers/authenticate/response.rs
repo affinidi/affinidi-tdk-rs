@@ -66,7 +66,7 @@ pub async fn authentication_response(
 
         // Authentication messages MUST be signed and authenticated!
         if envelope.metadata.authenticated && envelope.metadata.encrypted {
-            debug!("Authenticated messages is properly signed and encrypted")
+            debug!("Auth message verified: signed and encrypted")
         } else {
             return Err(MediatorError::problem_with_log(
                 86,
@@ -172,7 +172,7 @@ pub async fn authentication_response(
 
         // Authentication messages MUST be signed and authenticated!
         if unpack_metadata.authenticated && unpack_metadata.encrypted {
-            debug!("Authentication message is properly signed and encrypted")
+            debug!("Auth message verified: signed and encrypted")
         } else {
             return Err(MediatorError::problem_with_log(
                 86,
@@ -358,7 +358,7 @@ pub async fn authentication_response(
 
         // Check that this isn't a replay attack
         if let SessionState::ChallengeSent = session.state {
-            debug!("Database session state is ChallengeSent - Good to go!");
+            debug!("Session state valid: ChallengeSent");
         } else {
             return Err(MediatorError::problem(
                 34,
@@ -431,11 +431,7 @@ pub async fn authentication_response(
         _register_did_and_setup(&state, &session.did_hash).await?;
 
         metrics::counter!(crate::common::metrics::names::AUTH_SUCCESS_TOTAL).increment(1);
-        info!(
-            "{}: Authentication successful for DID({})",
-            session.session_id,
-            digest(&session.did)
-        );
+        info!("Authentication successful for {}", session.did);
 
         Ok((
             StatusCode::OK,

@@ -80,10 +80,7 @@ pub async fn authentication_challenge(
         state.database.create_session(&session).await?;
 
         metrics::counter!(crate::common::metrics::names::AUTH_CHALLENGES_TOTAL).increment(1);
-        debug!(
-            "{}: Challenge sent to DID({})",
-            session.session_id, session.did
-        );
+        debug!("Challenge sent to {}", session.did);
 
         Ok((
             StatusCode::OK,

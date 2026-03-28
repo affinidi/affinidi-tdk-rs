@@ -8,7 +8,7 @@ use affinidi_messaging_sdk::messages::{
 use axum::{Json, extract::State};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use tracing::{Instrument, Level, debug, info, span};
+use tracing::{Instrument, Level, debug, span};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct ResponseData {
@@ -67,7 +67,6 @@ pub async fn message_delete_handler(
         let mut deleted: DeleteMessageResponse = DeleteMessageResponse::default();
 
         for message in &body.message_ids {
-            debug!("Deleting message: message_id({})", message);
             let result = state
                 .database
                 .handler
@@ -77,11 +76,7 @@ pub async fn message_delete_handler(
             match result {
                 Ok(_) => deleted.success.push(message.into()),
                 Err(err) => {
-                    // This often occurs because the message was already deleted, and client is trying to delete it again
-                    info!(
-                        "{}: failed to delete msg({}). Reason: {}",
-                        session.session_id, message, err
-                    );
+                    debug!(message_id = message, error = %err, "Delete failed (may already be deleted)");
                     deleted.errors.push((message.into(), err.to_string()));
                 }
             }

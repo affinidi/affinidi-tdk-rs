@@ -357,7 +357,7 @@ impl DIDCacheClient {
 
         // Check if the DID is in the cache
         if let Some(doc) = self.cache.get(&hash).await {
-            debug!("found did ({}) in cache", did);
+            debug!("DID cache hit: {}", did);
             Ok(ResolveResponse {
                 did: did.to_string(),
                 method,
@@ -366,7 +366,7 @@ impl DIDCacheClient {
                 cache_hit: true,
             })
         } else {
-            debug!("did ({}) NOT in cache hash ({:#?})", did, hash);
+            debug!("DID cache miss: {}", did);
             // If the DID is not in the cache, resolve it (local or via network)
             #[cfg(feature = "network")]
             let doc = {
@@ -380,7 +380,7 @@ impl DIDCacheClient {
             #[cfg(not(feature = "network"))]
             let doc = self.local_resolve(&parsed_did).await?;
 
-            debug!("adding did ({}) to cache ({:#?})", did, hash);
+            debug!("DID cached: {}", did);
             self.cache.insert(hash, doc.clone()).await;
             Ok(ResolveResponse {
                 did: did.to_string(),
@@ -416,7 +416,7 @@ impl DIDCacheClient {
     /// Add a DID Document to the cache manually
     pub async fn add_did_document(&mut self, did: &str, doc: Document) {
         let hash = DIDCacheClient::hash_did(did);
-        debug!("manually adding did ({}) hash({:#?}) to cache", did, hash);
+        debug!("DID manually cached: {}", did);
         self.cache.insert(hash, doc).await;
     }
 
