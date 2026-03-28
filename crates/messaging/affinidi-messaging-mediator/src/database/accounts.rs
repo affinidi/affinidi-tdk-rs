@@ -65,20 +65,19 @@ impl Database {
     ) -> Result<Option<Account>, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        let (details, access_list_count): (HashMap<String, String>, u32) =
-            redis::pipe()
-                .atomic()
-                .hgetall(["DID:", did_hash].concat())
-                .scard(["ACCESS_LIST:", did_hash].concat())
-                .query_async(&mut con)
-                .await
-                .map_err(|err| {
-                    MediatorError::DatabaseError(
-                        14,
-                        "NA".to_string(),
-                        format!("Failed to get account details. Reason: {err}"),
-                    )
-                })?;
+        let (details, access_list_count): (HashMap<String, String>, u32) = redis::pipe()
+            .atomic()
+            .hgetall(["DID:", did_hash].concat())
+            .scard(["ACCESS_LIST:", did_hash].concat())
+            .query_async(&mut con)
+            .await
+            .map_err(|err| {
+                MediatorError::DatabaseError(
+                    14,
+                    "NA".to_string(),
+                    format!("Failed to get account details. Reason: {err}"),
+                )
+            })?;
 
         if details.is_empty() {
             debug!("Account {} does not exist", did_hash);

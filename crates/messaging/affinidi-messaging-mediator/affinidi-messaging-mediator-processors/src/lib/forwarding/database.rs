@@ -86,10 +86,9 @@ impl ForwardingProcessor {
         &self,
         block_ms: usize,
     ) -> Result<Vec<ForwardQueueEntry>, ProcessorError> {
-        let mut conn =
-            self.database.get_blocking_connection().await.map_err(|e| {
-                ProcessorError::ForwardingError(format!("DB blocking connection error: {e}"))
-            })?;
+        let mut conn = self.database.get_blocking_connection().await.map_err(|e| {
+            ProcessorError::ForwardingError(format!("DB blocking connection error: {e}"))
+        })?;
 
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
             redis::cmd("XREADGROUP")

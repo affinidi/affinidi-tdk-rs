@@ -9,6 +9,8 @@
 - **FIX:** Replaced `deadpool-redis` with direct `redis` crate dependency
   - Forwarding processor now uses dedicated blocking connection for XREADGROUP
   - Fixes spurious timeout errors from redis 1.x's 500ms default response timeout
+- **CHORE:** Cleaned up message expiry cleanup processor logging
+  - No longer logs every second when idle
 
 ### 0.12.2
 

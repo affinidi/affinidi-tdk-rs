@@ -25,20 +25,16 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            redis::Cmd::hset(
-                format!("DID:{did_hash}"),
-                "ACLS",
-                acls.to_hex_string(),
-            )
-            .exec_async(&mut con)
-            .await
-            .map_err(|err| {
-                MediatorError::DatabaseError(
-                    14,
-                    "NA".to_string(),
-                    format!("set_acl failed. Reason: {err}"),
-                )
-            })?;
+            redis::Cmd::hset(format!("DID:{did_hash}"), "ACLS", acls.to_hex_string())
+                .exec_async(&mut con)
+                .await
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        14,
+                        "NA".to_string(),
+                        format!("set_acl failed. Reason: {err}"),
+                    )
+                })?;
 
             Ok(acls.to_owned())
         }
@@ -59,17 +55,16 @@ impl Database {
 
             let mut con = self.get_connection().await?;
 
-            let acl: Option<String> =
-                redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
-                    .query_async(&mut con)
-                    .await
-                    .map_err(|err| {
-                        MediatorError::DatabaseError(
-                            14,
-                            "NA".to_string(),
-                            format!("get_did_acls failed. Reason: {err}"),
-                        )
-                    })?;
+            let acl: Option<String> = redis::Cmd::hget(format!("DID:{did_hash}"), "ACLS")
+                .query_async(&mut con)
+                .await
+                .map_err(|err| {
+                    MediatorError::DatabaseError(
+                        14,
+                        "NA".to_string(),
+                        format!("get_did_acls failed. Reason: {err}"),
+                    )
+                })?;
 
             if let Some(acl) = acl {
                 Ok(Some(MediatorACLSet::from_hex_string(&acl).map_err(

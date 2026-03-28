@@ -58,10 +58,10 @@ impl MessageExpiryCleanupProcessor {
                 .query_async(&mut conn)
                 .await
                 .map_err(|err| {
-                    ProcessorError::MessageExpiryCleanupError(format!(
-                        "SPOP {key} failed. Reason: {err}"
-                    ))
-                })?;
+                ProcessorError::MessageExpiryCleanupError(format!(
+                    "SPOP {key} failed. Reason: {err}"
+                ))
+            })?;
 
             if let Some(msg_id) = msg_id {
                 if self

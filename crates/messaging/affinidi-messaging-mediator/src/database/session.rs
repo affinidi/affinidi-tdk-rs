@@ -196,24 +196,23 @@ impl Database {
     pub async fn get_session(&self, session_id: &str, did: &str) -> Result<Session, MediatorError> {
         let mut con = self.get_connection().await?;
 
-        let (session_db, did_db): (HashMap<String, String>, Vec<Option<String>>) =
-            redis::pipe()
-                .atomic()
-                .cmd("HGETALL")
-                .arg(format!("SESSION:{session_id}"))
-                .cmd("HMGET")
-                .arg(["DID:", &digest(did)].concat())
-                .arg("ROLE_TYPE")
-                .arg("ACLS")
-                .query_async(&mut con)
-                .await
-                .map_err(|err| {
-                    MediatorError::SessionError(
-                        14,
-                        session_id.into(),
-                        format!("Failed to retrieve session ({session_id}). Reason: {err}"),
-                    )
-                })?;
+        let (session_db, did_db): (HashMap<String, String>, Vec<Option<String>>) = redis::pipe()
+            .atomic()
+            .cmd("HGETALL")
+            .arg(format!("SESSION:{session_id}"))
+            .cmd("HMGET")
+            .arg(["DID:", &digest(did)].concat())
+            .arg("ROLE_TYPE")
+            .arg("ACLS")
+            .query_async(&mut con)
+            .await
+            .map_err(|err| {
+                MediatorError::SessionError(
+                    14,
+                    session_id.into(),
+                    format!("Failed to retrieve session ({session_id}). Reason: {err}"),
+                )
+            })?;
 
         let mut session: Session = Session {
             session_id: session_id.into(),

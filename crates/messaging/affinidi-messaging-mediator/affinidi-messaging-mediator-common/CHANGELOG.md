@@ -15,6 +15,10 @@
   - `database_timeout` config now maps to `ConnectionManagerConfig` response/connection timeouts
   - `database_pool_size` config is deprecated and ignored
 - **CHORE:** Upgraded `redis` from `1.0` to `1.1` with `connection-manager` feature
+- **CHORE:** Cleaned up log messages for readability
+  - Removed per-second idle DEBUG spam from message expiry cleanup
+  - Simplified DID resolver cache log messages (removed hash arrays)
+  - Simplified ACL check and auth handler log messages
 
 ## 10th March 2026
 
