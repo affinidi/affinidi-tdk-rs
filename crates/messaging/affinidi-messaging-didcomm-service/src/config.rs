@@ -1,5 +1,5 @@
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
-use affinidi_tdk_common::profiles::TDKProfile;
+use affinidi_tdk_common::{config::TDKConfig, profiles::TDKProfile};
 
 pub struct DIDCommServiceConfig {
     pub listeners: Vec<ListenerConfig>,
@@ -12,6 +12,7 @@ pub struct ListenerConfig {
     pub restart_policy: RestartPolicy,
     pub message_wait_duration_secs: u64,
     pub auto_delete: bool,
+    pub tdk_config: Option<TDKConfig>,
 }
 
 impl Default for ListenerConfig {
@@ -23,6 +24,7 @@ impl Default for ListenerConfig {
             restart_policy: RestartPolicy::default(),
             message_wait_duration_secs: 5,
             auto_delete: true,
+            tdk_config: None,
         }
     }
 }
@@ -67,6 +69,7 @@ mod tests {
         assert!(lc.auto_delete);
         assert!(lc.acl_mode.is_none());
         assert!(matches!(lc.restart_policy, RestartPolicy::Never));
+        assert!(lc.tdk_config.is_none());
     }
 
     #[test]

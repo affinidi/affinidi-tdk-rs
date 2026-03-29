@@ -70,7 +70,11 @@ impl Listener {
     }
 
     pub async fn connect(&mut self) -> Result<(), DIDCommServiceError> {
-        let shared_state = Arc::new(TDKSharedState::default().await);
+        let shared_state = if let Some(tdk_config) = self.config.tdk_config.take() {
+            Arc::new(TDKSharedState::new(tdk_config).await?)
+        } else {
+            Arc::new(TDKSharedState::default().await)
+        };
 
         shared_state
             .secrets_resolver
