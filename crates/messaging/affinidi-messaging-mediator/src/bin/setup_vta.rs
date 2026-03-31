@@ -399,8 +399,9 @@ async fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error
                     );
                 }
                 Err(e) => {
-                    let err_msg = format!("{e}");
-                    if err_msg.contains("ResourceExistsException") || err_msg.contains("already exists") {
+                    // Use Debug format for full error chain; Display only says "service error"
+                    let err_detail = format!("{e:?}");
+                    if err_detail.contains("ResourceExistsException") || err_detail.contains("already exists") {
                         // Secret exists — update it
                         asm.put_secret_value()
                             .secret_id(&secret_name)
@@ -408,7 +409,7 @@ async fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error
                             .send()
                             .await
                             .map_err(|e| {
-                                format!("Could not update existing secret '{secret_name}': {e}")
+                                format!("Could not update existing secret '{secret_name}': {e:?}")
                             })?;
                         println!(
                             "  {} Updated existing secret '{}'",
@@ -417,8 +418,7 @@ async fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error
                         );
                     } else {
                         return Err(format!(
-                            "Could not create secret '{secret_name}' in AWS Secrets Manager: {e}\n  \
-                             Check your AWS credentials and permissions (secretsmanager:CreateSecret)."
+                            "Could not create secret '{secret_name}' in AWS Secrets Manager:\n  {err_detail}"
                         ).into());
                     }
                 }
