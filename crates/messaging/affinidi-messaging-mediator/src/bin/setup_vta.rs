@@ -18,8 +18,7 @@ use dialoguer::{Confirm, Input, Select};
 use std::{collections::HashMap, env, fs, process};
 use vta_sdk::{
     client::{
-        CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, UpdateContextRequest,
-        VtaClient,
+        CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, VtaClient,
     },
     context_provision::ContextProvisionBundle,
     credentials::CredentialBundle,
@@ -598,12 +597,7 @@ async fn step_did(
             );
 
             // Update context with the DID (may already be set, but ensure it's correct)
-            let update_req = UpdateContextRequest {
-                name: None,
-                did: Some(provisioned_did.id.clone()),
-                description: None,
-            };
-            client.update_context(context_id, update_req).await?;
+            client.update_context_did(context_id, &provisioned_did.id).await?;
             println!(
                 "  {} Context '{}' configured with DID",
                 style("*").green(),
@@ -753,12 +747,7 @@ async fn create_new_did(
         style(&result.did).cyan()
     );
 
-    let update_req = UpdateContextRequest {
-        name: None,
-        did: Some(result.did),
-        description: None,
-    };
-    client.update_context(context_id, update_req).await?;
+    client.update_context_did(context_id, &result.did).await?;
     println!(
         "  {} Context '{}' updated with new DID",
         style("*").green(),
@@ -874,12 +863,7 @@ async fn import_existing_did(
         );
     }
 
-    let update_req = UpdateContextRequest {
-        name: None,
-        did: Some(did.clone()),
-        description: None,
-    };
-    client.update_context(context_id, update_req).await?;
+    client.update_context_did(context_id, &did).await?;
     println!(
         "  {} Context '{}' updated with DID: {}",
         style("*").green(),
