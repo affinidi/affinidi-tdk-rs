@@ -203,11 +203,11 @@ pub(crate) async fn load_secrets(
                 .send()
                 .await
                 .map_err(|e| {
-                    eprintln!("Could not get secret value. {e}");
+                    eprintln!("Could not get secret value. {e:?}");
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Could not get secret value. {e}"),
+                        format!("Could not get secret value. {e:?}"),
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
@@ -389,11 +389,11 @@ pub(crate) async fn config_jwt_secret(
                 .send()
                 .await
                 .map_err(|e| {
-                    eprintln!("Could not get secret value. {e}");
+                    eprintln!("Could not get secret value. {e:?}");
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Could not get secret value. {e}"),
+                        format!("Could not get secret value. {e:?}"),
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
@@ -465,11 +465,11 @@ pub(crate) async fn aws_parameter_store(
         .send()
         .await
         .map_err(|e| {
-            eprintln!("Could not get ({parameter_name:?}) parameter. {e}");
+            eprintln!("Could not get ({parameter_name:?}) parameter. {e:?}");
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                format!("Could not get ({parameter_name:?}) parameter. {e}"),
+                format!("Could not get ({parameter_name:?}) parameter. {e:?}"),
             )
         })?;
     let parameter = response.parameter.ok_or_else(|| {
@@ -577,11 +577,11 @@ pub(crate) async fn load_vta_credential(
                     .send()
                     .await
                     .map_err(|e| {
-                        eprintln!("Could not get VTA credential from AWS Secrets Manager. {e}");
+                        eprintln!("Could not get VTA credential from AWS Secrets Manager. {e:?}");
                         MediatorError::ConfigError(
                             12,
                             "NA".into(),
-                            format!("Could not get VTA credential from AWS Secrets Manager. {e}"),
+                            format!("Could not get VTA credential from AWS Secrets Manager. {e:?}"),
                         )
                     })?;
                 response.secret_string.ok_or_else(|| {
