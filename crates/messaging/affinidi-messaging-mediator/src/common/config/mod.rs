@@ -211,8 +211,16 @@ impl TryFrom<ConfigRaw> for Config {
         let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
 
         // Initialize VTA client if vta:// scheme is used for DID or secrets
+        // IMPORTANT: The mediator MUST use REST (not DIDComm) to communicate with VTA during
+        // startup. If the VTA only supports DIDComm transport via this mediator, neither service
+        // can bootstrap — a deadlock. The `client` feature (not `session`) ensures REST transport.
         let needs_vta = raw.mediator_did.starts_with("vta://")
             || raw.security.mediator_secrets.starts_with("vta://");
+
+        // VTA health info for circular dependency detection (populated below if VTA is used)
+        let mut vta_mediator_did: Option<String> = None;
+        let mut vta_mediator_url: Option<String> = None;
+
         let vta_client = if needs_vta {
             let vta_config = raw.vta.as_ref().ok_or_else(|| {
                 MediatorError::ConfigError(
@@ -226,22 +234,81 @@ impl TryFrom<ConfigRaw> for Config {
             let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
             let url_override = vta_config.url.as_deref().filter(|u| !u.is_empty());
 
-            info!("Authenticating to VTA...");
+            info!("Authenticating to VTA via REST...");
             let client = VtaClient::from_credential(&credential_raw, url_override)
                 .await
                 .map_err(|e| {
                     error!("VTA authentication failed: {e}");
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("VTA authentication failed: {e}"),
-                    )
+                    if e.is_network() {
+                        MediatorError::ConfigError(12, "NA".into(), format!(
+                            "Cannot reach VTA via REST: {e}. \
+                             The mediator requires REST access to the VTA during startup. \
+                             If the VTA relies on this mediator for DIDComm transport and has no \
+                             independent REST endpoint, this is a deadlock — neither service can start. \
+                             Ensure the VTA exposes a REST API that is reachable without this mediator."
+                        ))
+                    } else {
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("VTA authentication failed: {e}"),
+                        )
+                    }
                 })?;
-            info!("Successfully authenticated to VTA (auto-refresh enabled)");
+
+            let vta_base_url = client.base_url().to_string();
+            info!("Successfully authenticated to VTA at '{vta_base_url}' (REST, auto-refresh enabled)");
+
+            // Probe VTA health to detect circular dependency with this mediator.
+            // The health endpoint reports the VTA's own mediator configuration, so we can
+            // check whether the VTA routes DIDComm through this same mediator.
+            match client.health().await {
+                Ok(health) => {
+                    if health.mediator_did.is_some() || health.mediator_url.is_some() {
+                        info!(
+                            "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
+                            health.mediator_did.as_deref().unwrap_or("none"),
+                            health.mediator_url.as_deref().unwrap_or("none"),
+                        );
+                    }
+                    vta_mediator_did = health.mediator_did;
+                    vta_mediator_url = health.mediator_url;
+                }
+                Err(e) => {
+                    warn!("Could not check VTA health for circular dependency detection (non-fatal): {e}");
+                }
+            }
+
             Some(client)
         } else {
             None
         };
+
+        // Resolve mediator DID before building config so we can check for circular dependency
+        let mediator_did = read_did_config(&raw.mediator_did, &aws_config, "mediator_did", vta_client.as_ref()).await?;
+
+        // Circular dependency check: does the VTA route DIDComm through THIS mediator?
+        if let Some(vta_med_did) = &vta_mediator_did {
+            if vta_med_did == &mediator_did {
+                warn!(
+                    "CIRCULAR DEPENDENCY: This mediator's DID ({mediator_did}) matches the VTA's \
+                     configured mediator DID. The VTA routes DIDComm through this mediator. \
+                     REST bootstrapping prevents startup deadlock, but both services are \
+                     interdependent — if this mediator is unavailable, the VTA's DIDComm \
+                     transport will be disrupted until the mediator restarts and re-bootstraps \
+                     from VTA via REST. Simultaneous restarts of both services may require \
+                     manual intervention (start VTA first with REST enabled, then start mediator)."
+                );
+            }
+        } else if let Some(vta_med_url) = &vta_mediator_url {
+            // Fallback: if we couldn't match by DID, warn if VTA has any mediator configured
+            warn!(
+                "VTA is configured with mediator_url '{}'. If this is the same mediator, \
+                 a circular dependency exists. Ensure the VTA's REST endpoint is accessible \
+                 independently of this mediator for bootstrap.",
+                vta_med_url
+            );
+        }
 
         let mut config = Config {
             log_level: match raw.log_level.as_str() {
@@ -260,7 +327,7 @@ impl TryFrom<ConfigRaw> for Config {
                 true
             }),
             listen_address: raw.server.listen_address,
-            mediator_did: read_did_config(&raw.mediator_did, &aws_config, "mediator_did", vta_client.as_ref()).await?,
+            mediator_did,
             admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None).await?,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
