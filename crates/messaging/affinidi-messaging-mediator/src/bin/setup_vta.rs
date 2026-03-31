@@ -843,11 +843,13 @@ async fn import_existing_did(
         // The VTA expects raw key bytes in multibase (no multicodec prefix).
         let private_key = decode_and_validate_private_key(&private_key, &key_type, fragment)?;
 
+        // Use the full verification method ID as the label so that the mediator's
+        // secrets resolver can match keys to DID document verification methods.
         let req = ImportKeyRequest {
             key_type: key_type.clone(),
             private_key_jwe: None,
             private_key_multibase: Some(private_key),
-            label: Some(format!("mediator-{fragment}")),
+            label: Some(vm_id.clone()),
             context_id: Some(context_id.to_string()),
         };
 

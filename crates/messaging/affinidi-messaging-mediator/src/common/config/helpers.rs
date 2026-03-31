@@ -200,7 +200,14 @@ pub(crate) async fn load_secrets(
                 &key.key_id,
             )?;
 
-            let secret = Secret::from_multibase(&multibase_with_codec, Some(&key.key_id))
+            // Use the key's label as the Secret ID if it looks like a verification method ID
+            // (e.g., "did:web:example.com#key-0"). The label is set by the setup wizard to
+            // match the DID document's verification method IDs. Falls back to VTA key_id.
+            let secret_id = key.label.as_deref()
+                .filter(|l| l.contains('#') || l.starts_with("did:"))
+                .unwrap_or(&key.key_id);
+
+            let secret = Secret::from_multibase(&multibase_with_codec, Some(secret_id))
                 .map_err(|e| {
                     MediatorError::ConfigError(
                         12, "NA".into(),
