@@ -549,6 +549,7 @@ pub(crate) async fn read_document(
 /// - `keyring://<service>/<user>` - Load from OS keyring (requires `vta-keyring` feature)
 pub(crate) async fn load_vta_credential(
     credential_config: &str,
+    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))]
     aws_config: &SdkConfig,
 ) -> Result<String, MediatorError> {
     let parts: Vec<&str> = credential_config.split("://").collect();
@@ -566,28 +567,40 @@ pub(crate) async fn load_vta_credential(
             Ok(parts[1].to_string())
         }
         "aws_secrets" => {
-            info!("Loading VTA credential from AWS Secrets Manager");
-            let asm = aws_sdk_secretsmanager::Client::new(aws_config);
-            let response = asm
-                .get_secret_value()
-                .secret_id(parts[1])
-                .send()
-                .await
-                .map_err(|e| {
-                    eprintln!("Could not get VTA credential from AWS Secrets Manager. {e}");
+            #[cfg(feature = "vta-aws-secrets")]
+            {
+                info!("Loading VTA credential from AWS Secrets Manager");
+                let asm = aws_sdk_secretsmanager::Client::new(aws_config);
+                let response = asm
+                    .get_secret_value()
+                    .secret_id(parts[1])
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        eprintln!("Could not get VTA credential from AWS Secrets Manager. {e}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Could not get VTA credential from AWS Secrets Manager. {e}"),
+                        )
+                    })?;
+                response.secret_string.ok_or_else(|| {
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Could not get VTA credential from AWS Secrets Manager. {e}"),
+                        "No secret string found in AWS Secrets Manager response for VTA credential".into(),
                     )
-                })?;
-            response.secret_string.ok_or_else(|| {
-                MediatorError::ConfigError(
+                })
+            }
+            #[cfg(not(feature = "vta-aws-secrets"))]
+            {
+                Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "No secret string found in AWS Secrets Manager response for VTA credential".into(),
-                )
-            })
+                    "aws_secrets:// for VTA credentials requires the 'vta-aws-secrets' feature. \
+                     Rebuild with: cargo build --features vta-aws-secrets".into(),
+                ))
+            }
         }
         "keyring" => {
             #[cfg(feature = "vta-keyring")]

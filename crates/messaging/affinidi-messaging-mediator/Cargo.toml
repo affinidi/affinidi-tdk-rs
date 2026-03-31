@@ -25,8 +25,10 @@ didcomm = [
 tsp = [
     "dep:affinidi-tsp",
 ]
-# VTA credential storage via OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+# VTA credential storage backends (at least one required for production VTA use)
+# string:// is always available for dev/CI without either feature
 vta-keyring = ["dep:keyring"]
+vta-aws-secrets = []
 
 [dependencies]
 # Affinidi Crates
