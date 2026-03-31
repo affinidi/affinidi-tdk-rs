@@ -11,13 +11,15 @@ participants.
 
 ## Feature Flags
 
-Protocol support is controlled via Cargo feature flags. At least one must be
-enabled.
+Protocol and integration support is controlled via Cargo feature flags.
 
 | Feature | Default | Description |
 |---|---|---|
 | `didcomm` | Yes | DIDComm v2 protocol support (authentication, inbound/outbound, OOB discovery) |
 | `tsp` | No | Trust Spanning Protocol support |
+| `vta-aws-secrets` | No | VTA credential storage via AWS Secrets Manager |
+| `vta-keyring` | No | VTA credential storage via OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service) |
+| `setup` | No | Interactive `mediator-setup-vta` CLI wizard |
 
 ```bash
 # DIDComm only (default)
@@ -28,6 +30,12 @@ cargo build --no-default-features --features tsp
 
 # Both protocols
 cargo build --features "didcomm,tsp"
+
+# With VTA support (AWS production)
+cargo build --features vta-aws-secrets
+
+# Build the VTA setup wizard
+cargo build --bin mediator-setup-vta --features setup
 ```
 
 ## Architecture
@@ -77,6 +85,52 @@ cd affinidi-messaging-mediator
 export REDIS_URL=redis://@localhost:6379
 cargo run
 ```
+
+## VTA Integration (Centralized Key Management)
+
+The mediator can use a [Verifiable Trust Agent (VTA)](https://github.com/OpenVTC/verifiable-trust-infrastructure)
+for centralized DID and key management instead of local file-based secrets.
+
+See [docs/vta-setup-guide.md](docs/vta-setup-guide.md) for the full step-by-step guide.
+
+### Quick Start with Setup Wizard
+
+The fastest way to configure VTA integration:
+
+```bash
+# Build the setup wizard
+cargo build --bin mediator-setup-vta --features setup
+
+# Run it (uses conf/mediator.toml by default)
+cargo run --bin mediator-setup-vta --features setup
+
+# Or specify a config path
+cargo run --bin mediator-setup-vta --features setup -- --config path/to/mediator.toml
+```
+
+The wizard accepts a **Context Provision Bundle** from `pnm contexts provision`
+(recommended) and auto-configures the credential, context, DID, and
+`mediator.toml` in a single flow.
+
+### Manual Configuration
+
+Set `mediator_did` and `mediator_secrets` to use the `vta://` scheme, and add a
+`[vta]` section:
+
+```toml
+mediator_did = "vta://mediator"
+
+[security]
+mediator_secrets = "vta://mediator"
+
+[vta]
+credential = "string://eyJkaWQ..."
+context = "mediator"
+```
+
+See the [VTA setup guide](docs/vta-setup-guide.md) for all credential storage
+backends, environment variable configuration, and production deployment
+guidance.
 
 ## Access Control Lists (ACLs)
 
