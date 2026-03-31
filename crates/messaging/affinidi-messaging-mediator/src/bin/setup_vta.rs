@@ -1,5 +1,8 @@
 //! Interactive CLI wizard for configuring VTA integration with the mediator.
 //!
+//! Accepts a **Context Provision Bundle** from `pnm contexts provision` (recommended)
+//! or a raw **Credential Bundle** from `cnm-cli auth credentials generate`.
+//!
 //! Build and run:
 //!   cargo run --bin mediator-setup-vta --features setup [-- --config path/to/mediator.toml]
 
@@ -8,16 +11,31 @@ use affinidi_did_common::{
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use console::style;
-use dialoguer::{Confirm, Input, Password, Select};
+use console::{Key, Term, style};
+use dialoguer::{Confirm, Input, Select};
 use std::{collections::HashMap, env, fs, process};
 use vta_sdk::{
-    client::{CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, UpdateContextRequest, VtaClient},
+    client::{
+        CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, UpdateContextRequest,
+        VtaClient,
+    },
+    context_provision::ContextProvisionBundle,
     credentials::CredentialBundle,
     keys::KeyType,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
+
+/// What the user pasted — either a full provision bundle or a plain credential.
+enum BundleInput {
+    /// Full provision bundle from `pnm contexts provision` — includes context, DID, secrets.
+    Provision {
+        bundle: ContextProvisionBundle,
+        credential_raw: String,
+    },
+    /// Plain credential from `cnm-cli auth credentials generate` — manual setup required.
+    Credential { credential_raw: String },
+}
 
 #[tokio::main]
 async fn main() {
@@ -35,20 +53,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", style("==================").dim());
     println!();
 
-    // Step 1: Get and validate credential
-    let (client, credential_raw) = step_credential().await?;
+    // Step 1: Get and validate bundle/credential
+    let (client, input) = step_credential().await?;
 
     // Step 2: Choose credential storage
-    let credential_config = step_storage(&credential_raw)?;
+    let credential_raw = match &input {
+        BundleInput::Provision {
+            credential_raw, ..
+        } => credential_raw,
+        BundleInput::Credential { credential_raw } => credential_raw,
+    };
+    let credential_config = step_storage(credential_raw)?;
 
     // Step 3: Context setup
-    let context_id = step_context(&client).await?;
+    let context_id = step_context(&client, &input).await?;
 
     // Step 4: DID setup
-    step_did(&client, &context_id).await?;
+    let did_doc_path = step_did(&client, &context_id, &input).await?;
 
     // Step 5: Save config
-    step_save_config(&config_path, &credential_config, &context_id)?;
+    step_save_config(&config_path, &credential_config, &context_id, did_doc_path.as_deref())?;
 
     println!();
     println!("{}", style("Setup complete!").green().bold());
@@ -72,50 +96,113 @@ fn parse_config_path() -> String {
     DEFAULT_CONFIG_PATH.to_string()
 }
 
+// ─── Masked input helper ─────────────────────────────────────────────────────
+
+/// Read a line of input, displaying `*` for each character typed/pasted.
+fn read_masked(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let term = Term::stderr();
+    term.write_str(prompt)?;
+
+    let mut input = String::new();
+    loop {
+        match term.read_key()? {
+            Key::Enter => {
+                term.write_line("")?;
+                break;
+            }
+            Key::Backspace => {
+                if input.pop().is_some() {
+                    term.clear_chars(1)?;
+                }
+            }
+            Key::Char(c) if !c.is_control() => {
+                input.push(c);
+                term.write_str("*")?;
+            }
+            _ => {}
+        }
+    }
+    Ok(input)
+}
+
 // ─── Step 1: Credential ─────────────────────────────────────────────────────
 
-async fn step_credential() -> Result<(VtaClient, String), Box<dyn std::error::Error>> {
-    println!("{}", style("Step 1: VTA Credential").bold());
-    println!("  Paste the credential bundle from your VTA admin.");
+async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::error::Error>> {
+    println!("{}", style("Step 1: VTA Bundle").bold());
+    println!("  Paste the bundle from your VTA provisioning:");
     println!(
-        "  (Generated via: {})",
+        "  - Context Provision Bundle (from {})",
+        style("pnm contexts provision").dim()
+    );
+    println!(
+        "  - Or a Credential Bundle (from {})",
         style("cnm-cli auth credentials generate").dim()
     );
     println!();
 
-    let credential_raw: String = Password::new()
-        .with_prompt("  Credential bundle (base64url)")
-        .interact()?;
+    let raw = read_masked("  Bundle (base64url): ")?;
+    let raw = raw.trim().to_string();
 
-    let credential_raw = credential_raw.trim().to_string();
-    if credential_raw.is_empty() {
-        return Err("Credential cannot be empty".into());
+    if raw.is_empty() {
+        return Err("Bundle cannot be empty".into());
     }
 
-    // Validate the credential structure
-    let credential = CredentialBundle::decode(&credential_raw).map_err(|e| {
-        format!("Invalid credential bundle: {e}. Make sure you pasted the full base64url string.")
-    })?;
+    // Try to decode as ContextProvisionBundle first, fall back to CredentialBundle
+    let input = if let Ok(bundle) = ContextProvisionBundle::decode(&raw) {
+        println!(
+            "  {} Decoded context provision bundle",
+            style("*").green(),
+        );
+        println!(
+            "    Context: {} ({})",
+            style(&bundle.context_id).cyan(),
+            &bundle.context_name
+        );
+        if let Some(did) = &bundle.did {
+            println!("    DID: {}", style(&did.id).cyan());
+            println!(
+                "    Keys: {} secret{}",
+                did.secrets.len(),
+                if did.secrets.len() == 1 { "" } else { "s" }
+            );
+        }
 
-    let vta_url = credential
-        .vta_url
-        .as_deref()
-        .ok_or("Credential does not contain a VTA URL. You may need a newer credential.")?;
-
-    println!(
-        "  {} Credential valid. VTA: {}",
-        style("*").green(),
-        style(vta_url).cyan()
-    );
+        let credential_raw = bundle.credential.clone();
+        BundleInput::Provision {
+            bundle,
+            credential_raw,
+        }
+    } else if CredentialBundle::decode(&raw).is_ok() {
+        println!(
+            "  {} Decoded credential bundle (manual context/DID setup required)",
+            style("*").green(),
+        );
+        BundleInput::Credential {
+            credential_raw: raw,
+        }
+    } else {
+        return Err(
+            "Could not decode input as a Context Provision Bundle or Credential Bundle.\n  \
+             Make sure you pasted the full base64url string."
+                .into(),
+        );
+    };
 
     // Authenticate
-    print!("  Authenticating...");
-    let client = VtaClient::from_credential(&credential_raw, None)
+    let credential_raw = match &input {
+        BundleInput::Provision {
+            credential_raw, ..
+        } => credential_raw,
+        BundleInput::Credential { credential_raw } => credential_raw,
+    };
+
+    print!("  Authenticating to VTA...");
+    let client = VtaClient::from_credential(credential_raw, None)
         .await
         .map_err(|e| {
             if e.is_network() {
                 format!(
-                    "Cannot reach VTA at {vta_url}: {e}\n  \
+                    "Cannot reach VTA: {e}\n  \
                      Ensure the VTA is running and the REST endpoint is accessible."
                 )
             } else {
@@ -124,13 +211,13 @@ async fn step_credential() -> Result<(VtaClient, String), Box<dyn std::error::Er
         })?;
 
     println!(
-        "\r  {} Authenticated to VTA at {}",
+        "\r  {} Authenticated to VTA at {}    ",
         style("*").green(),
         style(client.base_url()).cyan()
     );
     println!();
 
-    Ok((client, credential_raw))
+    Ok((client, input))
 }
 
 // ─── Step 2: Credential Storage ──────────────────────────────────────────────
@@ -155,7 +242,6 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
 
     let credential_config = match selection {
         0 => {
-            // String - embed directly
             let config = format!("string://{credential_raw}");
             println!(
                 "  {} Credential will be embedded in config file",
@@ -164,7 +250,6 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
             config
         }
         1 => {
-            // AWS Secrets Manager
             let secret_name: String = Input::new()
                 .with_prompt("  AWS Secret name")
                 .with_initial_text("mediator/vta-credential")
@@ -200,7 +285,6 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
             format!("aws_secrets://{secret_name}")
         }
         2 => {
-            // OS Keyring
             let service: String = Input::new()
                 .with_prompt("  Keyring service name")
                 .with_initial_text("affinidi-mediator")
@@ -211,7 +295,6 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
                 .with_initial_text("vta-credential")
                 .interact_text()?;
 
-            // Try to save to keyring
             #[cfg(feature = "vta-keyring")]
             {
                 let entry = keyring::Entry::new(&service, &user)?;
@@ -247,12 +330,44 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
 
 // ─── Step 3: Context ─────────────────────────────────────────────────────────
 
-async fn step_context(client: &VtaClient) -> Result<String, Box<dyn std::error::Error>> {
+async fn step_context(
+    client: &VtaClient,
+    input: &BundleInput,
+) -> Result<String, Box<dyn std::error::Error>> {
     println!("{}", style("Step 3: VTA Context").bold());
-    println!("  A context groups the mediator's DID and keys in the VTA.");
-    println!();
 
-    // List existing contexts
+    // If from provision bundle, context is already known
+    if let BundleInput::Provision { bundle, .. } = input {
+        println!(
+            "  Context from bundle: {} ({})",
+            style(&bundle.context_id).cyan(),
+            &bundle.context_name
+        );
+
+        if Confirm::new()
+            .with_prompt(format!(
+                "  Use context '{}'?",
+                bundle.context_id
+            ))
+            .default(true)
+            .interact()?
+        {
+            println!(
+                "  {} Using context '{}'",
+                style("*").green(),
+                style(&bundle.context_id).cyan()
+            );
+            println!();
+            return Ok(bundle.context_id.clone());
+        }
+        println!("  Falling back to manual context selection...");
+        println!();
+    } else {
+        println!("  A context groups the mediator's DID and keys in the VTA.");
+        println!();
+    }
+
+    // Manual context selection
     let contexts = client.list_contexts().await?;
     let mut options: Vec<String> = contexts
         .contexts
@@ -275,7 +390,6 @@ async fn step_context(client: &VtaClient) -> Result<String, Box<dyn std::error::
         .interact()?;
 
     let context_id = if selection == contexts.contexts.len() {
-        // Create new context
         let id: String = Input::new()
             .with_prompt("  Context ID")
             .with_initial_text("mediator")
@@ -310,14 +424,87 @@ async fn step_context(client: &VtaClient) -> Result<String, Box<dyn std::error::
 
 // ─── Step 4: DID Setup ──────────────────────────────────────────────────────
 
+/// Returns an optional path to a saved DID document file (for did_web_self_hosted).
 async fn step_did(
     client: &VtaClient,
     context_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+    input: &BundleInput,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
     println!("{}", style("Step 4: Mediator DID").bold());
     println!();
 
-    // Check if context already has a DID
+    // If provision bundle has a DID, use it directly — keys are already in VTA
+    if let BundleInput::Provision { bundle, .. } = input {
+        if let Some(provisioned_did) = &bundle.did {
+            println!(
+                "  DID from bundle: {}",
+                style(&provisioned_did.id).cyan()
+            );
+            println!(
+                "  {} key{} already provisioned in VTA",
+                provisioned_did.secrets.len(),
+                if provisioned_did.secrets.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            );
+
+            // Update context with the DID (may already be set, but ensure it's correct)
+            let update_req = UpdateContextRequest {
+                name: None,
+                did: Some(provisioned_did.id.clone()),
+                description: None,
+            };
+            client.update_context(context_id, update_req).await?;
+            println!(
+                "  {} Context '{}' configured with DID",
+                style("*").green(),
+                context_id
+            );
+
+            // If there's a log entry, offer to save it for did:web self-hosting
+            let doc_path = if provisioned_did.log_entry.is_some()
+                || provisioned_did.did_document.is_some()
+            {
+                if Confirm::new()
+                    .with_prompt("  Save DID document for self-hosting (did:web)?")
+                    .default(true)
+                    .interact()?
+                {
+                    let path: String = Input::new()
+                        .with_prompt("  DID document path")
+                        .with_initial_text("conf/mediator_did.json")
+                        .interact_text()?;
+
+                    let content = if let Some(log_entry) = &provisioned_did.log_entry {
+                        log_entry.clone()
+                    } else if let Some(doc) = &provisioned_did.did_document {
+                        serde_json::to_string_pretty(doc)?
+                    } else {
+                        unreachable!()
+                    };
+
+                    fs::write(&path, &content)?;
+                    println!(
+                        "  {} Saved DID document to {}",
+                        style("*").green(),
+                        style(&path).cyan()
+                    );
+                    Some(path)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            println!();
+            return Ok(doc_path);
+        }
+    }
+
+    // No DID from bundle — check if context already has one
     let ctx = client.get_context(context_id).await?;
     if let Some(existing_did) = &ctx.did {
         println!(
@@ -332,7 +519,7 @@ async fn step_did(
         {
             println!("  {} Keeping existing DID", style("*").green());
             println!();
-            return Ok(());
+            return Ok(None);
         }
     }
 
@@ -354,7 +541,7 @@ async fn step_did(
     }
 
     println!();
-    Ok(())
+    Ok(None)
 }
 
 async fn create_new_did(
@@ -365,7 +552,6 @@ async fn create_new_did(
     println!("  Creating a new did:webvh for the mediator...");
     println!();
 
-    // Check if VTA has webvh servers configured
     let servers_resp = client.list_webvh_servers().await?;
     let servers = &servers_resp.servers;
 
@@ -377,13 +563,9 @@ async fn create_new_did(
         );
     }
 
-    // Select server if multiple
     let server_id = if servers.len() == 1 {
         let label = servers[0].label.as_deref().unwrap_or(&servers[0].id);
-        println!(
-            "  Using webvh server: {}",
-            style(label).cyan()
-        );
+        println!("  Using webvh server: {}", style(label).cyan());
         Some(servers[0].id.clone())
     } else {
         let server_options: Vec<String> = servers
@@ -424,7 +606,6 @@ async fn create_new_did(
         style(&result.did).cyan()
     );
 
-    // Update context with the new DID
     let update_req = UpdateContextRequest {
         name: None,
         did: Some(result.did),
@@ -451,7 +632,6 @@ async fn import_existing_did(
 
     let did = did.trim().to_string();
 
-    // Resolve the DID document
     println!("  Resolving DID document...");
     let resolver = DIDCacheClient::new(
         DIDCacheConfigBuilder::default()
@@ -467,8 +647,6 @@ async fn import_existing_did(
         .map_err(|e| format!("Could not resolve DID '{}': {e}", did))?;
 
     let doc = &resolved.doc;
-
-    // Collect all verification methods and their roles
     let vm_roles = collect_vm_roles(doc);
     let vms = &doc.verification_method;
 
@@ -503,7 +681,7 @@ async fn import_existing_did(
     println!();
     println!("  For each key, provide the private key in multibase format.");
     println!(
-        "  These will be securely imported into the VTA context '{}'.",
+        "  These will be imported into the VTA context '{}'.",
         style(context_id).cyan()
     );
     println!();
@@ -513,11 +691,9 @@ async fn import_existing_did(
         let fragment = vm_id.rsplit_once('#').map(|(_, f)| f).unwrap_or(&vm_id);
         let key_type = detect_key_type(vm);
 
-        let private_key: String = Password::new()
-            .with_prompt(format!("  Private key for {fragment} ({key_type:?})"))
-            .interact()?;
-
+        let private_key = read_masked(&format!("  Private key for {fragment} ({key_type:?}): "))?;
         let private_key = private_key.trim().to_string();
+
         if private_key.is_empty() {
             println!(
                 "  {} Skipping {} (no key provided)",
@@ -547,7 +723,6 @@ async fn import_existing_did(
         );
     }
 
-    // Update context with the DID
     let update_req = UpdateContextRequest {
         name: None,
         did: Some(did.clone()),
@@ -597,7 +772,6 @@ fn collect_vm_roles(doc: &Document) -> HashMap<String, Vec<&'static str>> {
     roles
 }
 
-/// Extract the ID string from a VerificationRelationship.
 fn vr_id(vr: &VerificationRelationship) -> Option<String> {
     match vr {
         VerificationRelationship::Reference(url) => Some(url.to_string()),
@@ -609,7 +783,6 @@ fn vr_id(vr: &VerificationRelationship) -> Option<String> {
 fn detect_key_type(vm: &VerificationMethod) -> KeyType {
     let type_str = vm.type_.as_str();
 
-    // Check type string first
     if type_str.contains("X25519") {
         return KeyType::X25519;
     }
@@ -622,9 +795,6 @@ fn detect_key_type(vm: &VerificationMethod) -> KeyType {
 
     // For Multikey or JsonWebKey2020, inspect the key material
     if let Some(serde_json::Value::String(mb)) = vm.property_set.get("publicKeyMultibase") {
-        // Multibase-multicodec prefixes:
-        // z6Mk... = Ed25519 public key (0xed01)
-        // z6LS... = X25519 public key (0xec01)
         if mb.starts_with("z6Mk") {
             return KeyType::Ed25519;
         }
@@ -639,12 +809,11 @@ fn detect_key_type(vm: &VerificationMethod) -> KeyType {
                 "Ed25519" => KeyType::Ed25519,
                 "X25519" => KeyType::X25519,
                 "P-256" => KeyType::P256,
-                _ => KeyType::Ed25519, // fallback
+                _ => KeyType::Ed25519,
             };
         }
     }
 
-    // Default to Ed25519 for unknown types
     KeyType::Ed25519
 }
 
@@ -654,6 +823,7 @@ fn step_save_config(
     config_path: &str,
     credential_config: &str,
     context_id: &str,
+    did_doc_path: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", style("Step 5: Update Configuration").bold());
     println!();
@@ -666,7 +836,7 @@ fn step_save_config(
         );
         println!("  Add the following to your mediator config:");
         println!();
-        print_config_snippet(credential_config, context_id);
+        print_config_snippet(credential_config, context_id, did_doc_path);
         return Ok(());
     }
 
@@ -678,6 +848,13 @@ fn step_save_config(
     // Update mediator_secrets
     let content =
         replace_config_value(&content, "mediator_secrets", &format!("vta://{context_id}"));
+
+    // Update did_web_self_hosted if we saved a DID document
+    let content = if let Some(path) = did_doc_path {
+        replace_config_value(&content, "did_web_self_hosted", &format!("file://{path}"))
+    } else {
+        content
+    };
 
     // Add or update [vta] section
     let content = upsert_vta_section(&content, credential_config, context_id);
@@ -697,6 +874,12 @@ fn step_save_config(
         "    mediator_secrets = \"vta://{}\"",
         style(context_id).cyan()
     );
+    if let Some(path) = did_doc_path {
+        println!(
+            "    did_web_self_hosted = \"file://{}\"",
+            style(path).cyan()
+        );
+    }
     println!(
         "    [vta] credential = \"{}...\"",
         style(&credential_config[..credential_config.len().min(30)]).dim()
@@ -705,18 +888,16 @@ fn step_save_config(
     Ok(())
 }
 
-/// Replace a top-level or section-level config value, handling commented-out lines.
+/// Replace a config value in the TOML content (only un-commented lines).
 fn replace_config_value(content: &str, key: &str, new_value: &str) -> String {
     let mut result = Vec::new();
     let mut replaced = false;
 
     for line in content.lines() {
         let trimmed = line.trim();
-        // Match: key = "..." (not commented out)
         let is_match = trimmed.starts_with(key) && trimmed.contains('=');
 
         if is_match && !replaced {
-            // Preserve leading whitespace
             let indent = &line[..line.len() - line.trim_start().len()];
             result.push(format!("{indent}{key} = \"{new_value}\""));
             replaced = true;
@@ -742,14 +923,12 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        // Detect start of [vta] section (commented or not)
         let is_vta_header = {
             let uncommented = trimmed.trim_start_matches('#').trim();
             uncommented == "[vta]"
         };
 
         if is_vta_header && !vta_section_replaced {
-            // Replace the entire [vta] section
             in_vta_section = true;
             vta_section_replaced = true;
             result.push("[vta]".to_string());
@@ -759,16 +938,13 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
         }
 
         if in_vta_section {
-            // Skip lines until we hit the next section or a separator
             let is_next_section = trimmed.starts_with('[') && !trimmed.starts_with("# [");
-            let is_separator =
-                trimmed.starts_with("### ***") && i + 1 < lines.len();
+            let is_separator = trimmed.starts_with("### ***") && i + 1 < lines.len();
 
             if is_next_section || is_separator {
                 in_vta_section = false;
                 result.push(line.to_string());
             }
-            // Skip old VTA section lines
             continue;
         }
 
@@ -777,12 +953,10 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
 
     let mut final_content = result.join("\n");
 
-    // If no [vta] section existed, insert it before [server]
     if !vta_section_replaced {
         if let Some(pos) = final_content.find("\n[server]") {
             final_content.insert_str(pos, &vta_section);
         } else {
-            // Fallback: append at end
             final_content.push_str(&vta_section);
         }
     }
@@ -790,8 +964,13 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
     final_content
 }
 
-fn print_config_snippet(credential_config: &str, context_id: &str) {
+fn print_config_snippet(credential_config: &str, context_id: &str, did_doc_path: Option<&str>) {
     println!("  mediator_did = \"vta://{context_id}\"");
+    println!();
+    println!("  [server]");
+    if let Some(path) = did_doc_path {
+        println!("  did_web_self_hosted = \"file://{path}\"");
+    }
     println!();
     println!("  [security]");
     println!("  mediator_secrets = \"vta://{context_id}\"");
