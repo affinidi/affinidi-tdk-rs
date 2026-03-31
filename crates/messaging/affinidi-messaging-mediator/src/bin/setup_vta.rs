@@ -11,6 +11,8 @@ use affinidi_did_common::{
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use aws_config;
+use aws_sdk_secretsmanager;
 use console::{Key, Term, style};
 use dialoguer::{Confirm, Input, Select};
 use std::{collections::HashMap, env, fs, process};
@@ -63,7 +65,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => credential_raw,
         BundleInput::Credential { credential_raw } => credential_raw,
     };
-    let credential_config = step_storage(credential_raw)?;
+    let credential_config = step_storage(credential_raw).await?;
 
     // Step 3: Context setup
     let context_id = step_context(&client, &input).await?;
@@ -342,7 +344,7 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
 // ─── Step 2: Credential Storage ──────────────────────────────────────────────
 
 /// Returns the credential config string for mediator.toml (e.g., "string://eyJ...")
-fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Error>> {
+async fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Error>> {
     println!("{}", style("Step 2: Credential Storage").bold());
     println!("  How should the mediator load this credential at runtime?");
     println!();
@@ -374,32 +376,58 @@ fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error::Erro
                 .with_initial_text("mediator/vta-credential")
                 .interact_text()?;
 
-            println!(
-                "  {} Store the credential in AWS Secrets Manager as '{}'",
-                style("!").yellow(),
-                style(&secret_name).cyan()
-            );
-            println!("  Run:");
-            println!(
-                "    aws secretsmanager create-secret --name '{}' --secret-string '{}'",
-                secret_name, credential_raw
-            );
-            println!();
+            println!("  Saving credential to AWS Secrets Manager...");
+
+            let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+                .load()
+                .await;
+            let asm = aws_sdk_secretsmanager::Client::new(&aws_config);
+
+            // Try to create the secret; if it already exists, update it
+            match asm
+                .create_secret()
+                .name(&secret_name)
+                .secret_string(credential_raw)
+                .send()
+                .await
+            {
+                Ok(_) => {
+                    println!(
+                        "  {} Created secret '{}'",
+                        style("*").green(),
+                        style(&secret_name).cyan()
+                    );
+                }
+                Err(e) => {
+                    let err_msg = format!("{e}");
+                    if err_msg.contains("ResourceExistsException") || err_msg.contains("already exists") {
+                        // Secret exists — update it
+                        asm.put_secret_value()
+                            .secret_id(&secret_name)
+                            .secret_string(credential_raw)
+                            .send()
+                            .await
+                            .map_err(|e| {
+                                format!("Could not update existing secret '{secret_name}': {e}")
+                            })?;
+                        println!(
+                            "  {} Updated existing secret '{}'",
+                            style("*").green(),
+                            style(&secret_name).cyan()
+                        );
+                    } else {
+                        return Err(format!(
+                            "Could not create secret '{secret_name}' in AWS Secrets Manager: {e}\n  \
+                             Check your AWS credentials and permissions (secretsmanager:CreateSecret)."
+                        ).into());
+                    }
+                }
+            }
+
             println!(
                 "  Build the mediator with: {}",
                 style("--features vta-aws-secrets").cyan()
             );
-
-            if !Confirm::new()
-                .with_prompt("  Have you stored the credential in AWS?")
-                .default(false)
-                .interact()?
-            {
-                println!(
-                    "  {} You can store it later. The mediator will fail to start until the secret exists.",
-                    style("!").yellow()
-                );
-            }
 
             format!("aws_secrets://{secret_name}")
         }
