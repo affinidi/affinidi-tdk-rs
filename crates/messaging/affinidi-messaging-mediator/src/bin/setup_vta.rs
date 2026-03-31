@@ -850,6 +850,11 @@ async fn import_existing_did(
             continue;
         }
 
+        // Strip multicodec prefix if present. Users typically provide keys in full
+        // multibase-multicodec format (e.g., z + base58btc(multicodec_prefix + raw_key)),
+        // but the VTA expects just the raw key bytes in multibase (z + base58btc(raw_key)).
+        let private_key = strip_multicodec_prefix(&private_key)?;
+
         let req = ImportKeyRequest {
             key_type: key_type.clone(),
             private_key_jwe: None,
@@ -924,6 +929,52 @@ fn vr_id(vr: &VerificationRelationship) -> Option<String> {
         VerificationRelationship::Reference(url) => Some(url.to_string()),
         VerificationRelationship::VerificationMethod(vm) => Some(vm.id.to_string()),
     }
+}
+
+/// Strip the multicodec prefix from a multibase-encoded private key if present.
+///
+/// Users provide keys in full multibase-multicodec format:
+///   z + base58btc(multicodec_prefix + raw_key)
+/// But the VTA expects raw key bytes in multibase:
+///   z + base58btc(raw_key)
+///
+/// Known multicodec prefixes (2-byte varint):
+///   Ed25519 private: 0x80, 0x26
+///   X25519 private:  0x82, 0x26
+///   Ed25519 public:  0xed, 0x01
+///   X25519 public:   0xec, 0x01
+fn strip_multicodec_prefix(multibase_key: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Must start with 'z' (base58btc multibase prefix)
+    if !multibase_key.starts_with('z') {
+        // Not multibase base58btc — return as-is, let the VTA validate
+        return Ok(multibase_key.to_string());
+    }
+
+    let encoded = &multibase_key[1..]; // strip 'z' prefix
+    let bytes = bs58::decode(encoded)
+        .into_vec()
+        .map_err(|e| format!("Invalid base58btc encoding: {e}"))?;
+
+    // Check for known 2-byte multicodec prefixes
+    let raw_bytes = if bytes.len() > 2 {
+        let has_multicodec = matches!(
+            (bytes[0], bytes[1]),
+            (0x80, 0x26) | // Ed25519 private
+            (0x82, 0x26) | // X25519 private
+            (0xed, 0x01) | // Ed25519 public
+            (0xec, 0x01)   // X25519 public
+        );
+        if has_multicodec {
+            &bytes[2..]
+        } else {
+            &bytes[..]
+        }
+    } else {
+        &bytes[..]
+    };
+
+    // Re-encode as multibase base58btc (z prefix + base58)
+    Ok(format!("z{}", bs58::encode(raw_bytes).into_string()))
 }
 
 /// Detect the key type from a verification method using its type string and multibase prefix.
