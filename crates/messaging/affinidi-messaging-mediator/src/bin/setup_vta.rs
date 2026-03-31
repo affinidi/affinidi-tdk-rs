@@ -287,21 +287,50 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
     };
 
     print!("  Authenticating to VTA...");
-    let client = VtaClient::from_credential(credential_raw, None)
-        .await
-        .map_err(|e| {
+
+    // Try lightweight auth first (works when VTA DID is did:key).
+    // Falls back to session-based auth with full DID resolution for
+    // VTAs using did:web, did:webvh, or other non-did:key methods.
+    let client = match VtaClient::from_credential(credential_raw, None).await {
+        Ok(client) => client,
+        Err(e) => {
             if e.is_network() {
-                format!(
+                return Err(format!(
                     "Cannot reach VTA: {e}\n  \
                      Ensure the VTA is running and the REST endpoint is accessible."
                 )
-            } else {
-                format!("Authentication failed: {e}")
+                .into());
             }
-        })?;
+
+            // Lightweight auth failed (e.g., VTA DID is not did:key).
+            // Fall back to session-based challenge-response with full DID resolution.
+            print!("\r  Authenticating to VTA (session auth)...");
+
+            let credential = CredentialBundle::decode(credential_raw).map_err(|e| {
+                format!("Invalid credential: {e}")
+            })?;
+
+            let vta_url = credential.vta_url.as_deref().ok_or(
+                "VTA URL not found in credential. Set [vta].url in config.",
+            )?;
+
+            let token_result = vta_sdk::session::challenge_response(
+                vta_url,
+                &credential.did,
+                &credential.private_key_multibase,
+                &credential.vta_did,
+            )
+            .await
+            .map_err(|e| format!("VTA authentication failed: {e}"))?;
+
+            let client = VtaClient::new(vta_url);
+            client.set_token(token_result.access_token);
+            client
+        }
+    };
 
     println!(
-        "\r  {} Authenticated to VTA at {}    ",
+        "\r  {} Authenticated to VTA at {}         ",
         style("*").green(),
         style(client.base_url()).cyan()
     );

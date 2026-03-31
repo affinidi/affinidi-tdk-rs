@@ -18,7 +18,7 @@ use affinidi_messaging_mediator_common::{
 };
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use vta_sdk::client::VtaClient;
+use vta_sdk::{client::VtaClient, credentials::CredentialBundle};
 use async_convert::{TryFrom, async_trait};
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
@@ -235,29 +235,68 @@ impl TryFrom<ConfigRaw> for Config {
             let url_override = vta_config.url.as_deref().filter(|u| !u.is_empty());
 
             info!("Authenticating to VTA via REST...");
-            let client = VtaClient::from_credential(&credential_raw, url_override)
-                .await
-                .map_err(|e| {
-                    error!("VTA authentication failed: {e}");
+
+            // Try lightweight auth first (works when VTA DID is did:key).
+            // Falls back to session-based auth with full DID resolution for
+            // VTAs using did:web, did:webvh, or other non-did:key methods.
+            let client = match VtaClient::from_credential(&credential_raw, url_override).await {
+                Ok(client) => {
+                    info!(
+                        "Successfully authenticated to VTA at '{}' (REST, auto-refresh enabled)",
+                        client.base_url()
+                    );
+                    client
+                }
+                Err(e) => {
+                    let err_msg = format!("{e}");
                     if e.is_network() {
-                        MediatorError::ConfigError(12, "NA".into(), format!(
+                        return Err(MediatorError::ConfigError(12, "NA".into(), format!(
                             "Cannot reach VTA via REST: {e}. \
                              The mediator requires REST access to the VTA during startup. \
                              If the VTA relies on this mediator for DIDComm transport and has no \
                              independent REST endpoint, this is a deadlock — neither service can start. \
                              Ensure the VTA exposes a REST API that is reachable without this mediator."
-                        ))
-                    } else {
+                        )));
+                    }
+
+                    // Lightweight auth failed (e.g., VTA DID is not did:key).
+                    // Fall back to session-based challenge-response with full DID resolution.
+                    warn!("Lightweight VTA auth failed ({err_msg}), trying session auth with DID resolution...");
+
+                    let credential = CredentialBundle::decode(&credential_raw).map_err(|e| {
+                        MediatorError::ConfigError(12, "NA".into(), format!("Invalid VTA credential: {e}"))
+                    })?;
+
+                    let vta_url = url_override
+                        .or(credential.vta_url.as_deref())
+                        .ok_or_else(|| {
+                            MediatorError::ConfigError(
+                                12, "NA".into(),
+                                "VTA URL not found in credential or config".into(),
+                            )
+                        })?;
+
+                    let token_result = vta_sdk::session::challenge_response(
+                        vta_url,
+                        &credential.did,
+                        &credential.private_key_multibase,
+                        &credential.vta_did,
+                    )
+                    .await
+                    .map_err(|e| {
+                        error!("VTA session auth also failed: {e}");
                         MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
+                            12, "NA".into(),
                             format!("VTA authentication failed: {e}"),
                         )
-                    }
-                })?;
+                    })?;
 
-            let vta_base_url = client.base_url().to_string();
-            info!("Successfully authenticated to VTA at '{vta_base_url}' (REST, auto-refresh enabled)");
+                    let client = VtaClient::new(vta_url);
+                    client.set_token(token_result.access_token);
+                    info!("Successfully authenticated to VTA at '{vta_url}' (REST, session auth)");
+                    client
+                }
+            };
 
             // Probe VTA health to detect circular dependency with this mediator.
             // The health endpoint reports the VTA's own mediator configuration, so we can
