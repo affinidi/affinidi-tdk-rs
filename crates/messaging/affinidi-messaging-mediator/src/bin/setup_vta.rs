@@ -125,6 +125,71 @@ fn read_masked(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(input)
 }
 
+/// Try to extract the nested `credential` field from a base64url-encoded JSON bundle.
+/// This handles the case where ContextProvisionBundle::decode() fails due to version
+/// mismatch or unknown fields, but the nested credential is still valid.
+fn try_extract_credential_from_json(raw_b64: &str) -> Option<String> {
+    use base64::prelude::*;
+    let json_bytes = BASE64_URL_SAFE_NO_PAD.decode(raw_b64).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&json_bytes).ok()?;
+    json.get("credential")?.as_str().map(String::from)
+}
+
+/// Try to extract context_id and context_name from a base64url-encoded JSON bundle.
+fn try_extract_context_from_json(raw_b64: &str) -> Option<(String, String)> {
+    use base64::prelude::*;
+    let json_bytes = BASE64_URL_SAFE_NO_PAD.decode(raw_b64).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&json_bytes).ok()?;
+    let id = json.get("context_id")?.as_str()?.to_string();
+    let name = json
+        .get("context_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    Some((id, name))
+}
+
+/// Try to decode the raw input as a plain CredentialBundle.
+/// Validates that the credential's DID is a did:key (required for authentication).
+fn try_as_credential_bundle(
+    raw: &str,
+    provision_err: &impl std::fmt::Display,
+) -> Result<BundleInput, Box<dyn std::error::Error>> {
+    match CredentialBundle::decode(raw) {
+        Ok(cred) if cred.did.starts_with("did:key:") => {
+            println!(
+                "  {} Decoded credential bundle (manual context/DID setup required)",
+                style("*").green(),
+            );
+            Ok(BundleInput::Credential {
+                credential_raw: raw.to_string(),
+            })
+        }
+        Ok(cred) => {
+            // Decoded but DID is not a did:key — likely a provision bundle that was
+            // incorrectly decoded as a credential
+            Err(format!(
+                "The input appears to be a Context Provision Bundle, but could not be decoded:\n  \
+                 {provision_err}\n\n  \
+                 (The credential DID '{}' is not a did:key, which confirms this is not a \
+                 plain Credential Bundle.)\n\n  \
+                 This may be a version mismatch between the VTA and this tool. Try upgrading \
+                 the mediator or re-provisioning the context with a compatible VTA version.",
+                cred.did
+            )
+            .into())
+        }
+        Err(_) => Err(format!(
+            "Could not decode input as a Context Provision Bundle or Credential Bundle.\n\n  \
+             Provision bundle error: {provision_err}\n\n  \
+             Make sure you pasted the full base64url string from either:\n  \
+             - pnm contexts provision\n  \
+             - cnm-cli auth credentials generate"
+        )
+        .into()),
+    }
+}
+
 // ─── Step 1: Credential ─────────────────────────────────────────────────────
 
 async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::error::Error>> {
@@ -147,45 +212,70 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
         return Err("Bundle cannot be empty".into());
     }
 
-    // Try to decode as ContextProvisionBundle first, fall back to CredentialBundle
-    let input = if let Ok(bundle) = ContextProvisionBundle::decode(&raw) {
-        println!(
-            "  {} Decoded context provision bundle",
-            style("*").green(),
-        );
-        println!(
-            "    Context: {} ({})",
-            style(&bundle.context_id).cyan(),
-            &bundle.context_name
-        );
-        if let Some(did) = &bundle.did {
-            println!("    DID: {}", style(&did.id).cyan());
+    // Try to decode as ContextProvisionBundle first, fall back to CredentialBundle.
+    //
+    // Important: if the input is a provision bundle but decode fails (version mismatch,
+    // new fields, etc.), we try to extract the nested credential field from the raw JSON.
+    // We do NOT blindly try CredentialBundle::decode on the original input, because a
+    // provision bundle can partially deserialize as a credential with wrong field mappings
+    // (e.g., the `did` field gets a non-did:key value, causing "not a did:key" errors).
+    let input = match ContextProvisionBundle::decode(&raw) {
+        Ok(bundle) => {
             println!(
-                "    Keys: {} secret{}",
-                did.secrets.len(),
-                if did.secrets.len() == 1 { "" } else { "s" }
+                "  {} Decoded context provision bundle",
+                style("*").green(),
             );
-        }
+            println!(
+                "    Context: {} ({})",
+                style(&bundle.context_id).cyan(),
+                &bundle.context_name
+            );
+            if let Some(did) = &bundle.did {
+                println!("    DID: {}", style(&did.id).cyan());
+                println!(
+                    "    Keys: {} secret{}",
+                    did.secrets.len(),
+                    if did.secrets.len() == 1 { "" } else { "s" }
+                );
+            }
 
-        let credential_raw = bundle.credential.clone();
-        BundleInput::Provision {
-            bundle,
-            credential_raw,
+            let credential_raw = bundle.credential.clone();
+            BundleInput::Provision {
+                bundle,
+                credential_raw,
+            }
         }
-    } else if CredentialBundle::decode(&raw).is_ok() {
-        println!(
-            "  {} Decoded credential bundle (manual context/DID setup required)",
-            style("*").green(),
-        );
-        BundleInput::Credential {
-            credential_raw: raw,
+        Err(provision_err) => {
+            // Provision bundle decode failed. Try to extract the nested credential
+            // from the raw JSON in case it's a provision bundle with unknown fields.
+            if let Some(credential_raw) = try_extract_credential_from_json(&raw) {
+                // Validate the extracted credential
+                match CredentialBundle::decode(&credential_raw) {
+                    Ok(cred) if cred.did.starts_with("did:key:") => {
+                        println!(
+                            "  {} Decoded provision bundle (extracted credential)",
+                            style("*").green(),
+                        );
+                        // Try to extract context info from the raw JSON
+                        if let Some((ctx_id, ctx_name)) = try_extract_context_from_json(&raw) {
+                            println!(
+                                "    Context: {} ({})",
+                                style(&ctx_id).cyan(),
+                                ctx_name
+                            );
+                        }
+                        BundleInput::Credential { credential_raw }
+                    }
+                    _ => {
+                        // Extracted credential is also invalid, try the raw input as a plain credential
+                        try_as_credential_bundle(&raw, &provision_err)?
+                    }
+                }
+            } else {
+                // No nested credential found, try the raw input as a plain credential
+                try_as_credential_bundle(&raw, &provision_err)?
+            }
         }
-    } else {
-        return Err(
-            "Could not decode input as a Context Provision Bundle or Credential Bundle.\n  \
-             Make sure you pasted the full base64url string."
-                .into(),
-        );
     };
 
     // Authenticate
