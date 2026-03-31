@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.5"
+version = "0.13.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -25,6 +25,8 @@ didcomm = [
 tsp = [
     "dep:affinidi-tsp",
 ]
+# VTA credential storage via OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+vta-keyring = ["dep:keyring"]
 
 [dependencies]
 # Affinidi Crates
@@ -37,6 +39,7 @@ affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messag
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
+vta-sdk = { git = "https://github.com/OpenVTC/verifiable-trust-infrastructure.git", branch = "nightly", features = ["client"] }
 
 # External Crates
 didwebvh-rs = "0.4.0"
@@ -51,6 +54,7 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
 hostname = "0.4"
+keyring = { version = "3", optional = true }
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"

@@ -1,6 +1,7 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
+use vta_sdk::client::VtaClient;
 use aws_config::SdkConfig;
 use http::{
     HeaderValue, Method,
@@ -152,6 +153,7 @@ impl SecurityConfigRaw {
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
         aws_config: &SdkConfig,
+        vta_client: Option<&VtaClient>,
     ) -> Result<SecurityConfig, MediatorError> {
         let warn_default = |field: &str, value: &str, default: &str| {
             eprintln!(
@@ -263,7 +265,7 @@ impl SecurityConfigRaw {
         }
 
         // Load mediator secrets
-        load_secrets(&config.mediator_secrets, &self.mediator_secrets, aws_config).await?;
+        load_secrets(&config.mediator_secrets, &self.mediator_secrets, aws_config, vta_client).await?;
 
         // Create the JWT encoding and decoding keys
         let jwt_secret = config_jwt_secret(&self.jwt_authorization_secret, aws_config).await?;

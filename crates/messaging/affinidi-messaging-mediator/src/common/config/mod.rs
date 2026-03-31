@@ -18,6 +18,7 @@ use affinidi_messaging_mediator_common::{
 };
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
+use vta_sdk::client::VtaClient;
 use async_convert::{TryFrom, async_trait};
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
@@ -28,8 +29,8 @@ use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use helpers::{
-    get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
-    read_document,
+    get_hostname, load_forwarding_protection_blocks, load_vta_credential, read_config_file,
+    read_did_config, read_document,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +74,18 @@ impl DIDResolverConfig {
     }
 }
 
+/// VTA (Verifiable Trust Agent) configuration for centralized key management.
+/// When present, enables `vta://` scheme for `mediator_did` and `mediator_secrets`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VtaConfigRaw {
+    /// Base64url-encoded credential from VTA admin (cnm-cli auth credentials generate)
+    pub credential: String,
+    /// VTA context name for the mediator's keys and DID (default: "mediator")
+    pub context: Option<String>,
+    /// Override the VTA URL from the credential (useful for dev/testing)
+    pub url: Option<String>,
+}
+
 /// Raw configuration deserialized from the TOML file, converted to [`Config`]
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ConfigRaw {
@@ -86,6 +99,7 @@ pub(crate) struct ConfigRaw {
     pub did_resolver: DIDResolverConfig,
     pub limits: LimitsConfigRaw,
     pub processors: ProcessorsConfigRaw,
+    pub vta: Option<VtaConfigRaw>,
 }
 
 #[derive(Clone, Serialize)]
@@ -196,6 +210,39 @@ impl TryFrom<ConfigRaw> for Config {
         // If SecretsResolver was instantiated in default(), it would create two copies of it (though only use one)
         let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
 
+        // Initialize VTA client if vta:// scheme is used for DID or secrets
+        let needs_vta = raw.mediator_did.starts_with("vta://")
+            || raw.security.mediator_secrets.starts_with("vta://");
+        let vta_client = if needs_vta {
+            let vta_config = raw.vta.as_ref().ok_or_else(|| {
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "[vta] config section is required when using vta:// scheme for mediator_did or mediator_secrets".into(),
+                )
+            })?;
+
+            // Resolve the credential from its storage backend (string://, aws_secrets://, keyring://)
+            let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
+            let url_override = vta_config.url.as_deref().filter(|u| !u.is_empty());
+
+            info!("Authenticating to VTA...");
+            let client = VtaClient::from_credential(&credential_raw, url_override)
+                .await
+                .map_err(|e| {
+                    error!("VTA authentication failed: {e}");
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        format!("VTA authentication failed: {e}"),
+                    )
+                })?;
+            info!("Successfully authenticated to VTA (auto-refresh enabled)");
+            Some(client)
+        } else {
+            None
+        };
+
         let mut config = Config {
             log_level: match raw.log_level.as_str() {
                 "trace" => LevelFilter::TRACE,
@@ -213,8 +260,8 @@ impl TryFrom<ConfigRaw> for Config {
                 true
             }),
             listen_address: raw.server.listen_address,
-            mediator_did: read_did_config(&raw.mediator_did, &aws_config, "mediator_did").await?,
-            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did").await?,
+            mediator_did: read_did_config(&raw.mediator_did, &aws_config, "mediator_did", vta_client.as_ref()).await?,
+            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None).await?,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(
@@ -227,7 +274,7 @@ impl TryFrom<ConfigRaw> for Config {
             api_prefix: raw.server.api_prefix,
             security: raw
                 .security
-                .convert(secrets_resolver.clone(), &aws_config)
+                .convert(secrets_resolver.clone(), &aws_config, vta_client.as_ref())
                 .await?,
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,
