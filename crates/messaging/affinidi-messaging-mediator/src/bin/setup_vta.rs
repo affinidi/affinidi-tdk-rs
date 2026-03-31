@@ -850,10 +850,9 @@ async fn import_existing_did(
             continue;
         }
 
-        // Strip multicodec prefix if present. Users typically provide keys in full
-        // multibase-multicodec format (e.g., z + base58btc(multicodec_prefix + raw_key)),
-        // but the VTA expects just the raw key bytes in multibase (z + base58btc(raw_key)).
-        let private_key = strip_multicodec_prefix(&private_key)?;
+        // Decode multibase-multicodec format and validate key type matches the DID document.
+        // The VTA expects raw key bytes in multibase (no multicodec prefix).
+        let private_key = decode_and_validate_private_key(&private_key, &key_type, fragment)?;
 
         let req = ImportKeyRequest {
             key_type: key_type.clone(),
@@ -931,50 +930,57 @@ fn vr_id(vr: &VerificationRelationship) -> Option<String> {
     }
 }
 
-/// Strip the multicodec prefix from a multibase-encoded private key if present.
+/// Decode a multibase-multicodec encoded private key, validate the key type matches
+/// what the DID document expects, and return the raw key bytes as a plain multibase string
+/// (without multicodec prefix) for the VTA import API.
 ///
-/// Users provide keys in full multibase-multicodec format:
-///   z + base58btc(multicodec_prefix + raw_key)
-/// But the VTA expects raw key bytes in multibase:
-///   z + base58btc(raw_key)
-///
-/// Known multicodec prefixes (2-byte varint):
-///   Ed25519 private: 0x80, 0x26
-///   X25519 private:  0x82, 0x26
-///   Ed25519 public:  0xed, 0x01
-///   X25519 public:   0xec, 0x01
-fn strip_multicodec_prefix(multibase_key: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Must start with 'z' (base58btc multibase prefix)
-    if !multibase_key.starts_with('z') {
-        // Not multibase base58btc — return as-is, let the VTA validate
-        return Ok(multibase_key.to_string());
-    }
-
-    let encoded = &multibase_key[1..]; // strip 'z' prefix
-    let bytes = bs58::decode(encoded)
-        .into_vec()
-        .map_err(|e| format!("Invalid base58btc encoding: {e}"))?;
-
-    // Check for known 2-byte multicodec prefixes
-    let raw_bytes = if bytes.len() > 2 {
-        let has_multicodec = matches!(
-            (bytes[0], bytes[1]),
-            (0x80, 0x26) | // Ed25519 private
-            (0x82, 0x26) | // X25519 private
-            (0xed, 0x01) | // Ed25519 public
-            (0xec, 0x01)   // X25519 public
-        );
-        if has_multicodec {
-            &bytes[2..]
-        } else {
-            &bytes[..]
-        }
-    } else {
-        &bytes[..]
+/// If the input is NOT multicodec-encoded (just raw bytes in multibase), returns it as-is.
+fn decode_and_validate_private_key(
+    multibase_key: &str,
+    expected_type: &KeyType,
+    fragment: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use affinidi_encoding::{
+        Codec, ED25519_PRIV, X25519_PRIV, P256_PRIV,
+        decode_multikey_with_codec, encode_base58btc,
     };
 
-    // Re-encode as multibase base58btc (z prefix + base58)
-    Ok(format!("z{}", bs58::encode(raw_bytes).into_string()))
+    // Try to decode as multibase-multicodec
+    match decode_multikey_with_codec(multibase_key) {
+        Ok((codec_value, raw_bytes)) => {
+            // Validate the codec matches the expected key type
+            let decoded_codec = Codec::from_u64(codec_value);
+            let (expected_codec, expected_name) = match expected_type {
+                KeyType::Ed25519 => (ED25519_PRIV, "Ed25519"),
+                KeyType::X25519 => (X25519_PRIV, "X25519"),
+                KeyType::P256 => (P256_PRIV, "P-256"),
+            };
+
+            match decoded_codec {
+                Codec::Unknown(_) => {
+                    // Unknown codec — might be raw bytes that happened to parse.
+                    // Return the raw bytes as multibase, let VTA validate.
+                }
+                _ if codec_value == expected_codec => {
+                    // Codec matches expected type
+                }
+                _ => {
+                    return Err(format!(
+                        "Key type mismatch for '{fragment}': DID document expects {expected_name} \
+                         but the private key is encoded as {decoded_codec:?}"
+                    ).into());
+                }
+            }
+
+            // Re-encode raw bytes as plain multibase base58btc (no multicodec prefix)
+            Ok(encode_base58btc(&raw_bytes))
+        }
+        Err(_) => {
+            // Not valid multicodec — might already be raw bytes in multibase.
+            // Return as-is, let the VTA validate.
+            Ok(multibase_key.to_string())
+        }
+    }
 }
 
 /// Detect the key type from a verification method using its type string and multibase prefix.
