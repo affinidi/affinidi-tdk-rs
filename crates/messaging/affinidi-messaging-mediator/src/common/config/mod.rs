@@ -187,14 +187,13 @@ impl TryFrom<ConfigRaw> for Config {
 
     async fn try_from(raw: ConfigRaw) -> Result<Self, Self::Error> {
         // Set up AWS Configuration
-        let region = match env::var("AWS_REGION") {
-            Ok(region) => Region::new(region),
-            Err(_) => Region::new("ap-southeast-1"),
-        };
-        let aws_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(region)
-            .load()
-            .await;
+        // Region is resolved in order: AWS_REGION env var → EC2 instance metadata →
+        // ~/.aws/config. Only override if explicitly set via env var.
+        let mut aws_builder = aws_config::defaults(BehaviorVersion::latest());
+        if let Ok(region) = env::var("AWS_REGION") {
+            aws_builder = aws_builder.region(Region::new(region));
+        }
+        let aws_config = aws_builder.load().await;
         let mut tags = HashMap::from([("app".to_string(), "mediator".to_string())]);
         for (key, value) in env::vars() {
             if key.get(..13) == Some("MEDIATOR_TAG_") {
