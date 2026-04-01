@@ -412,8 +412,10 @@ async fn step_credential(
         .await
         .map_err(|e| format!("VTA authentication failed: {e}"))?;
 
+    // Pass None for url_override so connect() resolves the VTA DID document
+    // and uses DIDComm transport through the VTA's mediator (not REST).
     let client = store
-        .connect(session_key, Some(vta_url))
+        .connect(session_key, None)
         .await
         .map_err(|e| format!("Could not establish DIDComm session with VTA: {e}"))?;
 
