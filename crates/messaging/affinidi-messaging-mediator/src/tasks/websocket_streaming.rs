@@ -183,11 +183,15 @@ impl StreamingTask {
                                 match clients.get(&payload.did_hash) { Some((tx, _, active)) => {
                                     if payload.force_delivery ||  *active {
                                         // Send the message to the client
-                                        match tx.send(WebSocketCommands::Message(payload.message.clone())).await { Err(err) => {
-                                            error!("Error sending message to client ({}): {}", payload.did_hash, err);
-                                        } _ => {
+                                        if let Err(err) = tx.send(WebSocketCommands::Message(payload.message.clone())).await {
+                                            warn!("Dead WebSocket channel for ({}), cleaning up: {}", payload.did_hash, err);
+                                            clients.remove(&payload.did_hash);
+                                            if let Err(e) = database.streaming_deregister_client(&payload.did_hash, &self.uuid).await {
+                                                error!("Error deregistering dead client ({}): {}", payload.did_hash, e);
+                                            }
+                                        } else {
                                             debug!("Sent message to client ({})", payload.did_hash);
-                                        }}
+                                        }
                                     } else {
                                         debug!("pub/sub msg received for did_hash({}) but it is not active", payload.did_hash);
                                         if let Err(err) = database.streaming_stop_live(&payload.did_hash, &self.uuid).await {

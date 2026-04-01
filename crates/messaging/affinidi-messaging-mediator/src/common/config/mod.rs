@@ -76,14 +76,25 @@ impl DIDResolverConfig {
 }
 
 /// VTA (Verifiable Trust Agent) configuration for centralized key management.
+///
 /// When present, enables `vta://` scheme for `mediator_did` and `mediator_secrets`.
+/// On startup, the mediator authenticates to the VTA, fetches fresh secrets,
+/// and caches them locally for offline resilience.
+///
+/// All fields can be overridden via environment variables:
+/// `VTA_CREDENTIAL`, `VTA_CONTEXT`, `VTA_URL`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VtaConfigRaw {
-    /// Base64url-encoded credential from VTA admin (cnm-cli auth credentials generate)
+    /// VTA credential string with storage scheme prefix:
+    /// - `string://<base64url>` — inline credential (dev/CI)
+    /// - `aws_secrets://<secret_name>` — AWS Secrets Manager (requires `vta-aws-secrets` feature)
+    /// - `keyring://<service>/<user>` — OS keyring (requires `vta-keyring` feature)
     pub credential: String,
-    /// VTA context name for the mediator's keys and DID (default: "mediator")
+    /// VTA context ID that holds this mediator's DID and keys.
+    /// Defaults to `"mediator"` if not set.
     pub context: Option<String>,
-    /// Override the VTA URL from the credential (useful for dev/testing)
+    /// Override the VTA REST URL from the credential.
+    /// Set this when using `--rest` discovery or for dev/testing.
     pub url: Option<String>,
 }
 
@@ -236,6 +247,7 @@ impl TryFrom<ConfigRaw> for Config {
                 credential: credential_raw,
                 context,
                 url_override: vta_config.url.clone().filter(|u| !u.is_empty()),
+                timeout: None,
             };
 
             let cache = vta_cache::MediatorSecretCache::from_credential_config(

@@ -13,11 +13,25 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tracing::info;
+use tracing::{error, info, warn};
 use vta_sdk::client::VtaClient;
 
 use super::VtaConfigRaw;
 use super::processors::ForwardingConfig;
+
+/// Parse a `scheme://path` config string, returning `(scheme, path)`.
+///
+/// Used for credential, secret, and DID config fields that support
+/// multiple backends (e.g., `file://`, `aws_secrets://`, `vta://`, `keyring://`).
+fn parse_scheme<'a>(input: &'a str, field_name: &str) -> Result<(&'a str, &'a str), MediatorError> {
+    input.split_once("://").ok_or_else(|| {
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            format!("Invalid `{field_name}` format: expected scheme://path, got '{input}'"),
+        )
+    })
+}
 
 /// Override a String config field with an environment variable if set.
 macro_rules! env_override {
@@ -258,20 +272,13 @@ pub(crate) async fn load_secrets(
     aws_config: &SdkConfig,
     vta_bundle: Option<&vta_sdk::did_secrets::DidSecretsBundle>,
 ) -> Result<(), MediatorError> {
-    let parts: Vec<&str> = secrets.split("://").collect();
-    if parts.len() != 2 {
-        return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            "Invalid `mediator_secrets` format".into(),
-        ));
-    }
-    println!("Loading secrets method({}) path({})", parts[0], parts[1]);
+    let (scheme, path) = parse_scheme(secrets, "mediator_secrets")?;
+    info!("Loading secrets method({scheme}) path({path})");
 
     // VTA path: use the pre-fetched secrets bundle from integration::startup().
     // The bundle was already fetched from VTA (or loaded from cache) and contains
     // multicodec-prefixed private keys with verification method IDs.
-    if parts[0] == "vta" {
+    if scheme == "vta" {
         let bundle = vta_bundle.ok_or_else(|| {
             MediatorError::ConfigError(
                 12,
@@ -304,18 +311,18 @@ pub(crate) async fn load_secrets(
     }
 
     // File / AWS path: fetch JSON content then parse
-    let content: String = match parts[0] {
-        "file" => read_file_lines(parts[1])?.concat(),
+    let content: String = match scheme {
+        "file" => read_file_lines(path)?.concat(),
         "aws_secrets" => {
             let asm = aws_sdk_secretsmanager::Client::new(aws_config);
 
             let response = asm
                 .get_secret_value()
-                .secret_id(parts[1])
+                .secret_id(path)
                 .send()
                 .await
                 .map_err(|e| {
-                    eprintln!("Could not get secret value. {e:?}");
+                    error!("Could not get secret value. {e:?}");
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
@@ -323,7 +330,7 @@ pub(crate) async fn load_secrets(
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
-                eprintln!("No secret string found in response");
+                error!("No secret string found in response");
                 MediatorError::ConfigError(
                     12,
                     "NA".into(),
@@ -341,7 +348,7 @@ pub(crate) async fn load_secrets(
     };
 
     let secrets: Vec<Secret> = serde_json::from_str(&content).map_err(|err| {
-        eprintln!("Could not parse `mediator_secrets` JSON content. {err}");
+        error!("Could not parse `mediator_secrets` JSON content. {err}");
         MediatorError::ConfigError(
             12,
             "NA".into(),
@@ -362,11 +369,11 @@ pub(crate) async fn load_secrets(
 /// Read the primary configuration file for the mediator.
 /// Returns a ConfigRaw struct with env var overrides applied.
 pub(crate) fn read_config_file(file_name: &str) -> Result<super::ConfigRaw, MediatorError> {
-    println!("Config file({file_name})");
+    info!("Config file({file_name})");
     let raw_config = read_file_lines(file_name)?;
 
     let mut config: super::ConfigRaw = toml::from_str(&raw_config.join("\n")).map_err(|err| {
-        eprintln!("Could not parse configuration settings. {err:?}");
+        error!("Could not parse configuration settings. {err:?}");
         MediatorError::ConfigError(
             12,
             "NA".into(),
@@ -392,7 +399,7 @@ where
     P: AsRef<Path>,
 {
     let file = File::open(file_name.as_ref()).map_err(|err| {
-        eprintln!(
+        error!(
             "Could not open file({}). {}",
             file_name.as_ref().display(),
             err
@@ -427,17 +434,10 @@ pub(crate) async fn read_did_config(
     field_name: &str,
     vta_client: Option<&VtaClient>,
 ) -> Result<String, MediatorError> {
-    let parts: Vec<&str> = did_config.split("://").collect();
-    if parts.len() != 2 {
-        return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            format!("Invalid `{field_name}` format"),
-        ));
-    }
-    let content: String = match parts[0] {
-        "did" => parts[1].to_string(),
-        "aws_parameter_store" => aws_parameter_store(parts[1], aws_config).await?,
+    let (scheme, path) = parse_scheme(did_config, field_name)?;
+    let content: String = match scheme {
+        "did" => path.to_string(),
+        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
         "vta" => {
             let client = vta_client.ok_or_else(|| {
                 MediatorError::ConfigError(
@@ -446,7 +446,7 @@ pub(crate) async fn read_did_config(
                     format!("VTA client not initialized but vta:// scheme used for {field_name}"),
                 )
             })?;
-            let context_id = parts[1];
+            let context_id = path;
             info!("Fetching {field_name} from VTA context '{context_id}'");
             let ctx = client.get_context(context_id).await.map_err(|e| {
                 MediatorError::ConfigError(
@@ -483,27 +483,20 @@ pub(crate) async fn config_jwt_secret(
     jwt_secret: &str,
     aws_config: &SdkConfig,
 ) -> Result<Vec<u8>, MediatorError> {
-    let parts: Vec<&str> = jwt_secret.split("://").collect();
-    if parts.len() != 2 {
-        return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            "Invalid `jwt_authorization_secret` format".into(),
-        ));
-    }
-    let content: String = match parts[0] {
-        "string" => parts[1].to_string(),
+    let (scheme, path) = parse_scheme(jwt_secret, "jwt_authorization_secret")?;
+    let content: String = match scheme {
+        "string" => path.to_string(),
         "aws_secrets" => {
-            println!("Loading JWT secret from AWS Secrets Manager");
+            info!("Loading JWT secret from AWS Secrets Manager");
             let asm = aws_sdk_secretsmanager::Client::new(aws_config);
 
             let response = asm
                 .get_secret_value()
-                .secret_id(parts[1])
+                .secret_id(path)
                 .send()
                 .await
                 .map_err(|e| {
-                    eprintln!("Could not get secret value. {e:?}");
+                    error!("Could not get secret value. {e:?}");
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
@@ -511,7 +504,7 @@ pub(crate) async fn config_jwt_secret(
                     )
                 })?;
             response.secret_string.ok_or_else(|| {
-                eprintln!("No secret string found in response");
+                error!("No secret string found in response");
                 MediatorError::ConfigError(
                     12,
                     "NA".into(),
@@ -528,7 +521,7 @@ pub(crate) async fn config_jwt_secret(
     };
 
     BASE64_URL_SAFE_NO_PAD.decode(content).map_err(|err| {
-        eprintln!("Could not create JWT key pair. {err}");
+        error!("Could not create JWT key pair. {err}");
         MediatorError::ConfigError(
             12,
             "NA".into(),
@@ -579,7 +572,7 @@ pub(crate) async fn aws_parameter_store(
         .send()
         .await
         .map_err(|e| {
-            eprintln!("Could not get ({parameter_name:?}) parameter. {e:?}");
+            error!("Could not get ({parameter_name:?}) parameter. {e:?}");
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
@@ -587,7 +580,7 @@ pub(crate) async fn aws_parameter_store(
             )
         })?;
     let parameter = response.parameter.ok_or_else(|| {
-        eprintln!("No parameter string found in response");
+        error!("No parameter string found in response");
         MediatorError::ConfigError(
             12,
             "NA".into(),
@@ -612,7 +605,7 @@ pub(crate) async fn aws_parameter_store(
     }
 
     parameter.value.ok_or_else(|| {
-        eprintln!(
+        error!(
             "Parameter ({:?}) found, but no parameter value found in response",
             parameter.name
         );
@@ -632,17 +625,10 @@ pub(crate) async fn read_document(
     document_path: &str,
     aws_config: &SdkConfig,
 ) -> Result<String, MediatorError> {
-    let parts: Vec<&str> = document_path.split("://").collect();
-    if parts.len() != 2 {
-        return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            "Invalid `document_path` format".into(),
-        ));
-    }
-    let content: String = match parts[0] {
-        "file" => read_file_lines(parts[1])?.concat(),
-        "aws_parameter_store" => aws_parameter_store(parts[1], aws_config).await?,
+    let (scheme, path) = parse_scheme(document_path, "document_path")?;
+    let content: String = match scheme {
+        "file" => read_file_lines(path)?.concat(),
+        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
@@ -665,20 +651,12 @@ pub(crate) async fn load_vta_credential(
     credential_config: &str,
     #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))] aws_config: &SdkConfig,
 ) -> Result<String, MediatorError> {
-    let parts: Vec<&str> = credential_config.split("://").collect();
-    if parts.len() != 2 {
-        return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            "Invalid VTA credential format. Expected string://, aws_secrets://, or keyring://"
-                .into(),
-        ));
-    }
+    let (scheme, path) = parse_scheme(credential_config, "vta.credential")?;
 
-    match parts[0] {
+    match scheme {
         "string" => {
             info!("Loading VTA credential from config/environment");
-            Ok(parts[1].to_string())
+            Ok(path.to_string())
         }
         "aws_secrets" => {
             #[cfg(feature = "vta-aws-secrets")]
@@ -687,11 +665,11 @@ pub(crate) async fn load_vta_credential(
                 let asm = aws_sdk_secretsmanager::Client::new(aws_config);
                 let response = asm
                     .get_secret_value()
-                    .secret_id(parts[1])
+                    .secret_id(path)
                     .send()
                     .await
                     .map_err(|e| {
-                        eprintln!("Could not get VTA credential from AWS Secrets Manager. {e:?}");
+                        error!("Could not get VTA credential from AWS Secrets Manager. {e:?}");
                         MediatorError::ConfigError(
                             12,
                             "NA".into(),
@@ -722,7 +700,7 @@ pub(crate) async fn load_vta_credential(
             #[cfg(feature = "vta-keyring")]
             {
                 info!("Loading VTA credential from OS keyring");
-                let keyring_parts: Vec<&str> = parts[1].splitn(2, '/').collect();
+                let keyring_parts: Vec<&str> = path.splitn(2, '/').collect();
                 let (service, user) = match keyring_parts.len() {
                     2 => (keyring_parts[0], keyring_parts[1]),
                     1 => (keyring_parts[0], "credential"),
@@ -765,7 +743,7 @@ pub(crate) async fn load_vta_credential(
             "NA".into(),
             format!(
                 "Invalid VTA credential scheme '{}'. Expected string://, aws_secrets://, or keyring://",
-                parts[0]
+                scheme
             ),
         )),
     }
@@ -781,7 +759,7 @@ pub(crate) async fn load_forwarding_protection_blocks(
     let mut blocked_dids: Vec<String> = match serde_json::from_str(blocked_dids) {
         Ok(dids) => dids,
         Err(err) => {
-            eprintln!("Could not parse blocked_forwarding_dids. Reason: {err}");
+            error!("Could not parse blocked_forwarding_dids. Reason: {err}");
             return Err(MediatorError::ConfigError(
                 12,
                 "NA".into(),
@@ -819,11 +797,11 @@ pub(crate) async fn load_forwarding_protection_blocks(
                                 if let Some(uri) = uri.as_str() {
                                     forwarding_config.blocked_forwarding.insert(uri.into());
                                 } else {
-                                    eprintln!("WARN: Couldn't parse URI as a string: {uri:#?}");
+                                    warn!("Couldn't parse URI as a string: {uri:#?}");
                                 }
                             } else {
-                                eprintln!(
-                                    "WARN: Service endpoint map does not contain a URI. DID ({did}), Service ({service:#?}), Endpoint ({endpoint:#?})"
+                                warn!(
+                                    "Service endpoint map does not contain a URI. DID ({did}), Service ({service:#?}), Endpoint ({endpoint:#?})"
                                 );
                             }
                         }
@@ -831,11 +809,11 @@ pub(crate) async fn load_forwarding_protection_blocks(
                         if let Some(uri) = uri.as_str() {
                             forwarding_config.blocked_forwarding.insert(uri.into());
                         } else {
-                            eprintln!("WARN: Couldn't parse URI as a string: {uri:#?}");
+                            warn!("Couldn't parse URI as a string: {uri:#?}");
                         }
                     } else {
-                        eprintln!(
-                            "WARN: Service endpoint map does not contain a URI. DID ({did}), Service ({service:#?}), Endpoint ({map:#?})"
+                        warn!(
+                            "Service endpoint map does not contain a URI. DID ({did}), Service ({service:#?}), Endpoint ({map:#?})"
                         );
                     }
                 }
