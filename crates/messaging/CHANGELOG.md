@@ -8,6 +8,17 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 1st April 2026
+
+### DIDComm Service (0.1.4)
+
+- **FIX:** Fixed websocket task leak during reconnect retries. When `run_with_restart`
+  called `connect()` after a failed connection, the previous ATM's websocket background
+  task was not stopped, causing orphaned tasks to accumulate. When the mediator recovered,
+  all orphaned tasks connected simultaneously, triggering a flood of
+  `w.websocket.duplicate-channel` problem reports. `connect()` now calls
+  `stop_websocket()` and clears old state before creating a new ATM and profile.
+
 ## 28th March 2026
 
 ### Helpers (0.12.2)
