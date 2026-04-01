@@ -5,6 +5,10 @@
 //!
 //! Build and run:
 //!   cargo run --bin mediator-setup-vta --features setup [-- --config path/to/mediator.toml]
+//!
+//! Use `--rest` to resolve the VTA DID document and discover a `VTARest` service
+//! endpoint for REST communication (instead of relying on the URL in the credential):
+//!   cargo run --bin mediator-setup-vta --features setup -- --rest
 
 use affinidi_did_common::{
     Document,
@@ -27,6 +31,14 @@ use vta_sdk::{
 
 const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
 
+/// Parsed CLI arguments.
+struct CliArgs {
+    config: String,
+    /// When true, resolve the VTA DID document and look for a VTARest service
+    /// endpoint to use as the REST URL override (instead of DIDComm transport).
+    rest: bool,
+}
+
 /// What the user pasted — either a full provision bundle or a plain credential.
 enum BundleInput {
     /// Full provision bundle from `pnm contexts provision` — includes context, DID, secrets.
@@ -47,7 +59,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = parse_config_path();
+    let args = parse_args();
 
     println!();
     println!("{}", style("Mediator VTA Setup").bold().cyan());
@@ -55,7 +67,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Step 1: Get and validate bundle/credential
-    let (client, input) = step_credential().await?;
+    let (client, input, vta_rest_url) = step_credential(args.rest).await?;
 
     // Step 2: Choose credential storage
     let credential_raw = match &input {
@@ -73,7 +85,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let did_doc_path = step_did(&client, &context_id, &input).await?;
 
     // Step 5: Save config
-    step_save_config(&config_path, &credential_config, &context_id, did_doc_path.as_deref())?;
+    step_save_config(
+        &args.config,
+        &credential_config,
+        &context_id,
+        did_doc_path.as_deref(),
+        vta_rest_url.as_deref(),
+    )?;
 
     println!();
     println!("{}", style("Setup complete!").green().bold());
@@ -85,16 +103,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn parse_config_path() -> String {
+fn parse_args() -> CliArgs {
     let args: Vec<String> = env::args().collect();
+    let mut config = DEFAULT_CONFIG_PATH.to_string();
+    let mut rest = false;
     let mut i = 1;
     while i < args.len() {
-        if args[i] == "--config" && i + 1 < args.len() {
-            return args[i + 1].clone();
+        match args[i].as_str() {
+            "--config" if i + 1 < args.len() => {
+                config = args[i + 1].clone();
+                i += 2;
+            }
+            "--rest" => {
+                rest = true;
+                i += 1;
+            }
+            _ => i += 1,
         }
-        i += 1;
     }
-    DEFAULT_CONFIG_PATH.to_string()
+    CliArgs { config, rest }
 }
 
 // ─── Masked input helper ─────────────────────────────────────────────────────
@@ -191,9 +218,46 @@ fn try_as_credential_bundle(
     }
 }
 
+/// Resolve the VTA DID document and look for a service with type "VTARest".
+/// Returns the REST endpoint URL if found.
+async fn resolve_vta_rest_url(vta_did: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let resolver = DIDCacheClient::new(
+        DIDCacheConfigBuilder::default()
+            .with_network_timeout(10)
+            .build(),
+    )
+    .await
+    .map_err(|e| format!("Could not start DID resolver: {e}"))?;
+
+    let resolved = resolver
+        .resolve(vta_did)
+        .await
+        .map_err(|e| format!("Could not resolve VTA DID '{}': {e}", vta_did))?;
+
+    for svc in &resolved.doc.service {
+        if svc.type_.iter().any(|t| t == "VTARest") {
+            if let Some(url) = svc.service_endpoint.get_uri() {
+                // get_uri() may return a quoted string from JSON, strip quotes
+                let url = url.trim_matches('"').to_string();
+                return Ok(url);
+            }
+        }
+    }
+
+    Err(format!(
+        "VTA DID '{}' has no service with type \"VTARest\".\n  \
+         The DID document must include a VTARest service endpoint for --rest to work.",
+        vta_did
+    )
+    .into())
+}
+
 // ─── Step 1: Credential ─────────────────────────────────────────────────────
 
-async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::error::Error>> {
+/// Returns (client, input, optional VTA REST URL discovered via --rest).
+async fn step_credential(
+    force_rest: bool,
+) -> Result<(VtaClient, BundleInput, Option<String>), Box<dyn std::error::Error>> {
     println!("{}", style("Step 1: VTA Bundle").bold());
     println!("  Paste the bundle from your VTA provisioning:");
     println!(
@@ -287,12 +351,41 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
         BundleInput::Credential { credential_raw } => credential_raw,
     };
 
+    // If --rest is set, resolve the VTA DID and look for a VTARest service endpoint
+    // to use as the REST URL override. This avoids routing through DIDComm transport.
+    let mut vta_rest_url: Option<String> = None;
+
+    if force_rest {
+        print!("  Resolving VTA DID for REST endpoint...");
+        let credential = CredentialBundle::decode(credential_raw)
+            .map_err(|e| format!("Invalid credential: {e}"))?;
+
+        match resolve_vta_rest_url(&credential.vta_did).await {
+            Ok(url) => {
+                println!(
+                    "\r  {} Found VTARest service: {}         ",
+                    style("*").green(),
+                    style(&url).cyan()
+                );
+                vta_rest_url = Some(url);
+            }
+            Err(e) => {
+                println!(
+                    "\r  {} {}         ",
+                    style("!").yellow(),
+                    e
+                );
+            }
+        }
+    }
+
     print!("  Authenticating to VTA...");
 
     // Try lightweight auth first (works when VTA DID is did:key).
     // Falls back to session-based auth with full DID resolution for
     // VTAs using did:web, did:webvh, or other non-did:key methods.
-    let client = match VtaClient::from_credential(credential_raw, None).await {
+    let url_override = vta_rest_url.as_deref();
+    let client = match VtaClient::from_credential(credential_raw, url_override).await {
         Ok(client) => client,
         Err(e) => {
             if e.is_network() {
@@ -311,9 +404,9 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
                 format!("Invalid credential: {e}")
             })?;
 
-            let vta_url = credential.vta_url.as_deref().ok_or(
-                "VTA URL not found in credential. Set [vta].url in config.",
-            )?;
+            let vta_url = url_override
+                .or(credential.vta_url.as_deref())
+                .ok_or("VTA URL not found in credential or --rest. Set [vta].url in config.")?;
 
             let token_result = vta_sdk::session::challenge_response(
                 vta_url,
@@ -337,7 +430,7 @@ async fn step_credential() -> Result<(VtaClient, BundleInput), Box<dyn std::erro
     );
     println!();
 
-    Ok((client, input))
+    Ok((client, input, vta_rest_url))
 }
 
 // ─── Step 2: Credential Storage ──────────────────────────────────────────────
@@ -1014,6 +1107,7 @@ fn step_save_config(
     credential_config: &str,
     context_id: &str,
     did_doc_path: Option<&str>,
+    vta_rest_url: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", style("Step 5: Update Configuration").bold());
     println!();
@@ -1026,7 +1120,7 @@ fn step_save_config(
         );
         println!("  Add the following to your mediator config:");
         println!();
-        print_config_snippet(credential_config, context_id, did_doc_path);
+        print_config_snippet(credential_config, context_id, did_doc_path, vta_rest_url);
         return Ok(());
     }
 
@@ -1047,7 +1141,7 @@ fn step_save_config(
     };
 
     // Add or update [vta] section
-    let content = upsert_vta_section(&content, credential_config, context_id);
+    let content = upsert_vta_section(&content, credential_config, context_id, vta_rest_url);
 
     fs::write(config_path, &content)?;
 
@@ -1068,6 +1162,12 @@ fn step_save_config(
         println!(
             "    did_web_self_hosted = \"file://{}\"",
             style(path).cyan()
+        );
+    }
+    if let Some(url) = vta_rest_url {
+        println!(
+            "    [vta] url = \"{}\"",
+            style(url).cyan()
         );
     }
     println!(
@@ -1100,9 +1200,17 @@ fn replace_config_value(content: &str, key: &str, new_value: &str) -> String {
 }
 
 /// Add or replace the [vta] section in the config file.
-fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) -> String {
+fn upsert_vta_section(
+    content: &str,
+    credential_config: &str,
+    context_id: &str,
+    vta_rest_url: Option<&str>,
+) -> String {
+    let url_line = vta_rest_url
+        .map(|u| format!("\nurl = \"{u}\""))
+        .unwrap_or_default();
     let vta_section = format!(
-        "\n[vta]\ncredential = \"{credential_config}\"\ncontext = \"{context_id}\"\n"
+        "\n[vta]\ncredential = \"{credential_config}\"\ncontext = \"{context_id}\"{url_line}\n"
     );
 
     let lines: Vec<&str> = content.lines().collect();
@@ -1124,6 +1232,9 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
             result.push("[vta]".to_string());
             result.push(format!("credential = \"{credential_config}\""));
             result.push(format!("context = \"{context_id}\""));
+            if let Some(url) = vta_rest_url {
+                result.push(format!("url = \"{url}\""));
+            }
             continue;
         }
 
@@ -1154,7 +1265,12 @@ fn upsert_vta_section(content: &str, credential_config: &str, context_id: &str) 
     final_content
 }
 
-fn print_config_snippet(credential_config: &str, context_id: &str, did_doc_path: Option<&str>) {
+fn print_config_snippet(
+    credential_config: &str,
+    context_id: &str,
+    did_doc_path: Option<&str>,
+    vta_rest_url: Option<&str>,
+) {
     println!("  mediator_did = \"vta://{context_id}\"");
     println!();
     println!("  [server]");
@@ -1168,6 +1284,9 @@ fn print_config_snippet(credential_config: &str, context_id: &str, did_doc_path:
     println!("  [vta]");
     println!("  credential = \"{credential_config}\"");
     println!("  context = \"{context_id}\"");
+    if let Some(url) = vta_rest_url {
+        println!("  url = \"{url}\"");
+    }
 }
 
 fn truncate_did(did: &str) -> String {
