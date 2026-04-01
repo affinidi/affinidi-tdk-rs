@@ -92,7 +92,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
 
             let start = StreamingUpdate {
                 did_hash: session.did_hash.clone(),
-                state: StreamingUpdateState::Register(tx),
+                state: StreamingUpdateState::Register {
+                    channel: tx,
+                    session_id: session.session_id.clone(),
+                    did: session.did.clone(),
+                },
             };
             match streaming.channel.send(start).await {
                 Ok(_) => {

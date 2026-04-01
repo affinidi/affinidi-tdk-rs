@@ -29,7 +29,11 @@ use tracing::{Instrument, Level, debug, error, info, span, warn};
 /// Stop: Stop streaming messages to clients.
 /// Deregister: Remove the hash map entry for the DID hash.
 pub enum StreamingUpdateState {
-    Register(mpsc::Sender<WebSocketCommands>),
+    Register {
+        channel: mpsc::Sender<WebSocketCommands>,
+        session_id: String,
+        did: String,
+    },
     Start,
     Stop,
     Deregister,
@@ -152,7 +156,8 @@ impl StreamingTask {
             database.streaming_clean_start(&self.uuid).await?;
 
             // Create a hashmap to store the clients and if they are active (true = yes)
-            let mut clients: HashMap<String, (mpsc::Sender<WebSocketCommands>, bool)> = HashMap::new();
+            // Key: did_hash, Value: (channel, session_id, live_delivery_active)
+            let mut clients: HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)> = HashMap::new();
 
             // Start streaming messages to clients
             let mut pubsub = self._start_pubsub(database.clone(), &self.uuid).await?;
@@ -175,7 +180,7 @@ impl StreamingTask {
                                 };
 
                                 // Find the MPSC transmit channel for the associated DID hash
-                                match clients.get(&payload.did_hash) { Some((tx, active)) => {
+                                match clients.get(&payload.did_hash) { Some((tx, _, active)) => {
                                     if payload.force_delivery ||  *active {
                                         // Send the message to the client
                                         match tx.send(WebSocketCommands::Message(payload.message.clone())).await { Err(err) => {
@@ -217,11 +222,11 @@ impl StreamingTask {
                     value = channel.recv() => { // mpsc command channel
                         if let Some(value) = &value {
                             match &value.state {
-                                StreamingUpdateState::Register(client_tx) => {
-                                    self._handle_registration(&database, &mut clients, value, client_tx).await;
+                                StreamingUpdateState::Register { channel: client_tx, session_id, did } => {
+                                    self._handle_registration(&database, &mut clients, value, client_tx, session_id, did).await;
                                 },
                                 StreamingUpdateState::Start => {
-                                    if let Some((_, active)) = clients.get_mut(&value.did_hash) {
+                                    if let Some((_, _, active)) = clients.get_mut(&value.did_hash) {
                                         info!("Starting streaming for DID: ({})", value.did_hash);
                                         *active = true;
                                     };
@@ -232,7 +237,7 @@ impl StreamingTask {
                                 },
                                 StreamingUpdateState::Stop => {
                                     // Set active to false
-                                    if let Some((_, active)) = clients.get_mut(&value.did_hash) {
+                                    if let Some((_, _, active)) = clients.get_mut(&value.did_hash) {
                                         info!("Stopping streaming for DID: ({})", value.did_hash);
                                         *active = false;
                                     };
@@ -269,23 +274,34 @@ impl StreamingTask {
     async fn _handle_registration(
         &self,
         database: &Database,
-        clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, bool)>,
+        clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)>,
         value: &StreamingUpdate,
         client_tx: &mpsc::Sender<WebSocketCommands>,
+        new_session_id: &str,
+        did: &str,
     ) {
-        if let Some((channel, _)) = clients.get(&value.did_hash) {
-            debug!("Duplicate WebSocket channel detected");
+        if let Some((channel, old_session_id, _)) = clients.get(&value.did_hash) {
+            warn!(
+                did = did,
+                old_session = old_session_id,
+                new_session = new_session_id,
+                "Duplicate WebSocket connection: closing old session in favour of new one",
+            );
             // Channel already exists, close the old one
             let _ = channel.send(WebSocketCommands::Close).await;
-            debug!("Sent close WebSocket command to old channel");
         }
 
         info!(
+            did = did,
+            session = new_session_id,
             "Registered streaming for DID: ({}) registered_clients({})",
             value.did_hash,
             clients.len() + 1
         );
-        clients.insert(value.did_hash.clone(), (client_tx.clone(), false));
+        clients.insert(
+            value.did_hash.clone(),
+            (client_tx.clone(), new_session_id.to_string(), false),
+        );
 
         if let Err(err) = database
             .streaming_register_client(&value.did_hash, &self.uuid)
