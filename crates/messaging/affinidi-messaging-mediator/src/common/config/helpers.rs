@@ -163,11 +163,10 @@ pub(crate) async fn load_secrets(
     }
     println!("Loading secrets method({}) path({})", parts[0], parts[1]);
 
-    // VTA path: fetch secrets from VTA context.
-    // The VTA returns multicodec-prefixed private keys, so fetch_context_secrets()
-    // can convert them directly via Secret::from_multibase().
-    // We then remap the Secret ID to the key's label if it looks like a verification
-    // method ID (set by the setup wizard to match the DID document).
+    // VTA path: fetch secrets from VTA context via fetch_did_secrets_bundle().
+    // This single call resolves the context DID, paginates all active keys,
+    // fetches each secret with multicodec-prefixed private keys, and uses key
+    // labels as verification method IDs when available.
     if parts[0] == "vta" {
         let client = vta_client.ok_or_else(|| {
             MediatorError::ConfigError(
@@ -178,35 +177,33 @@ pub(crate) async fn load_secrets(
         })?;
         let context_id = parts[1];
 
-        // Fetch secrets — VTA now returns multicodec-prefixed keys natively
-        let mut vta_secrets = client.fetch_context_secrets(context_id).await.map_err(|e| {
+        let bundle = client.fetch_did_secrets_bundle(context_id).await.map_err(|e| {
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                format!("Could not fetch secrets from VTA context '{context_id}': {e}"),
+                format!("Could not fetch secrets bundle from VTA context '{context_id}': {e}"),
             )
         })?;
 
-        // Remap Secret IDs: if a key's label looks like a verification method ID
-        // (e.g., "did:web:example.com#key-0"), use it as the Secret ID so the
-        // secrets resolver can match keys to DID document verification methods.
-        let keys_resp = client.list_keys(0, 1000, None, Some(context_id)).await.map_err(|e| {
-            MediatorError::ConfigError(12, "NA".into(), format!("Could not list keys from VTA: {e}"))
-        })?;
-        for (secret, key) in vta_secrets.iter_mut().zip(keys_resp.keys.iter()) {
-            if let Some(label) = key.label.as_deref() {
-                if label.contains('#') || label.starts_with("did:") {
-                    secret.id = label.to_string();
-                }
-            }
+        let mut secrets = Vec::with_capacity(bundle.secrets.len());
+        for entry in &bundle.secrets {
+            let secret = Secret::from_multibase(&entry.private_key_multibase, Some(&entry.key_id))
+                .map_err(|e| {
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        format!("Could not decode VTA secret '{}': {e}", entry.key_id),
+                    )
+                })?;
+            secrets.push(secret);
         }
 
         info!(
             "Loading {} mediator Secret{} from VTA context '{context_id}'",
-            vta_secrets.len(),
-            if vta_secrets.len() == 1 { "" } else { "s" }
+            secrets.len(),
+            if secrets.len() == 1 { "" } else { "s" }
         );
-        secrets_resolver.insert_vec(&vta_secrets).await;
+        secrets_resolver.insert_vec(&secrets).await;
         return Ok(());
     }
 
