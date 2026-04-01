@@ -19,12 +19,13 @@ use aws_config;
 use aws_sdk_secretsmanager;
 use console::{Key, Term, style};
 use dialoguer::{Confirm, Input, Select};
-use std::{collections::HashMap, env, fs, process};
+use std::{collections::HashMap, env, fs, process, sync::Mutex};
 use vta_sdk::{
     client::{CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, VtaClient},
     context_provision::ContextProvisionBundle,
     credentials::CredentialBundle,
     keys::KeyType,
+    session::{SessionBackend, SessionStore},
 };
 
 const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
@@ -214,6 +215,30 @@ fn try_as_credential_bundle(
     }
 }
 
+/// In-memory session backend for the ephemeral setup session.
+///
+/// The DIDComm session is only needed for the duration of the setup wizard
+/// (to create DIDs via the VTA). No persistence to disk.
+struct InMemoryBackend {
+    data: Mutex<HashMap<String, String>>,
+}
+
+impl SessionBackend for InMemoryBackend {
+    fn load(&self, key: &str) -> Option<String> {
+        self.data.lock().unwrap().get(key).cloned()
+    }
+    fn save(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.data
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+    fn clear(&self, key: &str) {
+        self.data.lock().unwrap().remove(key);
+    }
+}
+
 /// Resolve the VTA DID document and look for a service with type "VTARest".
 /// Returns the REST endpoint URL if found.
 async fn resolve_vta_rest_url(vta_did: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -362,48 +387,35 @@ async fn step_credential(
         }
     }
 
-    print!("  Authenticating to VTA...");
+    print!("  Authenticating to VTA via DIDComm...");
 
-    // Try lightweight auth first (works when VTA DID is did:key).
-    // Falls back to session-based auth with full DID resolution for
-    // VTAs using did:web, did:webvh, or other non-did:key methods.
-    let url_override = vta_rest_url.as_deref();
-    let client = match VtaClient::from_credential(credential_raw, url_override).await {
-        Ok(client) => client,
-        Err(e) => {
-            if e.is_network() {
-                return Err(format!(
-                    "Cannot reach VTA: {e}\n  \
-                     Ensure the VTA is running and the REST endpoint is accessible."
-                )
-                .into());
-            }
+    // The setup wizard needs a full DIDComm session (not just REST) because
+    // operations like create_did_webvh require the VTA to send DIDComm messages
+    // to the webvh server through its mediator. We use an ephemeral in-memory
+    // session backend — it's only needed for the duration of this wizard.
+    let credential = CredentialBundle::decode(credential_raw)
+        .map_err(|e| format!("Invalid credential: {e}"))?;
 
-            // Lightweight auth failed (e.g., VTA DID is not did:key).
-            // Fall back to session-based challenge-response with full DID resolution.
-            print!("\r  Authenticating to VTA (session auth)...");
+    let vta_url = vta_rest_url
+        .as_deref()
+        .or(credential.vta_url.as_deref())
+        .ok_or("VTA URL not found in credential or --rest. Set [vta].url in config.")?;
 
-            let credential = CredentialBundle::decode(credential_raw)
-                .map_err(|e| format!("Invalid credential: {e}"))?;
-
-            let vta_url = url_override
-                .or(credential.vta_url.as_deref())
-                .ok_or("VTA URL not found in credential or --rest. Set [vta].url in config.")?;
-
-            let token_result = vta_sdk::session::challenge_response(
-                vta_url,
-                &credential.did,
-                &credential.private_key_multibase,
-                &credential.vta_did,
-            )
-            .await
-            .map_err(|e| format!("VTA authentication failed: {e}"))?;
-
-            let client = VtaClient::new(vta_url);
-            client.set_token(token_result.access_token);
-            client
-        }
+    let backend = InMemoryBackend {
+        data: Mutex::new(HashMap::new()),
     };
+    let store = SessionStore::with_backend(Box::new(backend));
+    let session_key = "mediator-setup";
+
+    store
+        .login(credential_raw, vta_url, session_key)
+        .await
+        .map_err(|e| format!("VTA authentication failed: {e}"))?;
+
+    let client = store
+        .connect(session_key, Some(vta_url))
+        .await
+        .map_err(|e| format!("Could not establish DIDComm session with VTA: {e}"))?;
 
     println!(
         "\r  {} Authenticated to VTA at {}         ",
@@ -809,24 +821,7 @@ async fn create_new_did(
     };
 
     println!("  Creating DID (this may take a moment)...");
-    let result = match client.create_did_webvh(req).await {
-        Ok(r) => r,
-        Err(e) => {
-            let msg = format!("{e}");
-            if msg.contains("DIDComm not available") || msg.contains("mediator connection") {
-                return Err(format!(
-                    "DID creation requires DIDComm, which is not available via REST-only auth.\n\n  \
-                     The mediator setup wizard uses REST to communicate with the VTA, but \
-                     creating a did:webvh requires the VTA to send DIDComm messages to the \
-                     webvh server (through a mediator).\n\n  \
-                     Instead, pre-create the DID using the PNM CLI and pass the provision bundle:\n\n  \
-                     \x20 pnm contexts provision --context-id {context_id} --create-did\n\n  \
-                     Then re-run the setup wizard and paste the provision bundle."
-                ).into());
-            }
-            return Err(e.into());
-        }
-    };
+    let result = client.create_did_webvh(req).await?;
 
     println!(
         "  {} Created DID: {}",
