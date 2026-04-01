@@ -164,9 +164,10 @@ pub(crate) async fn load_secrets(
     println!("Loading secrets method({}) path({})", parts[0], parts[1]);
 
     // VTA path: fetch secrets from VTA context.
-    // We manually list keys and get each secret because the VTA stores raw key bytes
-    // (without multicodec prefix), but Secret::from_multibase requires the prefix to
-    // identify the key type. We re-add the prefix using the key_type from the response.
+    // The VTA returns multicodec-prefixed private keys, so fetch_context_secrets()
+    // can convert them directly via Secret::from_multibase().
+    // We then remap the Secret ID to the key's label if it looks like a verification
+    // method ID (set by the setup wizard to match the DID document).
     if parts[0] == "vta" {
         let client = vta_client.ok_or_else(|| {
             MediatorError::ConfigError(
@@ -177,44 +178,27 @@ pub(crate) async fn load_secrets(
         })?;
         let context_id = parts[1];
 
-        // List all keys in the context
+        // Fetch secrets — VTA now returns multicodec-prefixed keys natively
+        let mut vta_secrets = client.fetch_context_secrets(context_id).await.map_err(|e| {
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!("Could not fetch secrets from VTA context '{context_id}': {e}"),
+            )
+        })?;
+
+        // Remap Secret IDs: if a key's label looks like a verification method ID
+        // (e.g., "did:web:example.com#key-0"), use it as the Secret ID so the
+        // secrets resolver can match keys to DID document verification methods.
         let keys_resp = client.list_keys(0, 1000, None, Some(context_id)).await.map_err(|e| {
             MediatorError::ConfigError(12, "NA".into(), format!("Could not list keys from VTA: {e}"))
         })?;
-        info!("Found {} key(s) in VTA context '{context_id}'", keys_resp.keys.len());
-
-        let mut vta_secrets = Vec::with_capacity(keys_resp.keys.len());
-        for key in &keys_resp.keys {
-            let secret_resp = client.get_key_secret(&key.key_id).await.map_err(|e| {
-                MediatorError::ConfigError(
-                    12, "NA".into(),
-                    format!("Could not fetch secret for key '{}': {e}", key.key_id),
-                )
-            })?;
-
-            // Re-encode the private key with the multicodec prefix so that
-            // Secret::from_multibase can identify the key type.
-            let multibase_with_codec = reencode_with_multicodec(
-                &secret_resp.private_key_multibase,
-                &key.key_type,
-                &key.key_id,
-            )?;
-
-            // Use the key's label as the Secret ID if it looks like a verification method ID
-            // (e.g., "did:web:example.com#key-0"). The label is set by the setup wizard to
-            // match the DID document's verification method IDs. Falls back to VTA key_id.
-            let secret_id = key.label.as_deref()
-                .filter(|l| l.contains('#') || l.starts_with("did:"))
-                .unwrap_or(&key.key_id);
-
-            let secret = Secret::from_multibase(&multibase_with_codec, Some(secret_id))
-                .map_err(|e| {
-                    MediatorError::ConfigError(
-                        12, "NA".into(),
-                        format!("Could not create Secret from VTA key '{}': {e}", key.key_id),
-                    )
-                })?;
-            vta_secrets.push(secret);
+        for (secret, key) in vta_secrets.iter_mut().zip(keys_resp.keys.iter()) {
+            if let Some(label) = key.label.as_deref() {
+                if label.contains('#') || label.starts_with("did:") {
+                    secret.id = label.to_string();
+                }
+            }
         }
 
         info!(
@@ -280,44 +264,6 @@ pub(crate) async fn load_secrets(
     secrets_resolver.insert_vec(&secrets).await;
 
     Ok(())
-}
-
-/// Re-encode a VTA private key (raw bytes in multibase) with the appropriate multicodec
-/// prefix so that `Secret::from_multibase` can identify the key type.
-///
-/// The VTA stores raw key bytes without multicodec prefix, but the secrets resolver
-/// needs the prefix to determine if a key is Ed25519, X25519, P256, etc.
-fn reencode_with_multicodec(
-    private_key_multibase: &str,
-    key_type: &vta_sdk::keys::KeyType,
-    key_id: &str,
-) -> Result<String, MediatorError> {
-    use affinidi_encoding::{ED25519_PRIV, X25519_PRIV, P256_PRIV, decode_multikey_with_codec, encode_multikey};
-
-    // First check if the key already has a valid multicodec prefix
-    if let Ok((codec, _)) = decode_multikey_with_codec(private_key_multibase) {
-        let codec_type = affinidi_encoding::Codec::from_u64(codec);
-        if !matches!(codec_type, affinidi_encoding::Codec::Unknown(_)) {
-            // Already has a valid multicodec prefix — return as-is
-            return Ok(private_key_multibase.to_string());
-        }
-    }
-
-    // No valid prefix — decode raw bytes and re-encode with the correct codec
-    let raw_bytes = affinidi_encoding::decode_base58btc(private_key_multibase).map_err(|e| {
-        MediatorError::ConfigError(
-            12, "NA".into(),
-            format!("Could not decode private key for '{}': {e}", key_id),
-        )
-    })?;
-
-    let codec = match key_type {
-        vta_sdk::keys::KeyType::Ed25519 => ED25519_PRIV,
-        vta_sdk::keys::KeyType::X25519 => X25519_PRIV,
-        vta_sdk::keys::KeyType::P256 => P256_PRIV,
-    };
-
-    Ok(encode_multikey(codec, &raw_bytes))
 }
 
 /// Read the primary configuration file for the mediator.
