@@ -2,6 +2,7 @@ pub mod helpers;
 pub mod limits;
 pub mod processors;
 pub mod security;
+pub(crate) mod vta_cache;
 
 pub use limits::*;
 pub use processors::*;
@@ -18,7 +19,7 @@ use affinidi_messaging_mediator_common::{
 };
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use vta_sdk::{client::VtaClient, credentials::CredentialBundle};
+use vta_sdk::integration::{self, VtaServiceConfig};
 use async_convert::{TryFrom, async_trait};
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
@@ -209,18 +210,13 @@ impl TryFrom<ConfigRaw> for Config {
         // If SecretsResolver was instantiated in default(), it would create two copies of it (though only use one)
         let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
 
-        // Initialize VTA client if vta:// scheme is used for DID or secrets
-        // IMPORTANT: The mediator MUST use REST (not DIDComm) to communicate with VTA during
-        // startup. If the VTA only supports DIDComm transport via this mediator, neither service
-        // can bootstrap — a deadlock. The `client` feature (not `session`) ensures REST transport.
+        // Initialize VTA integration if vta:// scheme is used for DID or secrets.
+        // Uses integration::startup() which authenticates, fetches fresh secrets,
+        // caches them locally, and falls back to the cache if VTA is unreachable.
         let needs_vta = raw.mediator_did.starts_with("vta://")
             || raw.security.mediator_secrets.starts_with("vta://");
 
-        // VTA health info for circular dependency detection (populated below if VTA is used)
-        let mut vta_mediator_did: Option<String> = None;
-        let mut vta_mediator_url: Option<String> = None;
-
-        let vta_client = if needs_vta {
+        let vta_startup = if needs_vta {
             let vta_config = raw.vta.as_ref().ok_or_else(|| {
                 MediatorError::ConfigError(
                     12,
@@ -231,122 +227,66 @@ impl TryFrom<ConfigRaw> for Config {
 
             // Resolve the credential from its storage backend (string://, aws_secrets://, keyring://)
             let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
-            let url_override = vta_config.url.as_deref().filter(|u| !u.is_empty());
+            let context = vta_config.context.clone().unwrap_or_else(|| "mediator".into());
 
-            info!("Authenticating to VTA via REST...");
-
-            // Try lightweight auth first (works when VTA DID is did:key).
-            // Falls back to session-based auth with full DID resolution for
-            // VTAs using did:web, did:webvh, or other non-did:key methods.
-            let client = match VtaClient::from_credential(&credential_raw, url_override).await {
-                Ok(client) => {
-                    info!(
-                        "Successfully authenticated to VTA at '{}' (REST, auto-refresh enabled)",
-                        client.base_url()
-                    );
-                    client
-                }
-                Err(e) => {
-                    let err_msg = format!("{e}");
-                    if e.is_network() {
-                        return Err(MediatorError::ConfigError(12, "NA".into(), format!(
-                            "Cannot reach VTA via REST: {e}. \
-                             The mediator requires REST access to the VTA during startup. \
-                             If the VTA relies on this mediator for DIDComm transport and has no \
-                             independent REST endpoint, this is a deadlock — neither service can start. \
-                             Ensure the VTA exposes a REST API that is reachable without this mediator."
-                        )));
-                    }
-
-                    // Lightweight auth failed (e.g., VTA DID is not did:key).
-                    // Fall back to session-based challenge-response with full DID resolution.
-                    warn!("Lightweight VTA auth failed ({err_msg}), trying session auth with DID resolution...");
-
-                    let credential = CredentialBundle::decode(&credential_raw).map_err(|e| {
-                        MediatorError::ConfigError(12, "NA".into(), format!("Invalid VTA credential: {e}"))
-                    })?;
-
-                    let vta_url = url_override
-                        .or(credential.vta_url.as_deref())
-                        .ok_or_else(|| {
-                            MediatorError::ConfigError(
-                                12, "NA".into(),
-                                "VTA URL not found in credential or config".into(),
-                            )
-                        })?;
-
-                    let token_result = vta_sdk::session::challenge_response(
-                        vta_url,
-                        &credential.did,
-                        &credential.private_key_multibase,
-                        &credential.vta_did,
-                    )
-                    .await
-                    .map_err(|e| {
-                        error!("VTA session auth also failed: {e}");
-                        MediatorError::ConfigError(
-                            12, "NA".into(),
-                            format!("VTA authentication failed: {e}"),
-                        )
-                    })?;
-
-                    let client = VtaClient::new(vta_url);
-                    client.set_token(token_result.access_token);
-                    info!("Successfully authenticated to VTA at '{vta_url}' (REST, session auth)");
-                    client
-                }
+            let service_config = VtaServiceConfig {
+                credential: credential_raw,
+                context,
+                url_override: vta_config.url.clone().filter(|u| !u.is_empty()),
             };
 
-            // Probe VTA health to detect circular dependency with this mediator.
-            // The health endpoint reports the VTA's own mediator configuration, so we can
-            // check whether the VTA routes DIDComm through this same mediator.
-            match client.health().await {
-                Ok(health) => {
-                    if health.mediator_did.is_some() || health.mediator_url.is_some() {
-                        info!(
-                            "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
-                            health.mediator_did.as_deref().unwrap_or("none"),
-                            health.mediator_url.as_deref().unwrap_or("none"),
-                        );
+            let cache = vta_cache::MediatorSecretCache::from_credential_config(
+                &vta_config.credential,
+                &aws_config,
+            );
+
+            info!("Starting VTA integration...");
+            let result = integration::startup(&service_config, &cache).await.map_err(|e| {
+                MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
+            })?;
+
+            // Mediator-specific: probe VTA health to detect circular dependency.
+            if let Some(client) = &result.client {
+                match client.health().await {
+                    Ok(health) => {
+                        if health.mediator_did.as_deref() == Some(&result.did) {
+                            warn!(
+                                "CIRCULAR DEPENDENCY: This mediator's DID ({}) matches the VTA's \
+                                 configured mediator DID. REST bootstrapping prevents startup deadlock, \
+                                 but both services are interdependent.",
+                                result.did
+                            );
+                        } else if let Some(vta_med_url) = &health.mediator_url {
+                            if health.mediator_did.is_some() {
+                                info!(
+                                    "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
+                                    health.mediator_did.as_deref().unwrap_or("none"),
+                                    vta_med_url,
+                                );
+                            }
+                        }
                     }
-                    vta_mediator_did = health.mediator_did;
-                    vta_mediator_url = health.mediator_url;
-                }
-                Err(e) => {
-                    warn!("Could not check VTA health for circular dependency detection (non-fatal): {e}");
+                    Err(e) => {
+                        warn!("Could not check VTA health for circular dependency detection (non-fatal): {e}");
+                    }
                 }
             }
 
-            Some(client)
+            Some(result)
         } else {
             None
         };
 
-        // Resolve mediator DID before building config so we can check for circular dependency
-        let mediator_did = read_did_config(&raw.mediator_did, &aws_config, "mediator_did", vta_client.as_ref()).await?;
-
-        // Circular dependency check: does the VTA route DIDComm through THIS mediator?
-        if let Some(vta_med_did) = &vta_mediator_did {
-            if vta_med_did == &mediator_did {
-                warn!(
-                    "CIRCULAR DEPENDENCY: This mediator's DID ({mediator_did}) matches the VTA's \
-                     configured mediator DID. The VTA routes DIDComm through this mediator. \
-                     REST bootstrapping prevents startup deadlock, but both services are \
-                     interdependent — if this mediator is unavailable, the VTA's DIDComm \
-                     transport will be disrupted until the mediator restarts and re-bootstraps \
-                     from VTA via REST. Simultaneous restarts of both services may require \
-                     manual intervention (start VTA first with REST enabled, then start mediator)."
-                );
+        // Resolve mediator DID — from VTA startup result or config
+        let mediator_did = if let Some(ref result) = vta_startup {
+            if raw.mediator_did.starts_with("vta://") {
+                result.did.clone()
+            } else {
+                read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
             }
-        } else if let Some(vta_med_url) = &vta_mediator_url {
-            // Fallback: if we couldn't match by DID, warn if VTA has any mediator configured
-            warn!(
-                "VTA is configured with mediator_url '{}'. If this is the same mediator, \
-                 a circular dependency exists. Ensure the VTA's REST endpoint is accessible \
-                 independently of this mediator for bootstrap.",
-                vta_med_url
-            );
-        }
+        } else {
+            read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
+        };
 
         let mut config = Config {
             log_level: match raw.log_level.as_str() {
@@ -379,7 +319,7 @@ impl TryFrom<ConfigRaw> for Config {
             api_prefix: raw.server.api_prefix,
             security: raw
                 .security
-                .convert(secrets_resolver.clone(), &aws_config, vta_client.as_ref())
+                .convert(secrets_resolver.clone(), &aws_config, vta_startup.as_ref().map(|r| &r.bundle))
                 .await?,
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,

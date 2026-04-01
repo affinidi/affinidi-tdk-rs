@@ -147,11 +147,14 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
 
 /// Loads the secret data into the Config file.
 /// Supports file://, aws_secrets://, and vta:// (Verifiable Trust Agent) schemes.
+///
+/// For `vta://`, secrets are loaded from the pre-fetched [`DidSecretsBundle`] in the
+/// VTA startup result (already cached locally by `integration::startup()`).
 pub(crate) async fn load_secrets(
     secrets_resolver: &Arc<ThreadedSecretsResolver>,
     secrets: &str,
     aws_config: &SdkConfig,
-    vta_client: Option<&VtaClient>,
+    vta_bundle: Option<&vta_sdk::did_secrets::DidSecretsBundle>,
 ) -> Result<(), MediatorError> {
     let parts: Vec<&str> = secrets.split("://").collect();
     if parts.len() != 2 {
@@ -163,25 +166,15 @@ pub(crate) async fn load_secrets(
     }
     println!("Loading secrets method({}) path({})", parts[0], parts[1]);
 
-    // VTA path: fetch secrets from VTA context via fetch_did_secrets_bundle().
-    // This single call resolves the context DID, paginates all active keys,
-    // fetches each secret with multicodec-prefixed private keys, and uses key
-    // labels as verification method IDs when available.
+    // VTA path: use the pre-fetched secrets bundle from integration::startup().
+    // The bundle was already fetched from VTA (or loaded from cache) and contains
+    // multicodec-prefixed private keys with verification method IDs.
     if parts[0] == "vta" {
-        let client = vta_client.ok_or_else(|| {
+        let bundle = vta_bundle.ok_or_else(|| {
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                "VTA client not initialized but vta:// scheme used for mediator_secrets".into(),
-            )
-        })?;
-        let context_id = parts[1];
-
-        let bundle = client.fetch_did_secrets_bundle(context_id).await.map_err(|e| {
-            MediatorError::ConfigError(
-                12,
-                "NA".into(),
-                format!("Could not fetch secrets bundle from VTA context '{context_id}': {e}"),
+                "VTA startup result not available but vta:// scheme used for mediator_secrets".into(),
             )
         })?;
 
@@ -199,7 +192,7 @@ pub(crate) async fn load_secrets(
         }
 
         info!(
-            "Loading {} mediator Secret{} from VTA context '{context_id}'",
+            "Loading {} mediator Secret{} from VTA",
             secrets.len(),
             if secrets.len() == 1 { "" } else { "s" }
         );

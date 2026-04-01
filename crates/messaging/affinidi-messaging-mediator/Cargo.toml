@@ -48,7 +48,7 @@ affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messag
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
-vta-sdk = { git = "https://github.com/OpenVTC/verifiable-trust-infrastructure.git", branch = "nightly", features = ["session"] }
+vta-sdk = { git = "https://github.com/OpenVTC/verifiable-trust-infrastructure.git", branch = "nightly", features = ["integration"] }
 
 # External Crates
 didwebvh-rs = "0.4.0"
