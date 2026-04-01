@@ -21,9 +21,7 @@ use console::{Key, Term, style};
 use dialoguer::{Confirm, Input, Select};
 use std::{collections::HashMap, env, fs, process};
 use vta_sdk::{
-    client::{
-        CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, VtaClient,
-    },
+    client::{CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, VtaClient},
     context_provision::ContextProvisionBundle,
     credentials::CredentialBundle,
     keys::KeyType,
@@ -71,9 +69,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Choose credential storage
     let credential_raw = match &input {
-        BundleInput::Provision {
-            credential_raw, ..
-        } => credential_raw,
+        BundleInput::Provision { credential_raw, .. } => credential_raw,
         BundleInput::Credential { credential_raw } => credential_raw,
     };
     let credential_config = step_storage(credential_raw).await?;
@@ -286,10 +282,7 @@ async fn step_credential(
     // (e.g., the `did` field gets a non-did:key value, causing "not a did:key" errors).
     let input = match ContextProvisionBundle::decode(&raw) {
         Ok(bundle) => {
-            println!(
-                "  {} Decoded context provision bundle",
-                style("*").green(),
-            );
+            println!("  {} Decoded context provision bundle", style("*").green(),);
             println!(
                 "    Context: {} ({})",
                 style(&bundle.context_id).cyan(),
@@ -323,11 +316,7 @@ async fn step_credential(
                         );
                         // Try to extract context info from the raw JSON
                         if let Some((ctx_id, ctx_name)) = try_extract_context_from_json(&raw) {
-                            println!(
-                                "    Context: {} ({})",
-                                style(&ctx_id).cyan(),
-                                ctx_name
-                            );
+                            println!("    Context: {} ({})", style(&ctx_id).cyan(), ctx_name);
                         }
                         BundleInput::Credential { credential_raw }
                     }
@@ -345,9 +334,7 @@ async fn step_credential(
 
     // Authenticate
     let credential_raw = match &input {
-        BundleInput::Provision {
-            credential_raw, ..
-        } => credential_raw,
+        BundleInput::Provision { credential_raw, .. } => credential_raw,
         BundleInput::Credential { credential_raw } => credential_raw,
     };
 
@@ -370,11 +357,7 @@ async fn step_credential(
                 vta_rest_url = Some(url);
             }
             Err(e) => {
-                println!(
-                    "\r  {} {}         ",
-                    style("!").yellow(),
-                    e
-                );
+                println!("\r  {} {}         ", style("!").yellow(), e);
             }
         }
     }
@@ -400,9 +383,8 @@ async fn step_credential(
             // Fall back to session-based challenge-response with full DID resolution.
             print!("\r  Authenticating to VTA (session auth)...");
 
-            let credential = CredentialBundle::decode(credential_raw).map_err(|e| {
-                format!("Invalid credential: {e}")
-            })?;
+            let credential = CredentialBundle::decode(credential_raw)
+                .map_err(|e| format!("Invalid credential: {e}"))?;
 
             let vta_url = url_override
                 .or(credential.vta_url.as_deref())
@@ -493,7 +475,9 @@ async fn step_storage(credential_raw: &str) -> Result<String, Box<dyn std::error
                 Err(e) => {
                     // Use Debug format for full error chain; Display only says "service error"
                     let err_detail = format!("{e:?}");
-                    if err_detail.contains("ResourceExistsException") || err_detail.contains("already exists") {
+                    if err_detail.contains("ResourceExistsException")
+                        || err_detail.contains("already exists")
+                    {
                         // Secret exists — update it
                         asm.put_secret_value()
                             .secret_id(&secret_name)
@@ -584,10 +568,7 @@ async fn step_context(
         );
 
         if Confirm::new()
-            .with_prompt(format!(
-                "  Use context '{}'?",
-                bundle.context_id
-            ))
+            .with_prompt(format!("  Use context '{}'?", bundle.context_id))
             .default(true)
             .interact()?
         {
@@ -675,10 +656,7 @@ async fn step_did(
     // If provision bundle has a DID, use it directly — keys are already in VTA
     if let BundleInput::Provision { bundle, .. } = input {
         if let Some(provisioned_did) = &bundle.did {
-            println!(
-                "  DID from bundle: {}",
-                style(&provisioned_did.id).cyan()
-            );
+            println!("  DID from bundle: {}", style(&provisioned_did.id).cyan());
             println!(
                 "  {} key{} already provisioned in VTA",
                 provisioned_did.secrets.len(),
@@ -690,7 +668,9 @@ async fn step_did(
             );
 
             // Update context with the DID (may already be set, but ensure it's correct)
-            client.update_context_did(context_id, &provisioned_did.id).await?;
+            client
+                .update_context_did(context_id, &provisioned_did.id)
+                .await?;
             println!(
                 "  {} Context '{}' configured with DID",
                 style("*").green(),
@@ -698,40 +678,39 @@ async fn step_did(
             );
 
             // If there's a log entry, offer to save it for did:web self-hosting
-            let doc_path = if provisioned_did.log_entry.is_some()
-                || provisioned_did.did_document.is_some()
-            {
-                if Confirm::new()
-                    .with_prompt("  Save DID document for self-hosting (did:web)?")
-                    .default(true)
-                    .interact()?
-                {
-                    let path: String = Input::new()
-                        .with_prompt("  DID document path")
-                        .with_initial_text("conf/mediator_did.json")
-                        .interact_text()?;
+            let doc_path =
+                if provisioned_did.log_entry.is_some() || provisioned_did.did_document.is_some() {
+                    if Confirm::new()
+                        .with_prompt("  Save DID document for self-hosting (did:web)?")
+                        .default(true)
+                        .interact()?
+                    {
+                        let path: String = Input::new()
+                            .with_prompt("  DID document path")
+                            .with_initial_text("conf/mediator_did.json")
+                            .interact_text()?;
 
-                    let content = if let Some(log_entry) = &provisioned_did.log_entry {
-                        log_entry.clone()
-                    } else if let Some(doc) = &provisioned_did.did_document {
-                        serde_json::to_string_pretty(doc)?
+                        let content = if let Some(log_entry) = &provisioned_did.log_entry {
+                            log_entry.clone()
+                        } else if let Some(doc) = &provisioned_did.did_document {
+                            serde_json::to_string_pretty(doc)?
+                        } else {
+                            unreachable!()
+                        };
+
+                        fs::write(&path, &content)?;
+                        println!(
+                            "  {} Saved DID document to {}",
+                            style("*").green(),
+                            style(&path).cyan()
+                        );
+                        Some(path)
                     } else {
-                        unreachable!()
-                    };
-
-                    fs::write(&path, &content)?;
-                    println!(
-                        "  {} Saved DID document to {}",
-                        style("*").green(),
-                        style(&path).cyan()
-                    );
-                    Some(path)
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
             println!();
             return Ok(doc_path);
@@ -790,11 +769,9 @@ async fn create_new_did(
     let servers = &servers_resp.servers;
 
     if servers.is_empty() {
-        return Err(
-            "No did:webvh servers configured in VTA. \
+        return Err("No did:webvh servers configured in VTA. \
              Add one via: cnm-cli webvh server add <url>"
-                .into(),
-        );
+            .into());
     }
 
     let server_id = if servers.len() == 1 {
@@ -1020,8 +997,7 @@ fn decode_and_validate_private_key(
     fragment: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use affinidi_encoding::{
-        Codec, ED25519_PRIV, X25519_PRIV, P256_PRIV,
-        decode_multikey_with_codec, encode_base58btc,
+        Codec, ED25519_PRIV, P256_PRIV, X25519_PRIV, decode_multikey_with_codec, encode_base58btc,
     };
 
     // Try to decode as multibase-multicodec
@@ -1047,7 +1023,8 @@ fn decode_and_validate_private_key(
                     return Err(format!(
                         "Key type mismatch for '{fragment}': DID document expects {expected_name} \
                          but the private key is encoded as {decoded_codec:?}"
-                    ).into());
+                    )
+                    .into());
                 }
             }
 
@@ -1150,10 +1127,7 @@ fn step_save_config(
         style("*").green(),
         style(config_path).cyan()
     );
-    println!(
-        "    mediator_did = \"vta://{}\"",
-        style(context_id).cyan()
-    );
+    println!("    mediator_did = \"vta://{}\"", style(context_id).cyan());
     println!(
         "    mediator_secrets = \"vta://{}\"",
         style(context_id).cyan()
@@ -1165,10 +1139,7 @@ fn step_save_config(
         );
     }
     if let Some(url) = vta_rest_url {
-        println!(
-            "    [vta] url = \"{}\"",
-            style(url).cyan()
-        );
+        println!("    [vta] url = \"{}\"", style(url).cyan());
     }
     println!(
         "    [vta] credential = \"{}...\"",

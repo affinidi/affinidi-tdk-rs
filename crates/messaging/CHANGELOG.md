@@ -14,8 +14,8 @@ tooling.
 
 - **FIX:** Fixed websocket task leak during reconnect retries. When `run_with_restart`
   called `connect()` after a failed connection, the previous ATM's websocket background
-  task was not stopped, causing orphaned tasks to accumulate. When the mediator recovered,
-  all orphaned tasks connected simultaneously, triggering a flood of
+  task was not stopped, causing orphaned tasks to accumulate. When the mediator
+  recovered, all orphaned tasks connected simultaneously, triggering a flood of
   `w.websocket.duplicate-channel` problem reports. `connect()` now calls
   `stop_websocket()` and clears old state before creating a new ATM and profile.
 
@@ -130,7 +130,7 @@ tooling.
 
 - **CHORE:** Updated import paths (`affinidi_didcomm` → `affinidi_messaging_didcomm`)
 
-### Helpers (0.12.2)
+### Helpers (0.12.2 (1 of 2))
 
 - **FEATURE:** Added `protocol_comparison` benchmark example — compares TSP vs
   DIDComm message packing performance using direct protocol APIs
@@ -157,7 +157,8 @@ tooling.
 ### Mediator (0.12.2)
 
 - **FIX:** DID doc endpoints not returning the correct response type.
-  - `well_known_did_doc_handler` returns a plaintext instead of JSON to satisfy the resolver.
+  - `well_known_did_doc_handler` returns a plaintext instead of JSON to satisfy
+    the resolver.
 - **CHORE:** Bumped depedencies
   - `didwebvh-rs` upgraded from `0.1.16` to `0.2.0`
 
@@ -261,7 +262,7 @@ tooling.
   covering plaintext unpacking, forward unwrapping (JSON and Base64 attachments),
   nested forwards, config-driven behavior, and error handling
 
-### Helpers (0.11.8)
+### Helpers (0.11.8) (1 of 2)
 
 - **FEATURE:** Added `trust_ping` example
 

@@ -59,14 +59,13 @@ impl SecretCache for MediatorSecretCache {
         &self,
         bundle: &DidSecretsBundle,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let encoded = bundle.encode().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("Failed to encode secrets bundle: {e}").into()
-        })?;
+        let encoded = bundle
+            .encode()
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                format!("Failed to encode secrets bundle: {e}").into()
+            })?;
 
-        let (scheme, path) = self
-            .backend
-            .split_once("://")
-            .unwrap_or(("string", ""));
+        let (scheme, path) = self.backend.split_once("://").unwrap_or(("string", ""));
 
         match scheme {
             "aws_secrets" if !path.is_empty() => {
@@ -110,15 +109,16 @@ impl SecretCache for MediatorSecretCache {
                     } else {
                         (parts[0], "secrets-cache")
                     };
-                    let entry = keyring::Entry::new(service, user)
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    let entry = keyring::Entry::new(service, user).map_err(
+                        |e| -> Box<dyn std::error::Error + Send + Sync> {
                             format!("Keyring cache access failed: {e}").into()
-                        })?;
-                    entry
-                        .set_password(&encoded)
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                        },
+                    )?;
+                    entry.set_password(&encoded).map_err(
+                        |e| -> Box<dyn std::error::Error + Send + Sync> {
                             format!("Keyring cache store failed: {e}").into()
-                        })?;
+                        },
+                    )?;
                     debug!("Cached VTA secrets to keyring: {service}/{user}");
                 }
                 #[cfg(not(feature = "vta-keyring"))]
@@ -138,10 +138,7 @@ impl SecretCache for MediatorSecretCache {
     async fn load(
         &self,
     ) -> Result<Option<DidSecretsBundle>, Box<dyn std::error::Error + Send + Sync>> {
-        let (scheme, path) = self
-            .backend
-            .split_once("://")
-            .unwrap_or(("string", ""));
+        let (scheme, path) = self.backend.split_once("://").unwrap_or(("string", ""));
 
         let encoded: Option<String> = match scheme {
             "aws_secrets" if !path.is_empty() => {
@@ -184,10 +181,11 @@ impl SecretCache for MediatorSecretCache {
 
         match encoded {
             Some(s) if !s.is_empty() => {
-                let bundle = DidSecretsBundle::decode(&s)
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                let bundle = DidSecretsBundle::decode(&s).map_err(
+                    |e| -> Box<dyn std::error::Error + Send + Sync> {
                         format!("Failed to decode cached secrets bundle: {e}").into()
-                    })?;
+                    },
+                )?;
                 debug!("Loaded {} cached secret(s)", bundle.secrets.len());
                 Ok(Some(bundle))
             }

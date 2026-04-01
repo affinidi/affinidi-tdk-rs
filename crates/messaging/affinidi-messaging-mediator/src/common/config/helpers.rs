@@ -2,7 +2,6 @@ use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
-use vta_sdk::client::VtaClient;
 use aws_config::SdkConfig;
 use aws_sdk_secretsmanager;
 use aws_sdk_ssm::types::ParameterType;
@@ -15,6 +14,7 @@ use std::{
     sync::Arc,
 };
 use tracing::info;
+use vta_sdk::client::VtaClient;
 
 use super::VtaConfigRaw;
 use super::processors::ForwardingConfig;
@@ -60,20 +60,41 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
     // Security
     env_override!(config.security.mediator_acl_mode, "MEDIATOR_ACL_MODE");
     env_override!(config.security.global_acl_default, "GLOBAL_DEFAULT_ACL");
-    env_override!(config.security.local_direct_delivery_allowed, "LOCAL_DIRECT_DELIVERY_ALLOWED");
-    env_override!(config.security.local_direct_delivery_allow_anon, "LOCAL_DIRECT_DELIVERY_ALLOW_ANON");
+    env_override!(
+        config.security.local_direct_delivery_allowed,
+        "LOCAL_DIRECT_DELIVERY_ALLOWED"
+    );
+    env_override!(
+        config.security.local_direct_delivery_allow_anon,
+        "LOCAL_DIRECT_DELIVERY_ALLOW_ANON"
+    );
     env_override!(config.security.mediator_secrets, "MEDIATOR_SECRETS");
     env_override!(config.security.use_ssl, "USE_SSL");
     env_override_opt!(config.security.ssl_certificate_file, "SSL_CERTIFICATE_FILE");
     env_override_opt!(config.security.ssl_key_file, "SSL_KEY_FILE");
-    env_override!(config.security.jwt_authorization_secret, "JWT_AUTHORIZATION_SECRET");
+    env_override!(
+        config.security.jwt_authorization_secret,
+        "JWT_AUTHORIZATION_SECRET"
+    );
     env_override!(config.security.jwt_access_expiry, "JWT_ACCESS_EXPIRY");
     env_override!(config.security.jwt_refresh_expiry, "JWT_REFRESH_EXPIRY");
     env_override_opt!(config.security.cors_allow_origin, "CORS_ALLOW_ORIGIN");
-    env_override!(config.security.block_anonymous_outer_envelope, "BLOCK_ANONYMOUS_OUTER_ENVELOPE");
-    env_override!(config.security.force_session_did_match, "FORCE_SESSION_DID_MATCH");
-    env_override!(config.security.block_remote_admin_msgs, "BLOCK_REMOTE_ADMIN_MSGS");
-    env_override!(config.security.admin_messages_expiry, "ADMIN_MESSAGES_EXPIRY");
+    env_override!(
+        config.security.block_anonymous_outer_envelope,
+        "BLOCK_ANONYMOUS_OUTER_ENVELOPE"
+    );
+    env_override!(
+        config.security.force_session_did_match,
+        "FORCE_SESSION_DID_MATCH"
+    );
+    env_override!(
+        config.security.block_remote_admin_msgs,
+        "BLOCK_REMOTE_ADMIN_MSGS"
+    );
+    env_override!(
+        config.security.admin_messages_expiry,
+        "ADMIN_MESSAGES_EXPIRY"
+    );
 
     // Streaming
     env_override!(config.streaming.enabled, "STREAMING_ENABLED");
@@ -81,25 +102,55 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
 
     // DID Resolver
     env_override_opt!(config.did_resolver.address, "DID_RESOLVER_ADDRESS");
-    env_override!(config.did_resolver.cache_capacity, "DID_RESOLVER_CACHE_CAPACITY");
+    env_override!(
+        config.did_resolver.cache_capacity,
+        "DID_RESOLVER_CACHE_CAPACITY"
+    );
     env_override!(config.did_resolver.cache_ttl, "DID_RESOLVER_CACHE_TTL");
-    env_override!(config.did_resolver.network_timeout, "DID_RESOLVER_NETWORK_TIMEOUT");
-    env_override!(config.did_resolver.network_limit, "DID_RESOLVER_NETWORK_LIMIT");
+    env_override!(
+        config.did_resolver.network_timeout,
+        "DID_RESOLVER_NETWORK_TIMEOUT"
+    );
+    env_override!(
+        config.did_resolver.network_limit,
+        "DID_RESOLVER_NETWORK_LIMIT"
+    );
 
     // Limits
-    env_override!(config.limits.attachments_max_count, "LIMIT_ATTACHMENTS_MAX_COUNT");
-    env_override!(config.limits.crypto_operations_per_message, "LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE");
+    env_override!(
+        config.limits.attachments_max_count,
+        "LIMIT_ATTACHMENTS_MAX_COUNT"
+    );
+    env_override!(
+        config.limits.crypto_operations_per_message,
+        "LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE"
+    );
     env_override!(config.limits.deleted_messages, "LIMIT_DELETED_MESSAGES");
     env_override!(config.limits.forward_task_queue, "LIMIT_FORWARD_TASK_QUEUE");
     env_override!(config.limits.http_size, "LIMIT_HTTP_SIZE");
     env_override!(config.limits.listed_messages, "LIMIT_LISTED_MESSAGES");
     env_override!(config.limits.local_max_acl, "LIMIT_LOCAL_MAX_ACL");
-    env_override!(config.limits.message_expiry_seconds, "LIMIT_MESSAGE_EXPIRY_SECONDS");
+    env_override!(
+        config.limits.message_expiry_seconds,
+        "LIMIT_MESSAGE_EXPIRY_SECONDS"
+    );
     env_override!(config.limits.message_size, "LIMIT_MESSAGE_SIZE");
-    env_override!(config.limits.queued_send_messages_soft, "LIMIT_QUEUED_SEND_MESSAGES_SOFT");
-    env_override!(config.limits.queued_send_messages_hard, "LIMIT_QUEUED_SEND_MESSAGES_HARD");
-    env_override!(config.limits.queued_receive_messages_soft, "LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT");
-    env_override!(config.limits.queued_receive_messages_hard, "LIMIT_QUEUED_RECEIVE_MESSAGES_HARD");
+    env_override!(
+        config.limits.queued_send_messages_soft,
+        "LIMIT_QUEUED_SEND_MESSAGES_SOFT"
+    );
+    env_override!(
+        config.limits.queued_send_messages_hard,
+        "LIMIT_QUEUED_SEND_MESSAGES_HARD"
+    );
+    env_override!(
+        config.limits.queued_receive_messages_soft,
+        "LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT"
+    );
+    env_override!(
+        config.limits.queued_receive_messages_hard,
+        "LIMIT_QUEUED_RECEIVE_MESSAGES_HARD"
+    );
     env_override!(config.limits.to_keys_per_recipient, "LIMIT_TO_KEYS_PER_DID");
     env_override!(config.limits.to_recipients, "LIMIT_TO_RECIPIENTS");
     env_override!(config.limits.ws_size, "LIMIT_WS_SIZE");
@@ -107,27 +158,78 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
     env_override!(config.limits.oob_invite_ttl, "OOB_INVITE_TTL");
     env_override!(config.limits.rate_limit_per_ip, "LIMIT_RATE_LIMIT_PER_IP");
     env_override!(config.limits.rate_limit_burst, "LIMIT_RATE_LIMIT_BURST");
-    env_override!(config.limits.max_websocket_connections, "LIMIT_MAX_WEBSOCKET_CONNECTIONS");
-    env_override!(config.limits.did_rate_limit_per_second, "LIMIT_DID_RATE_LIMIT_PER_SECOND");
-    env_override!(config.limits.did_rate_limit_burst, "LIMIT_DID_RATE_LIMIT_BURST");
+    env_override!(
+        config.limits.max_websocket_connections,
+        "LIMIT_MAX_WEBSOCKET_CONNECTIONS"
+    );
+    env_override!(
+        config.limits.did_rate_limit_per_second,
+        "LIMIT_DID_RATE_LIMIT_PER_SECOND"
+    );
+    env_override!(
+        config.limits.did_rate_limit_burst,
+        "LIMIT_DID_RATE_LIMIT_BURST"
+    );
 
     // Processors - Forwarding
-    env_override!(config.processors.forwarding.enabled, "PROCESSOR_FORWARDING_ENABLED");
-    env_override!(config.processors.forwarding.future_time_limit, "PROCESSOR_FORWARDING_FUTURE_TIME_LIMIT");
-    env_override!(config.processors.forwarding.external_forwarding, "PROCESSOR_FORWARDING_EXTERNAL");
-    env_override!(config.processors.forwarding.report_errors, "PROCESSOR_FORWARDING_REPORT_ERRORS");
-    env_override!(config.processors.forwarding.blocked_forwarding_dids, "PROCESSOR_FORWARDING_BLOCKED_DIDS");
-    env_override!(config.processors.forwarding.rate_window_seconds, "PROCESSOR_FORWARDING_RATE_WINDOW");
-    env_override!(config.processors.forwarding.ws_threshold_msgs_per_10s, "PROCESSOR_FORWARDING_WS_THRESHOLD");
-    env_override!(config.processors.forwarding.ws_idle_timeout_seconds, "PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT");
-    env_override!(config.processors.forwarding.batch_size, "PROCESSOR_FORWARDING_BATCH_SIZE");
-    env_override!(config.processors.forwarding.max_retries, "PROCESSOR_FORWARDING_MAX_RETRIES");
-    env_override!(config.processors.forwarding.initial_backoff_ms, "PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS");
-    env_override!(config.processors.forwarding.max_backoff_ms, "PROCESSOR_FORWARDING_MAX_BACKOFF_MS");
-    env_override!(config.processors.forwarding.consumer_group, "PROCESSOR_FORWARDING_CONSUMER_GROUP");
+    env_override!(
+        config.processors.forwarding.enabled,
+        "PROCESSOR_FORWARDING_ENABLED"
+    );
+    env_override!(
+        config.processors.forwarding.future_time_limit,
+        "PROCESSOR_FORWARDING_FUTURE_TIME_LIMIT"
+    );
+    env_override!(
+        config.processors.forwarding.external_forwarding,
+        "PROCESSOR_FORWARDING_EXTERNAL"
+    );
+    env_override!(
+        config.processors.forwarding.report_errors,
+        "PROCESSOR_FORWARDING_REPORT_ERRORS"
+    );
+    env_override!(
+        config.processors.forwarding.blocked_forwarding_dids,
+        "PROCESSOR_FORWARDING_BLOCKED_DIDS"
+    );
+    env_override!(
+        config.processors.forwarding.rate_window_seconds,
+        "PROCESSOR_FORWARDING_RATE_WINDOW"
+    );
+    env_override!(
+        config.processors.forwarding.ws_threshold_msgs_per_10s,
+        "PROCESSOR_FORWARDING_WS_THRESHOLD"
+    );
+    env_override!(
+        config.processors.forwarding.ws_idle_timeout_seconds,
+        "PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT"
+    );
+    env_override!(
+        config.processors.forwarding.batch_size,
+        "PROCESSOR_FORWARDING_BATCH_SIZE"
+    );
+    env_override!(
+        config.processors.forwarding.max_retries,
+        "PROCESSOR_FORWARDING_MAX_RETRIES"
+    );
+    env_override!(
+        config.processors.forwarding.initial_backoff_ms,
+        "PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS"
+    );
+    env_override!(
+        config.processors.forwarding.max_backoff_ms,
+        "PROCESSOR_FORWARDING_MAX_BACKOFF_MS"
+    );
+    env_override!(
+        config.processors.forwarding.consumer_group,
+        "PROCESSOR_FORWARDING_CONSUMER_GROUP"
+    );
 
     // Processors - Message Expiry Cleanup
-    env_override!(config.processors.message_expiry_cleanup.enabled, "PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED");
+    env_override!(
+        config.processors.message_expiry_cleanup.enabled,
+        "PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED"
+    );
 
     // VTA - create section from env vars if not present in TOML
     if config.vta.is_none() {
@@ -174,7 +276,8 @@ pub(crate) async fn load_secrets(
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                "VTA startup result not available but vta:// scheme used for mediator_secrets".into(),
+                "VTA startup result not available but vta:// scheme used for mediator_secrets"
+                    .into(),
             )
         })?;
 
@@ -364,7 +467,9 @@ pub(crate) async fn read_did_config(
             return Err(MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                format!("Invalid {field_name} format! Expecting did://, aws_parameter_store://, or vta:// ..."),
+                format!(
+                    "Invalid {field_name} format! Expecting did://, aws_parameter_store://, or vta:// ..."
+                ),
             ));
         }
     };
@@ -558,15 +663,15 @@ pub(crate) async fn read_document(
 /// - `keyring://<service>/<user>` - Load from OS keyring (requires `vta-keyring` feature)
 pub(crate) async fn load_vta_credential(
     credential_config: &str,
-    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))]
-    aws_config: &SdkConfig,
+    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))] aws_config: &SdkConfig,
 ) -> Result<String, MediatorError> {
     let parts: Vec<&str> = credential_config.split("://").collect();
     if parts.len() != 2 {
         return Err(MediatorError::ConfigError(
             12,
             "NA".into(),
-            "Invalid VTA credential format. Expected string://, aws_secrets://, or keyring://".into(),
+            "Invalid VTA credential format. Expected string://, aws_secrets://, or keyring://"
+                .into(),
         ));
     }
 
@@ -597,7 +702,8 @@ pub(crate) async fn load_vta_credential(
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        "No secret string found in AWS Secrets Manager response for VTA credential".into(),
+                        "No secret string found in AWS Secrets Manager response for VTA credential"
+                            .into(),
                     )
                 })
             }
@@ -607,7 +713,8 @@ pub(crate) async fn load_vta_credential(
                     12,
                     "NA".into(),
                     "aws_secrets:// for VTA credentials requires the 'vta-aws-secrets' feature. \
-                     Rebuild with: cargo build --features vta-aws-secrets".into(),
+                     Rebuild with: cargo build --features vta-aws-secrets"
+                        .into(),
                 ))
             }
         }
@@ -638,7 +745,9 @@ pub(crate) async fn load_vta_credential(
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Could not read VTA credential from keyring '{service}/{user}': {e}"),
+                        format!(
+                            "Could not read VTA credential from keyring '{service}/{user}': {e}"
+                        ),
                     )
                 })
             }

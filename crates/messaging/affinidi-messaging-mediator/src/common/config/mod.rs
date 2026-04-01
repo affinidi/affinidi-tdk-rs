@@ -19,7 +19,6 @@ use affinidi_messaging_mediator_common::{
 };
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use vta_sdk::integration::{self, VtaServiceConfig};
 use async_convert::{TryFrom, async_trait};
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
@@ -28,6 +27,7 @@ use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
+use vta_sdk::integration::{self, VtaServiceConfig};
 
 use helpers::{
     get_hostname, load_forwarding_protection_blocks, load_vta_credential, read_config_file,
@@ -227,7 +227,10 @@ impl TryFrom<ConfigRaw> for Config {
 
             // Resolve the credential from its storage backend (string://, aws_secrets://, keyring://)
             let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
-            let context = vta_config.context.clone().unwrap_or_else(|| "mediator".into());
+            let context = vta_config
+                .context
+                .clone()
+                .unwrap_or_else(|| "mediator".into());
 
             let service_config = VtaServiceConfig {
                 credential: credential_raw,
@@ -241,9 +244,11 @@ impl TryFrom<ConfigRaw> for Config {
             );
 
             info!("Starting VTA integration...");
-            let result = integration::startup(&service_config, &cache).await.map_err(|e| {
-                MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
-            })?;
+            let result = integration::startup(&service_config, &cache)
+                .await
+                .map_err(|e| {
+                    MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
+                })?;
 
             // Mediator-specific: probe VTA health to detect circular dependency.
             if let Some(client) = &result.client {
@@ -267,7 +272,9 @@ impl TryFrom<ConfigRaw> for Config {
                         }
                     }
                     Err(e) => {
-                        warn!("Could not check VTA health for circular dependency detection (non-fatal): {e}");
+                        warn!(
+                            "Could not check VTA health for circular dependency detection (non-fatal): {e}"
+                        );
                     }
                 }
             }
@@ -306,7 +313,8 @@ impl TryFrom<ConfigRaw> for Config {
             }),
             listen_address: raw.server.listen_address,
             mediator_did,
-            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None).await?,
+            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None)
+                .await?,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(
@@ -319,7 +327,11 @@ impl TryFrom<ConfigRaw> for Config {
             api_prefix: raw.server.api_prefix,
             security: raw
                 .security
-                .convert(secrets_resolver.clone(), &aws_config, vta_startup.as_ref().map(|r| &r.bundle))
+                .convert(
+                    secrets_resolver.clone(),
+                    &aws_config,
+                    vta_startup.as_ref().map(|r| &r.bundle),
+                )
                 .await?,
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,
