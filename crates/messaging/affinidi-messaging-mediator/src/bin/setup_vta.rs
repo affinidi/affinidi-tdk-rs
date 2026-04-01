@@ -809,7 +809,24 @@ async fn create_new_did(
     };
 
     println!("  Creating DID (this may take a moment)...");
-    let result = client.create_did_webvh(req).await?;
+    let result = match client.create_did_webvh(req).await {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("{e}");
+            if msg.contains("DIDComm not available") || msg.contains("mediator connection") {
+                return Err(format!(
+                    "DID creation requires DIDComm, which is not available via REST-only auth.\n\n  \
+                     The mediator setup wizard uses REST to communicate with the VTA, but \
+                     creating a did:webvh requires the VTA to send DIDComm messages to the \
+                     webvh server (through a mediator).\n\n  \
+                     Instead, pre-create the DID using the PNM CLI and pass the provision bundle:\n\n  \
+                     \x20 pnm contexts provision --context-id {context_id} --create-did\n\n  \
+                     Then re-run the setup wizard and paste the provision bundle."
+                ).into());
+            }
+            return Err(e.into());
+        }
+    };
 
     println!(
         "  {} Created DID: {}",
