@@ -44,6 +44,15 @@
   - DID verification method ID used as key label for secret lookup
   - AWS SDK region auto-detection from instance metadata
   - Full error details in debug format for AWS SDK errors
+- **FIX:** Empty secrets bundle from VTA is now a hard error
+  - Prevents starting with zero signing keys due to misconfiguration
+- **FIX:** VTA startup timeout (default 30s) prevents hangs when VTA is
+  partially reachable
+- **FIX:** Dead WebSocket channels cleaned up on send failure
+  - Previously, disconnected channels accumulated in the streaming HashMap
+- **CHORE:** Replace all `println!`/`eprintln!` with tracing macros
+  - Log output now respects log level configuration and JSON formatting
+- **CHORE:** Extract `parse_scheme()` helper for `scheme://path` config parsing
 
 ## 28th March 2026
 

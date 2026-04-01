@@ -7,14 +7,20 @@ for centralized DID and key management.
 ## Overview
 
 When integrated with a VTA, the mediator fetches its DID and cryptographic
-secrets from the VTA at startup instead of loading them from local files. This
-provides:
+secrets from the VTA at startup and caches them locally. On subsequent startups,
+if the VTA is unreachable, the mediator falls back to the last cached secrets.
+This provides:
 
-- **Centralized key management** -- keys never leave the VTA, secrets are
-  fetched on demand
+- **Centralized key management** -- keys managed in VTA, fetched fresh on each
+  startup
+- **Offline resilience** -- locally cached secrets allow startup when VTA is down
+- **Automatic key rotation** -- fresh keys picked up on every startup without
+  redeployment
 - **Automatic token refresh** -- the SDK handles re-authentication transparently
 - **Multiple credential storage backends** -- string, AWS Secrets Manager, OS
   keyring
+- **Startup timeout** -- 30-second default prevents hangs when VTA is partially
+  reachable
 - **Circular dependency detection** -- the mediator detects and warns if the VTA
   routes DIDComm through this mediator
 
@@ -42,6 +48,10 @@ This outputs a **Context Provision Bundle** (a long base64url string). Copy it.
 
 ```bash
 cargo run --bin mediator-setup-vta --features setup
+
+# Use --rest to discover the VTA REST endpoint from its DID document
+# (bypasses DIDComm transport for VTAs with a VTARest service):
+cargo run --bin mediator-setup-vta --features setup -- --rest
 ```
 
 The wizard will prompt you to:
@@ -157,10 +167,16 @@ cargo run
 At startup you will see:
 
 ```
-Authenticating to VTA via REST...
-Successfully authenticated to VTA at 'https://vta.example.com:8080' (REST, auto-refresh enabled)
-Fetching mediator_did from VTA context 'mediator'
-Loading 3 mediator Secrets from VTA context 'mediator'
+Starting VTA integration...
+Authenticated to VTA at 'https://vta.example.com:8080' (REST, auto-refresh enabled)
+Loaded fresh secrets from VTA (context=mediator, secrets=3)
+```
+
+If the VTA is unreachable, the mediator falls back to cached secrets:
+
+```
+VTA unreachable (...), falling back to cached secrets
+Using CACHED secrets — keys may be stale (context=mediator, secrets=3)
 ```
 
 ## Environment Variable Configuration
@@ -277,6 +293,28 @@ The mediator requires REST access to the VTA during startup. Verify:
 The VTA context exists but no DID has been assigned. Either:
 - Create a DID: `pnm webvh dids create --context mediator`
 - Or assign an existing DID: `pnm contexts update mediator --did <did>`
+
+### "VTA startup timed out after 30s"
+
+The VTA is partially reachable (TCP connects but doesn't respond). Check:
+- VTA service health and logs
+- Network latency between mediator and VTA
+
+### "VTA context returned zero secrets"
+
+The VTA context has a DID but no keys provisioned. Run the setup wizard
+or provision keys manually:
+
+```bash
+pnm keys create --context mediator --key-type ed25519
+pnm keys create --context mediator --key-type x25519
+```
+
+### "VTA unreachable and no cached secrets exist"
+
+This is the first startup and the VTA can't be reached. The mediator must
+successfully contact the VTA at least once to cache secrets. Ensure the VTA
+is running, then restart the mediator.
 
 ### "aws_secrets:// requires the 'vta-aws-secrets' feature"
 
