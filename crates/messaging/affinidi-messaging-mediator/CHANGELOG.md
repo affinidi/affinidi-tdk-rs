@@ -53,6 +53,7 @@
 - **CHORE:** Replace all `println!`/`eprintln!` with tracing macros
   - Log output now respects log level configuration and JSON formatting
 - **CHORE:** Extract `parse_scheme()` helper for `scheme://path` config parsing
+- **CHORE:** Switch `vta-sdk` dependency from git nightly to crates.io `0.3.0`
 
 ## 28th March 2026
 
