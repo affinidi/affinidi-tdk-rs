@@ -9,7 +9,7 @@ use vta_sdk::integration::SecretCache;
 /// On store: encodes the bundle as a base64url JSON string and persists it.
 /// On load: retrieves the string and decodes it back.
 #[allow(dead_code)] // aws_config is used behind feature gates
-pub(crate) struct MediatorSecretCache {
+pub struct MediatorSecretCache {
     /// The scheme://path string for the cache backend, e.g.:
     /// - `string://` — no-op (cannot persist; acts as "no cache")
     /// - `aws_secrets://<name>-cache` — AWS Secrets Manager

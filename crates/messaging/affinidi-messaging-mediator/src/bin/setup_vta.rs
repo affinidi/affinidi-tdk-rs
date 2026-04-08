@@ -15,13 +15,20 @@ use affinidi_did_common::{
     verification_method::{VerificationMethod, VerificationRelationship},
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_secrets_resolver::secrets::Secret;
 use aws_config;
 use aws_sdk_secretsmanager;
 use console::{Key, Term, style};
 use dialoguer::{Confirm, Input, Select};
-use std::{collections::HashMap, env, fs, process, sync::Mutex};
+use didwebvh_rs::{
+    create::{CreateDIDConfig, create_did},
+    parameters::Parameters as WebVHParameters,
+};
+use std::{collections::HashMap, env, fs, process, sync::Arc, sync::Mutex};
 use vta_sdk::{
-    client::{CreateContextRequest, CreateDidWebvhRequest, ImportKeyRequest, VtaClient},
+    client::{
+        CreateContextRequest, CreateDidWebvhRequest, CreateKeyRequest, ImportKeyRequest, VtaClient,
+    },
     context_provision::ContextProvisionBundle,
     credentials::CredentialBundle,
     keys::KeyType,
@@ -36,6 +43,10 @@ struct CliArgs {
     /// When true, resolve the VTA DID document and look for a VTARest service
     /// endpoint to use as the REST URL override (instead of DIDComm transport).
     rest: bool,
+    /// When true, import a VTA secrets bundle for cold-start bootstrapping.
+    /// Skips VTA authentication and DID creation — only stores the bundle in
+    /// the local cache and updates the config.
+    import_bundle: bool,
 }
 
 /// What the user pasted — either a full provision bundle or a plain credential.
@@ -59,6 +70,10 @@ async fn main() {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
+
+    if args.import_bundle {
+        return run_import_bundle(&args.config).await;
+    }
 
     println!();
     println!("{}", style("Mediator VTA Setup").bold().cyan());
@@ -104,6 +119,7 @@ fn parse_args() -> CliArgs {
     let args: Vec<String> = env::args().collect();
     let mut config = DEFAULT_CONFIG_PATH.to_string();
     let mut rest = false;
+    let mut import_bundle = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -115,10 +131,129 @@ fn parse_args() -> CliArgs {
                 rest = true;
                 i += 1;
             }
+            "--import-bundle" => {
+                import_bundle = true;
+                i += 1;
+            }
             _ => i += 1,
         }
     }
-    CliArgs { config, rest }
+    CliArgs {
+        config,
+        rest,
+        import_bundle,
+    }
+}
+
+// ─── Import Bundle Mode ─────────────────────────────────────────────────────
+
+/// Offline bundle import for cold-start bootstrapping.
+///
+/// Accepts a VTA secrets bundle and credential, stores them locally, and
+/// updates the mediator config. No VTA connection required.
+///
+/// At startup the mediator will try `integration::startup()`, fail to reach
+/// the VTA, and fall back to the pre-seeded cache — starting successfully
+/// with the imported secrets.
+async fn run_import_bundle(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use affinidi_messaging_mediator::common::config::vta_cache::MediatorSecretCache;
+    use vta_sdk::did_secrets::DidSecretsBundle;
+    use vta_sdk::integration::SecretCache;
+
+    println!();
+    println!("{}", style("Mediator VTA Bundle Import").bold().cyan());
+    println!("{}", style("=========================").dim());
+    println!();
+    println!("  Import a VTA secrets bundle for cold-start without a running VTA.");
+    println!();
+
+    // Step 1: Get and decode the VTA secrets bundle
+    let bundle_raw = read_masked("  VTA secrets bundle (base64url): ")?;
+    let bundle_raw = bundle_raw.trim().to_string();
+
+    if bundle_raw.is_empty() {
+        return Err("Secrets bundle cannot be empty".into());
+    }
+
+    let bundle = DidSecretsBundle::decode(&bundle_raw)
+        .map_err(|e| format!("Failed to decode VTA secrets bundle: {e}"))?;
+
+    println!(
+        "  {} Decoded bundle for DID: {}",
+        style("*").green(),
+        style(&bundle.did).cyan()
+    );
+    println!(
+        "    {} secret{}",
+        bundle.secrets.len(),
+        if bundle.secrets.len() == 1 { "" } else { "s" }
+    );
+
+    if bundle.secrets.is_empty() {
+        return Err("Bundle contains no secrets".into());
+    }
+
+    // Step 2: Get the VTA credential
+    println!();
+    let credential_raw = read_masked("  VTA credential (base64url): ")?;
+    let credential_raw = credential_raw.trim().to_string();
+
+    if credential_raw.is_empty() {
+        return Err("Credential cannot be empty".into());
+    }
+
+    // Validate it's at least valid base64url
+    use base64::prelude::*;
+    BASE64_URL_SAFE_NO_PAD
+        .decode(&credential_raw)
+        .map_err(|e| format!("Invalid base64url credential: {e}"))?;
+
+    println!("  {} Credential validated", style("*").green());
+
+    // Step 3: Choose storage backend
+    println!();
+    let credential_config = step_storage(&credential_raw).await?;
+
+    // Step 4: Cache the secrets bundle
+    println!("{}", style("  Caching Secrets Bundle").bold());
+
+    let aws_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    let cache = MediatorSecretCache::from_credential_config(&credential_config, &aws_config);
+    cache
+        .store(&bundle)
+        .await
+        .map_err(|e| format!("Failed to store secrets bundle in cache: {e}"))?;
+    println!(
+        "  {} Secrets bundle cached ({} secret{})",
+        style("*").green(),
+        bundle.secrets.len(),
+        if bundle.secrets.len() == 1 { "" } else { "s" }
+    );
+
+    // Step 5: Get context ID
+    println!();
+    let context_id: String = Input::new()
+        .with_prompt("  VTA context ID")
+        .with_initial_text("mediator")
+        .interact_text()?;
+
+    // Step 6: Update config
+    println!();
+    step_save_config(config_path, &credential_config, &context_id, None, None)?;
+
+    println!();
+    println!("{}", style("Import complete!").green().bold());
+    println!();
+    println!("  The mediator will use cached secrets when the VTA is unreachable.");
+    println!("  When the VTA becomes available, fresh secrets will be fetched automatically.");
+    println!();
+    println!("Start the mediator with:");
+    println!("  cargo run --bin mediator");
+    println!();
+
+    Ok(())
 }
 
 // ─── Masked input helper ─────────────────────────────────────────────────────
@@ -393,8 +528,8 @@ async fn step_credential(
     // operations like create_did_webvh require the VTA to send DIDComm messages
     // to the webvh server through its mediator. We use an ephemeral in-memory
     // session backend — it's only needed for the duration of this wizard.
-    let credential = CredentialBundle::decode(credential_raw)
-        .map_err(|e| format!("Invalid credential: {e}"))?;
+    let credential =
+        CredentialBundle::decode(credential_raw).map_err(|e| format!("Invalid credential: {e}"))?;
 
     let vta_url = vta_rest_url
         .as_deref()
@@ -776,6 +911,32 @@ async fn create_new_did(
     context_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!();
+
+    let options = vec![
+        "VTA-managed: VTA creates and hosts the DID on a webvh server",
+        "Local + VTA-hosted: create DID locally then publish via VTA",
+        "Fully local: create DID locally, output did.jsonl for manual upload",
+    ];
+
+    let selection = Select::new()
+        .with_prompt("  DID creation flow")
+        .items(&options)
+        .default(0)
+        .interact()?;
+
+    match selection {
+        0 => create_did_vta_managed(client, context_id).await,
+        1 => create_did_local_vta_hosted(client, context_id).await,
+        2 => create_did_fully_local(client, context_id).await,
+        _ => unreachable!(),
+    }
+}
+
+async fn create_did_vta_managed(
+    client: &VtaClient,
+    context_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
     println!("  Creating a new did:webvh for the mediator...");
     println!();
 
@@ -787,6 +948,20 @@ async fn create_new_did(
              Add one via: cnm-cli webvh server add <url>"
             .into());
     }
+
+    // Display available webvh servers
+    println!("  Available webvh servers:");
+    for s in servers {
+        let label = s.label.as_deref().unwrap_or("?");
+        println!(
+            "    {} {} ({}) - {}",
+            style("*").dim(),
+            style(label).cyan(),
+            style(&s.id).dim(),
+            style(&s.did).dim()
+        );
+    }
+    println!();
 
     let server_id = if servers.len() == 1 {
         let label = servers[0].label.as_deref().unwrap_or(&servers[0].id);
@@ -810,6 +985,61 @@ async fn create_new_did(
         Some(servers[sel].id.clone())
     };
 
+    // Prompt for the mediator's public-facing URL to build DID document services
+    println!();
+    println!("  The DID document will include service endpoints for DIDComm messaging");
+    println!("  and authentication. Enter the mediator's public-facing base URL.");
+    println!(
+        "  Example: {}",
+        style("https://mediator.example.com/mediator/v1").dim()
+    );
+    println!();
+
+    let public_url: String = Input::new()
+        .with_prompt("  Mediator public URL")
+        .interact_text()?;
+
+    let public_url = public_url.trim().trim_end_matches('/');
+
+    // Derive WebSocket URL from the HTTP URL
+    let ws_url = public_url
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+
+    // Build mediator service entries for the DID document
+    let services = vec![
+        serde_json::json!({
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": [
+                {
+                    "accept": ["didcomm/v2"],
+                    "uri": public_url
+                },
+                {
+                    "accept": ["didcomm/v2"],
+                    "uri": format!("{}/ws", ws_url)
+                }
+            ]
+        }),
+        serde_json::json!({
+            "type": "Authentication",
+            "serviceEndpoint": format!("{}/authenticate", public_url)
+        }),
+    ];
+
+    println!();
+    println!("  DID document will include:");
+    println!(
+        "    DIDComm:  {} | {}",
+        style(public_url).cyan(),
+        style(format!("{}/ws", ws_url)).cyan()
+    );
+    println!(
+        "    Auth:     {}",
+        style(format!("{}/authenticate", public_url)).cyan()
+    );
+    println!();
+
     let req = CreateDidWebvhRequest {
         context_id: context_id.to_string(),
         server_id,
@@ -818,8 +1048,13 @@ async fn create_new_did(
         label: Some("mediator".to_string()),
         portable: false,
         add_mediator_service: false,
-        additional_services: None,
+        additional_services: Some(services),
         pre_rotation_count: 1,
+        did_document: None,
+        did_log: None,
+        set_primary: true,
+        signing_key_id: None,
+        ka_key_id: None,
     };
 
     println!("  Creating DID (this may take a moment)...");
@@ -836,6 +1071,462 @@ async fn create_new_did(
         "  {} Context '{}' updated with new DID",
         style("*").green(),
         context_id
+    );
+
+    Ok(())
+}
+
+/// Prompt for the mediator's public URL and build service JSON values for the DID document.
+/// Returns `(public_url, services)` where services use `{DID}` placeholders for IDs.
+fn prompt_mediator_services() -> Result<(String, Vec<serde_json::Value>), Box<dyn std::error::Error>>
+{
+    println!();
+    println!("  The DID document will include service endpoints for DIDComm messaging");
+    println!("  and authentication. Enter the mediator's public-facing base URL.");
+    println!(
+        "  Example: {}",
+        style("https://mediator.example.com/mediator/v1").dim()
+    );
+    println!();
+
+    let public_url: String = Input::new()
+        .with_prompt("  Mediator public URL")
+        .interact_text()?;
+    let public_url = public_url.trim().trim_end_matches('/').to_string();
+
+    let ws_url = public_url
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+
+    let services = vec![
+        serde_json::json!({
+            "id": "{DID}#didcomm",
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": [
+                {
+                    "accept": ["didcomm/v2"],
+                    "uri": &public_url
+                },
+                {
+                    "accept": ["didcomm/v2"],
+                    "uri": format!("{}/ws", ws_url)
+                }
+            ]
+        }),
+        serde_json::json!({
+            "id": "{DID}#auth",
+            "type": "Authentication",
+            "serviceEndpoint": format!("{}/authenticate", public_url)
+        }),
+    ];
+
+    println!();
+    println!("  DID document will include:");
+    println!(
+        "    DIDComm:  {} | {}",
+        style(&public_url).cyan(),
+        style(format!("{}/ws", ws_url)).cyan()
+    );
+    println!(
+        "    Auth:     {}",
+        style(format!("{}/authenticate", public_url)).cyan()
+    );
+
+    Ok((public_url, services))
+}
+
+/// Generate VTA keys (signing + encryption) and return Secret objects reconstructed
+/// from the VTA key material. Returns `(signing_secret, encryption_secret, signing_key_id, encryption_key_id)`.
+async fn create_vta_keys_as_secrets(
+    client: &VtaClient,
+    context_id: &str,
+) -> Result<(Secret, Secret, String, String), Box<dyn std::error::Error>> {
+    println!();
+    println!("  Generating keys in VTA...");
+
+    let signing_resp = client
+        .create_key(
+            CreateKeyRequest::new(KeyType::Ed25519)
+                .label("tmp-mediator-signing")
+                .context(context_id),
+        )
+        .await
+        .map_err(|e| format!("Failed to create signing key: {e}"))?;
+    println!(
+        "    {} Ed25519 signing key: {}",
+        style("*").green(),
+        style(&signing_resp.key_id).dim()
+    );
+
+    let encryption_resp = client
+        .create_key(
+            CreateKeyRequest::new(KeyType::X25519)
+                .label("tmp-mediator-encryption")
+                .context(context_id),
+        )
+        .await
+        .map_err(|e| format!("Failed to create encryption key: {e}"))?;
+    println!(
+        "    {} X25519 encryption key: {}",
+        style("*").green(),
+        style(&encryption_resp.key_id).dim()
+    );
+
+    // Fetch private key material so we can construct Secret objects for didwebvh-rs
+    let signing_secret_resp = client
+        .get_key_secret(&signing_resp.key_id)
+        .await
+        .map_err(|e| format!("Failed to get signing key secret: {e}"))?;
+    let encryption_secret_resp = client
+        .get_key_secret(&encryption_resp.key_id)
+        .await
+        .map_err(|e| format!("Failed to get encryption key secret: {e}"))?;
+
+    let signing_secret = Secret::from_multibase(&signing_secret_resp.private_key_multibase, None)
+        .map_err(|e| format!("Failed to construct signing secret: {e}"))?;
+    let encryption_secret =
+        Secret::from_multibase(&encryption_secret_resp.private_key_multibase, None)
+            .map_err(|e| format!("Failed to construct encryption secret: {e}"))?;
+
+    Ok((
+        signing_secret,
+        encryption_secret,
+        signing_resp.key_id,
+        encryption_resp.key_id,
+    ))
+}
+
+/// After the DID is finalized, rename VTA key IDs to match the verification method IDs
+/// used in the DID document.
+async fn rename_vta_keys(
+    client: &VtaClient,
+    final_did: &str,
+    signing_key_id: &str,
+    encryption_key_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!("  Renaming keys in VTA to match verification method IDs...");
+
+    let key_0_id = format!("{final_did}#key-0");
+    let key_1_id = format!("{final_did}#key-1");
+
+    client
+        .rename_key(signing_key_id, &key_0_id)
+        .await
+        .map_err(|e| format!("Failed to rename signing key: {e}"))?;
+    println!(
+        "    {} {} → {}",
+        style("*").green(),
+        style(signing_key_id).dim(),
+        style(&key_0_id).cyan()
+    );
+
+    client
+        .rename_key(encryption_key_id, &key_1_id)
+        .await
+        .map_err(|e| format!("Failed to rename encryption key: {e}"))?;
+    println!(
+        "    {} {} → {}",
+        style("*").green(),
+        style(encryption_key_id).dim(),
+        style(&key_1_id).cyan()
+    );
+
+    Ok(())
+}
+
+/// Build a DID document, authorization key, and parameters for `create_did()`.
+/// The DID document uses `{DID}` placeholders which `create_did()` will resolve.
+fn build_did_config(
+    address: &str,
+    signing_secret: Secret,
+    encryption_secret: Secret,
+    services: Vec<serde_json::Value>,
+) -> Result<(CreateDIDConfig, Secret), Box<dyn std::error::Error>> {
+    // Build the authorization key (update key) from the signing secret
+    let mut auth_key = signing_secret.clone();
+    let auth_pub = auth_key
+        .get_public_keymultibase()
+        .map_err(|e| format!("Failed to get auth key public multibase: {e}"))?;
+    auth_key.id = format!("did:key:{0}#{0}", auth_pub);
+
+    // Build the DID document with {DID} placeholders
+    let signing_pub = signing_secret
+        .get_public_keymultibase()
+        .map_err(|e| format!("Failed to get signing public key: {e}"))?;
+    let encryption_pub = encryption_secret
+        .get_public_keymultibase()
+        .map_err(|e| format!("Failed to get encryption public key: {e}"))?;
+
+    let did_document = serde_json::json!({
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://www.w3.org/ns/cid/v1"
+        ],
+        "id": "{DID}",
+        "verificationMethod": [
+            {
+                "id": "{DID}#key-0",
+                "type": "Multikey",
+                "controller": "{DID}",
+                "publicKeyMultibase": signing_pub
+            },
+            {
+                "id": "{DID}#key-1",
+                "type": "Multikey",
+                "controller": "{DID}",
+                "publicKeyMultibase": encryption_pub
+            }
+        ],
+        "authentication":  ["{DID}#key-0"],
+        "assertionMethod": ["{DID}#key-0"],
+        "keyAgreement":    ["{DID}#key-1"],
+        "service": services
+    });
+
+    let update_pub = didwebvh_rs::Multibase::new(auth_pub);
+
+    let parameters = WebVHParameters {
+        update_keys: Some(Arc::new(vec![update_pub])),
+        portable: Some(true),
+        ..Default::default()
+    };
+
+    let config = CreateDIDConfig::builder()
+        .address(address)
+        .authorization_key(auth_key)
+        .did_document(did_document)
+        .parameters(parameters)
+        .build()
+        .map_err(|e| format!("Failed to build DID config: {e}"))?;
+
+    Ok((config, signing_secret))
+}
+
+/// Flow 2: Create DID locally using didwebvh-rs, then publish via VTA.
+async fn create_did_local_vta_hosted(
+    client: &VtaClient,
+    context_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!("  Creating DID locally, then publishing via VTA...");
+
+    // ── 1. Select webvh server for publishing ───────────────────────
+
+    let servers_resp = client.list_webvh_servers().await?;
+    let servers = &servers_resp.servers;
+
+    if servers.is_empty() {
+        return Err("No did:webvh servers configured in VTA. \
+             Add one via: cnm-cli webvh server add <url>"
+            .into());
+    }
+
+    println!();
+    println!("  Available webvh servers:");
+    for s in servers {
+        let label = s.label.as_deref().unwrap_or("?");
+        println!(
+            "    {} {} ({}) - {}",
+            style("*").dim(),
+            style(label).cyan(),
+            style(&s.id).dim(),
+            style(&s.did).dim()
+        );
+    }
+    println!();
+
+    let server_id = if servers.len() == 1 {
+        let label = servers[0].label.as_deref().unwrap_or(&servers[0].id);
+        println!("  Using webvh server: {}", style(label).cyan());
+        Some(servers[0].id.clone())
+    } else {
+        let server_options: Vec<String> = servers
+            .iter()
+            .map(|s| {
+                let label = s.label.as_deref().unwrap_or("?");
+                format!("{} ({})", s.id, label)
+            })
+            .collect();
+
+        let sel = Select::new()
+            .with_prompt("  Select webvh server")
+            .items(&server_options)
+            .default(0)
+            .interact()?;
+
+        Some(servers[sel].id.clone())
+    };
+
+    // ── 2. Generate keys in VTA ─────────────────────────────────────
+
+    let (signing_secret, encryption_secret, signing_key_id, encryption_key_id) =
+        create_vta_keys_as_secrets(client, context_id).await?;
+
+    // ── 3. Prompt for webvh address and mediator services ───────────
+
+    println!();
+    println!("  Enter the domain (and optional path) where the DID document will be hosted.");
+    println!(
+        "  Examples: {} or {}",
+        style("webvh.example.com/mediator").dim(),
+        style("https://webvh.example.com/mediator").dim()
+    );
+    println!();
+
+    let address: String = Input::new()
+        .with_prompt("  Webvh host URL")
+        .interact_text()?;
+    let address = address.trim().to_string();
+
+    let (_public_url, services) = prompt_mediator_services()?;
+
+    // ── 4. Create DID using didwebvh-rs programmatic API ────────────
+
+    println!();
+    println!("  Creating did:webvh log entry...");
+
+    let (config, _signing_secret) =
+        build_did_config(&address, signing_secret, encryption_secret, services)?;
+
+    let result = create_did(config)
+        .await
+        .map_err(|e| format!("DID creation failed: {e}"))?;
+
+    let final_did = result.did();
+    println!(
+        "  {} Created DID: {}",
+        style("*").green(),
+        style(final_did).cyan()
+    );
+
+    // ── 5. Publish via VTA using did_log field ──────────────────────
+
+    println!("  Publishing DID via VTA...");
+
+    let log_entry_json = serde_json::to_string(result.log_entry())?;
+
+    let req = CreateDidWebvhRequest {
+        context_id: context_id.to_string(),
+        server_id,
+        url: None,
+        path: None,
+        label: Some("mediator".to_string()),
+        portable: false,
+        add_mediator_service: false,
+        additional_services: None,
+        pre_rotation_count: 1,
+        did_document: None,
+        did_log: Some(log_entry_json),
+        set_primary: true,
+        signing_key_id: Some(signing_key_id.clone()),
+        ka_key_id: Some(encryption_key_id.clone()),
+    };
+
+    client
+        .create_did_webvh(req)
+        .await
+        .map_err(|e| format!("Failed to publish DID via VTA: {e}"))?;
+
+    // ── 6. Rename keys and update context ───────────────────────────
+
+    rename_vta_keys(client, final_did, &signing_key_id, &encryption_key_id).await?;
+
+    client.update_context_did(context_id, final_did).await?;
+
+    println!();
+    println!(
+        "  {} Published DID and updated context '{}'",
+        style("*").green(),
+        context_id
+    );
+
+    Ok(())
+}
+
+/// Flow 3: Create DID fully locally using didwebvh-rs, output did.jsonl for manual upload.
+async fn create_did_fully_local(
+    client: &VtaClient,
+    context_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    println!();
+    println!("  Creating DID locally using VTA-managed keys...");
+
+    // ── 1. Generate keys in VTA ─────────────────────────────────────
+
+    let (signing_secret, encryption_secret, signing_key_id, encryption_key_id) =
+        create_vta_keys_as_secrets(client, context_id).await?;
+
+    // ── 2. Prompt for webvh address and mediator services ───────────
+
+    println!();
+    println!("  Enter the domain (and optional path) where the DID document will be hosted.");
+    println!(
+        "  Examples: {} or {}",
+        style("webvh.example.com/mediator").dim(),
+        style("https://webvh.example.com/mediator").dim()
+    );
+    println!();
+
+    let address: String = Input::new()
+        .with_prompt("  Webvh host URL")
+        .interact_text()?;
+    let address = address.trim().to_string();
+
+    let (_public_url, services) = prompt_mediator_services()?;
+
+    // ── 3. Prompt for output path ───────────────────────────────────
+
+    let did_doc_path: String = Input::new()
+        .with_prompt("  Output path for did.jsonl")
+        .with_initial_text("conf/mediator_did.jsonl")
+        .interact_text()?;
+
+    // ── 4. Create DID using didwebvh-rs programmatic API ────────────
+
+    println!();
+    println!("  Creating did:webvh log entry...");
+
+    let (config, _signing_secret) =
+        build_did_config(&address, signing_secret, encryption_secret, services)?;
+
+    let result = create_did(config)
+        .await
+        .map_err(|e| format!("DID creation failed: {e}"))?;
+
+    let final_did = result.did();
+    println!(
+        "  {} Created DID: {}",
+        style("*").green(),
+        style(final_did).cyan()
+    );
+
+    // ── 5. Write did.jsonl ──────────────────────────────────────────
+
+    let log_entry_json = serde_json::to_string(result.log_entry())?;
+    fs::write(&did_doc_path, &log_entry_json)?;
+    println!(
+        "  {} Saved DID document to {}",
+        style("*").green(),
+        style(&did_doc_path).cyan()
+    );
+
+    // ── 6. Rename keys and update context ───────────────────────────
+
+    rename_vta_keys(client, final_did, &signing_key_id, &encryption_key_id).await?;
+
+    client.update_context_did(context_id, final_did).await?;
+
+    println!();
+    println!(
+        "  {} Context '{}' updated with new DID",
+        style("*").green(),
+        context_id
+    );
+    println!();
+    println!(
+        "  {} Upload {} to your webvh server to publish the DID.",
+        style("!").yellow(),
+        style(&did_doc_path).cyan()
     );
 
     Ok(())

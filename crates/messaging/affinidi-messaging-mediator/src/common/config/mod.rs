@@ -2,7 +2,7 @@ pub mod helpers;
 pub mod limits;
 pub mod processors;
 pub mod security;
-pub(crate) mod vta_cache;
+pub mod vta_cache;
 
 pub use limits::*;
 pub use processors::*;
