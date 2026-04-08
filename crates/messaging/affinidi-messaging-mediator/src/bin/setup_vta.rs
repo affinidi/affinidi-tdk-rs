@@ -232,16 +232,52 @@ async fn run_import_bundle(config_path: &str) -> Result<(), Box<dyn std::error::
         if bundle.secrets.len() == 1 { "" } else { "s" }
     );
 
-    // Step 5: Get context ID
+    // Step 5: DID document for self-hosting
+    println!();
+    println!("{}", style("  DID Document (optional)").bold());
+    println!("  If you have the mediator's did.jsonl file, provide it so the mediator");
+    println!("  can resolve its own DID locally (without needing the webvh-server).");
+    println!();
+
+    let did_doc_path: String = Input::new()
+        .with_prompt("  Path to did.jsonl (or empty to skip)")
+        .allow_empty(true)
+        .interact_text()?;
+
+    let did_doc_path = if did_doc_path.trim().is_empty() {
+        None
+    } else {
+        let src = did_doc_path.trim();
+        if !std::path::Path::new(src).exists() {
+            return Err(format!("File not found: {src}").into());
+        }
+        // Copy to conf/ directory for the mediator to load at runtime
+        let dest = "conf/mediator_did.jsonl";
+        fs::copy(src, dest)?;
+        println!(
+            "  {} Copied DID document to {}",
+            style("*").green(),
+            style(dest).cyan()
+        );
+        Some(dest.to_string())
+    };
+
+    // Step 6: Get context ID
     println!();
     let context_id: String = Input::new()
         .with_prompt("  VTA context ID")
         .with_initial_text("mediator")
         .interact_text()?;
 
-    // Step 6: Update config
+    // Step 7: Update config
     println!();
-    step_save_config(config_path, &credential_config, &context_id, None, None)?;
+    step_save_config(
+        config_path,
+        &credential_config,
+        &context_id,
+        did_doc_path.as_deref(),
+        None,
+    )?;
 
     println!();
     println!("{}", style("Import complete!").green().bold());
