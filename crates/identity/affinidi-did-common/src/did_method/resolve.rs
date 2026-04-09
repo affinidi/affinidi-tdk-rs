@@ -78,10 +78,12 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
                 )]),
             });
 
-            key_agreement.push(VerificationRelationship::Reference(x25519_vm_id));
+            key_agreement.push(VerificationRelationship::Reference(
+                x25519_vm_id.to_string(),
+            ));
         }
         P256_PUB | P384_PUB | SECP256K1_PUB | X25519_PUB => {
-            key_agreement.push(VerificationRelationship::Reference(vm_id.clone()));
+            key_agreement.push(VerificationRelationship::Reference(vm_id.to_string()));
         }
         _ => {
             return Err(DIDError::ResolutionError(format!(
@@ -106,7 +108,7 @@ fn resolve_key(did: &DID, identifier: &str) -> Result<Document, DIDError> {
         },
     );
 
-    let vm_relationship = VerificationRelationship::Reference(vm_id);
+    let vm_relationship = VerificationRelationship::Reference(vm_id.to_string());
 
     Ok(Document {
         id: did.url(),
@@ -216,9 +218,7 @@ fn resolve_peer_2(did: &DID, identifier: &str) -> Result<Document, DIDError> {
 
             verification_methods.push(vm);
 
-            let ref_url = Url::from_str(&kid)
-                .map_err(|e| DIDError::ResolutionError(format!("Invalid key ID: {e}")))?;
-            let relationship = VerificationRelationship::Reference(ref_url);
+            let relationship = VerificationRelationship::Reference(kid);
 
             match purpose {
                 PeerPurpose::Verification => {

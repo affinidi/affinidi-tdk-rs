@@ -101,7 +101,7 @@ impl DocumentBuilder {
     /// Add a URL reference to `authentication`.
     pub fn authentication_reference(mut self, url: &str) -> Result<Self, DocumentError> {
         self.authentication
-            .push(VerificationRelationship::Reference(Url::parse(url)?));
+            .push(VerificationRelationship::Reference(url.to_string()));
         Ok(self)
     }
 
@@ -123,7 +123,7 @@ impl DocumentBuilder {
     /// Add a URL reference to `assertion_method`.
     pub fn assertion_method_reference(mut self, url: &str) -> Result<Self, DocumentError> {
         self.assertion_method
-            .push(VerificationRelationship::Reference(Url::parse(url)?));
+            .push(VerificationRelationship::Reference(url.to_string()));
         Ok(self)
     }
 
@@ -145,7 +145,7 @@ impl DocumentBuilder {
     /// Add a URL reference to `key_agreement`.
     pub fn key_agreement_reference(mut self, url: &str) -> Result<Self, DocumentError> {
         self.key_agreement
-            .push(VerificationRelationship::Reference(Url::parse(url)?));
+            .push(VerificationRelationship::Reference(url.to_string()));
         Ok(self)
     }
 
@@ -167,7 +167,7 @@ impl DocumentBuilder {
     /// Add a URL reference to `capability_invocation`.
     pub fn capability_invocation_reference(mut self, url: &str) -> Result<Self, DocumentError> {
         self.capability_invocation
-            .push(VerificationRelationship::Reference(Url::parse(url)?));
+            .push(VerificationRelationship::Reference(url.to_string()));
         Ok(self)
     }
 
@@ -189,7 +189,7 @@ impl DocumentBuilder {
     /// Add a URL reference to `capability_delegation`.
     pub fn capability_delegation_reference(mut self, url: &str) -> Result<Self, DocumentError> {
         self.capability_delegation
-            .push(VerificationRelationship::Reference(Url::parse(url)?));
+            .push(VerificationRelationship::Reference(url.to_string()));
         Ok(self)
     }
 

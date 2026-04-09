@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.12.5"
+version = "0.13.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -16,15 +16,21 @@ repository.workspace = true
 name = "mediator"
 path = "src/main.rs"
 
+[[bin]]
+name = "mediator-setup-vta"
+path = "src/bin/setup_vta.rs"
+required-features = ["setup"]
+
 [features]
 default = ["didcomm"]
-didcomm = [
-    "dep:affinidi-messaging-didcomm",
-    "dep:affinidi-encoding",
-]
-tsp = [
-    "dep:affinidi-tsp",
-]
+didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding"]
+tsp = ["dep:affinidi-tsp"]
+# VTA credential storage backends (at least one required for production VTA use)
+# string:// is always available for dev/CI without either feature
+vta-keyring = ["dep:keyring"]
+vta-aws-secrets = []
+# Interactive VTA setup wizard (mediator-setup-vta binary)
+setup = ["dep:dialoguer", "dep:console", "dep:affinidi-encoding"]
 
 [dependencies]
 # Affinidi Crates
@@ -37,9 +43,10 @@ affinidi-messaging-mediator-common = { version = "0.12", path = "affinidi-messag
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
+vta-sdk = { version = "0.3", features = ["integration"] }
 
 # External Crates
-didwebvh-rs = "0.4.0"
+didwebvh-rs = "0.4"
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1.8"
@@ -51,6 +58,9 @@ axum-server = { version = "0.8", features = ["tls-rustls"] }
 base64 = "0.22"
 chrono = "0.4"
 hostname = "0.4"
+keyring = { version = "3", optional = true }
+dialoguer = { version = "0.12", optional = true }
+console = { version = "0.16", optional = true }
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
@@ -76,9 +86,9 @@ subtle = "2.6"
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
-governor = "0.8"
+governor = "0.10"
 metrics = "0.24"
-metrics-exporter-prometheus = "0.16"
+metrics-exporter-prometheus = "0.18"
 toml = "1"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
@@ -89,12 +99,11 @@ tracing-subscriber = { version = "0.3", features = [
   "json",
   "valuable",
 ] }
+url = "2"
 uuid = { version = "1.22", features = ["v4", "fast-rng"] }
 reqwest = { version = "0.13", features = ["rustls", "json"] }
-tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 futures-util = "0.3"
 
 [dev-dependencies]
-console = "0.16"
-dialoguer = "0.12"
 lazy_static = "1.5"

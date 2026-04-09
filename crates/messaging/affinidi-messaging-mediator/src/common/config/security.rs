@@ -14,6 +14,7 @@ use std::{
     sync::Arc,
 };
 use tower_http::cors::CorsLayer;
+use vta_sdk::did_secrets::DidSecretsBundle;
 
 use super::helpers::{config_jwt_secret, load_secrets};
 
@@ -152,10 +153,11 @@ impl SecurityConfigRaw {
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
         aws_config: &SdkConfig,
+        vta_bundle: Option<&DidSecretsBundle>,
     ) -> Result<SecurityConfig, MediatorError> {
         let warn_default = |field: &str, value: &str, default: &str| {
-            eprintln!(
-                "WARN: Could not parse security.{field} value '{value}', using default: {default}"
+            tracing::warn!(
+                "Could not parse security.{field} value '{value}', using default: {default}"
             );
         };
 
@@ -237,7 +239,7 @@ impl SecurityConfigRaw {
 
         // Check if conflicting config on anonymous and force session_match
         if !config.block_anonymous_outer_envelope && config.force_session_did_match {
-            eprintln!(
+            tracing::error!(
                 "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false"
             );
             return Err(MediatorError::ConfigError(12,
@@ -249,7 +251,7 @@ impl SecurityConfigRaw {
         // Convert the default ACL Set into a GlobalACLSet
         config.global_acl_default = MediatorACLSet::from_string_ruleset(&self.global_acl_default)
             .map_err(|err| {
-            eprintln!("Couldn't parse global_acl_default config parameter. Reason: {err}");
+            tracing::error!("Couldn't parse global_acl_default config parameter. Reason: {err}");
             MediatorError::ConfigError(
                 12,
                 "NA".into(),
@@ -263,7 +265,13 @@ impl SecurityConfigRaw {
         }
 
         // Load mediator secrets
-        load_secrets(&config.mediator_secrets, &self.mediator_secrets, aws_config).await?;
+        load_secrets(
+            &config.mediator_secrets,
+            &self.mediator_secrets,
+            aws_config,
+            vta_bundle,
+        )
+        .await?;
 
         // Create the JWT encoding and decoding keys
         let jwt_secret = config_jwt_secret(&self.jwt_authorization_secret, aws_config).await?;
@@ -271,7 +279,7 @@ impl SecurityConfigRaw {
         config.jwt_encoding_key = EncodingKey::from_ed_der(&jwt_secret);
 
         let pair = Ed25519KeyPair::from_pkcs8(&jwt_secret).map_err(|err| {
-            eprintln!("Could not create JWT key pair. {err}");
+            tracing::error!("Could not create JWT key pair. {err}");
             MediatorError::ConfigError(
                 12,
                 "NA".into(),

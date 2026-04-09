@@ -2,6 +2,7 @@ pub mod helpers;
 pub mod limits;
 pub mod processors;
 pub mod security;
+pub mod vta_cache;
 
 pub use limits::*;
 pub use processors::*;
@@ -26,10 +27,11 @@ use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
+use vta_sdk::integration::{self, VtaServiceConfig};
 
 use helpers::{
-    get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
-    read_document,
+    get_hostname, load_forwarding_protection_blocks, load_vta_credential, read_config_file,
+    read_did_config, read_document,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +75,29 @@ impl DIDResolverConfig {
     }
 }
 
+/// VTA (Verifiable Trust Agent) configuration for centralized key management.
+///
+/// When present, enables `vta://` scheme for `mediator_did` and `mediator_secrets`.
+/// On startup, the mediator authenticates to the VTA, fetches fresh secrets,
+/// and caches them locally for offline resilience.
+///
+/// All fields can be overridden via environment variables:
+/// `VTA_CREDENTIAL`, `VTA_CONTEXT`, `VTA_URL`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VtaConfigRaw {
+    /// VTA credential string with storage scheme prefix:
+    /// - `string://<base64url>` — inline credential (dev/CI)
+    /// - `aws_secrets://<secret_name>` — AWS Secrets Manager (requires `vta-aws-secrets` feature)
+    /// - `keyring://<service>/<user>` — OS keyring (requires `vta-keyring` feature)
+    pub credential: String,
+    /// VTA context ID that holds this mediator's DID and keys.
+    /// Defaults to `"mediator"` if not set.
+    pub context: Option<String>,
+    /// Override the VTA REST URL from the credential.
+    /// Set this when using `--rest` discovery or for dev/testing.
+    pub url: Option<String>,
+}
+
 /// Raw configuration deserialized from the TOML file, converted to [`Config`]
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ConfigRaw {
@@ -86,6 +111,7 @@ pub(crate) struct ConfigRaw {
     pub did_resolver: DIDResolverConfig,
     pub limits: LimitsConfigRaw,
     pub processors: ProcessorsConfigRaw,
+    pub vta: Option<VtaConfigRaw>,
 }
 
 #[derive(Clone, Serialize)]
@@ -173,14 +199,13 @@ impl TryFrom<ConfigRaw> for Config {
 
     async fn try_from(raw: ConfigRaw) -> Result<Self, Self::Error> {
         // Set up AWS Configuration
-        let region = match env::var("AWS_REGION") {
-            Ok(region) => Region::new(region),
-            Err(_) => Region::new("ap-southeast-1"),
-        };
-        let aws_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(region)
-            .load()
-            .await;
+        // Region is resolved in order: AWS_REGION env var → EC2 instance metadata →
+        // ~/.aws/config. Only override if explicitly set via env var.
+        let mut aws_builder = aws_config::defaults(BehaviorVersion::latest());
+        if let Ok(region) = env::var("AWS_REGION") {
+            aws_builder = aws_builder.region(Region::new(region));
+        }
+        let aws_config = aws_builder.load().await;
         let mut tags = HashMap::from([("app".to_string(), "mediator".to_string())]);
         for (key, value) in env::vars() {
             if key.get(..13) == Some("MEDIATOR_TAG_") {
@@ -195,6 +220,92 @@ impl TryFrom<ConfigRaw> for Config {
         // When you instantiate config, the ..Config::default() will run the full default() function again
         // If SecretsResolver was instantiated in default(), it would create two copies of it (though only use one)
         let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
+
+        // Initialize VTA integration if vta:// scheme is used for DID or secrets.
+        // Uses integration::startup() which authenticates, fetches fresh secrets,
+        // caches them locally, and falls back to the cache if VTA is unreachable.
+        let needs_vta = raw.mediator_did.starts_with("vta://")
+            || raw.security.mediator_secrets.starts_with("vta://");
+
+        let vta_startup = if needs_vta {
+            let vta_config = raw.vta.as_ref().ok_or_else(|| {
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "[vta] config section is required when using vta:// scheme for mediator_did or mediator_secrets".into(),
+                )
+            })?;
+
+            // Resolve the credential from its storage backend (string://, aws_secrets://, keyring://)
+            let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
+            let context = vta_config
+                .context
+                .clone()
+                .unwrap_or_else(|| "mediator".into());
+
+            let service_config = VtaServiceConfig {
+                credential: credential_raw,
+                context,
+                url_override: vta_config.url.clone().filter(|u| !u.is_empty()),
+                timeout: None,
+            };
+
+            let cache = vta_cache::MediatorSecretCache::from_credential_config(
+                &vta_config.credential,
+                &aws_config,
+            );
+
+            info!("Starting VTA integration...");
+            let result = integration::startup(&service_config, &cache)
+                .await
+                .map_err(|e| {
+                    MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
+                })?;
+
+            // Mediator-specific: probe VTA health to detect circular dependency.
+            if let Some(client) = &result.client {
+                match client.health().await {
+                    Ok(health) => {
+                        if health.mediator_did.as_deref() == Some(&result.did) {
+                            warn!(
+                                "CIRCULAR DEPENDENCY: This mediator's DID ({}) matches the VTA's \
+                                 configured mediator DID. REST bootstrapping prevents startup deadlock, \
+                                 but both services are interdependent.",
+                                result.did
+                            );
+                        } else if let Some(vta_med_url) = &health.mediator_url {
+                            if health.mediator_did.is_some() {
+                                info!(
+                                    "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
+                                    health.mediator_did.as_deref().unwrap_or("none"),
+                                    vta_med_url,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Could not check VTA health for circular dependency detection (non-fatal): {e}"
+                        );
+                    }
+                }
+            }
+
+            Some(result)
+        } else {
+            None
+        };
+
+        // Resolve mediator DID — from VTA startup result or config
+        let mediator_did = if let Some(ref result) = vta_startup {
+            if raw.mediator_did.starts_with("vta://") {
+                result.did.clone()
+            } else {
+                read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
+            }
+        } else {
+            read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
+        };
 
         let mut config = Config {
             log_level: match raw.log_level.as_str() {
@@ -213,8 +324,9 @@ impl TryFrom<ConfigRaw> for Config {
                 true
             }),
             listen_address: raw.server.listen_address,
-            mediator_did: read_did_config(&raw.mediator_did, &aws_config, "mediator_did").await?,
-            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did").await?,
+            mediator_did,
+            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None)
+                .await?,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(
@@ -227,7 +339,11 @@ impl TryFrom<ConfigRaw> for Config {
             api_prefix: raw.server.api_prefix,
             security: raw
                 .security
-                .convert(secrets_resolver.clone(), &aws_config)
+                .convert(
+                    secrets_resolver.clone(),
+                    &aws_config,
+                    vta_startup.as_ref().map(|r| &r.bundle),
+                )
                 .await?,
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,

@@ -70,6 +70,15 @@ impl Listener {
     }
 
     pub async fn connect(&mut self) -> Result<(), DIDCommServiceError> {
+        // Clean up any existing connection before reconnecting to prevent
+        // orphaned websocket tasks that independently retry and cause
+        // duplicate-channel floods when the mediator comes back online.
+        if let Some(ref profile) = self.profile {
+            let _ = profile.stop_websocket().await;
+        }
+        self.profile = None;
+        self.atm = None;
+
         let shared_state = if let Some(tdk_config) = self.config.tdk_config.take() {
             Arc::new(TDKSharedState::new(tdk_config).await?)
         } else {

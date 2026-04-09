@@ -1,427 +1,355 @@
 ### Mediator Configuration
-### You can override these settings by setting environment variables
-### Example: export MEDIATOR_DID=did://did:web:localhost%3A7037:mediator:v1:.well-known
+###
+### Every setting can be overridden by an environment variable.
+### The env var name is shown in the "Env:" line above each field.
+### Environment variables take priority over values in this file.
 
 ### log_level: trace debug info warn error
-### default: info
-### NOTE: RUST_LOG environment variable can override this setting
+### NOTE: RUST_LOG environment variable can also override this setting
 log_level = "info"
 
-### log_json: If true, log output will be in JSON format
-### default: true
-log_json = "${LOG_JSON:false}"
+### Env: LOG_JSON
+### If true, log output will be in JSON format
+log_json = "false"
 
-### mediator_did: DID of the mediator
-### REQUIRED: DID of the mediator
+### Env: MEDIATOR_DID
+### DID of the mediator (REQUIRED)
 ### Supported formats:
-### - did://did:peer:<version>:<base58-encoded-verification-key>
-### - aws_parameter_store://<parameter_name> - Load DID from AWS Systems Manager Parameter Store
-mediator_did = "${MEDIATOR_DID:did://did:web:localhost%3A7037:mediator:v1:.well-known}"
+###   did://<did_string>
+###   aws_parameter_store://<parameter_name>
+###   vta://<context>  (requires [vta] section)
+mediator_did = "vta://mediator-local"
 
+### ****************************************************************************************************************************
+### VTA (Verifiable Trust Agent) integration
+### Enables centralized key management via a VTA instance.
+### When configured, set mediator_did and/or security.mediator_secrets to "vta://<context>"
+###
+### Example:
+###   mediator_did = "vta://mediator"
+###   [security]
+###   mediator_secrets = "vta://mediator"
+### ****************************************************************************************************************************
+[vta]
+credential = "keyring://affinidi-mediator/vta-credential"
+context = "mediator-local"
 ### ****************************************************************************************************************************
 ### Server configuration
 ### ****************************************************************************************************************************
 [server]
-### listen_address: <ip_address>:<tcp_port> that this service will listen on.
-### Default: 0.0.0.0:7037
-listen_address = "${LISTEN_ADDRESS:0.0.0.0:7037}"
+### Env: LISTEN_ADDRESS
+### <ip_address>:<tcp_port> that this service will listen on
+listen_address = "0.0.0.0:7037"
 
-### api_prefix: API prefix
-### Default: /mediator/v1/
-api_prefix = "${API_PREFIX:/mediator/v1/}"
+### Env: API_PREFIX
+### API prefix
+api_prefix = "/mediator/v1/"
 
-### admin_did: DID of the admin
-### REQUIRED: DID of the admin
-### Supported formats:
-### - did://did:method:...
-### - aws_parameter_store://<parameter_name> - Load DID from AWS Systems Manager Parameter Store
-### NOTE: It is strongly recommended to NOT use the same DID as the mediator! 
+### Env: ADMIN_DID
+### DID of the admin (REQUIRED)
+### NOTE: It is strongly recommended to NOT use the same DID as the mediator!
 ###       This causes more use cases where the secrets of the mediator itself can be exposed in administration tasks.
-### NOTE: You can add additional Mediator admin DIDs after mediator has started by using the Affinidi Mediator admin DIDComm protocol
-admin_did = "${ADMIN_DID:did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3}"
+### NOTE: You can add additional admin DIDs after startup via the DIDComm admin protocol
+admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3"
 
-### did_web_self_hosted: <DID Document Path> Path to the self-hosted DID Document
-### Default: None
+### Env: DID_WEB_SELF_HOSTED
+### Path to the self-hosted DID Document
 ### Supported formats:
-### - file://<path> - Load secrets from a file
-### - aws_parameter_store://<parameter_name> - Load DID Document from AWS Systems Manager Parameter Store
-### NOTE: If you are using a self-hosted DID Document, you can specify the path here
-### This is a convenience feature to allow you to host a did:web DID Document on the same server as the mediator
-### When this option is enabled, a did:web valid route will be added /.well-known/did.json
-### NOTE: You can put port names in the did:web identifier, i.e. did:web:localhost%3A7037
-did_web_self_hosted = "${DID_WEB_SELF_HOSTED:file://./conf/mediator_did.json}"
+###   file://<path>
+###   aws_parameter_store://<parameter_name>
+### When enabled, adds a did:web route at /.well-known/did.json
+did_web_self_hosted = "file://./conf/mediator_did.json"
 
 ### ****************************************************************************************************************************
 ### Database configuration
 ### ****************************************************************************************************************************
 [database]
-### functions_file: Path to the database functions file
-### Default: ./conf/atm-functions.lua
-functions_file = "${DATABASE_FUNCTIONS_FILE:./conf/atm-functions.lua}"
+### Env: DATABASE_FUNCTIONS_FILE
+### Path to the database functions file
+functions_file = "./conf/atm-functions.lua"
 
-### database_url: URL of the Redis compatible database
-### Default: redis://127.0.0.1/
-database_url = "${DATABASE_URL:redis://127.0.0.1/}"
+### Env: DATABASE_URL
+### URL of the Redis compatible database
+database_url = "redis://127.0.0.1/"
 
-### database_pool_size: DEPRECATED - ignored, kept for backwards compatibility.
-### The mediator now uses a single multiplexed Redis connection.
-### Default: 10
-database_pool_size = "${DATABASE_POOL_SIZE:10}"
+### Env: DATABASE_POOL_SIZE
+### DEPRECATED - ignored, kept for backwards compatibility
+database_pool_size = "10"
 
-### database_timeout: Timeout for database operations in seconds
-### Default: 2
-database_timeout = "${DATABASE_TIMEOUT:2}"
+### Env: DATABASE_TIMEOUT
+### Timeout for database operations in seconds
+database_timeout = "2"
 
 ### ****************************************************************************************************************************
 ### Security configuration
 ### ****************************************************************************************************************************
 [security]
-### mediator_acl_mode: What ACL logic mode is the mediator running in?
-### Default: explicit_deny
-### Options:
-###    - explicit_deny: Mediator will allow any DID to connect and forward/deliver messages unless explicitly denied
-###    - explicit_allow: Mediator will deny all DIDs except for what has been explicitly allowed
-mediator_acl_mode = "${MEDIATOR_ACL_MODE:explicit_allow}"
+### Env: MEDIATOR_ACL_MODE
+### ACL logic mode: explicit_deny | explicit_allow
+mediator_acl_mode = "explicit_allow"
 
-### global_acl_default: Default ACL that is applied to new/unknown DIDs that connect to the mediator
-### Default: DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES
-### NOTE: When building a default ACL, the starting point is all actions are denied unless explicitly allowed
-### NOTE: self-changed flags are:
-###    - SEND_MESSAGES
-###    - RECEIVE_MESSAGES
-###    - SEND_FORWARDED
-###    - RECEIVE_FORWARDED
-###    - CREATE_INVITES
-###    - ANON_RECEIVE
-###    - SELF_MANAGE_LIST
-###    - SELF_MANAGE_SEND_QUEUE_LIMIT
-###    - SELF_MANAGE_RECEIVE_QUEUE_LIMIT
-### Options:
-###    - ALLOW_ALL: Allow all operations (sets ACL mode to explicit_deny per DID, DID can self manage their own ACLs)
-###    - DENY_ALL: Deny all operations (sets ACL mode to explicit_allow per DID)
-###    - ALLOW_ALL_SELF_CHANGE: Allows all self-changed flags (explicitly set when ALLOW_ALL is set)
-###    - DENY_ALL_SELF_CHANGE: Denies all self-changed flags (explicitly set when DENY_ALL is set)
-###    - MODE_EXPLICIT_ALLOW: Per DID Access Control List (ACL) will only allow what is explicitly allowed
-###    - MODE_EXPLICIT_DENY: Per DID Access Control List (ACL) will only allow everyone except for those explicitly denied
-###    - MODE_SELF_CHANGE: Allows the DID owner to change the ACL Mode for their own DID Access Control List
-###    - LOCAL: Will store messages for a DID on the mediator
-###    - SEND_MESSAGES: DID Can send messages to others
-###    - SEND_MESSAGES_CHANGE: Allows the DID owner to change the send_messages ACL for their own DID
-###    - RECEIVE_MESSAGES: DID Can receive messages from others
-###    - RECEIVE_MESSAGES_CHANGE: Allows the DID owner to change the receive_messages ACL for their own DID
-###    - SEND_FORWARDED: DID can send forwarded messages
-###    - SEND_FORWARDED_CHANGE: Allows the DID owner to change the send_forwarded ACL for their own DID
-###    - RECEIVE_FORWARDED: DID can receive forwarded messages
-###    - RECEIVE_FORWARDED_CHANGE: Allows the DID owner to change the receive_forwarded ACL for their own DID
-###    - CREATE_INVITES: DID can create OOB invites
-###    - CREATE_INVITES_CHANGE: Allows the DID owner to change the create_invites ACL for their own DID
-###    - ANON_RECEIVE: DID can receive anonymous messages
-###    - ANON_RECEIVE_CHANGE: Allows the DID owner to change the anon_receive ACL for their own DID
-###    - SELF_MANAGE_LIST: DID can self manage their own ACL list (add/remove)
-###    - SELF_MANAGE_SEND_QUEUE_LIMIT: DID can set their send queue limits (between the queued_messages_soft and queued_messages_hard)
-###    - SELF_MANAGE_RECEIVE_QUEUE_LIMIT: DID can set their receive queue limits (between the queued_messages_soft and queued_messages_hard)
-###  NOTE: Can be comma separated to allow multiple options. ALLOW_ALL or DENY_ALL must always be first!
-global_acl_default = "${GLOBAL_DEFAULT_ACL:DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES}"
+### Env: GLOBAL_DEFAULT_ACL
+### Default ACL applied to new/unknown DIDs
+### NOTE: ALLOW_ALL or DENY_ALL must always be first, followed by comma-separated flags
+### Flags: LOCAL, SEND_MESSAGES, RECEIVE_MESSAGES, SEND_FORWARDED, RECEIVE_FORWARDED,
+###        CREATE_INVITES, ANON_RECEIVE, SELF_MANAGE_LIST, SELF_MANAGE_SEND_QUEUE_LIMIT,
+###        SELF_MANAGE_RECEIVE_QUEUE_LIMIT (and _CHANGE variants)
+global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"
 
-### local_direct_delivery_allowed: If true, messages that are addressed to a local DID directly will be delivered
-### Default: false (all messages must be addressed to the mediator)
-### NOTE: This can be useful on private networks where you may not want to wrap every message in a forward envelope
-###       If set to false, then all messages must be addressed to the mediator, and the mediator will handle delivery
-###       If set to true, then you can either message the mediator or to a local DID directly
-local_direct_delivery_allowed = "${LOCAL_DIRECT_DELIVERY_ALLOWED:true}"
+### Env: LOCAL_DIRECT_DELIVERY_ALLOWED
+### If true, messages addressed directly to a local DID will be delivered
+local_direct_delivery_allowed = "true"
 
-### local_direct_delivery_allow_anon: If true, anonymous messages can be delivered directly to a local DID
-### Default:false
-### NOTE: This is a security feature to prevent spam from unknown sender
-local_direct_delivery_allow_anon = "${LOCAL_DIRECT_DELIVERY_ALLOW_ANON:false}"
+### Env: LOCAL_DIRECT_DELIVERY_ALLOW_ANON
+### If true, anonymous messages can be delivered directly to a local DID
+local_direct_delivery_allow_anon = "false"
 
-### mediator_secrets: Secrets of the mediator
-### REQUIRED: Location of secrets
+### Env: MEDIATOR_SECRETS
+### Location of mediator secrets (REQUIRED)
 ### Supported formats:
-### - file://<path> - Load secrets from a file
-### - aws_secrets://<secret_name> - Load secrets from AWS Secrets Manager
-### See secrets.json-example for the format of the secrets
-### NOTE: The key identifiers (id) must match the key identifiers in the mediator_did
-mediator_secrets = "${MEDIATOR_SECRETS:file://./conf/secrets.json}"
+###   file://<path>
+###   aws_secrets://<secret_name>
+###   vta://<context>  (requires [vta] section)
+### NOTE: Key identifiers (id) must match the key identifiers in the mediator DID document
+mediator_secrets = "vta://mediator-local"
 
-### If true (default) SSL is enabled.
-### default: true
-### NOTE: do not use `false` in prod unless TLS is terminated outside of the service
-use_ssl = "${USE_SSL:false}"
+### Env: USE_SSL
+### If true, SSL is enabled. Set to false only if TLS is terminated externally
+use_ssl = "false"
 
-### Note: If you comment out the following SSL configs, will default back to non-TLS mode.
-###       Useful if doing testing/debugging without requiring SSL certificate checks
-### ssl_certificate_file: <path> file that contains the SSL certificate for this service
-ssl_certificate_file = "${SSL_CERTIFICATE_FILE:conf/keys/end.cert}"
+### Env: SSL_CERTIFICATE_FILE
+### Path to the SSL certificate file
+ssl_certificate_file = "conf/keys/end.cert"
 
-### ssl_key_file: <path> file that contains the SSL certificate key
-ssl_key_file = "${SSL_KEY_FILE:conf/keys/end.key}"
+### Env: SSL_KEY_FILE
+### Path to the SSL certificate key file
+ssl_key_file = "conf/keys/end.key"
 
-### jwt_authorization_secret
-### REQUIRED: Key string that is used to sign JWT tokens
-### Supported Formats:
-### - string://<key> - Use the key as is
-### - aws_secrets://<secret_name> - Load the key from AWS Secrets Manager
-jwt_authorization_secret = "${JWT_AUTHORIZATION_SECRET:string://MFECAQEwBQYDK2VwBCIEIIsgJfWwqWvy-_EbTy1OMMY1t5fex1UGUXVDfjdd30I6gSEArzZVXBELy8m4ICDLe9mIkr7qLJMxmEpDrE8WpfdcLeA}"
+### Env: JWT_AUTHORIZATION_SECRET
+### Key used to sign JWT tokens (REQUIRED)
+### Supported formats: string://<key> | aws_secrets://<secret_name>
+jwt_authorization_secret = "string://MFECAQEwBQYDK2VwBCIEIIsgJfWwqWvy-_EbTy1OMMY1t5fex1UGUXVDfjdd30I6gSEArzZVXBELy8m4ICDLe9mIkr7qLJMxmEpDrE8WpfdcLeA"
 
-### jwt_access_expiry: Expiry time in seconds for JWT access tokens
-### Default: 900 (15 Minutes)
-### NOTE: JWT_ACCESS_EXPIRY has a minimum value of 10 seconds, if you try to set below this it will override it to 10
-###       This is due to SDK's needing some time to refresh the token and handle a transaction before triggering a refresh
-jwt_access_expiry = "${JWT_ACCESS_EXPIRY:900}"
+### Env: JWT_ACCESS_EXPIRY
+### Expiry time in seconds for JWT access tokens (minimum: 10)
+jwt_access_expiry = "900"
 
-### jwt_refresh_expiry: Expiry time in seconds for JWT refresh tokens
-### Default: 86400 (24 hours)
-jwt_refresh_expiry = "${JWT_REFRESH_EXPIRY:86_400}"
+### Env: JWT_REFRESH_EXPIRY
+### Expiry time in seconds for JWT refresh tokens
+jwt_refresh_expiry = "86400"
 
-### cors_allow_origin: Comma separated list of origins that are allowed to access this service
-### Default: *
-### NOTE: Use * to allow all origins, otherwise for production you should limit the origins
+### Env: CORS_ALLOW_ORIGIN
+### Comma separated list of allowed origins. Use * for all origins
 ### Example: "https://affinidi.com,https://example2.com"
-# cors_allow_origin = "${CORS_ALLOW_ORIGIN:https://affinidi.com}"
+# cors_allow_origin = "https://affinidi.com"
 
-### block_anonymous_outer_envelope: If true, the mediator requires all messages being sent to the Mediator to be signed
-### Default: true
-### NOTE: Setting this to false allows for anonymous messages to be sent to the mediator itself
-### NOTE: You can still send an anonymous message to a recipient; It must wrapped in a signed forwarding wrapper
-block_anonymous_outer_envelope = "${BLOCK_ANONYMOUS_OUTER_ENVELOPE:true}"
+### Env: BLOCK_ANONYMOUS_OUTER_ENVELOPE
+### If true, all messages sent to the mediator must be signed
+block_anonymous_outer_envelope = "true"
 
-### force_session_did_match: If true, the signing DID in the outer envelope MUST match the Session DID
-### Default: true
-### NOTE: This is a security feature to prevent a malicious actor from sending messages on behalf of another DID
-### NOTE: Inner messages can still be signed by a different DID, but the outer envelope must match the session DID
-### NOTE: This option MUST be set to false if `block_anonymous_outer_envelope` is set to false. Mediator will not start otherwise!
-force_session_did_match = "${FORCE_SESSION_DID_MATCH:true}"
+### Env: FORCE_SESSION_DID_MATCH
+### If true, the signing DID in the outer envelope MUST match the session DID
+### Must be false if block_anonymous_outer_envelope is false
+force_session_did_match = "true"
 
-### block_remote_admin_msgs: If true, any admin messages must be delivered to the mediator by the admin DID
-### Default: true
-### NOTE: This is a security feature to prevent a malicious actor from sending admin messages to the mediator
-### NOTE: This means you can NOT route admin messages via another mediator or endpoint, you must direct connect to the mediator
-block_remote_admin_msgs = "${BLOCK_REMOTE_ADMIN_MSGS:true}"
+### Env: BLOCK_REMOTE_ADMIN_MSGS
+### If true, admin messages must be delivered directly (not via another mediator)
+block_remote_admin_msgs = "true"
 
-### admin_messages_expiry: Time To Live (TTL) in seconds for admin messages (minimizes the risk of replay attacks)
-### Default: 3 (3 seconds)
-admin_messages_expiry = "${ADMIN_MESSAGES_EXPIRY:3}"
+### Env: ADMIN_MESSAGES_EXPIRY
+### TTL in seconds for admin messages (minimizes replay attack risk)
+admin_messages_expiry = "3"
 
 ### ****************************************************************************************************************************
 ### Live streaming setup
 ### ****************************************************************************************************************************
 [streaming]
-### enabled: If true, can live stream messages to subscribed recipients via WebSockets
-### Default: true
-enabled = "${STREAMING_ENABLED:true}"
+### Env: STREAMING_ENABLED
+### If true, enables live message streaming via WebSockets
+enabled = "true"
 
-### uuid: Each subscriber needs a unique identifier, this is used to setup session tracking in the backend
-### Default: hostname"
-### Supported Formats:
-### - hostname://
-### - string://<uuid> - Use the UUID as is
-### NOTE: Having multiple subscribers with the same UUID will cause issues
-uuid = "${STREAMING_UUID:hostname://}"
+### Env: STREAMING_UUID
+### Unique identifier for this subscriber instance
+### Formats: hostname:// | string://<uuid>
+uuid = "hostname://"
 
 ### ****************************************************************************************************************************
 ### DID Resolver configuration
 ### ****************************************************************************************************************************
 [did_resolver]
-### service_address: Address of the DID resolver service
-### Default: None (Uses local DID resolver)
-#address = "${DID_RESOLVER_ADDRESS:ws://127.0.0.1:8080/did/v1/ws}"
+### Env: DID_RESOLVER_ADDRESS
+### Address of the DID resolver service (omit to use local resolver)
+# address = "ws://127.0.0.1:8080/did/v1/ws"
 
-### cache_capacity: Number of DID's to cache in memory
-### Default: 1000
-cache_capacity = "${DID_RESOLVER_CACHE_CAPACITY:1000}"
+### Env: DID_RESOLVER_CACHE_CAPACITY
+### Number of DIDs to cache in memory
+cache_capacity = "1000"
 
-### cache_ttl: Time to live in seconds for DID's in the cache
-### Default: 300 (5 minutes)
-cache_ttl = "${DID_RESOLVER_CACHE_TTL:300}"
+### Env: DID_RESOLVER_CACHE_TTL
+### TTL in seconds for cached DIDs
+cache_ttl = "300"
 
-### network_timeout: Timeout in milliseconds for DID Resolver operations
-### Default: 5000 milliseconds (you need to account for 3rd party DID resolution latency (blockchains, www etc)
-network_timeout = "${DID_RESOLVER_NETWORK_TIMEOUT:5000}"
+### Env: DID_RESOLVER_NETWORK_TIMEOUT
+### Timeout in milliseconds for DID resolution (account for blockchain latency)
+network_timeout = "5000"
 
-### network_limit: Maximum number of concurrent requests to the DID resolver
-### Default: 100
-network_limit = "${DID_RESOLVER_NETWORK_LIMIT:100}"
+### Env: DID_RESOLVER_NETWORK_LIMIT
+### Maximum concurrent DID resolution requests
+network_limit = "100"
 
 ### ****************************************************************************************************************************
-### Resource limits for the mediator
+### Resource limits
 ### ****************************************************************************************************************************
 [limits]
-### attachments_max_count: Maximum number of attachments in a single message
-### Default: 20
-attachments_max_count = "${LIMIT_ATTACHMENTS_MAX_COUNT:20}"
+### Env: LIMIT_ATTACHMENTS_MAX_COUNT
+attachments_max_count = "20"
 
-### approximate maximum amount of crypto operations per one message
-### it is used to protect the mediator from DoS type attacks.
-### Default: 1000
-crypto_operations_per_message = "${LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE:1000}"
+### Env: LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE
+### Protects against DoS attacks via excessive crypto operations
+crypto_operations_per_message = "1000"
 
-### deleted_messages: Maximum number of messages that can be deleted at once
-### Default: 100
-deleted_messages = "${LIMIT_DELETED_MESSAGES:100}"
+### Env: LIMIT_DELETED_MESSAGES
+### Maximum messages that can be deleted at once
+deleted_messages = "100"
 
-### forward_task_queue: How many forward tasks can be queued up in total
-### Default: 50_000
-forward_task_queue = "${LIMIT_FORWARD_TASK_QUEUE:50000}"
+### Env: LIMIT_FORWARD_TASK_QUEUE
+### Maximum queued forward tasks
+forward_task_queue = "50000"
 
-### http_size: Maximum size of a http request payload in bytes
-### Default: 10485760 (10MB)
-### It is recommended to use infrastructure level limitation instead of application level limitations
-http_size = "${LIMIT_HTTP_SIZE:10485760}"
+### Env: LIMIT_HTTP_SIZE
+### Maximum HTTP request payload in bytes (10MB)
+http_size = "10485760"
 
-### listed_messages: Maximum number of messages that can be listed at a time
-### Default: 100
-listed_messages = "${LIMIT_LISTED_MESSAGES:100}"
+### Env: LIMIT_LISTED_MESSAGES
+### Maximum messages listed at a time
+listed_messages = "100"
 
-### local_max_acl: Maximum number of ACL entries that each DID can have
-### Default: 1_000
-local_max_acl = "${LIMIT_LOCAL_MAX_ACL:1000}"
+### Env: LIMIT_LOCAL_MAX_ACL
+### Maximum ACL entries per DID
+local_max_acl = "1000"
 
-### message_expiry_seconds: Time to live in seconds for messages stored
-### Messages will expire after this limit
-### Default: 604_800 (7 days)
-message_expiry_seconds = "${LIMIT_MESSAGE_EXPIRY_SECONDS:604800}"
+### Env: LIMIT_MESSAGE_EXPIRY_SECONDS
+### TTL in seconds for stored messages (7 days)
+message_expiry_seconds = "604800"
 
-### message_size: Maximum size of a message in bytes
-### Default: 1048576 (1MB)
-message_size = "${LIMIT_MESSAGE_SIZE:1048576}"
+### Env: LIMIT_MESSAGE_SIZE
+### Maximum message size in bytes (1MB)
+message_size = "1048576"
 
-### queued_send_messages_soft: Default number of messages that can queued for outbound delivery for a DID
-### Default: 200
-### NOTE: -1 means no limit
-queued_send_messages_soft = "${LIMIT_QUEUED_SEND_MESSAGES_SOFT:200}"
+### Env: LIMIT_QUEUED_SEND_MESSAGES_SOFT
+### Default outbound queue limit per DID (-1 = no limit)
+queued_send_messages_soft = "200"
 
-### queued_send_messages_hard: Maximum number of messages that a non-admin account can set the queue_send_messages to (upper bound)
-### Default: 1000
-### NOTE: -1 means no limit
-### NOTE: Admin accounts can set higher limits beyond the hard limit. Be careful though as this can be used to DoS the mediator
-queued_send_messages_hard = "${LIMIT_QUEUED_SEND_MESSAGES_HARD:1000}"
+### Env: LIMIT_QUEUED_SEND_MESSAGES_HARD
+### Maximum outbound queue limit settable by non-admin (-1 = no limit)
+queued_send_messages_hard = "1000"
 
-### queued_receive_messages_soft: Default number of messages that can queued for inbound delivery for a DID
-### Default: 200
-### NOTE: -1 means no limit
-queued_receive_messages_soft = "${LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT:200}"
+### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT
+### Default inbound queue limit per DID (-1 = no limit)
+queued_receive_messages_soft = "200"
 
-### queued_receive_messages_hard: Maximum number of messages that a non-admin account can set the queue_receive_messages to (upper bound)
-### Default: 1000
-### NOTE: -1 means no limit
-### NOTE: Admin accounts can set higher limits beyond the hard limit. Be careful though as this can be used to DoS the mediator
-queued_receive_messages_hard = "${LIMIT_QUEUED_RECEIVE_MESSAGES_HARD:1000}"
+### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_HARD
+### Maximum inbound queue limit settable by non-admin (-1 = no limit)
+queued_receive_messages_hard = "1000"
 
-### to_keys_per_recipient: Maximum number of keys in a single recipient did
-### Default: 100
-### NOTE: Protects against a DOS attack where a single message can become a bomb with thousands of recipients and thousands of keys
-to_keys_per_recipient = "${LIMIT_TO_KEYS_PER_DID:100}"
+### Env: LIMIT_TO_KEYS_PER_DID
+### Maximum keys per recipient DID (DoS protection)
+to_keys_per_recipient = "100"
 
-### to_recipients: Maximum number of recipients in a single message
-### Default: 100
-### NOTE: Protects against a DOS attack where a single message can become a bomb with thousands of recipients
-to_recipients = "${LIMIT_TO_RECIPIENTS:100}"
+### Env: LIMIT_TO_RECIPIENTS
+### Maximum recipients per message (DoS protection)
+to_recipients = "100"
 
-### ws_size: Maximum size of a websocket request payload in bytes
-### Default: 10485760 (10MB)
-### It is recommended to use infrastructure level limitation instead of application level limitations
-ws_size = "${LIMIT_WS_SIZE:10485760}"
+### Env: LIMIT_WS_SIZE
+### Maximum WebSocket payload in bytes (10MB)
+ws_size = "10485760"
 
-### access_list_limit: Maximum number of access list entries that each DID can have
-### Default: 1000
-access_list_limit = "${ACCESS_LIST_LIMIT:1000}"
+### Env: ACCESS_LIST_LIMIT
+### Maximum access list entries per DID
+access_list_limit = "1000"
 
-### oob_invite_ttl: Time to live in seconds for OOB invites
-### Default 86_400
-oob_invite_ttl = "${OOB_INVITE_TTL:86_400}"
+### Env: OOB_INVITE_TTL
+### TTL in seconds for OOB invites
+oob_invite_ttl = "86400"
 
-### rate_limit_per_ip: Maximum requests per second per IP address
-### Default: 100
-### Set to 0 to disable IP-based rate limiting
-# rate_limit_per_ip = "${LIMIT_RATE_LIMIT_PER_IP:100}"
+### Env: LIMIT_RATE_LIMIT_PER_IP
+### Requests per second per IP (0 = disabled)
+# rate_limit_per_ip = "100"
 
-### rate_limit_burst: Burst size for IP-based rate limiting (additional requests allowed in a burst)
-### Default: 50
-# rate_limit_burst = "${LIMIT_RATE_LIMIT_BURST:50}"
+### Env: LIMIT_RATE_LIMIT_BURST
+### Burst size for IP-based rate limiting
+# rate_limit_burst = "50"
 
-### max_websocket_connections: Maximum number of concurrent WebSocket connections
-### Default: 10000
-### Set to 0 for unlimited connections (not recommended in production)
-# max_websocket_connections = "${LIMIT_MAX_WEBSOCKET_CONNECTIONS:10000}"
+### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS
+### Maximum concurrent WebSocket connections (0 = unlimited)
+# max_websocket_connections = "10000"
 
-### did_rate_limit_per_second: Maximum requests per second per authenticated DID
-### Default: 0 (disabled)
-### Set to 0 to disable per-DID rate limiting
-# did_rate_limit_per_second = "${LIMIT_DID_RATE_LIMIT_PER_SECOND:0}"
+### Env: LIMIT_DID_RATE_LIMIT_PER_SECOND
+### Requests per second per authenticated DID (0 = disabled)
+# did_rate_limit_per_second = "0"
 
-### did_rate_limit_burst: Burst size for per-DID rate limiting (additional requests allowed in a burst)
-### Default: 10
-# did_rate_limit_burst = "${LIMIT_DID_RATE_LIMIT_BURST:10}"
+### Env: LIMIT_DID_RATE_LIMIT_BURST
+### Burst size for per-DID rate limiting
+# did_rate_limit_burst = "10"
 
 ### ****************************************************************************************************************************
-### Configuration specific to the forwarding processor
+### Forwarding processor configuration
 ### ****************************************************************************************************************************
-### NOTE: While you can send a message directly to a DID, ideally you are forwarding messages through the mediator, even if
-###       if the ultimate recipient is local to the mediator. This allows the mediator to handle message delivery, retries, etc.
-
 [processors.forwarding]
-### enabled: If true, the forwarding processor is enabled within the mediator locally
-### Default: true
-### NOTE: If you are using a separate forwarding processor, set this to false
-enabled = "${PROCESSOR_FORWARDING_ENABLED:true}"
+### Env: PROCESSOR_FORWARDING_ENABLED
+### Enable the local forwarding processor
+enabled = "true"
 
-### future_time_limit: Maximum time in seconds that a message can be scheduled in the future
-### Default: 86400 (1 day)
-future_time_limit = "${PROCESSOR_FORWARDING_FUTURE_TIME_LIMIT:86400}"
+### Env: PROCESSOR_FORWARDING_FUTURE_TIME_LIMIT
+### Maximum seconds a message can be scheduled in the future
+future_time_limit = "86400"
 
-### external_forwarding: If true, the mediator will forward messages to another mediator/endpoint when required
-### Default: true
-### NOTE: If you are running a private network, you may want to disable the ability to forward messages externally
-external_forwarding = "${PROCESSOR_FORWARDING_EXTERNAL:true}"
+### Env: PROCESSOR_FORWARDING_EXTERNAL
+### If true, forward messages to external mediators/endpoints
+external_forwarding = "true"
 
-### report_errors: If true, the mediator will generate problem reports to the sender of the message
-### Default: true
-### NOTE: You may want to disable this in production to prevent leaking information about the mediator
-report_errors = "${PROCESSOR_FORWARDING_REPORT_ERRORS:true}"
+### Env: PROCESSOR_FORWARDING_REPORT_ERRORS
+### If true, generate problem reports for failed forwarding
+report_errors = "true"
 
-### blocked_forwarding_dids: Additional DIDs that the mediator will block forwarding to
-### Default: None (always includes the mediator DID and associated services)
-### NOTE: If you are running a cluster of mediators, you may use this feature to list other cluster DIDs
-###       so that you don't accidentally create a circular forwarding loop
-### Format: ["did_1", "did_2"]
-blocked_forwarding_dids = "${PROCESSOR_FORWARDING_BLOCKED_DIDS:[]}"
+### Env: PROCESSOR_FORWARDING_BLOCKED_DIDS
+### Additional DIDs to block forwarding to (JSON array)
+### Always includes the mediator's own DID
+blocked_forwarding_dids = "[]"
 
-### rate_window_seconds: Sliding window in seconds for tracking message rate per remote endpoint
-### Used to decide REST vs WebSocket transport for external forwarding
-### Default: 300 (5 minutes)
-rate_window_seconds = "${PROCESSOR_FORWARDING_RATE_WINDOW:300}"
+### Env: PROCESSOR_FORWARDING_RATE_WINDOW
+### Sliding window in seconds for endpoint message rate tracking
+rate_window_seconds = "300"
 
-### ws_threshold_msgs_per_10s: If messages per 10 seconds >= this threshold, prefer WebSocket
-### Default: 1 (1 message per 10 seconds triggers WebSocket preference)
-ws_threshold_msgs_per_10s = "${PROCESSOR_FORWARDING_WS_THRESHOLD:1}"
+### Env: PROCESSOR_FORWARDING_WS_THRESHOLD
+### Messages per 10s threshold to prefer WebSocket over REST
+ws_threshold_msgs_per_10s = "1"
 
-### ws_idle_timeout_seconds: Seconds of idle time before disconnecting a WebSocket to a remote mediator
-### Default: 60 (1 minute)
-ws_idle_timeout_seconds = "${PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT:60}"
+### Env: PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT
+### Seconds of idle time before disconnecting a remote WebSocket
+ws_idle_timeout_seconds = "60"
 
-### batch_size: Number of messages to read per batch from the forwarding queue
-### Default: 50
-batch_size = "${PROCESSOR_FORWARDING_BATCH_SIZE:50}"
+### Env: PROCESSOR_FORWARDING_BATCH_SIZE
+### Messages per batch from the forwarding queue
+batch_size = "50"
 
-### max_retries: Maximum number of retry attempts for failed forwarding to a remote mediator
-### Default: 5
-max_retries = "${PROCESSOR_FORWARDING_MAX_RETRIES:5}"
+### Env: PROCESSOR_FORWARDING_MAX_RETRIES
+### Maximum retry attempts for failed forwarding
+max_retries = "5"
 
-### initial_backoff_ms: Initial backoff delay in milliseconds for retry
-### Default: 1000 (1 second)
-initial_backoff_ms = "${PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS:1000}"
+### Env: PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS
+### Initial backoff delay in milliseconds
+initial_backoff_ms = "1000"
 
-### max_backoff_ms: Maximum backoff delay in milliseconds for retry
-### Default: 60000 (1 minute)
-max_backoff_ms = "${PROCESSOR_FORWARDING_MAX_BACKOFF_MS:60000}"
+### Env: PROCESSOR_FORWARDING_MAX_BACKOFF_MS
+### Maximum backoff delay in milliseconds
+max_backoff_ms = "60000"
 
-### consumer_group: Redis consumer group name for forwarding processors
-### All processors sharing the same group name will coordinate message distribution
-### Default: "forwarding"
-consumer_group = "${PROCESSOR_FORWARDING_CONSUMER_GROUP:forwarding}"
+### Env: PROCESSOR_FORWARDING_CONSUMER_GROUP
+### Redis consumer group name (shared across processor instances)
+consumer_group = "forwarding"
 
 [processors.message_expiry_cleanup]
-### enabled: If true, the message expiry cleanup processor is enabled within the mediator locally
-### Default: true
-enabled = "${PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED:true}"
+### Env: PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED
+### Enable the message expiry cleanup processor
+enabled = "true"
