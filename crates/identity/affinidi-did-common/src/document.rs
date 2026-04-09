@@ -1,12 +1,7 @@
 //! Extends the SSI Crate Document with new methods and functions
 
-use crate::{
-    DID, Document, DocumentError,
-    verification_method::{VerificationMethod, VerificationRelationship},
-};
+use crate::{DID, Document, DocumentError, verification_method::VerificationMethod};
 use std::collections::HashMap;
-use std::str::FromStr;
-use url::Url;
 
 pub trait DocumentExt {
     /// Does this DID contain authentication verification_method with the given id?
@@ -43,45 +38,15 @@ pub trait DocumentExt {
 
 impl DocumentExt for Document {
     fn contains_authentication(&self, id: &str) -> bool {
-        let id = if let Ok(id) = Url::from_str(id) {
-            id
-        } else {
-            return false;
-        };
-
-        self.authentication.iter().any(|vm| match vm {
-            VerificationRelationship::Reference(url) => url,
-            VerificationRelationship::VerificationMethod(map) => &map.id,
-        }
-         == &id)
+        self.authentication.iter().any(|vm| vm.get_id() == id)
     }
 
     fn contains_key_agreement(&self, id: &str) -> bool {
-        let id = if let Ok(id) = Url::from_str(id) {
-            id
-        } else {
-            return false;
-        };
-
-        self.key_agreement.iter().any(|vm| match vm {
-            VerificationRelationship::Reference(url) => url,
-            VerificationRelationship::VerificationMethod(map) => &map.id,
-        }
-         == &id)
+        self.key_agreement.iter().any(|vm| vm.get_id() == id)
     }
 
     fn contains_assertion_method(&self, id: &str) -> bool {
-        let id = if let Ok(id) = Url::from_str(id) {
-            id
-        } else {
-            return false;
-        };
-
-        self.assertion_method.iter().any(|vm| match vm {
-            VerificationRelationship::Reference(url) => url,
-            VerificationRelationship::VerificationMethod(map) => &map.id,
-        }
-         == &id)
+        self.assertion_method.iter().any(|vm| vm.get_id() == id)
     }
 
     /// Finds a specific authentication_id or returns all authentication ID's
@@ -215,9 +180,7 @@ mod tests {
                 property_set: HashMap::new(),
             }],
             assertion_method: vec![
-                VerificationRelationship::Reference(
-                    Url::parse("did:test:1234#assert_ref").unwrap(),
-                ),
+                VerificationRelationship::Reference("did:test:1234#assert_ref".to_string()),
                 VerificationRelationship::VerificationMethod(Box::new(VerificationMethod {
                     id: Url::parse("did:test:1234#assert_vm").unwrap(),
                     type_: "Ed25519VerificationKey2018".to_string(),
@@ -228,7 +191,7 @@ mod tests {
                 })),
             ],
             key_agreement: vec![
-                VerificationRelationship::Reference(Url::parse("did:test:1234#key_ref").unwrap()),
+                VerificationRelationship::Reference("did:test:1234#key_ref".to_string()),
                 VerificationRelationship::VerificationMethod(Box::new(VerificationMethod {
                     id: Url::parse("did:test:1234#key_vm").unwrap(),
                     type_: "Ed25519VerificationKey2018".to_string(),
@@ -242,7 +205,7 @@ mod tests {
             capability_invocation: vec![],
             service: vec![],
             authentication: vec![
-                VerificationRelationship::Reference(Url::parse("did:test:1234#auth_ref").unwrap()),
+                VerificationRelationship::Reference("did:test:1234#auth_ref".to_string()),
                 VerificationRelationship::VerificationMethod(Box::new(VerificationMethod {
                     id: Url::parse("did:test:1234#auth_vm").unwrap(),
                     type_: "Ed25519VerificationKey2018".to_string(),

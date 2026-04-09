@@ -59,8 +59,9 @@ impl VerificationMethod {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum VerificationRelationship {
-    /// Reference to a Verification Method
-    Reference(Url),
+    /// Reference to a Verification Method (may be an absolute DID URL or a
+    /// relative fragment like `"#0"`, so we keep it as a plain `String`).
+    Reference(String),
     /// Embedded Verification Method
     VerificationMethod(Box<VerificationMethod>),
 }
@@ -129,7 +130,7 @@ mod tests {
 
     #[test]
     fn get_id_reference() {
-        let rel = VerificationRelationship::Reference(Url::parse("did:test:1234#key-1").unwrap());
+        let rel = VerificationRelationship::Reference("did:test:1234#key-1".to_string());
         assert_eq!(rel.get_id(), "did:test:1234#key-1");
     }
 
@@ -163,7 +164,7 @@ mod tests {
 
     #[test]
     fn verification_relationship_reference_serde() {
-        let rel = VerificationRelationship::Reference(Url::parse("did:test:1234#key-1").unwrap());
+        let rel = VerificationRelationship::Reference("did:test:1234#key-1".to_string());
         let json = serde_json::to_string(&rel).unwrap();
         assert_eq!(json, "\"did:test:1234#key-1\"");
         let back: VerificationRelationship = serde_json::from_str(&json).unwrap();

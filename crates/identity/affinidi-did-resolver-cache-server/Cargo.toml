@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.7.1"
+version = "0.7.2"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -19,11 +19,13 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
 ], path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.3"
 
-didwebvh-rs = "0.4.0"
+didwebvh-rs = "0.4"
 
 # External Crates
 ahash = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
+] }
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 chrono = "0.4"
