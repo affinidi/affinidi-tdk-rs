@@ -153,6 +153,7 @@ impl Database {
         let mut conn = self.get_blocking_connection().await?;
 
         // XREADGROUP GROUP <group> <consumer> BLOCK <ms> COUNT <n> STREAMS FORWARD_Q >
+        #[allow(clippy::type_complexity)]
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
             redis::cmd("XREADGROUP")
                 .arg("GROUP")
@@ -254,6 +255,7 @@ impl Database {
 
         // XAUTOCLAIM FORWARD_Q <group> <consumer> <min-idle-ms> 0 COUNT <n>
         // Returns: [next-start-id, [[id, [field, value, ...]], ...], [deleted-ids]]
+        #[allow(clippy::type_complexity)]
         let result: (String, Vec<(String, HashMap<String, String>)>, Vec<String>) =
             redis::cmd("XAUTOCLAIM")
                 .arg("FORWARD_Q")

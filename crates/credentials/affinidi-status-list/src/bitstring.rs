@@ -68,7 +68,7 @@ impl BitstringStatusList {
     ///
     /// The size should be at least `MIN_BITSTRING_SIZE` (131,072) for herd privacy.
     pub fn new(size: usize, purpose: StatusPurpose) -> Self {
-        let byte_len = (size + 7) / 8;
+        let byte_len = size.div_ceil(8);
         Self {
             bits: vec![0u8; byte_len],
             size,
@@ -192,7 +192,7 @@ impl BitstringStatusList {
             .read_to_end(&mut bits)
             .map_err(|e| StatusListError::Compression(e.to_string()))?;
 
-        let expected_bytes = (size + 7) / 8;
+        let expected_bytes = size.div_ceil(8);
         if bits.len() < expected_bytes {
             return Err(StatusListError::Invalid(format!(
                 "decoded bitstring too short: {} bytes, expected {}",

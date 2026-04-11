@@ -208,10 +208,10 @@ impl TryFrom<ConfigRaw> for Config {
         let aws_config = aws_builder.load().await;
         let mut tags = HashMap::from([("app".to_string(), "mediator".to_string())]);
         for (key, value) in env::vars() {
-            if key.get(..13) == Some("MEDIATOR_TAG_") {
-                if let Some(tag_key) = key.get(13..) {
-                    tags.insert(tag_key.to_lowercase(), value);
-                }
+            if key.get(..13) == Some("MEDIATOR_TAG_")
+                && let Some(tag_key) = key.get(13..)
+            {
+                tags.insert(tag_key.to_lowercase(), value);
             }
         }
 
@@ -273,14 +273,14 @@ impl TryFrom<ConfigRaw> for Config {
                                  but both services are interdependent.",
                                 result.did
                             );
-                        } else if let Some(vta_med_url) = &health.mediator_url {
-                            if health.mediator_did.is_some() {
-                                info!(
-                                    "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
-                                    health.mediator_did.as_deref().unwrap_or("none"),
-                                    vta_med_url,
-                                );
-                            }
+                        } else if let Some(vta_med_url) = &health.mediator_url
+                            && health.mediator_did.is_some()
+                        {
+                            info!(
+                                "VTA reports mediator dependency — mediator_did: {:?}, mediator_url: {:?}",
+                                health.mediator_did.as_deref().unwrap_or("none"),
+                                vta_med_url,
+                            );
                         }
                     }
                     Err(e) => {

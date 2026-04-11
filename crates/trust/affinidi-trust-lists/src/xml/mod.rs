@@ -155,10 +155,10 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                             }
                         } else if path_str.contains("TSPTradeName") {
                             current_tsp_trade_name = Some(text_buf.clone());
-                        } else if path_str.contains("ServiceName") {
-                            if current_service_name.is_empty() {
-                                current_service_name = text_buf.clone();
-                            }
+                        } else if path_str.contains("ServiceName")
+                            && current_service_name.is_empty()
+                        {
+                            current_service_name = text_buf.clone();
                         }
                     }
                     "ServiceTypeIdentifier" => {

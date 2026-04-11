@@ -90,6 +90,7 @@ impl ForwardingProcessor {
             ProcessorError::ForwardingError(format!("DB blocking connection error: {e}"))
         })?;
 
+        #[allow(clippy::type_complexity)]
         let result: Option<Vec<(String, Vec<(String, HashMap<String, String>)>)>> =
             redis::cmd("XREADGROUP")
                 .arg("GROUP")
@@ -183,6 +184,7 @@ impl ForwardingProcessor {
                 ProcessorError::ForwardingError(format!("DB connection error: {e}"))
             })?;
 
+        #[allow(clippy::type_complexity)]
         let result: (String, Vec<(String, HashMap<String, String>)>, Vec<String>) =
             redis::cmd("XAUTOCLAIM")
                 .arg("FORWARD_Q")

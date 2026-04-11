@@ -275,8 +275,7 @@ mod tests {
                 }
                 // Return a minimal valid document
                 let doc_json = format!(
-                    r#"{{"id":"{}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
-                    did_str
+                    r#"{{"id":"{did_str}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
                 );
                 Some(
                     serde_json::from_str::<Document>(&doc_json)
@@ -307,8 +306,7 @@ mod tests {
                 // Return a stub document with 0 verification methods
                 // (built-in KeyResolver returns 2 for Ed25519)
                 let doc_json = format!(
-                    r#"{{"id":"{}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
-                    did_str
+                    r#"{{"id":"{did_str}","verificationMethod":[],"authentication":[],"assertionMethod":[],"keyAgreement":[],"capabilityInvocation":[],"capabilityDelegation":[],"service":[]}}"#,
                 );
                 Some(
                     serde_json::from_str::<Document>(&doc_json)

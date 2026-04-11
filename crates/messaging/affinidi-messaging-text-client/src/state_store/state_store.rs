@@ -109,7 +109,7 @@ impl StateStore {
                 message_received = inbound_message_channel.recv() => {
                     match message_received {
                         Ok(WebSocketResponses::MessageReceived(message, meta)) => {
-                            handle_message(&atm, &mut state, &*message, &*meta).await;
+                            handle_message(&atm, &mut state, &message, &meta).await;
                         },
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             // Ignore packed messages

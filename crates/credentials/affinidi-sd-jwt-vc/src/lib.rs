@@ -76,6 +76,7 @@ impl std::fmt::Display for SdJwtVc {
 /// - `iss` — issuer
 /// - `iat` — issued at
 /// - `cnf` — confirmation key (if present)
+#[allow(clippy::too_many_arguments)]
 pub fn issue(
     vct: &str,
     issuer: &str,
@@ -138,12 +139,12 @@ fn validate_frame_no_protected_claims(frame: &Value) -> error::Result<()> {
 
     if let Some(sd_array) = frame.get("_sd").and_then(|v| v.as_array()) {
         for item in sd_array {
-            if let Some(name) = item.as_str() {
-                if PROTECTED_CLAIMS.contains(&name) {
-                    return Err(SdJwtVcError::InvalidVct(format!(
-                        "\"{name}\" is a protected claim and must not be selectively disclosed"
-                    )));
-                }
+            if let Some(name) = item.as_str()
+                && PROTECTED_CLAIMS.contains(&name)
+            {
+                return Err(SdJwtVcError::InvalidVct(format!(
+                    "\"{name}\" is a protected claim and must not be selectively disclosed"
+                )));
             }
         }
     }
@@ -169,17 +170,17 @@ pub fn verify_temporal(payload: &Value, now_unix: u64) -> error::Result<()> {
     }
 
     // exp: if present, must be in the future
-    if let Some(exp) = payload.get("exp").and_then(|v| v.as_u64()) {
-        if now_unix > exp {
-            return Err(SdJwtVcError::Expired);
-        }
+    if let Some(exp) = payload.get("exp").and_then(|v| v.as_u64())
+        && now_unix > exp
+    {
+        return Err(SdJwtVcError::Expired);
     }
 
     // nbf: if present, must be in the past
-    if let Some(nbf) = payload.get("nbf").and_then(|v| v.as_u64()) {
-        if now_unix < nbf {
-            return Err(SdJwtVcError::NotYetValid);
-        }
+    if let Some(nbf) = payload.get("nbf").and_then(|v| v.as_u64())
+        && now_unix < nbf
+    {
+        return Err(SdJwtVcError::NotYetValid);
     }
 
     Ok(())

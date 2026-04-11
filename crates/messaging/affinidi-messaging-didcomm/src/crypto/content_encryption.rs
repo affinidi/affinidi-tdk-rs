@@ -111,9 +111,9 @@ pub fn decrypt(
     // AES-256-CBC decrypt
     let enc_key_arr: [u8; 32] = enc_key.try_into().unwrap();
     let decryptor = Aes256CbcDec::new(&enc_key_arr.into(), iv.into());
-    let mut buf = ciphertext.to_vec();
+    let buf = ciphertext.to_vec();
     let decrypted = decryptor
-        .decrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&mut buf)
+        .decrypt_padded_vec_mut::<cbc::cipher::block_padding::NoPadding>(&buf)
         .map_err(|e| DIDCommError::ContentEncryption(format!("AES-CBC decrypt failed: {e}")))?;
 
     // Remove PKCS7 padding

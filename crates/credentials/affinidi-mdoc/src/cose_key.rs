@@ -247,15 +247,15 @@ impl CoseKey {
         }
 
         // Validate private key size if present
-        if let Some(ref d) = self.d {
-            if d.len() != expected {
-                return Err(MdocError::Cose(format!(
-                    "private key must be {} bytes for {:?}, got {}",
-                    expected,
-                    self.crv,
-                    d.len()
-                )));
-            }
+        if let Some(ref d) = self.d
+            && d.len() != expected
+        {
+            return Err(MdocError::Cose(format!(
+                "private key must be {} bytes for {:?}, got {}",
+                expected,
+                self.crv,
+                d.len()
+            )));
         }
 
         // Validate kty matches crv
@@ -357,13 +357,14 @@ impl CoseKey {
 
         let get_int = |label: i64| -> Option<i128> {
             entries.iter().find_map(|(k, v)| {
-                if let ciborium::Value::Integer(ki) = k {
-                    let ki_val: i128 = (*ki).into();
-                    if ki_val == label as i128 {
-                        if let ciborium::Value::Integer(vi) = v {
-                            return Some((*vi).into());
-                        }
+                if let ciborium::Value::Integer(ki) = k
+                    && {
+                        let ki_val: i128 = (*ki).into();
+                        ki_val == label as i128
                     }
+                    && let ciborium::Value::Integer(vi) = v
+                {
+                    return Some((*vi).into());
                 }
                 None
             })
@@ -371,13 +372,14 @@ impl CoseKey {
 
         let get_bytes = |label: i64| -> Option<Vec<u8>> {
             entries.iter().find_map(|(k, v)| {
-                if let ciborium::Value::Integer(ki) = k {
-                    let ki_val: i128 = (*ki).into();
-                    if ki_val == label as i128 {
-                        if let ciborium::Value::Bytes(b) = v {
-                            return Some(b.clone());
-                        }
+                if let ciborium::Value::Integer(ki) = k
+                    && {
+                        let ki_val: i128 = (*ki).into();
+                        ki_val == label as i128
                     }
+                    && let ciborium::Value::Bytes(b) = v
+                {
+                    return Some(b.clone());
                 }
                 None
             })
@@ -421,25 +423,26 @@ impl CoseKey {
 
         // Parse key_ops (4) — optional
         let key_ops = entries.iter().find_map(|(k, v)| {
-            if let ciborium::Value::Integer(ki) = k {
-                let ki_val: i128 = (*ki).into();
-                if ki_val == 4 {
-                    if let ciborium::Value::Array(arr) = v {
-                        let ops: Vec<KeyOp> = arr
-                            .iter()
-                            .filter_map(|item| {
-                                if let ciborium::Value::Integer(vi) = item {
-                                    let val: i128 = (*vi).into();
-                                    KeyOp::from_i64(val as i64)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        if !ops.is_empty() {
-                            return Some(ops);
+            if let ciborium::Value::Integer(ki) = k
+                && {
+                    let ki_val: i128 = (*ki).into();
+                    ki_val == 4
+                }
+                && let ciborium::Value::Array(arr) = v
+            {
+                let ops: Vec<KeyOp> = arr
+                    .iter()
+                    .filter_map(|item| {
+                        if let ciborium::Value::Integer(vi) = item {
+                            let val: i128 = (*vi).into();
+                            KeyOp::from_i64(val as i64)
+                        } else {
+                            None
                         }
-                    }
+                    })
+                    .collect();
+                if !ops.is_empty() {
+                    return Some(ops);
                 }
             }
             None

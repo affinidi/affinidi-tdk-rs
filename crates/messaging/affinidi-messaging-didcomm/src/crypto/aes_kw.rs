@@ -14,7 +14,7 @@ const IV: u64 = 0xA6A6A6A6A6A6A6A6;
 /// Input key must be a multiple of 8 bytes. Output is input_len + 8 bytes.
 pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, DIDCommError> {
     let n = plaintext_key.len();
-    if n % 8 != 0 || n < 16 {
+    if !n.is_multiple_of(8) || n < 16 {
         return Err(DIDCommError::KeyWrap(
             "key to wrap must be >= 16 bytes and multiple of 8".into(),
         ));
@@ -32,11 +32,11 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, DIDCommErro
 
     // 6 * n rounds
     for j in 0..6u64 {
-        for i in 0..n_blocks {
+        for (i, ri) in r.iter_mut().enumerate().take(n_blocks) {
             // B = AES(K, A || R[i])
             let mut block = [0u8; 16];
             block[..8].copy_from_slice(&a.to_be_bytes());
-            block[8..].copy_from_slice(&r[i].to_be_bytes());
+            block[8..].copy_from_slice(&ri.to_be_bytes());
 
             let b = aes::Block::from_mut_slice(&mut block);
             cipher.encrypt_block(b);
@@ -44,7 +44,7 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, DIDCommErro
             // A = MSB(64, B) XOR t where t = (n*j)+i+1
             let t = (n_blocks as u64) * j + (i as u64) + 1;
             a = u64::from_be_bytes(block[..8].try_into().unwrap()) ^ t;
-            r[i] = u64::from_be_bytes(block[8..].try_into().unwrap());
+            *ri = u64::from_be_bytes(block[8..].try_into().unwrap());
         }
     }
 
@@ -63,7 +63,7 @@ pub fn wrap(kek: &[u8; 32], plaintext_key: &[u8]) -> Result<Vec<u8>, DIDCommErro
 /// Input must be wrapped_len bytes (plaintext_len + 8). Returns the unwrapped key.
 pub fn unwrap(kek: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>, DIDCommError> {
     let total = ciphertext.len();
-    if total % 8 != 0 || total < 24 {
+    if !total.is_multiple_of(8) || total < 24 {
         return Err(DIDCommError::KeyWrap(
             "wrapped key must be >= 24 bytes and multiple of 8".into(),
         ));

@@ -353,7 +353,7 @@ impl ForwardingProcessor {
     }
 
     fn calculate_backoff(&self, consecutive_failures: u32) -> Duration {
-        let base = self.config.initial_backoff_ms as u64;
+        let base = self.config.initial_backoff_ms;
         let max = self.config.max_backoff_ms;
         let backoff = base.saturating_mul(2u64.saturating_pow(consecutive_failures.min(10)));
         Duration::from_millis(backoff.min(max))

@@ -235,9 +235,9 @@ fn rfc9901_data_type_coverage() {
     assert_eq!(parsed.claim_value, json!(42));
 
     // float
-    let d = Disclosure::new_claim("test_float", json!(3.14), &hasher).unwrap();
+    let d = Disclosure::new_claim("test_float", json!(3.15), &hasher).unwrap();
     let parsed = Disclosure::parse(&d.serialized, &hasher).unwrap();
-    assert_eq!(parsed.claim_value, json!(3.14));
+    assert_eq!(parsed.claim_value, json!(3.15));
 
     // string
     let d = Disclosure::new_claim("test_str", json!("foo"), &hasher).unwrap();

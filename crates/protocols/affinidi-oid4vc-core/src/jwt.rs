@@ -175,12 +175,12 @@ pub mod test_utils {
             }
 
             let inner = Sha256::new()
-                .chain_update(&ipad)
+                .chain_update(ipad)
                 .chain_update(data)
                 .finalize();
             Sha256::new()
-                .chain_update(&opad)
-                .chain_update(&inner)
+                .chain_update(opad)
+                .chain_update(inner)
                 .finalize()
                 .to_vec()
         }

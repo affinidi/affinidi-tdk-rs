@@ -296,6 +296,85 @@ impl PeerServiceEndpointLong {
 // Service Encoding/Decoding
 // ============================================================================
 
+impl PeerService {
+    /// Encode this service for inclusion in a did:peer string
+    pub fn encode(&self) -> Result<String, PeerError> {
+        let json = serde_json::to_string(self).map_err(|e| {
+            PeerError::ServiceSyntaxError(format!("Failed to serialize service: {e}"))
+        })?;
+        Ok(format!(
+            "S{}",
+            BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes())
+        ))
+    }
+
+    /// Decode a service from a did:peer encoded string (including S prefix)
+    pub fn decode(encoded: &str) -> Result<Self, PeerError> {
+        let encoded = encoded.strip_prefix('S').unwrap_or(encoded);
+        let bytes = BASE64_URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|e| PeerError::ServiceSyntaxError(format!("Base64 decode failed: {e}")))?;
+
+        serde_json::from_slice(&bytes)
+            .map_err(|e| PeerError::ServiceSyntaxError(format!("JSON parse failed: {e}")))
+    }
+
+    /// Convert to standard DID Document Service format
+    pub fn to_did_service(
+        &self,
+        did: &str,
+        index: u32,
+    ) -> Result<crate::service::Service, PeerError> {
+        use std::str::FromStr;
+        use url::Url;
+
+        // Build service ID
+        let id_fragment = if let Some(id) = &self.id {
+            id.clone()
+        } else if index == 0 {
+            "#service".to_string()
+        } else {
+            format!("#service-{index}")
+        };
+
+        let id = Url::from_str(&format!("{did}{id_fragment}"))
+            .map_err(|e| PeerError::ServiceSyntaxError(format!("Invalid service ID: {e}")))?;
+
+        // Convert endpoint to standard format
+        let service_endpoint = match &self.endpoint {
+            PeerServiceEndpoint::Uri(uri) => {
+                let url = Url::from_str(uri)
+                    .map_err(|e| PeerError::ServiceSyntaxError(format!("Invalid URI: {e}")))?;
+                crate::service::Endpoint::Url(url)
+            }
+            PeerServiceEndpoint::Short(endpoints) => {
+                let value = match endpoints {
+                    OneOrMany::One(ep) => serde_json::to_value(ep.to_long())
+                        .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?,
+                    OneOrMany::Many(eps) => {
+                        let long: Vec<_> = eps.iter().map(|e| e.to_long()).collect();
+                        serde_json::to_value(long)
+                            .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?
+                    }
+                };
+                crate::service::Endpoint::Map(value)
+            }
+            PeerServiceEndpoint::Long(endpoints) => {
+                let value = serde_json::to_value(endpoints)
+                    .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?;
+                crate::service::Endpoint::Map(value)
+            }
+        };
+
+        Ok(crate::service::Service {
+            id: Some(id),
+            type_: vec!["DIDCommMessaging".to_string()],
+            service_endpoint,
+            property_set: HashMap::new(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,84 +645,5 @@ mod tests {
             did_svc.service_endpoint,
             crate::service::Endpoint::Map(_)
         ));
-    }
-}
-
-impl PeerService {
-    /// Encode this service for inclusion in a did:peer string
-    pub fn encode(&self) -> Result<String, PeerError> {
-        let json = serde_json::to_string(self).map_err(|e| {
-            PeerError::ServiceSyntaxError(format!("Failed to serialize service: {e}"))
-        })?;
-        Ok(format!(
-            "S{}",
-            BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes())
-        ))
-    }
-
-    /// Decode a service from a did:peer encoded string (including S prefix)
-    pub fn decode(encoded: &str) -> Result<Self, PeerError> {
-        let encoded = encoded.strip_prefix('S').unwrap_or(encoded);
-        let bytes = BASE64_URL_SAFE_NO_PAD
-            .decode(encoded)
-            .map_err(|e| PeerError::ServiceSyntaxError(format!("Base64 decode failed: {e}")))?;
-
-        serde_json::from_slice(&bytes)
-            .map_err(|e| PeerError::ServiceSyntaxError(format!("JSON parse failed: {e}")))
-    }
-
-    /// Convert to standard DID Document Service format
-    pub fn to_did_service(
-        &self,
-        did: &str,
-        index: u32,
-    ) -> Result<crate::service::Service, PeerError> {
-        use std::str::FromStr;
-        use url::Url;
-
-        // Build service ID
-        let id_fragment = if let Some(id) = &self.id {
-            id.clone()
-        } else if index == 0 {
-            "#service".to_string()
-        } else {
-            format!("#service-{index}")
-        };
-
-        let id = Url::from_str(&format!("{did}{id_fragment}"))
-            .map_err(|e| PeerError::ServiceSyntaxError(format!("Invalid service ID: {e}")))?;
-
-        // Convert endpoint to standard format
-        let service_endpoint = match &self.endpoint {
-            PeerServiceEndpoint::Uri(uri) => {
-                let url = Url::from_str(uri)
-                    .map_err(|e| PeerError::ServiceSyntaxError(format!("Invalid URI: {e}")))?;
-                crate::service::Endpoint::Url(url)
-            }
-            PeerServiceEndpoint::Short(endpoints) => {
-                let value = match endpoints {
-                    OneOrMany::One(ep) => serde_json::to_value(ep.to_long())
-                        .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?,
-                    OneOrMany::Many(eps) => {
-                        let long: Vec<_> = eps.iter().map(|e| e.to_long()).collect();
-                        serde_json::to_value(long)
-                            .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?
-                    }
-                };
-                crate::service::Endpoint::Map(value)
-            }
-            PeerServiceEndpoint::Long(endpoints) => {
-                let value = serde_json::to_value(endpoints)
-                    .map_err(|e| PeerError::ServiceSyntaxError(e.to_string()))?;
-                crate::service::Endpoint::Map(value)
-            }
-        };
-
-        Ok(crate::service::Service {
-            id: Some(id),
-            type_: vec!["DIDCommMessaging".to_string()],
-            service_endpoint,
-            property_set: HashMap::new(),
-        })
     }
 }

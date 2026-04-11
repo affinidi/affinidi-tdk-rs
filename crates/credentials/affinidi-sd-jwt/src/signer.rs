@@ -79,13 +79,13 @@ pub mod test_utils {
             }
 
             let mut inner_hasher = Sha256::new();
-            inner_hasher.update(&ipad);
+            inner_hasher.update(ipad);
             inner_hasher.update(data);
             let inner_hash = inner_hasher.finalize();
 
             let mut outer_hasher = Sha256::new();
-            outer_hasher.update(&opad);
-            outer_hasher.update(&inner_hash);
+            outer_hasher.update(opad);
+            outer_hasher.update(inner_hash);
             outer_hasher.finalize().to_vec()
         }
     }

@@ -232,16 +232,16 @@ impl DIDCommAgent {
                 if let Some(kid) = recipient["header"]["kid"].as_str() {
                     // Try each local identity to see if the KID matches
                     for local_did in self.store.local_dids() {
-                        if let Ok(local) = self.store.get_local(local_did) {
-                            if local.key_agreement_kid == kid {
-                                return unpack::unpack(
-                                    input,
-                                    Some(kid),
-                                    Some(&local.key_agreement_private),
-                                    sender_public,
-                                    None,
-                                );
-                            }
+                        if let Ok(local) = self.store.get_local(local_did)
+                            && local.key_agreement_kid == kid
+                        {
+                            return unpack::unpack(
+                                input,
+                                Some(kid),
+                                Some(&local.key_agreement_private),
+                                sender_public,
+                                None,
+                            );
                         }
                     }
                 }

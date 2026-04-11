@@ -90,7 +90,6 @@ affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
 affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
-vta-sdk = { path = "../../fpp/verifiable-trust-infrastructure/vta-sdk" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"

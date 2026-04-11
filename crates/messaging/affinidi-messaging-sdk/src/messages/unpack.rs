@@ -117,22 +117,22 @@ impl SharedState {
         let mut recipient_private: Option<PrivateKeyAgreement> = None;
 
         for recipient in recipients {
-            if let Some(kid) = recipient["header"]["kid"].as_str() {
-                if let Some(secret) = self.tdk_common.secrets_resolver.get_secret(kid).await {
-                    let curve = match secret.get_key_type() {
-                        affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
-                        affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
-                        affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
-                        _ => continue,
-                    };
-                    match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
-                        Ok(pk) => {
-                            recipient_kid_str = kid.to_string();
-                            recipient_private = Some(pk);
-                            break;
-                        }
-                        Err(_) => continue,
+            if let Some(kid) = recipient["header"]["kid"].as_str()
+                && let Some(secret) = self.tdk_common.secrets_resolver.get_secret(kid).await
+            {
+                let curve = match secret.get_key_type() {
+                    affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
+                    affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
+                    affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
+                    _ => continue,
+                };
+                match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
+                    Ok(pk) => {
+                        recipient_kid_str = kid.to_string();
+                        recipient_private = Some(pk);
+                        break;
                     }
+                    Err(_) => continue,
                 }
             }
         }

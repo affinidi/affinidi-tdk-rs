@@ -276,29 +276,29 @@ impl DeviceEngagement {
                 ciborium::Value::Array(methods) => {
                     let mut parsed = Vec::new();
                     for m in methods {
-                        if let ciborium::Value::Array(ma) = m {
-                            if ma.len() >= 2 {
-                                let transport_type = match &ma[0] {
-                                    ciborium::Value::Integer(i) => {
-                                        let n: i128 = (*i).into();
-                                        n as u32
-                                    }
-                                    _ => continue,
-                                };
-                                let ver = match &ma[1] {
-                                    ciborium::Value::Integer(i) => {
-                                        let n: i128 = (*i).into();
-                                        n as u32
-                                    }
-                                    _ => continue,
-                                };
-                                let retrieval_options = ma.get(2).cloned();
-                                parsed.push(DeviceRetrievalMethod {
-                                    transport_type,
-                                    version: ver,
-                                    retrieval_options,
-                                });
-                            }
+                        if let ciborium::Value::Array(ma) = m
+                            && ma.len() >= 2
+                        {
+                            let transport_type = match &ma[0] {
+                                ciborium::Value::Integer(i) => {
+                                    let n: i128 = (*i).into();
+                                    n as u32
+                                }
+                                _ => continue,
+                            };
+                            let ver = match &ma[1] {
+                                ciborium::Value::Integer(i) => {
+                                    let n: i128 = (*i).into();
+                                    n as u32
+                                }
+                                _ => continue,
+                            };
+                            let retrieval_options = ma.get(2).cloned();
+                            parsed.push(DeviceRetrievalMethod {
+                                transport_type,
+                                version: ver,
+                                retrieval_options,
+                            });
                         }
                     }
                     Some(parsed)

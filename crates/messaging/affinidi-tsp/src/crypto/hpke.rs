@@ -184,11 +184,11 @@ fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> Result<[u8; N_SECRET], T
     let kem_suite_id = KEM_SUITE_ID;
 
     // prk = LabeledExtract("", "shared_secret", dh)
-    let prk = labeled_extract(&kem_suite_id, &[], b"shared_secret", dh)?;
+    let prk = labeled_extract(kem_suite_id, &[], b"shared_secret", dh)?;
 
     // shared_secret = LabeledExpand(prk, "ss", kem_context, Nsecret)
     let mut shared_secret = [0u8; N_SECRET];
-    labeled_expand(&kem_suite_id, &prk, b"ss", kem_context, &mut shared_secret)?;
+    labeled_expand(kem_suite_id, &prk, b"ss", kem_context, &mut shared_secret)?;
 
     Ok(shared_secret)
 }
@@ -205,10 +205,10 @@ fn key_schedule(
     let psk_id = b"";
 
     // psk_id_hash = LabeledExtract("", "psk_id_hash", psk_id)
-    let psk_id_hash = labeled_extract(&suite_id, &[], b"psk_id_hash", psk_id)?;
+    let psk_id_hash = labeled_extract(suite_id, &[], b"psk_id_hash", psk_id)?;
 
     // info_hash = LabeledExtract("", "info_hash", info)
-    let info_hash = labeled_extract(&suite_id, &[], b"info_hash", info)?;
+    let info_hash = labeled_extract(suite_id, &[], b"info_hash", info)?;
 
     // ks_context = mode || psk_id_hash || info_hash (1 + 32 + 32 = 65 bytes, fixed size)
     let mut ks_context = [0u8; 1 + N_H + N_H];
@@ -217,16 +217,16 @@ fn key_schedule(
     ks_context[1 + N_H..].copy_from_slice(&info_hash);
 
     // secret = LabeledExtract(shared_secret, "secret", psk)
-    let secret = labeled_extract(&suite_id, shared_secret, b"secret", psk)?;
+    let secret = labeled_extract(suite_id, shared_secret, b"secret", psk)?;
 
     // key = LabeledExpand(secret, "key", ks_context, Nk)
     let mut key = [0u8; N_K];
-    labeled_expand(&suite_id, &secret, b"key", &ks_context, &mut key)?;
+    labeled_expand(suite_id, &secret, b"key", &ks_context, &mut key)?;
 
     // base_nonce = LabeledExpand(secret, "base_nonce", ks_context, Nn)
     let mut base_nonce = [0u8; N_N];
     labeled_expand(
-        &suite_id,
+        suite_id,
         &secret,
         b"base_nonce",
         &ks_context,
