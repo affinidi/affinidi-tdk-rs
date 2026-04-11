@@ -237,10 +237,10 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                             },
                             WebSocketCommands::Close => {
                                 #[cfg(feature = "didcomm")]
-                                if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await {
-                                    if let Err(e) = socket.send(Message::Text(msg.into())).await {
-                                        warn!("Failed to send message to WebSocket client: {e}");
-                                    }
+                                if let Ok(msg) =  _package_problem_report(&state, &session, None, _generate_duplicate_connection_problem_report()).await
+                                    && let Err(e) = socket.send(Message::Text(msg.into())).await
+                                {
+                                    warn!("Failed to send message to WebSocket client: {e}");
                                 }
                                 debug!("Streaming task requested close (duplicate connection)");
                                 already_deregistered_flag = true;

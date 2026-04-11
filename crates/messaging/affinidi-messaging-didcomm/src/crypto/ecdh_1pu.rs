@@ -26,6 +26,7 @@ use crate::error::DIDCommError;
 /// * `apv` - PartyVInfo (raw bytes, SHA-256 of sorted recipient kids)
 /// * `cc_tag` - Content encryption authentication tag (for tag-in-KDF)
 /// * `key_len` - Output key length in bits (256 for A256KW)
+#[allow(clippy::too_many_arguments)]
 pub fn derive_key_1pu(
     ephemeral: &PrivateKeyAgreement,
     sender_private: &PrivateKeyAgreement,
@@ -52,6 +53,7 @@ pub fn derive_key_1pu(
 }
 
 /// Derive key wrapping key on the recipient side.
+#[allow(clippy::too_many_arguments)]
 pub fn derive_key_1pu_recipient(
     recipient_private: &PrivateKeyAgreement,
     sender_public: &PublicKeyAgreement,

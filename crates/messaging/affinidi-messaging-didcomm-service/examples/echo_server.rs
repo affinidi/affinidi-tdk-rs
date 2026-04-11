@@ -34,9 +34,7 @@ async fn custom_middleware(
     next: Next,
 ) -> Result<Option<DIDCommResponse>, DIDCommServiceError> {
     // custom action
-    let result = next.run(ctx, message, meta).await;
-    // custom action
-    result
+    next.run(ctx, message, meta).await
 }
 
 async fn echo_handler(

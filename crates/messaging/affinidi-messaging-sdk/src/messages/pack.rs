@@ -87,7 +87,7 @@ impl SharedState {
                 let sender_secret = self
                     .tdk_common
                     .secrets_resolver
-                    .get_secret(&sender_kid.to_string())
+                    .get_secret(sender_kid.as_ref())
                     .await
                     .ok_or_else(|| {
                         ATMError::SecretsError(format!("no secret found for {sender_kid}"))

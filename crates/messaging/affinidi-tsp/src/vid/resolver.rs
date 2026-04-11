@@ -107,10 +107,10 @@ impl VidResolver for DelegatingVidResolver {
         }
 
         // For DIDs, delegate to the DID resolver if available
-        if is_did(vid) {
-            if let Some(did_resolver) = &self.did_resolver {
-                return did_resolver.resolve(vid);
-            }
+        if is_did(vid)
+            && let Some(did_resolver) = &self.did_resolver
+        {
+            return did_resolver.resolve(vid);
         }
 
         Err(TspError::VidNotFound(vid.to_string()))

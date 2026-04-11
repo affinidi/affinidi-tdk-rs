@@ -147,6 +147,7 @@ impl MediatorError {
     /// The `comment` is also used as the log message. For cases where the log
     /// message should differ (e.g., when comment has `{1}` placeholders but the
     /// log should have interpolated values), use [`problem_with_log`](Self::problem_with_log).
+    #[allow(clippy::too_many_arguments)]
     pub fn problem(
         code: u16,
         session_id: impl Into<String>,
@@ -179,6 +180,7 @@ impl MediatorError {
     ///
     /// Use this when the Problem Report comment has `{1}`, `{2}` placeholders
     /// but the log message should contain the actual interpolated values.
+    #[allow(clippy::too_many_arguments)]
     pub fn problem_with_log(
         code: u16,
         session_id: impl Into<String>,
@@ -259,9 +261,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "ErrorHandlingError".to_string(),
                     message: "Internal server error".to_string(),
                 }
@@ -277,9 +279,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "InternalError".to_string(),
                     message: "Internal server error".to_string(),
                 }
@@ -296,9 +298,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "BadRequest: ParseError".to_string(),
                     message: format!("Couldn't parse ({what})"),
                 }
@@ -307,8 +309,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::FORBIDDEN.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "Forbidden: PermissionError".to_string(),
                     message: msg.to_string(),
                 };
@@ -319,8 +321,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "BadRequest: RequestDataError".to_string(),
                     message: format!("Bad Request: ({msg})"),
                 };
@@ -331,8 +333,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "BadRequest: ServiceLimitError".to_string(),
                     message: msg.to_string(),
                 };
@@ -343,8 +345,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::UNAUTHORIZED.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "Unauthorized".to_string(),
                     message: "Unauthorized access".to_string(),
                 };
@@ -370,9 +372,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "DIDError".to_string(),
                     message: format!("did({did}) Error: invalid or unresolvable DID"),
                 }
@@ -388,9 +390,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "ConfigError".to_string(),
                     message: "Service configuration error".to_string(),
                 }
@@ -406,9 +408,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "DatabaseError".to_string(),
                     message: "Service temporarily unavailable".to_string(),
                 }
@@ -424,9 +426,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "MessageUnpackError".to_string(),
                     message: "Failed to unpack message".to_string(),
                 }
@@ -435,8 +437,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::UNPROCESSABLE_ENTITY.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "MessageExpired".to_string(),
                     message: format!("Message expired: expiry({expired}) now({now})"),
                 };
@@ -454,9 +456,9 @@ impl IntoResponse for AppError {
                 );
                 ErrorResponse {
                     http_code: StatusCode::BAD_REQUEST.as_u16(),
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "MessagePackError".to_string(),
                     message: "Failed to pack message".to_string(),
                 }
@@ -465,8 +467,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::NOT_IMPLEMENTED.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "NotImplemented".to_string(),
                     message,
                 };
@@ -477,8 +479,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "SessionError".to_string(),
                     message,
                 };
@@ -489,8 +491,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "AnonymousMessageError".to_string(),
                     message,
                 };
@@ -501,8 +503,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::NOT_ACCEPTABLE.as_u16(),
                     session_id: session_id.to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "ForwardMessageError".to_string(),
                     message,
                 };
@@ -520,8 +522,8 @@ impl IntoResponse for AppError {
                 ErrorResponse {
                     http_code: StatusCode::UNAUTHORIZED.as_u16(),
                     session_id: "NO-SESSION".to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "AuthenticationError".to_string(),
                     message: "Authentication failed".to_string(),
                 }
@@ -530,8 +532,8 @@ impl IntoResponse for AppError {
                 let response = ErrorResponse {
                     http_code: StatusCode::UNAUTHORIZED.as_u16(),
                     session_id: "NO-SESSION".to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "ACLDenied".to_string(),
                     message,
                 };
@@ -550,8 +552,8 @@ impl IntoResponse for AppError {
                 ErrorResponse {
                     http_code: StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
                     session_id: "NO-SESSION".to_string(),
-                    request_id: request_id,
-                    error_code: error_code,
+                    request_id,
+                    error_code,
                     error_code_str: "ProcessorError".to_string(),
                     message: "Internal server error".to_string(),
                 }
@@ -566,10 +568,10 @@ impl IntoResponse for AppError {
             ) => {
                 event!(Level::WARN, "{}{}", log_text, ctx_log);
                 ErrorResponse {
-                    http_code: http_code,
-                    session_id: session_id,
-                    request_id: request_id,
-                    error_code: error_code,
+                    http_code,
+                    session_id,
+                    request_id,
+                    error_code,
                     error_code_str: "DIDCommProblemReport".to_string(),
                     message: serde_json::to_string(&problem_report)
                         .unwrap_or_else(|_| "Failed to serialize Problem Report".to_string()),

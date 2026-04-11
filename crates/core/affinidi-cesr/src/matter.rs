@@ -224,7 +224,7 @@ impl Matter {
 
             let encoded = codec::b64_encode(&padded);
             let num_groups = encoded.len() / 4;
-            if encoded.len() % 4 != 0 {
+            if !encoded.len().is_multiple_of(4) {
                 return Err(CesrError::Conversion(
                     "padded raw bytes did not produce aligned base64".into(),
                 ));

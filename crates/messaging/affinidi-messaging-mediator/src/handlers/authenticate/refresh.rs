@@ -322,23 +322,23 @@ pub async fn authentication_refresh(
                 )
             })?;
 
-        if let Some(stored) = stored_hash {
-            if !bool::from(stored.as_bytes().ct_eq(incoming_hash.as_bytes())) {
-                metrics::counter!(crate::common::metrics::names::AUTH_FAILURES_TOTAL, "reason" => "refresh_token_reuse").increment(1);
-                return Err(MediatorError::problem_with_log(
-                    38,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authentication.session.refresh_token.reuse",
-                    "Refresh token has already been used (possible token replay)",
-                    vec![],
-                    StatusCode::UNAUTHORIZED,
-                    "Refresh token has already been used (possible token replay)",
-                )
-                .into());
-            }
+        if let Some(stored) = stored_hash
+            && !bool::from(stored.as_bytes().ct_eq(incoming_hash.as_bytes()))
+        {
+            metrics::counter!(crate::common::metrics::names::AUTH_FAILURES_TOTAL, "reason" => "refresh_token_reuse").increment(1);
+            return Err(MediatorError::problem_with_log(
+                38,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.session.refresh_token.reuse",
+                "Refresh token has already been used (possible token replay)",
+                vec![],
+                StatusCode::UNAUTHORIZED,
+                "Refresh token has already been used (possible token replay)",
+            )
+            .into());
         }
 
         // Generate a new access token

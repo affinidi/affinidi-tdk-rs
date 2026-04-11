@@ -92,7 +92,7 @@ impl SubjectSyntaxType {
     pub const JWK_THUMBPRINT_URN: &'static str = "urn:ietf:params:oauth:jwk-thumbprint";
 
     /// Parse from a string.
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         if s == Self::JWK_THUMBPRINT_URN {
             Self::JwkThumbprint
         } else {
@@ -319,11 +319,11 @@ mod tests {
 
     #[test]
     fn subject_syntax_type_parsing() {
-        let jwk = SubjectSyntaxType::from_str("urn:ietf:params:oauth:jwk-thumbprint");
+        let jwk = SubjectSyntaxType::parse("urn:ietf:params:oauth:jwk-thumbprint");
         assert_eq!(jwk, SubjectSyntaxType::JwkThumbprint);
         assert!(!jwk.is_did());
 
-        let did = SubjectSyntaxType::from_str("did:key");
+        let did = SubjectSyntaxType::parse("did:key");
         assert!(did.is_did());
         assert_eq!(did.as_str(), "did:key");
     }

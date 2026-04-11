@@ -10,9 +10,10 @@
  */
 
 /// A BBS ciphersuite configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Ciphersuite {
     /// BLS12-381 with SHA-256 (XMD).
+    #[default]
     Bls12381Sha256,
     /// BLS12-381 with SHAKE-256 (XOF).
     Bls12381Shake256,
@@ -57,12 +58,6 @@ impl Ciphersuite {
     /// The signature byte length.
     pub fn signature_length(&self) -> usize {
         self.octet_point_length() + self.octet_scalar_length()
-    }
-}
-
-impl Default for Ciphersuite {
-    fn default() -> Self {
-        Self::Bls12381Sha256
     }
 }
 

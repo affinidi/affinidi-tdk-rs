@@ -18,9 +18,10 @@
 use serde::{Deserialize, Serialize};
 
 /// The state of a TSP relationship between two VIDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RelationshipState {
     /// No relationship exists.
+    #[default]
     None,
     /// We sent a Relationship Forming Invite, awaiting acceptance.
     Pending,
@@ -77,12 +78,6 @@ impl RelationshipState {
             // Invalid transition
             (state, event) => Err(InvalidTransition { state, event }),
         }
-    }
-}
-
-impl Default for RelationshipState {
-    fn default() -> Self {
-        RelationshipState::None
     }
 }
 

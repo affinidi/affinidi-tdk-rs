@@ -72,49 +72,38 @@ impl MetaEnvelope {
             }
 
             // Check protected header for sender info (authcrypt)
-            if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str()) {
-                if let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64) {
-                    if let Ok(header) =
-                        serde_json::from_slice::<serde_json::Value>(&protected_bytes)
-                    {
-                        // Check algorithm for authcrypt
-                        if let Some(alg) = header.get("alg").and_then(|a| a.as_str()) {
-                            if alg.contains("1PU") {
-                                authenticated = true;
-                                // Extract sender DID from skid
-                                if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
-                                    if let Some(hash_pos) = skid.find('#') {
-                                        from_did = Some(skid[..hash_pos].to_string());
-                                    } else {
-                                        from_did = Some(skid.to_string());
-                                    }
-                                }
-                            }
-                        }
+            if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str())
+                && let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64)
+                && let Ok(header) =
+                    serde_json::from_slice::<serde_json::Value>(&protected_bytes)
+                // Check algorithm for authcrypt
+                && let Some(alg) = header.get("alg").and_then(|a| a.as_str())
+                && alg.contains("1PU")
+            {
+                authenticated = true;
+                // Extract sender DID from skid
+                if let Some(skid) = header.get("skid").and_then(|s| s.as_str()) {
+                    if let Some(hash_pos) = skid.find('#') {
+                        from_did = Some(skid[..hash_pos].to_string());
+                    } else {
+                        from_did = Some(skid.to_string());
                     }
                 }
             }
 
             // If we couldn't get from_did from skid, try resolving via apu header
-            if from_did.is_none() && authenticated {
-                // Try apu (agreement party u-info) which sometimes contains the sender kid
-                if let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str()) {
-                    if let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64) {
-                        if let Ok(header) =
-                            serde_json::from_slice::<serde_json::Value>(&protected_bytes)
-                        {
-                            if let Some(apu) = header.get("apu").and_then(|a| a.as_str()) {
-                                if let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu) {
-                                    if let Ok(apu_str) = String::from_utf8(apu_bytes) {
-                                        if let Some(hash_pos) = apu_str.find('#') {
-                                            from_did = Some(apu_str[..hash_pos].to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            // Try apu (agreement party u-info) which sometimes contains the sender kid
+            if from_did.is_none()
+                && authenticated
+                && let Some(protected_b64) = value.get("protected").and_then(|p| p.as_str())
+                && let Ok(protected_bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected_b64)
+                && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&protected_bytes)
+                && let Some(apu) = header.get("apu").and_then(|a| a.as_str())
+                && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
+                && let Ok(apu_str) = String::from_utf8(apu_bytes)
+                && let Some(hash_pos) = apu_str.find('#')
+            {
+                from_did = Some(apu_str[..hash_pos].to_string());
             }
 
             Ok(MetaEnvelope {
@@ -222,22 +211,22 @@ async fn unpack_jwe<S: SecretsResolver>(
     let mut recipient_private: Option<PrivateKeyAgreement> = None;
 
     for recipient in recipients {
-        if let Some(kid) = recipient["header"]["kid"].as_str() {
-            if let Some(secret) = secrets_resolver.get_secret(kid).await {
-                let curve = match secret.get_key_type() {
-                    affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
-                    affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
-                    affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
-                    _ => continue,
-                };
-                match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
-                    Ok(pk) => {
-                        recipient_kid_str = kid.to_string();
-                        recipient_private = Some(pk);
-                        break;
-                    }
-                    Err(_) => continue,
+        if let Some(kid) = recipient["header"]["kid"].as_str()
+            && let Some(secret) = secrets_resolver.get_secret(kid).await
+        {
+            let curve = match secret.get_key_type() {
+                affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
+                affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
+                affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
+                _ => continue,
+            };
+            match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
+                Ok(pk) => {
+                    recipient_kid_str = kid.to_string();
+                    recipient_private = Some(pk);
+                    break;
                 }
+                Err(_) => continue,
             }
         }
     }

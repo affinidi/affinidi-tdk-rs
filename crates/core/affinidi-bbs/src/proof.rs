@@ -230,16 +230,16 @@ pub fn core_proof_verify(
         .ok_or_else(|| BbsError::InvalidProof("invalid D point".into()))?;
     offset += 48;
 
-    let e_hat = read_scalar(&proof_bytes, &mut offset)?;
-    let r1_hat = read_scalar(&proof_bytes, &mut offset)?;
-    let r3_hat = read_scalar(&proof_bytes, &mut offset)?;
+    let e_hat = read_scalar(proof_bytes, &mut offset)?;
+    let r1_hat = read_scalar(proof_bytes, &mut offset)?;
+    let r3_hat = read_scalar(proof_bytes, &mut offset)?;
 
     let mut m_hats = Vec::with_capacity(u);
     for _ in 0..u {
-        m_hats.push(read_scalar(&proof_bytes, &mut offset)?);
+        m_hats.push(read_scalar(proof_bytes, &mut offset)?);
     }
 
-    let challenge = read_scalar(&proof_bytes, &mut offset)?;
+    let challenge = read_scalar(proof_bytes, &mut offset)?;
 
     // 2. Convert disclosed messages to scalars
     let disclosed_scalars = messages_to_scalars(disclosed_messages, cs)?;
@@ -315,6 +315,7 @@ pub fn core_proof_verify(
 }
 
 /// Compute the Fiat-Shamir challenge.
+#[allow(clippy::too_many_arguments)]
 fn compute_challenge(
     abar: &G1Projective,
     bbar: &G1Projective,

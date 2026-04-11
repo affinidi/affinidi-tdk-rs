@@ -76,7 +76,7 @@ pub struct DeviceSigned {
 #[derive(Debug, Clone)]
 pub enum DeviceAuth {
     /// COSE_Sign1 with detached payload (DeviceAuthenticationBytes as external aad).
-    Signature(CoseSign1),
+    Signature(Box<CoseSign1>),
     /// COSE_Mac0 with detached payload (HMAC-SHA-256 over DeviceAuthenticationBytes).
     ///
     /// Per ISO 18013-5, the MAC key is derived from ECDH between the device key
@@ -178,7 +178,7 @@ impl DeviceSigned {
 
         Ok(DeviceSigned {
             namespaces_bytes,
-            device_auth: DeviceAuth::Signature(sign1),
+            device_auth: DeviceAuth::Signature(Box::new(sign1)),
         })
     }
 
