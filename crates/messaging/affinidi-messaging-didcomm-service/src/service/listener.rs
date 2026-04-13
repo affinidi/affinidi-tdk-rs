@@ -5,6 +5,7 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -34,12 +35,24 @@ pub(crate) fn convert_meta(
 
 const ATM_OPERATION_TIMEOUT_SECS: u64 = 10;
 
+/// Shared handle providing access to a listener's ATM connection and profile.
+///
+/// Published via a `watch` channel after the listener connects, allowing
+/// outbound messaging through the same mediator websocket.
+#[derive(Clone)]
+pub(crate) struct ConnectionHandle {
+    pub atm: ATM,
+    pub profile: Arc<ATMProfile>,
+}
+
 pub(crate) struct Listener {
     pub config: ListenerConfig,
     pub handler: Arc<dyn DIDCommHandler>,
     pub shutdown: CancellationToken,
     atm: Option<ATM>,
     profile: Option<Arc<ATMProfile>>,
+    /// Watch channel sender — updated after each successful connect().
+    pub(crate) connection_tx: watch::Sender<Option<ConnectionHandle>>,
 }
 
 impl Listener {
@@ -47,6 +60,7 @@ impl Listener {
         config: ListenerConfig,
         handler: Arc<dyn DIDCommHandler>,
         shutdown: CancellationToken,
+        connection_tx: watch::Sender<Option<ConnectionHandle>>,
     ) -> Self {
         Self {
             config,
@@ -54,6 +68,7 @@ impl Listener {
             shutdown,
             atm: None,
             profile: None,
+            connection_tx,
         }
     }
 
@@ -78,6 +93,8 @@ impl Listener {
         }
         self.profile = None;
         self.atm = None;
+        // Clear the connection handle so outbound callers get NotConnected
+        let _ = self.connection_tx.send(None);
 
         let shared_state = if let Some(tdk_config) = self.config.tdk_config.take() {
             Arc::new(TDKSharedState::new(tdk_config).await?)
@@ -113,8 +130,17 @@ impl Listener {
             }
         };
 
+        let conn_handle = ConnectionHandle {
+            atm: atm.clone(),
+            profile: profile_arc.clone(),
+        };
+
         self.atm = Some(atm);
         self.profile = Some(profile_arc);
+
+        // Publish the connection handle so outbound messaging can use it
+        let _ = self.connection_tx.send(Some(conn_handle));
+
         Ok(())
     }
 

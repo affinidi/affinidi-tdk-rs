@@ -24,6 +24,7 @@ affinidi-messaging-didcomm-service = "0.1"
 - **Graceful shutdown** -- in-flight message handlers are tracked via `JoinSet` and drained on shutdown; panicked tasks are detected and logged
 - **Built-in handlers** -- `trust_ping_handler` for trust-ping protocol, `ignore_handler` for silently dropping messages (e.g. `MESSAGE_PICKUP_STATUS_TYPE`)
 - **Fallback and error handling** -- `.fallback()` for unmatched message types, `.on_error()` with `ErrorHandler` trait for centralized error logging
+- **Outbound messaging** -- send proactive (unsolicited) DIDComm messages through an existing listener's mediator connection via `DIDCommService::send_message()`, avoiding duplicate websocket sessions
 - **Transport utilities** -- `build_response`, `send_response`, `build_problem_report`, `send_problem_report`
 - **Problem report protocol** -- `ProblemReport` struct with standard DIDComm error codes; `DIDCommResponse::problem_report()` for returning problem reports directly from handlers
 - **Message utilities** -- `get_thread_id`, `get_parent_thread_id`, `new_message_id`
