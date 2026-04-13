@@ -16,10 +16,12 @@ pub use handler::{
     HandlerContext, MESSAGE_PICKUP_STATUS_TYPE, TRUST_PING_TYPE, TRUST_PONG_TYPE, ignore_handler,
     trust_ping_handler,
 };
-pub use middleware::{MessagePolicy, MiddlewareHandler, Next, RequestLogging, middleware_fn};
+pub use middleware::{
+    MessagePolicy, MiddlewareHandler, MiddlewareResult, Next, RequestLogging, middleware_fn,
+};
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;
 pub use router::{MessageHandler, Router, handler_fn};
-pub use service::{DIDCommService, ListenerState, ListenerStatus};
+pub use service::{DIDCommService, ListenerEvent, ListenerState, ListenerStatus};
 pub use transport::{build_problem_report, build_response, send_problem_report, send_response};
 pub use utils::{get_parent_thread_id, get_thread_id, new_message_id};

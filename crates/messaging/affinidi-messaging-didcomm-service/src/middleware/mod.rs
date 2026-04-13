@@ -18,7 +18,8 @@ pub use policy::MessagePolicy;
 pub use request_logging::RequestLogging;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-type MiddlewareResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
+/// The return type shared by middleware handlers and route handlers.
+pub type MiddlewareResult = Result<Option<DIDCommResponse>, DIDCommServiceError>;
 
 pub struct Next {
     handler: Arc<dyn MessageHandler>,

@@ -80,6 +80,18 @@ pub enum DIDCommServiceError {
     #[error("Handler error: {0}")]
     Handler(String),
 
+    #[error("Message body has already been extracted by another argument")]
+    MessageAlreadyExtracted,
+
+    #[error("UnpackMetadata has already been extracted by another argument")]
+    MetadataAlreadyExtracted,
+
+    #[error("Extension not found: {0}")]
+    ExtensionNotFound(String),
+
+    #[error("Invalid route pattern '{pattern}': {reason}")]
+    InvalidRoutePattern { pattern: String, reason: String },
+
     #[error("Policy violation: {0}")]
     Policy(#[from] PolicyViolation),
 

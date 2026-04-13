@@ -13,6 +13,7 @@ use affinidi_messaging_didcomm_service::{
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_secrets_resolver::secrets::Secret;
 use affinidi_tdk_common::profiles::TDKProfile;
+use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -103,14 +104,21 @@ async fn fallback_handler(
 
 struct EchoErrorHandler;
 
+#[async_trait]
 impl ErrorHandler for EchoErrorHandler {
-    fn on_error(&self, ctx: &HandlerContext, error: &DIDCommServiceError) {
+    async fn on_error(
+        &self,
+        ctx: &HandlerContext,
+        error: &DIDCommServiceError,
+    ) -> Option<DIDCommResponse> {
         warn!(
             profile = %ctx.profile.inner.alias,
             message_id = %ctx.message_id,
             error = %error,
             "Echo server handler error"
         );
+        // Return None to silently drop — no problem report sent
+        None
     }
 }
 

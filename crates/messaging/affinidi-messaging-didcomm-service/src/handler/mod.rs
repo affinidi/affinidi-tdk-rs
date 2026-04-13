@@ -12,6 +12,7 @@ use affinidi_messaging_didcomm::{Message, UnpackMetadata};
 use async_trait::async_trait;
 
 use crate::error::DIDCommServiceError;
+use crate::problem_report::ServiceProblemReport;
 use crate::response::DIDCommResponse;
 
 /// Top-level handler for incoming DIDComm messages.
@@ -22,7 +23,7 @@ use crate::response::DIDCommResponse;
 ///
 /// The return type is `Result` (not plain `Option`) so that raw implementors
 /// keep `?` ergonomics and middleware can intercept errors.
-/// When used through [`Router`], handler errors are caught and forwarded to
+/// When used through [`crate::router::Router`], handler errors are caught and forwarded to
 /// the configured [`ErrorHandler`], so `Router::handle` always returns `Ok`.
 #[async_trait]
 pub trait DIDCommHandler: Send + Sync + 'static {
@@ -34,14 +35,30 @@ pub trait DIDCommHandler: Send + Sync + 'static {
     ) -> Result<Option<DIDCommResponse>, DIDCommServiceError>;
 }
 
+/// Handler invoked when a route handler returns an error.
+///
+/// Return `Some(response)` to send a reply (e.g., a problem report) back to the
+/// sender. Return `None` to silently drop the error.
+///
+/// The default implementation logs the error and returns a problem report.
+#[async_trait]
 pub trait ErrorHandler: Send + Sync + 'static {
-    fn on_error(&self, ctx: &HandlerContext, error: &DIDCommServiceError);
+    async fn on_error(
+        &self,
+        ctx: &HandlerContext,
+        error: &DIDCommServiceError,
+    ) -> Option<DIDCommResponse>;
 }
 
 pub struct DefaultErrorHandler;
 
+#[async_trait]
 impl ErrorHandler for DefaultErrorHandler {
-    fn on_error(&self, ctx: &HandlerContext, error: &DIDCommServiceError) {
+    async fn on_error(
+        &self,
+        ctx: &HandlerContext,
+        error: &DIDCommServiceError,
+    ) -> Option<DIDCommResponse> {
         tracing::warn!(
             profile = %ctx.profile.inner.alias,
             message_id = %ctx.message_id,
@@ -50,6 +67,10 @@ impl ErrorHandler for DefaultErrorHandler {
             error = %error,
             "Error handling message"
         );
+
+        Some(DIDCommResponse::problem_report(
+            crate::problem_report::ProblemReport::internal_error(error.to_string()),
+        ))
     }
 }
 

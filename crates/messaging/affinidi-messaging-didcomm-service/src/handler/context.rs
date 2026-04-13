@@ -4,9 +4,11 @@ use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 
 /// Per-message context passed to handlers and middleware.
 ///
+/// Cloning is cheap — all fields are either small strings or `Arc`-wrapped.
 /// `sender_did` is `None` when the message was anoncrypt'd (no `from` field).
 #[derive(Clone)]
 pub struct HandlerContext {
+    pub listener_id: String,
     pub atm: ATM,
     pub profile: Arc<ATMProfile>,
     pub sender_did: Option<String>,
