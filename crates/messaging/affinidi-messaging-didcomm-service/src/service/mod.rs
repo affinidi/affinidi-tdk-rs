@@ -22,7 +22,7 @@ use listener::ConnectionHandle;
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
 /// Lifecycle events emitted by listeners.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ListenerEvent {
     /// The listener has connected to its mediator.
     Connected { listener_id: String },
@@ -57,7 +57,7 @@ struct ListenerHandle {
     connection_rx: watch::Receiver<Option<ConnectionHandle>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ListenerStatus {
     pub id: String,
     pub state: ListenerState,
@@ -65,7 +65,7 @@ pub struct ListenerStatus {
     pub uptime: Duration,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ListenerState {
     Running,
     Stopped,

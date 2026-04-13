@@ -164,12 +164,14 @@ impl Listener {
         let mut tasks = JoinSet::new();
 
         // Spawn offline sync as a tracked task
+        let listener_id = self.config.id.clone();
         let shutdown_clone = self.shutdown.clone();
         let atm_clone = atm.clone();
         let profile_clone = profile.clone();
         let handler_clone = self.handler.clone();
         tasks.spawn(async move {
             Listener::run_periodic_offline_sync(
+                &listener_id,
                 &atm_clone,
                 &profile_clone,
                 &handler_clone,
@@ -231,11 +233,12 @@ impl Listener {
 
         if let Some((message, meta)) = next {
             let meta = convert_meta(*meta);
+            let listener_id = self.config.id.clone();
             let atm = atm.clone();
             let profile = profile.clone();
             let handler = self.handler.clone();
             tasks.spawn(async move {
-                Self::dispatch_message(&atm, &profile, &handler, message, meta).await;
+                Self::dispatch_message(&listener_id, &atm, &profile, &handler, message, meta).await;
             });
         }
 
@@ -243,6 +246,7 @@ impl Listener {
     }
 
     pub(crate) async fn dispatch_message(
+        listener_id: &str,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn DIDCommHandler>,
@@ -254,6 +258,7 @@ impl Listener {
         let parent_thread_id = get_parent_thread_id(&message, false);
 
         let ctx = HandlerContext {
+            listener_id: listener_id.to_string(),
             atm: atm.clone(),
             profile: profile.clone(),
             sender_did,

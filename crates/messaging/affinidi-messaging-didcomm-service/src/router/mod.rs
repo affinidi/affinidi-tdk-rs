@@ -112,8 +112,8 @@ impl DIDCommHandler for Router {
             match next.run(ctx.clone(), message, meta).await {
                 Ok(response) => Ok(response),
                 Err(e) => {
-                    self.error_handler.on_error(&ctx, &e);
-                    Ok(None)
+                    let response = self.error_handler.on_error(&ctx, &e).await;
+                    Ok(response)
                 }
             }
         } else {

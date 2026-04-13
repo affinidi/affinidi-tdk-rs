@@ -50,7 +50,7 @@ impl FromMessageParts for Message {
         parts
             .message
             .take()
-            .ok_or_else(|| DIDCommServiceError::Internal("Message already consumed".into()))
+            .ok_or(DIDCommServiceError::MessageAlreadyExtracted)
     }
 }
 
@@ -59,7 +59,7 @@ impl FromMessageParts for UnpackMetadata {
         parts
             .meta
             .take()
-            .ok_or_else(|| DIDCommServiceError::Internal("UnpackMetadata already consumed".into()))
+            .ok_or(DIDCommServiceError::MetadataAlreadyExtracted)
     }
 }
 
@@ -73,10 +73,7 @@ impl<T: Clone + Send + Sync + 'static> FromMessageParts for Extension<T> {
             .cloned()
             .map(Extension)
             .ok_or_else(|| {
-                DIDCommServiceError::Internal(format!(
-                    "Extension not found: {}",
-                    std::any::type_name::<T>()
-                ))
+                DIDCommServiceError::ExtensionNotFound(std::any::type_name::<T>().to_string())
             })
     }
 }

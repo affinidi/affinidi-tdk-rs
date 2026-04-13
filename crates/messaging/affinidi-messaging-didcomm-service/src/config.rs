@@ -1,6 +1,7 @@
 use affinidi_messaging_sdk::protocols::mediator::acls::AccessListModeType;
 use affinidi_tdk_common::{config::TDKConfig, profiles::TDKProfile};
 
+#[derive(Debug)]
 pub struct DIDCommServiceConfig {
     pub listeners: Vec<ListenerConfig>,
 }
@@ -13,6 +14,34 @@ pub struct ListenerConfig {
     pub message_wait_duration_secs: u64,
     pub auto_delete: bool,
     pub tdk_config: Option<TDKConfig>,
+}
+
+impl std::fmt::Debug for ListenerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListenerConfig")
+            .field("id", &self.id)
+            .field("profile", &self.profile.alias)
+            .field("restart_policy", &self.restart_policy)
+            .field(
+                "message_wait_duration_secs",
+                &self.message_wait_duration_secs,
+            )
+            .field("auto_delete", &self.auto_delete)
+            .field("tdk_config", &self.tdk_config.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+impl ListenerConfig {
+    /// Create a new listener config with the required fields.
+    /// Optional fields use sensible defaults (restart: Never, wait: 5s, auto_delete: true).
+    pub fn new(id: impl Into<String>, profile: TDKProfile) -> Self {
+        Self {
+            id: id.into(),
+            profile,
+            ..Default::default()
+        }
+    }
 }
 
 impl Default for ListenerConfig {
@@ -29,7 +58,7 @@ impl Default for ListenerConfig {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum RestartPolicy {
     #[default]
     Never,
@@ -42,7 +71,7 @@ pub enum RestartPolicy {
     },
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RetryConfig {
     pub initial_delay_secs: u64,
     pub max_delay_secs: u64,

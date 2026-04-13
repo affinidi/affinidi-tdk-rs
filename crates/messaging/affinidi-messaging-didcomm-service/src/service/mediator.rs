@@ -44,6 +44,7 @@ impl Listener {
     }
 
     pub(crate) async fn run_periodic_offline_sync(
+        listener_id: &str,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn DIDCommHandler>,
@@ -57,7 +58,7 @@ impl Listener {
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(OFFLINE_SYNC_INTERVAL_SECS)) => {
-                    if let Err(e) = Listener::sync_offline_messages(atm, profile, handler).await {
+                    if let Err(e) = Listener::sync_offline_messages(listener_id, atm, profile, handler).await {
                         warn!(profile = %profile_alias, error = %e, "Offline sync failed");
                     }
                 }
@@ -66,6 +67,7 @@ impl Listener {
     }
 
     async fn sync_offline_messages(
+        listener_id: &str,
         atm: &ATM,
         profile: &Arc<ATMProfile>,
         handler: &Arc<dyn DIDCommHandler>,
@@ -96,7 +98,7 @@ impl Listener {
 
         for (message, meta) in offline_messages {
             let meta = super::listener::convert_meta(meta);
-            Listener::dispatch_message(atm, profile, handler, message, meta).await;
+            Listener::dispatch_message(listener_id, atm, profile, handler, message, meta).await;
         }
 
         let delete_result = atm

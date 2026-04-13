@@ -16,7 +16,9 @@ pub use handler::{
     HandlerContext, MESSAGE_PICKUP_STATUS_TYPE, TRUST_PING_TYPE, TRUST_PONG_TYPE, ignore_handler,
     trust_ping_handler,
 };
-pub use middleware::{MessagePolicy, MiddlewareHandler, Next, RequestLogging, middleware_fn};
+pub use middleware::{
+    MessagePolicy, MiddlewareHandler, MiddlewareResult, Next, RequestLogging, middleware_fn,
+};
 pub use problem_report::{ProblemReport, ServiceProblemReport};
 pub use response::DIDCommResponse;
 pub use router::{MessageHandler, Router, handler_fn};

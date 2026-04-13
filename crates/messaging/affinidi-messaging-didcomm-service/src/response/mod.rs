@@ -6,6 +6,21 @@ use crate::problem_report::{ProblemReport, ServiceProblemReport};
 use crate::transport::PROBLEM_REPORT_TYPE;
 use crate::utils::new_message_id;
 
+/// A response to be sent back to the message sender.
+///
+/// When sent via a handler return value, the following fields are
+/// auto-filled from the [`HandlerContext`] if not explicitly set:
+///
+/// - **`from`** — defaults to the listener's profile DID
+/// - **`to`** — defaults to the incoming message's sender DID
+/// - **`thid`** — defaults to the incoming message's thread ID
+/// - **`pthid`** — defaults to the incoming message's parent thread ID (if any)
+///
+/// This means a minimal response only needs a type and body:
+/// ```ignore
+/// Ok(Some(DIDCommResponse::new("https://example.com/ack", json!({}))))
+/// ```
+#[derive(Debug)]
 pub struct DIDCommResponse {
     pub(crate) type_: String,
     pub(crate) body: Value,

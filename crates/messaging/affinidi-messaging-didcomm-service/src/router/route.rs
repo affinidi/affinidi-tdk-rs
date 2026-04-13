@@ -21,9 +21,11 @@ impl Route {
             format!("^{}$", regex::escape(pattern))
         };
 
-        let regex = Regex::new(&anchored).map_err(|e| {
-            DIDCommServiceError::Internal(format!("Invalid route pattern '{pattern}': {e}"))
-        })?;
+        let regex =
+            Regex::new(&anchored).map_err(|e| DIDCommServiceError::InvalidRoutePattern {
+                pattern: pattern.to_string(),
+                reason: e.to_string(),
+            })?;
 
         Ok(Self {
             pattern: regex,
@@ -45,9 +47,11 @@ impl Route {
             format!("^{pattern}$")
         };
 
-        let regex = Regex::new(&anchored).map_err(|e| {
-            DIDCommServiceError::Internal(format!("Invalid route regex '{pattern}': {e}"))
-        })?;
+        let regex =
+            Regex::new(&anchored).map_err(|e| DIDCommServiceError::InvalidRoutePattern {
+                pattern: pattern.to_string(),
+                reason: e.to_string(),
+            })?;
 
         Ok(Self {
             pattern: regex,
