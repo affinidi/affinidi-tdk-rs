@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-messaging-didcomm-service = "0.1"
+affinidi-messaging-didcomm-service = "0.2"
 ```
 
 ## Features
@@ -24,7 +24,10 @@ affinidi-messaging-didcomm-service = "0.1"
 - **Graceful shutdown** -- in-flight message handlers are tracked via `JoinSet` and drained on shutdown; panicked tasks are detected and logged
 - **Built-in handlers** -- `trust_ping_handler` for trust-ping protocol, `ignore_handler` for silently dropping messages (e.g. `MESSAGE_PICKUP_STATUS_TYPE`)
 - **Fallback and error handling** -- `.fallback()` for unmatched message types, `.on_error()` with `ErrorHandler` trait for centralized error logging
-- **Outbound messaging** -- send proactive (unsolicited) DIDComm messages through an existing listener's mediator connection via `DIDCommService::send_message()`, avoiding duplicate websocket sessions
+- **Outbound messaging** -- send proactive (unsolicited) DIDComm messages through an existing listener's mediator connection via `DIDCommService::send_message()`, avoiding duplicate websocket sessions. `send_message_with_retry()` adds built-in retry with exponential backoff
+- **Connection readiness** -- `wait_connected(listener_id, timeout)` blocks until a listener's mediator connection is live, eliminating races between startup and first send
+- **Lifecycle events** -- `subscribe()` returns a broadcast receiver of `ListenerEvent`s (`Connected`, `Disconnected`, `Restarting`) for application-level reactions to connection state changes
+- **Cloneable service** -- `DIDCommService` implements `Clone` (cheaply, via internal `Arc`s), so it can be passed directly into handlers, spawn blocks, and shared state without an extra `Arc` wrapper
 - **Transport utilities** -- `build_response`, `send_response`, `build_problem_report`, `send_problem_report`
 - **Problem report protocol** -- `ProblemReport` struct with standard DIDComm error codes; `DIDCommResponse::problem_report()` for returning problem reports directly from handlers
 - **Message utilities** -- `get_thread_id`, `get_parent_thread_id`, `new_message_id`

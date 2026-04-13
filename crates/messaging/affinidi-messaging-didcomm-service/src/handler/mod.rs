@@ -22,7 +22,7 @@ use crate::response::DIDCommResponse;
 ///
 /// The return type is `Result` (not plain `Option`) so that raw implementors
 /// keep `?` ergonomics and middleware can intercept errors.
-/// When used through [`Router`], handler errors are caught and forwarded to
+/// When used through [`crate::router::Router`], handler errors are caught and forwarded to
 /// the configured [`ErrorHandler`], so `Router::handle` always returns `Ok`.
 #[async_trait]
 pub trait DIDCommHandler: Send + Sync + 'static {

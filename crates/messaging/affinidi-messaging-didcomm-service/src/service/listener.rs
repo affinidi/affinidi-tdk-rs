@@ -5,7 +5,7 @@ use affinidi_messaging_sdk::config::ATMConfigBuilder;
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use affinidi_secrets_resolver::SecretsResolver;
 use affinidi_tdk_common::TDKSharedState;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
@@ -14,6 +14,7 @@ use crate::config::ListenerConfig;
 use crate::error::{DIDCommServiceError, StartupError};
 use crate::handler::{DIDCommHandler, HandlerContext};
 use crate::response::DIDCommResponse;
+use crate::service::ListenerEvent;
 use crate::transport;
 use crate::utils::{get_parent_thread_id, get_thread_id};
 
@@ -53,6 +54,8 @@ pub(crate) struct Listener {
     profile: Option<Arc<ATMProfile>>,
     /// Watch channel sender — updated after each successful connect().
     pub(crate) connection_tx: watch::Sender<Option<ConnectionHandle>>,
+    /// Broadcast sender for lifecycle events.
+    pub(crate) events_tx: broadcast::Sender<ListenerEvent>,
 }
 
 impl Listener {
@@ -61,6 +64,7 @@ impl Listener {
         handler: Arc<dyn DIDCommHandler>,
         shutdown: CancellationToken,
         connection_tx: watch::Sender<Option<ConnectionHandle>>,
+        events_tx: broadcast::Sender<ListenerEvent>,
     ) -> Self {
         Self {
             config,
@@ -69,6 +73,7 @@ impl Listener {
             atm: None,
             profile: None,
             connection_tx,
+            events_tx,
         }
     }
 
@@ -140,6 +145,10 @@ impl Listener {
 
         // Publish the connection handle so outbound messaging can use it
         let _ = self.connection_tx.send(Some(conn_handle));
+
+        let _ = self.events_tx.send(ListenerEvent::Connected {
+            listener_id: self.config.id.clone(),
+        });
 
         Ok(())
     }
