@@ -71,6 +71,9 @@ pub enum DIDCommServiceError {
     #[error("Listener '{0}' not found")]
     ListenerNotFound(String),
 
+    #[error("Listener '{0}' is not connected")]
+    NotConnected(String),
+
     #[error("Service startup failed: {0}")]
     StartupFailed(#[from] StartupError),
 
