@@ -7,7 +7,8 @@ on:
 
 jobs:
   rust-pipeline:
-    uses: affinidi/pipeline-rust/.github/workflows/release.yaml@main
+    # Waiting for https://github.com/affinidi/pipeline-rust/pull/71 to merge before using @main
+    uses: affinidi/pipeline-rust/.github/workflows/release.yaml@feat/workspace-publish
     secrets: inherit
     with:
       toolchain: "1.94.0"
@@ -15,4 +16,5 @@ jobs:
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
+      workspace_publish: true
       release_dry_run: false
