@@ -16,6 +16,7 @@ use crate::{
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
+use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
@@ -27,7 +28,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, error, info, warn};
 
-pub async fn start() {
+pub async fn start() -> Result<(), MediatorError> {
     let ansi = env::var("LOCAL").is_ok();
 
     if ansi {
@@ -65,7 +66,7 @@ pub async fn start() {
         Ok(config) => config,
         Err(err) => {
             error!("Couldn't initialize mediator: {err}");
-            return;
+            return Err(err);
         }
     };
 
@@ -79,13 +80,19 @@ pub async fn start() {
         Ok(Ok(db)) => db,
         Ok(Err(err)) => {
             error!("Error opening database: {}", err);
-            error!("Exiting...");
-            std::process::exit(1);
+            return Err(MediatorError::DatabaseError(
+                14,
+                "NA".into(),
+                format!("Error opening database: {err}"),
+            ));
         }
         Err(_) => {
             error!("Database connection timed out after 30 seconds");
-            error!("Exiting...");
-            std::process::exit(1);
+            return Err(MediatorError::DatabaseError(
+                14,
+                "NA".into(),
+                "Database connection timed out after 30 seconds".into(),
+            ));
         }
     };
 
@@ -94,7 +101,7 @@ pub async fn start() {
 
     if let Err(err) = database.initialize(&config).await {
         error!("Error initializing database: {err}");
-        return;
+        return Err(err);
     }
 
     if let Some(functions_file) = &config.database.functions_file {
@@ -104,11 +111,15 @@ pub async fn start() {
         );
         if let Err(e) = database.load_scripts(functions_file).await {
             error!("Failed to load LUA scripts: {}", e);
-            return;
+            return Err(e);
         }
     } else {
-        info!("No LUA scripts file specified in the configuration. Skipping loading LUA scripts.");
-        return;
+        error!("LUA scripts file is required but not specified in the configuration");
+        return Err(MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            "LUA scripts file is required but not specified in the configuration".into(),
+        ));
     }
 
     // Create a cancellation token for coordinated graceful shutdown
@@ -191,7 +202,7 @@ pub async fn start() {
             Ok((task, handle)) => (Some(task), Some(handle)),
             Err(err) => {
                 error!("Error starting streaming task: {err}");
-                return;
+                return Err(err);
             }
         }
     } else {
@@ -203,7 +214,11 @@ pub async fn start() {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to create DID resolver: {}", e);
-            return;
+            return Err(MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!("Failed to create DID resolver: {e}"),
+            ));
         }
     };
 
@@ -310,14 +325,22 @@ pub async fn start() {
             Some(path) => path,
             None => {
                 error!("SSL Certificate file must be specified in the config");
-                return;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "SSL Certificate file must be specified in the config".into(),
+                ));
             }
         };
         let key_file = match config.security.ssl_key_file.clone() {
             Some(path) => path,
             None => {
                 error!("SSL Certificate key file must be specified in the config");
-                return;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "SSL Certificate key file must be specified in the config".into(),
+                ));
             }
         };
 
@@ -325,7 +348,11 @@ pub async fn start() {
             Ok(config) => config,
             Err(err) => {
                 error!("Invalid TLS certificate/key: {err}");
-                return;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Invalid TLS certificate/key: {err}"),
+                ));
             }
         };
 
@@ -341,7 +368,11 @@ pub async fn start() {
             Ok(addr) => addr,
             Err(e) => {
                 error!("Invalid listen_address '{}': {}", config.listen_address, e);
-                return;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Invalid listen_address '{}': {e}", config.listen_address),
+                ));
             }
         };
 
@@ -353,6 +384,11 @@ pub async fn start() {
             .await
         {
             error!("HTTPS server error: {err}");
+            return Err(MediatorError::InternalError(
+                17,
+                "NA".into(),
+                format!("HTTPS server error: {err}"),
+            ));
         }
     } else {
         warn!("**** WARNING: Running without SSL/TLS ****");
@@ -369,7 +405,11 @@ pub async fn start() {
             Ok(addr) => addr,
             Err(e) => {
                 error!("Invalid listen_address '{}': {}", config.listen_address, e);
-                return;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Invalid listen_address '{}': {e}", config.listen_address),
+                ));
             }
         };
 
@@ -381,10 +421,16 @@ pub async fn start() {
             .await
         {
             error!("HTTP server error: {err}");
+            return Err(MediatorError::InternalError(
+                17,
+                "NA".into(),
+                format!("HTTP server error: {err}"),
+            ));
         }
     }
 
     info!("Mediator shutdown complete.");
+    Ok(())
 }
 
 /// Wait for a shutdown signal (SIGINT or SIGTERM).
