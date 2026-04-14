@@ -112,6 +112,40 @@ The wizard accepts a **Context Provision Bundle** from `pnm contexts provision`
 (recommended) and auto-configures the credential, context, DID, and
 `mediator.toml` in a single flow.
 
+### Quick Start without a Secure Credential Store
+
+If you don't have access to AWS Secrets Manager or an OS keyring (e.g. in CI/CD,
+Docker containers, or quick local testing), you can pass the VTA credential
+directly as a `string://` value. No extra feature flags are required.
+
+**Option A: In `mediator.toml`**
+
+```toml
+mediator_did = "vta://mediator"
+
+[security]
+mediator_secrets = "vta://mediator"
+
+[vta]
+credential = "string://<paste-your-base64url-credential-here>"
+context = "mediator"
+```
+
+**Option B: Via environment variables**
+
+```bash
+export VTA_CREDENTIAL="string://eyJkaWQ..."
+export VTA_CONTEXT="mediator"
+export MEDIATOR_DID="vta://mediator"
+export MEDIATOR_SECRETS="vta://mediator"
+cargo run
+```
+
+> **Note:** With `string://`, VTA secrets are **not cached** between restarts.
+> Every restart will re-fetch secrets from the VTA. For production deployments,
+> use `aws_secrets://` or `keyring://` which enable local secret caching for
+> offline resilience.
+
 ### Manual Configuration
 
 Set `mediator_did` and `mediator_secrets` to use the `vta://` scheme, and add a

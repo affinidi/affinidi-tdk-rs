@@ -14,11 +14,11 @@ pub use affinidi_crypto::KeyType;
 use affinidi_crypto::{JWK, Params};
 use base58::ToBase58;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-use multihash::Multihash;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tracing::warn;
+use unsigned_varint::encode as varint_encode;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -292,14 +292,17 @@ impl Secret {
     /// base58<multihash<multikey>>
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
-        // SHA_256 code = 0x12
-        #[allow(deprecated)]
-        let hash_encoded = Multihash::<32>::wrap(0x12, hash.as_slice()).map_err(|e| {
-            SecretsResolverError::KeyError(format!(
-                "Couldn't create multihash encoding for Public Key. Reason: {e}",
-            ))
-        })?;
-        Ok(hash_encoded.to_bytes().to_base58())
+        // Multihash binary format: varint(code) || varint(length) || digest
+        // SHA-256 code = 0x12
+        let mut code_buf = varint_encode::u64_buffer();
+        let code_varint = varint_encode::u64(0x12, &mut code_buf);
+        let mut len_buf = varint_encode::u64_buffer();
+        let len_varint = varint_encode::u64(hash.len() as u64, &mut len_buf);
+        let mut bytes = Vec::with_capacity(code_varint.len() + len_varint.len() + hash.len());
+        bytes.extend_from_slice(code_varint);
+        bytes.extend_from_slice(len_varint);
+        bytes.extend_from_slice(&hash);
+        Ok(bytes.to_base58())
     }
 
     /// Get the multibase (Base58btc) encoded private key

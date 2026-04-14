@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 15th April 2026 (0.5.3)
+
+- **CHANGE:** Removed `multihash` crate dependency (yanked `core2` transitive dep)
+  - Multihash encoding now uses inline varint encoding via existing `unsigned-varint`
+    dependency — output is byte-identical
+
 ## 3rd November October 2025 (0.5.2)
 
 - **BREAKING:** Now uses the affinidi-crypto library for all cryptographic operations
