@@ -19,14 +19,21 @@ impl Database {
 
         // Setup the mediator account if it doesn't exist
         // Set the ACL for the mediator account to deny_all by default
+        let default_mediator_acl = MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED")
+            .map_err(|e| {
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Hardcoded mediator ACL ruleset is invalid. Reason: {e}"),
+                )
+            })?;
+
         self.setup_admin_account(
             &config.mediator_did_hash,
             AccountType::Mediator,
-            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED")
-                .expect("hardcoded ACL ruleset is valid"),
+            &default_mediator_acl,
         )
-        .await
-        .expect("Could not setup mediator account! exiting...");
+        .await?;
 
         // Set up the administration account if it doesn't exist
         self.setup_admin_account(
@@ -34,8 +41,7 @@ impl Database {
             AccountType::RootAdmin,
             &config.security.global_acl_default,
         )
-        .await
-        .expect("Could not setup admin account! exiting...");
+        .await?;
         Ok(())
     }
 
@@ -82,7 +88,15 @@ impl Database {
                     schema_version, mediator_version
                 );
                 if schema_version
-                    < Version::parse("0.10.0").expect("hardcoded version string is valid")
+                    < Version::parse("0.10.0").map_err(|e| {
+                        MediatorError::InternalError(
+                            17,
+                            "NA".into(),
+                            format!(
+                                "Couldn't parse hardcoded schema migration version (0.10.0). Reason: {e}"
+                            ),
+                        )
+                    })?
                 {
                     // Upgrade the database schema to 0.10.0
                     self.upgrade_0_10_0(&config.security.global_acl_default)

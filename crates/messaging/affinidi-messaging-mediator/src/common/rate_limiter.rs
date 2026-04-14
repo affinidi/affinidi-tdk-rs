@@ -30,11 +30,15 @@ impl RateLimiterState {
             return Self { limiter: None };
         }
 
-        let quota = Quota::per_second(
-            NonZeroU32::new(per_second).expect("per_second checked non-zero above"),
-        )
-        .allow_burst(NonZeroU32::new(burst.max(1)).expect("burst.max(1) is always non-zero"));
+        let Some(per_second_nz) = NonZeroU32::new(per_second) else {
+            return Self { limiter: None };
+        };
 
+        let burst_nz = match NonZeroU32::new(burst.max(1)) {
+            Some(value) => value,
+            None => return Self { limiter: None },
+        };
+        let quota = Quota::per_second(per_second_nz).allow_burst(burst_nz);
         Self {
             limiter: Some(Arc::new(RateLimiter::keyed(quota))),
         }

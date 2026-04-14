@@ -61,9 +61,13 @@ pub async fn start() {
 
     println!("[Loading Affinidi Secure Messaging Mediator configuration]");
 
-    let config = init("conf/mediator.toml", ansi)
-        .await
-        .expect("Couldn't initialize mediator!");
+    let config = match init("conf/mediator.toml", ansi).await {
+        Ok(config) => config,
+        Err(err) => {
+            error!("Couldn't initialize mediator: {err}");
+            return;
+        }
+    };
 
     // Start setting up the database durability and handling
     let database = match tokio::time::timeout(
@@ -88,10 +92,10 @@ pub async fn start() {
     // Convert from the common generic DatabaseHandler to the Mediator specific Database
     let database = Database::new(database);
 
-    database
-        .initialize(&config)
-        .await
-        .expect("Error initializing database");
+    if let Err(err) = database.initialize(&config).await {
+        error!("Error initializing database: {err}");
+        return;
+    }
 
     if let Some(functions_file) = &config.database.functions_file {
         info!(
@@ -183,10 +187,13 @@ pub async fn start() {
     let (streaming_task, _) = if config.streaming_enabled {
         let _database = database.clone(); // Clone the database handler for the subscriber thread
         let uuid = config.streaming_uuid.clone();
-        let (_task, _handle) = StreamingTask::new(_database.clone(), &uuid)
-            .await
-            .expect("Error starting streaming task");
-        (Some(_task), Some(_handle))
+        match StreamingTask::new(_database.clone(), &uuid).await {
+            Ok((task, handle)) => (Some(task), Some(handle)),
+            Err(err) => {
+                error!("Error starting streaming task: {err}");
+                return;
+            }
+        }
     } else {
         (None, None)
     };
@@ -299,18 +306,28 @@ pub async fn start() {
         // configure certificate and private key used by https
         // TODO: Build a proper TLS Config
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let ssl_config = RustlsConfig::from_pem_file(
-            config
-                .security
-                .ssl_certificate_file
-                .expect("SSL Certificate file must be specified in the Config"),
-            config
-                .security
-                .ssl_key_file
-                .expect("SSL Certificate key file must be specified in the Config"),
-        )
-        .await
-        .expect("bad certificate/key");
+        let certificate_file = match config.security.ssl_certificate_file.clone() {
+            Some(path) => path,
+            None => {
+                error!("SSL Certificate file must be specified in the config");
+                return;
+            }
+        };
+        let key_file = match config.security.ssl_key_file.clone() {
+            Some(path) => path,
+            None => {
+                error!("SSL Certificate key file must be specified in the config");
+                return;
+            }
+        };
+
+        let ssl_config = match RustlsConfig::from_pem_file(certificate_file, key_file).await {
+            Ok(config) => config,
+            Err(err) => {
+                error!("Invalid TLS certificate/key: {err}");
+                return;
+            }
+        };
 
         let handle = axum_server::Handle::new();
         let shutdown_handle = handle.clone();
@@ -330,11 +347,13 @@ pub async fn start() {
 
         info!("Mediator listening on {}", config.listen_address);
 
-        axum_server::bind_rustls(addr, ssl_config)
+        if let Err(err) = axum_server::bind_rustls(addr, ssl_config)
             .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
-            .unwrap();
+        {
+            error!("HTTPS server error: {err}");
+        }
     } else {
         warn!("**** WARNING: Running without SSL/TLS ****");
 
@@ -356,11 +375,13 @@ pub async fn start() {
 
         info!("Mediator listening on {}", config.listen_address);
 
-        axum_server::bind(addr)
+        if let Err(err) = axum_server::bind(addr)
             .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
-            .unwrap();
+        {
+            error!("HTTP server error: {err}");
+        }
     }
 
     info!("Mediator shutdown complete.");
@@ -369,17 +390,30 @@ pub async fn start() {
 /// Wait for a shutdown signal (SIGINT or SIGTERM).
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(err) => {
+                error!("Failed to install Ctrl+C handler: {err}");
+                // Keep this branch pending so another successfully installed signal
+                // handler can still trigger shutdown.
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(err) => {
+                error!("Failed to install SIGTERM handler: {err}");
+                // Keep this branch pending so another successfully installed signal
+                // handler can still trigger shutdown.
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
