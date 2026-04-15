@@ -205,10 +205,12 @@ impl WebSocketTransport {
                     },
                     _ = watchdog.tick(), if self.web_socket.is_some() => {
                         if self.awaiting_pong {
-                            debug!("Missed Pong, closing connection");
+                            warn!("Missed Pong, closing connection");
                             if let Some(web_socket) = self.web_socket.as_mut() {
                                 let _ = web_socket.close(None).await;
                             }
+                            self.web_socket = None;
+                            self.backoff_delay();
                         } else if let Some(web_socket) = self.web_socket.as_mut() {
                             let _ = web_socket.send(Message::Ping(Bytes::new())).await;
                         }
@@ -347,8 +349,9 @@ impl WebSocketTransport {
                     self.awaiting_pong = false;
                 }
                 Message::Close(_) => {
-                    debug!("WebSocket connection closed");
+                    debug!("WebSocket connection closed by server");
                     self.web_socket = None;
+                    self.backoff_delay();
                 }
                 _ => {
                     warn!("Received unknown message type: {:?}", ws_msg);
@@ -360,10 +363,12 @@ impl WebSocketTransport {
                 // Connection Dropped
                 warn!("WebSocket connection dropped");
                 self.web_socket = None;
+                self.backoff_delay();
             }
             Err(e) => {
                 error!("Generic websocket error: {:?}", e);
                 self.web_socket = None;
+                self.backoff_delay();
             }
         }
     }
@@ -439,28 +444,25 @@ impl WebSocketTransport {
         }
     }
 
+    /// Calculate exponential backoff delay: 0→1→2→4→8→16→32→60s (capped)
+    fn backoff_delay(&mut self) {
+        self.connect_delay = match self.connect_delay {
+            0 => 1,
+            d if d < 60 => (d * 2).min(60),
+            _ => 60,
+        };
+        self.connect_delay_timer = None;
+    }
+
     // Wrapper that handles all of the logic of setting up a connection to the mediator
     async fn _handle_connection(&mut self, atm: &ATM) -> Option<WebSocket> {
         debug!("Starting websocket connection");
-
-        fn _calculate_delay(delay: u8) -> u8 {
-            let delay = if delay == 0 {
-                1
-            } else if delay < 60 {
-                delay * 2
-            } else {
-                delay
-            };
-
-            if delay > 60 { 60 } else { delay }
-        }
 
         let mut web_socket = match self._create_socket().await {
             Ok(ws) => ws,
             Err(e) => {
                 error!("Error creating websocket connection: {:?}", e);
-                self.connect_delay = _calculate_delay(self.connect_delay);
-                self.connect_delay_timer = None;
+                self.backoff_delay();
                 return None;
             }
         };
@@ -490,8 +492,7 @@ impl WebSocketTransport {
                 Err(e) => {
                     error!("Error enabling live streaming: {:?}", e);
                     let _ = web_socket.close(None).await;
-                    self.connect_delay = _calculate_delay(self.connect_delay);
-                    self.connect_delay_timer = None;
+                    self.backoff_delay();
                     None
                 }
             }

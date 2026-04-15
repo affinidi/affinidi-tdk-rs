@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-04-15
+
+### Fixed
+
+- Reject duplicate DID listeners: `add_listener()` and `start()` now return `DuplicateDid` error when attempting to register a listener with a DID that is already in use by another listener, preventing mediator connection conflicts.
+
 ## [0.2.0] - 2026-04-13
 
 ### Added

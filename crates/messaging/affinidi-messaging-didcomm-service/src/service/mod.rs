@@ -2,7 +2,7 @@ mod listener;
 mod mediator;
 mod restart;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -89,6 +89,24 @@ impl DIDCommService {
             events_tx,
         };
 
+        // Validate no duplicate listener IDs or DIDs in initial config
+        {
+            let mut seen_ids = HashSet::new();
+            let mut seen_dids: HashMap<&str, &str> = HashMap::new();
+            for cfg in &config.listeners {
+                if !seen_ids.insert(cfg.id.as_str()) {
+                    return Err(DIDCommServiceError::ListenerAlreadyExists(cfg.id.clone()));
+                }
+                if let Some(existing) = seen_dids.get(cfg.profile.did.as_str()) {
+                    return Err(DIDCommServiceError::DuplicateDid {
+                        did: cfg.profile.did.clone(),
+                        existing_listener: existing.to_string(),
+                    });
+                }
+                seen_dids.insert(&cfg.profile.did, &cfg.id);
+            }
+        }
+
         for listener_config in config.listeners {
             service.spawn_listener(listener_config).await?;
         }
@@ -110,6 +128,12 @@ impl DIDCommService {
             return Err(DIDCommServiceError::ListenerAlreadyExists(
                 config.id.clone(),
             ));
+        }
+        if let Some(handle) = listeners.values().find(|h| h.did == config.profile.did) {
+            return Err(DIDCommServiceError::DuplicateDid {
+                did: config.profile.did.clone(),
+                existing_listener: handle.id.clone(),
+            });
         }
         drop(listeners);
 
@@ -288,7 +312,9 @@ impl DIDCommService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ListenerConfig, RestartPolicy};
     use affinidi_messaging_didcomm::Message;
+    use affinidi_tdk_common::profiles::TDKProfile;
     use serde_json::json;
 
     fn make_service() -> DIDCommService {
@@ -367,6 +393,58 @@ mod tests {
         assert!(
             matches!(err, DIDCommServiceError::NotConnected(ref id) if id == "test-listener"),
             "expected NotConnected, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_listener_rejects_duplicate_did() {
+        let service = make_service();
+
+        // Pre-insert a listener handle with did:example:alice
+        let (_tx, rx) = watch::channel(None);
+        let handle = ListenerHandle {
+            id: "listener-1".to_string(),
+            did: "did:example:alice".to_string(),
+            task: tokio::spawn(async {}),
+            token: CancellationToken::new(),
+            started_at: Instant::now(),
+            restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            connection_rx: rx,
+        };
+        service
+            .listeners
+            .write()
+            .await
+            .insert("listener-1".to_string(), handle);
+
+        // Try to add a new listener with a different ID but the same DID
+        let config = ListenerConfig {
+            id: "listener-2".to_string(),
+            profile: TDKProfile {
+                alias: "alice-duplicate".to_string(),
+                did: "did:example:alice".to_string(),
+                mediator: None,
+                secrets: vec![],
+            },
+            acl_mode: None,
+            restart_policy: RestartPolicy::Never,
+            message_wait_duration_secs: 5,
+            auto_delete: true,
+            tdk_config: None,
+        };
+
+        let result = service.add_listener(config).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DIDCommServiceError::DuplicateDid {
+                    ref did,
+                    ref existing_listener,
+                } if did == "did:example:alice" && existing_listener == "listener-1"
+            ),
+            "expected DuplicateDid, got: {err}"
         );
     }
 
