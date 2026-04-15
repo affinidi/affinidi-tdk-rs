@@ -68,6 +68,12 @@ pub enum DIDCommServiceError {
     #[error("Listener '{0}' already exists")]
     ListenerAlreadyExists(String),
 
+    #[error("DID '{did}' is already registered by listener '{existing_listener}'")]
+    DuplicateDid {
+        did: String,
+        existing_listener: String,
+    },
+
     #[error("Listener '{0}' not found")]
     ListenerNotFound(String),
 
