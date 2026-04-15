@@ -2,6 +2,11 @@
 
 ## Changelog history
 
+## 15th April 2026
+
+- **DOC:** Added README section on running without a secure credential store
+  (`string://` usage for dev/CI without keyring or AWS Secrets Manager)
+
 ## 1st April 2026
 
 ### 0.13.0 — VTA Integration
