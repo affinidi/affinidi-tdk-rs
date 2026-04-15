@@ -31,6 +31,9 @@ cargo build --no-default-features --features tsp
 # Both protocols
 cargo build --features "didcomm,tsp"
 
+# With VTA support (OS keyring — default config requires this)
+cargo build --features vta-keyring
+
 # With VTA support (AWS production)
 cargo build --features vta-aws-secrets
 
@@ -80,11 +83,43 @@ This generates:
 
 ### 3. Start the Mediator
 
+The default `conf/mediator.toml` uses a `keyring://` credential for VTA
+integration. This requires the `vta-keyring` feature flag, which is **not**
+enabled by default. Choose one of the following approaches:
+
+**Option A: Enable the `vta-keyring` feature** (recommended for local development
+with VTA credentials stored in your OS keyring):
+
+```bash
+cd affinidi-messaging-mediator
+export REDIS_URL=redis://@localhost:6379
+cargo run --features vta-keyring
+```
+
+This uses the OS keyring backend: **macOS Keychain**, **Windows Credential
+Manager**, or **Linux Secret Service** (e.g. GNOME Keyring, KWallet).
+
+**Option B: Use an inline credential** (no extra feature flags needed):
+
+Edit `conf/mediator.toml` and change the `[vta]` credential from `keyring://`
+to `string://`:
+
+```toml
+[vta]
+credential = "string://<paste-your-base64url-credential-here>"
+context = "mediator-local"
+```
+
+Then run without additional flags:
+
 ```bash
 cd affinidi-messaging-mediator
 export REDIS_URL=redis://@localhost:6379
 cargo run
 ```
+
+See [VTA Integration](#vta-integration-centralized-key-management) below for
+all credential storage options.
 
 ## VTA Integration (Centralized Key Management)
 
