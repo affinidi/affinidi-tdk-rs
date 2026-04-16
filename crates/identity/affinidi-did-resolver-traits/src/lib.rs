@@ -77,19 +77,18 @@ impl std::fmt::Display for MethodName {
 /// Convert `DIDMethod` (with data) to `MethodName` (pure discriminant).
 impl From<&DIDMethod> for MethodName {
     fn from(method: &DIDMethod) -> Self {
-        match method {
-            DIDMethod::Key { .. } => MethodName::Key,
-            DIDMethod::Peer { .. } => MethodName::Peer,
-            DIDMethod::Web { .. } => MethodName::Web,
-            DIDMethod::Jwk { .. } => MethodName::Jwk,
-            DIDMethod::Ethr { .. } => MethodName::Ethr,
-            DIDMethod::Pkh { .. } => MethodName::Pkh,
-            DIDMethod::Webvh { .. } => MethodName::Webvh,
-            DIDMethod::Cheqd { .. } => MethodName::Cheqd,
-            DIDMethod::Scid { .. } => MethodName::Scid,
-            DIDMethod::Ebsi { .. } => MethodName::Ebsi,
-            DIDMethod::Other { method, .. } => MethodName::Other(method.clone()),
-            _ => MethodName::Other(format!("{method}")),
+        match method.name() {
+            "key" => MethodName::Key,
+            "peer" => MethodName::Peer,
+            "web" => MethodName::Web,
+            "jwk" => MethodName::Jwk,
+            "ethr" => MethodName::Ethr,
+            "pkh" => MethodName::Pkh,
+            "webvh" => MethodName::Webvh,
+            "cheqd" => MethodName::Cheqd,
+            "scid" => MethodName::Scid,
+            "ebsi" => MethodName::Ebsi,
+            method => MethodName::Other(method.to_string()),
         }
     }
 }
