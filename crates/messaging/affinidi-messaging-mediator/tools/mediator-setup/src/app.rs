@@ -7,6 +7,7 @@ use crate::ui::selection::SelectionOption;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WizardStep {
     Deployment,
+    Vta,
     Protocol,
     Did,
     KeyStorage,
@@ -20,6 +21,7 @@ impl WizardStep {
     pub fn all() -> Vec<WizardStep> {
         vec![
             Self::Deployment,
+            Self::Vta,
             Self::Protocol,
             Self::Did,
             Self::KeyStorage,
@@ -33,6 +35,7 @@ impl WizardStep {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Deployment => "Deployment Type",
+            Self::Vta => "VTA Integration",
             Self::Protocol => "Protocol",
             Self::Did => "DID Configuration",
             Self::KeyStorage => "Key Storage",
@@ -78,6 +81,10 @@ impl WizardStep {
             Self::Deployment => StepData {
                 title: format!("Step {num}/{total}: Deployment Type"),
                 description: "What kind of deployment is this?".into(),
+            },
+            Self::Vta => StepData {
+                title: format!("Step {num}/{total}: VTA Integration"),
+                description: "Will this mediator use a Verifiable Trust Agent (VTA)?".into(),
             },
             Self::Protocol => StepData {
                 title: format!("Step {num}/{total}: Messaging Protocol"),
@@ -142,6 +149,10 @@ pub enum FocusPanel {
 pub struct WizardConfig {
     pub config_path: String,
     pub deployment_type: String,
+    /// Whether VTA integration is enabled
+    pub use_vta: bool,
+    /// VTA connectivity mode: "online" or "cold-start"
+    pub vta_mode: String,
     /// DIDComm v2 protocol enabled (default: true)
     pub didcomm_enabled: bool,
     /// TSP protocol enabled (experimental, default: false)
@@ -174,6 +185,8 @@ impl Default for WizardConfig {
         Self {
             config_path: DEFAULT_CONFIG_PATH.into(),
             deployment_type: String::new(),
+            use_vta: false,
+            vta_mode: String::new(),
             didcomm_enabled: true,
             tsp_enabled: false,
             did_method: String::new(),
@@ -290,6 +303,33 @@ impl WizardApp {
                 ),
                 SelectionOption::new("Container", "Docker image for container orchestration"),
             ],
+            WizardStep::Vta => {
+                if !self.config.use_vta {
+                    // Initial Yes/No question
+                    vec![
+                        SelectionOption::new(
+                            "Yes — use VTA",
+                            "Centralized key and DID management via Verifiable Trust Agent",
+                        ),
+                        SelectionOption::new(
+                            "No — manage independently",
+                            "Generate and manage keys locally or via cloud secret stores",
+                        ),
+                    ]
+                } else {
+                    // VTA connectivity mode sub-selection
+                    vec![
+                        SelectionOption::new(
+                            "Online (VTA is accessible)",
+                            "Connection mode auto-detected from credential",
+                        ),
+                        SelectionOption::new(
+                            "Cold-start (VTA not accessible)",
+                            "Use pre-provisioned or cached credentials",
+                        ),
+                    ]
+                }
+            }
             WizardStep::Protocol => {
                 let didcomm_check = if self.config.didcomm_enabled {
                     "[x]"
@@ -313,58 +353,66 @@ impl WizardApp {
                     SelectionOption::new("Continue >", "Proceed to the next step"),
                 ]
             }
-            WizardStep::Did => vec![
-                SelectionOption::new(
-                    "Configure via VTA (recommended)",
-                    "Centralized key management — VTA creates and hosts your DID",
-                ),
-                SelectionOption::new(
+            WizardStep::Did => {
+                let mut opts = vec![];
+                if self.config.use_vta {
+                    opts.push(SelectionOption::new(
+                        "Configure via VTA (recommended)",
+                        "Centralized key management — VTA creates and hosts your DID",
+                    ));
+                }
+                opts.push(SelectionOption::new(
                     "Generate did:webvh",
                     "Production — generates random keys you must manage yourself",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Generate did:peer",
                     "Quick start — generates random keys, no hosting required",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Import existing DID",
                     "Paste an existing DID string and secrets",
-                ),
-            ],
-            WizardStep::KeyStorage => vec![
-                SelectionOption::new(
-                    "VTA managed (vta://) [recommended]",
-                    "Centralized key management via Verifiable Trust Agent",
-                ),
-                SelectionOption::new(
+                ));
+                opts
+            }
+            WizardStep::KeyStorage => {
+                let mut opts = vec![];
+                if self.config.use_vta {
+                    opts.push(SelectionOption::new(
+                        "VTA managed (vta://) [recommended]",
+                        "Centralized key management via Verifiable Trust Agent",
+                    ));
+                }
+                opts.push(SelectionOption::new(
                     "OS Keyring (keyring://)",
                     "macOS Keychain, Linux Secret Service, Windows Credential Manager",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "AWS Secrets Manager (aws_secrets://)",
                     "AWS cloud production",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Google Cloud Secret Manager (gcp_secrets://)",
                     "GCP cloud production — coming soon",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Azure Key Vault (azure_keyvault://)",
                     "Azure cloud production — coming soon",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "HashiCorp Vault (vault://)",
                     "Enterprise / multi-cloud — coming soon",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Local file (file://)",
                     "Stored in secrets.json — NOT secure for production",
-                ),
-                SelectionOption::new(
+                ));
+                opts.push(SelectionOption::new(
                     "Inline in config (string://)",
                     "Embedded in mediator.toml — dev/CI only, NOT secure",
-                ),
-            ],
+                ));
+                opts
+            }
             WizardStep::Security => vec![
                 SelectionOption::new(
                     "No SSL (use TLS-terminating proxy)",
@@ -383,15 +431,26 @@ impl WizardApp {
                 // Database uses text input, but we return empty for the selection fallback
                 vec![]
             }
-            WizardStep::Admin => vec![
-                SelectionOption::new(
-                    "Generate a new admin did:key",
-                    "Creates a new Ed25519 key pair",
-                ),
-                SelectionOption::new("Paste an existing admin DID", "Use any DID method"),
-                SelectionOption::new("Copy admin DID from VTA", "Retrieve from VTA context"),
-                SelectionOption::new("Skip for now", "Configure admin later"),
-            ],
+            WizardStep::Admin => {
+                let mut opts = vec![
+                    SelectionOption::new(
+                        "Generate a new admin did:key",
+                        "Creates a new Ed25519 key pair",
+                    ),
+                    SelectionOption::new("Paste an existing admin DID", "Use any DID method"),
+                ];
+                if self.config.use_vta {
+                    opts.push(SelectionOption::new(
+                        "Copy admin DID from VTA",
+                        "Retrieve from VTA context",
+                    ));
+                }
+                opts.push(SelectionOption::new(
+                    "Skip for now",
+                    "Configure admin later",
+                ));
+                opts
+            }
             WizardStep::Summary => vec![],
         }
     }
@@ -405,30 +464,71 @@ impl WizardApp {
                 2 => "Same as server, plus generates a Dockerfile and docker-compose.yml with correct feature flags.".into(),
                 _ => String::new(),
             },
+            WizardStep::Vta => {
+                if !self.config.use_vta {
+                    match self.selection_index {
+                        0 => "VTA provides centralized key management, DID provisioning, and credential lifecycle. Recommended for production deployments.".into(),
+                        1 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
+                        _ => String::new(),
+                    }
+                } else {
+                    match self.selection_index {
+                        0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode (gRPC/REST) is auto-detected from the credential.".into(),
+                        1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during bootstrap.".into(),
+                        _ => String::new(),
+                    }
+                }
+            }
             WizardStep::Protocol => match self.selection_index {
                 0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments.".into(),
                 1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm.".into(),
                 2 => "Proceed to the next step with selected protocols.".into(),
                 _ => String::new(),
             },
-            WizardStep::Did => match self.selection_index {
-                0 => "VTA creates and manages the mediator's DID and keys centrally. Supports did:peer and did:webvh (configurable in VTA). Recommended for production.".into(),
-                1 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
-                2 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
-                3 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
-                _ => String::new(),
-            },
-            WizardStep::KeyStorage => match self.selection_index {
-                0 => "Keys managed by VTA with local caching for offline cold-start. Most secure — keys never leave the VTA boundary.".into(),
-                1 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
-                2 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                3 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
-                4 => "Store secrets in Azure Key Vault. Coming soon.".into(),
-                5 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
-                6 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
-                7 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
-                _ => String::new(),
-            },
+            WizardStep::Did => {
+                if self.config.use_vta {
+                    match self.selection_index {
+                        0 => "VTA creates and manages the mediator's DID and keys centrally. Supports did:peer and did:webvh (configurable in VTA). Recommended for production.".into(),
+                        1 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
+                        2 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
+                        3 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
+                        _ => String::new(),
+                    }
+                } else {
+                    match self.selection_index {
+                        0 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
+                        1 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
+                        2 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
+                        _ => String::new(),
+                    }
+                }
+            }
+            WizardStep::KeyStorage => {
+                if self.config.use_vta {
+                    match self.selection_index {
+                        0 => "Keys managed by VTA with local caching for offline cold-start. Most secure — keys never leave the VTA boundary.".into(),
+                        1 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
+                        2 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                        3 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
+                        4 => "Store secrets in Azure Key Vault. Coming soon.".into(),
+                        5 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
+                        6 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
+                        7 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
+                        _ => String::new(),
+                    }
+                } else {
+                    match self.selection_index {
+                        0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
+                        1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                        2 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
+                        3 => "Store secrets in Azure Key Vault. Coming soon.".into(),
+                        4 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
+                        5 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
+                        6 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
+                        _ => String::new(),
+                    }
+                }
+            }
             WizardStep::Security => match self.selection_index {
                 0 => "Run the mediator behind a reverse proxy (nginx, Caddy, AWS ALB) that terminates TLS. The mediator runs plain HTTP. This is the recommended approach.".into(),
                 1 => "Provide paths to existing SSL certificate and key files.".into(),
@@ -438,13 +538,24 @@ impl WizardApp {
             WizardStep::Database => {
                 "Redis is used for message queues, session storage, and forwarding. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
             }
-            WizardStep::Admin => match self.selection_index {
-                0 => "Generates a new Ed25519 did:key. The private key will be displayed — save it securely!".into(),
-                1 => "Paste any DID (did:key, did:peer, did:webvh, etc.) to use as admin.".into(),
-                2 => "Copy the admin DID from your VTA context.".into(),
-                3 => "You can configure the admin DID later by editing mediator.toml or via the admin API.".into(),
-                _ => String::new(),
-            },
+            WizardStep::Admin => {
+                if self.config.use_vta {
+                    match self.selection_index {
+                        0 => "Generates a new Ed25519 did:key. The private key will be displayed — save it securely!".into(),
+                        1 => "Paste any DID (did:key, did:peer, did:webvh, etc.) to use as admin.".into(),
+                        2 => "Copy the admin DID from your VTA context.".into(),
+                        3 => "You can configure the admin DID later by editing mediator.toml or via the admin API.".into(),
+                        _ => String::new(),
+                    }
+                } else {
+                    match self.selection_index {
+                        0 => "Generates a new Ed25519 did:key. The private key will be displayed — save it securely!".into(),
+                        1 => "Paste any DID (did:key, did:peer, did:webvh, etc.) to use as admin.".into(),
+                        2 => "You can configure the admin DID later by editing mediator.toml or via the admin API.".into(),
+                        _ => String::new(),
+                    }
+                }
+            }
             WizardStep::Summary => String::new(),
         }
     }
@@ -461,6 +572,40 @@ impl WizardApp {
                 };
                 self.apply_deployment_defaults();
                 self.advance();
+            }
+            WizardStep::Vta => {
+                if !self.config.use_vta {
+                    // Yes/No question
+                    match self.selection_index {
+                        0 => {
+                            // Yes — show connectivity sub-selection
+                            self.config.use_vta = true;
+                            self.selection_index = 0;
+                        }
+                        1 => {
+                            // No — manage independently
+                            self.config.use_vta = false;
+                            self.apply_vta_defaults();
+                            self.advance();
+                        }
+                        _ => return,
+                    }
+                } else {
+                    // Online/Cold-start sub-selection
+                    match self.selection_index {
+                        0 => {
+                            self.config.vta_mode = VTA_MODE_ONLINE.into();
+                            self.apply_vta_defaults();
+                            self.advance();
+                        }
+                        1 => {
+                            self.config.vta_mode = VTA_MODE_COLD_START.into();
+                            self.apply_vta_defaults();
+                            self.advance();
+                        }
+                        _ => return,
+                    }
+                }
             }
             WizardStep::Protocol => {
                 match self.selection_index {
@@ -487,33 +632,61 @@ impl WizardApp {
                 }
             }
             WizardStep::Did => {
-                self.config.did_method = match self.selection_index {
-                    0 => DID_VTA.into(),
-                    1 => DID_WEBVH.into(),
-                    2 => DID_PEER.into(),
-                    3 => DID_IMPORT.into(),
-                    _ => return,
-                };
-                // For did:webvh, collect the public URL
-                if self.selection_index == 1 {
-                    self.mode = InputMode::TextInput;
-                    self.text_input = Input::new(self.config.public_url.clone());
-                    return;
+                if self.config.use_vta {
+                    self.config.did_method = match self.selection_index {
+                        0 => DID_VTA.into(),
+                        1 => DID_WEBVH.into(),
+                        2 => DID_PEER.into(),
+                        3 => DID_IMPORT.into(),
+                        _ => return,
+                    };
+                    // For did:webvh, collect the public URL
+                    if self.selection_index == 1 {
+                        self.mode = InputMode::TextInput;
+                        self.text_input = Input::new(self.config.public_url.clone());
+                        return;
+                    }
+                } else {
+                    self.config.did_method = match self.selection_index {
+                        0 => DID_WEBVH.into(),
+                        1 => DID_PEER.into(),
+                        2 => DID_IMPORT.into(),
+                        _ => return,
+                    };
+                    // For did:webvh, collect the public URL
+                    if self.selection_index == 0 {
+                        self.mode = InputMode::TextInput;
+                        self.text_input = Input::new(self.config.public_url.clone());
+                        return;
+                    }
                 }
                 self.advance();
             }
             WizardStep::KeyStorage => {
-                self.config.secret_storage = match self.selection_index {
-                    0 => STORAGE_VTA.into(),
-                    1 => STORAGE_KEYRING.into(),
-                    2 => STORAGE_AWS.into(),
-                    3 => STORAGE_GCP.into(),
-                    4 => STORAGE_AZURE.into(),
-                    5 => STORAGE_VAULT.into(),
-                    6 => STORAGE_FILE.into(),
-                    7 => STORAGE_STRING.into(),
-                    _ => return,
-                };
+                if self.config.use_vta {
+                    self.config.secret_storage = match self.selection_index {
+                        0 => STORAGE_VTA.into(),
+                        1 => STORAGE_KEYRING.into(),
+                        2 => STORAGE_AWS.into(),
+                        3 => STORAGE_GCP.into(),
+                        4 => STORAGE_AZURE.into(),
+                        5 => STORAGE_VAULT.into(),
+                        6 => STORAGE_FILE.into(),
+                        7 => STORAGE_STRING.into(),
+                        _ => return,
+                    };
+                } else {
+                    self.config.secret_storage = match self.selection_index {
+                        0 => STORAGE_KEYRING.into(),
+                        1 => STORAGE_AWS.into(),
+                        2 => STORAGE_GCP.into(),
+                        3 => STORAGE_AZURE.into(),
+                        4 => STORAGE_VAULT.into(),
+                        5 => STORAGE_FILE.into(),
+                        6 => STORAGE_STRING.into(),
+                        _ => return,
+                    };
+                }
                 self.advance();
             }
             WizardStep::Security => {
@@ -537,13 +710,22 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Admin => {
-                self.config.admin_did_mode = match self.selection_index {
-                    0 => ADMIN_GENERATE.into(),
-                    1 => ADMIN_PASTE.into(),
-                    2 => ADMIN_VTA.into(),
-                    3 => ADMIN_SKIP.into(),
-                    _ => return,
-                };
+                if self.config.use_vta {
+                    self.config.admin_did_mode = match self.selection_index {
+                        0 => ADMIN_GENERATE.into(),
+                        1 => ADMIN_PASTE.into(),
+                        2 => ADMIN_VTA.into(),
+                        3 => ADMIN_SKIP.into(),
+                        _ => return,
+                    };
+                } else {
+                    self.config.admin_did_mode = match self.selection_index {
+                        0 => ADMIN_GENERATE.into(),
+                        1 => ADMIN_PASTE.into(),
+                        2 => ADMIN_SKIP.into(),
+                        _ => return,
+                    };
+                }
                 self.advance();
             }
             WizardStep::Summary => {
@@ -594,6 +776,8 @@ impl WizardApp {
     fn apply_deployment_defaults(&mut self) {
         match self.config.deployment_type.as_str() {
             DEPLOYMENT_LOCAL | DEPLOYMENT_SERVER | DEPLOYMENT_CONTAINER => {
+                self.config.use_vta = true;
+                self.config.vta_mode = VTA_MODE_ONLINE.into();
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
                 self.config.did_method = DID_VTA.into();
@@ -603,6 +787,26 @@ impl WizardApp {
                 self.config.admin_did_mode = ADMIN_GENERATE.into();
             }
             _ => {}
+        }
+    }
+
+    /// Apply or clear VTA-dependent defaults when toggling VTA integration.
+    fn apply_vta_defaults(&mut self) {
+        if self.config.use_vta {
+            self.config.did_method = DID_VTA.into();
+            self.config.secret_storage = STORAGE_VTA.into();
+            self.config.admin_did_mode = ADMIN_VTA.into();
+        } else {
+            if self.config.did_method == DID_VTA {
+                self.config.did_method = DID_PEER.into();
+            }
+            if self.config.secret_storage == STORAGE_VTA {
+                self.config.secret_storage = STORAGE_STRING.into();
+            }
+            if self.config.admin_did_mode == ADMIN_VTA {
+                self.config.admin_did_mode = ADMIN_GENERATE.into();
+            }
+            self.config.vta_mode = String::new();
         }
     }
 
@@ -646,6 +850,13 @@ impl WizardApp {
                 }
             }
             InputMode::Selecting => {
+                // Special handling for VTA connectivity sub-selection
+                if self.current_step == WizardStep::Vta && self.config.use_vta {
+                    // Go back from Online/Cold-start to Yes/No
+                    self.config.use_vta = false;
+                    self.selection_index = 0;
+                    return;
+                }
                 if let Some(prev) = self.current_step.prev() {
                     self.completed.retain(|s| *s != prev);
                     self.current_step = prev;
@@ -680,39 +891,81 @@ impl WizardApp {
     }
 
     /// Get the default selection index based on deployment defaults.
-    /// Get the default selection index based on deployment defaults.
     fn default_selection_index(&self) -> usize {
         match self.current_step {
+            WizardStep::Vta => {
+                if self.config.use_vta {
+                    0
+                } else {
+                    1
+                }
+            }
             WizardStep::Protocol => 0, // Start at DIDComm toggle
-            WizardStep::Did => match self.config.did_method.as_str() {
-                DID_VTA => 0,
-                DID_WEBVH => 1,
-                DID_PEER => 2,
-                DID_IMPORT => 3,
-                _ => 0,
-            },
-            WizardStep::KeyStorage => match self.config.secret_storage.as_str() {
-                STORAGE_VTA => 0,
-                STORAGE_KEYRING => 1,
-                STORAGE_AWS => 2,
-                STORAGE_GCP => 3,
-                STORAGE_AZURE => 4,
-                STORAGE_VAULT => 5,
-                STORAGE_FILE => 6,
-                STORAGE_STRING => 7,
-                _ => 0,
-            },
+            WizardStep::Did => {
+                if self.config.use_vta {
+                    match self.config.did_method.as_str() {
+                        DID_VTA => 0,
+                        DID_WEBVH => 1,
+                        DID_PEER => 2,
+                        DID_IMPORT => 3,
+                        _ => 0,
+                    }
+                } else {
+                    match self.config.did_method.as_str() {
+                        DID_WEBVH => 0,
+                        DID_PEER => 1,
+                        DID_IMPORT => 2,
+                        _ => 0,
+                    }
+                }
+            }
+            WizardStep::KeyStorage => {
+                if self.config.use_vta {
+                    match self.config.secret_storage.as_str() {
+                        STORAGE_VTA => 0,
+                        STORAGE_KEYRING => 1,
+                        STORAGE_AWS => 2,
+                        STORAGE_GCP => 3,
+                        STORAGE_AZURE => 4,
+                        STORAGE_VAULT => 5,
+                        STORAGE_FILE => 6,
+                        STORAGE_STRING => 7,
+                        _ => 0,
+                    }
+                } else {
+                    match self.config.secret_storage.as_str() {
+                        STORAGE_KEYRING => 0,
+                        STORAGE_AWS => 1,
+                        STORAGE_GCP => 2,
+                        STORAGE_AZURE => 3,
+                        STORAGE_VAULT => 4,
+                        STORAGE_FILE => 5,
+                        STORAGE_STRING => 6,
+                        _ => 0,
+                    }
+                }
+            }
             WizardStep::Security => match self.config.ssl_mode.as_str() {
                 SSL_EXISTING => 1,
                 SSL_SELF_SIGNED => 2,
                 _ => 0,
             },
-            WizardStep::Admin => match self.config.admin_did_mode.as_str() {
-                ADMIN_PASTE => 1,
-                ADMIN_VTA => 2,
-                ADMIN_SKIP => 3,
-                _ => 0,
-            },
+            WizardStep::Admin => {
+                if self.config.use_vta {
+                    match self.config.admin_did_mode.as_str() {
+                        ADMIN_PASTE => 1,
+                        ADMIN_VTA => 2,
+                        ADMIN_SKIP => 3,
+                        _ => 0,
+                    }
+                } else {
+                    match self.config.admin_did_mode.as_str() {
+                        ADMIN_PASTE => 1,
+                        ADMIN_SKIP => 2,
+                        _ => 0,
+                    }
+                }
+            }
             _ => 0,
         }
     }
@@ -725,11 +978,12 @@ mod tests {
     // ── WizardStep navigation ──────────────────────────────────────────
 
     #[test]
-    fn step_all_returns_8_steps_in_order() {
+    fn step_all_returns_9_steps_in_order() {
         let steps = WizardStep::all();
-        assert_eq!(steps.len(), 8);
+        assert_eq!(steps.len(), 9);
         assert_eq!(steps[0], WizardStep::Deployment);
-        assert_eq!(steps[7], WizardStep::Summary);
+        assert_eq!(steps[1], WizardStep::Vta);
+        assert_eq!(steps[8], WizardStep::Summary);
     }
 
     #[test]
@@ -811,7 +1065,7 @@ mod tests {
         let mut app = WizardApp::new("test.toml".into());
         assert_eq!(app.current_step, WizardStep::Deployment);
         app.advance();
-        assert_eq!(app.current_step, WizardStep::Protocol);
+        assert_eq!(app.current_step, WizardStep::Vta);
         assert!(app.completed_steps().contains(&WizardStep::Deployment));
     }
 
@@ -838,7 +1092,8 @@ mod tests {
     #[test]
     fn go_back_returns_to_previous_step() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // Deployment → Protocol
+        app.advance(); // Deployment → Vta
+        app.advance(); // Vta → Protocol
         app.advance(); // Protocol → Did
         assert_eq!(app.current_step, WizardStep::Did);
         app.go_back();
@@ -874,6 +1129,7 @@ mod tests {
     fn protocol_toggle_prevents_deselecting_both() {
         let mut app = WizardApp::new("test.toml".into());
         app.config.deployment_type = DEPLOYMENT_LOCAL.into();
+        app.advance(); // → Vta
         app.advance(); // → Protocol
 
         // DIDComm is selected by default
@@ -896,6 +1152,7 @@ mod tests {
         app.select_current();
 
         assert_eq!(app.config.deployment_type, DEPLOYMENT_LOCAL);
+        assert!(app.config.use_vta);
         assert!(app.config.didcomm_enabled);
         assert_eq!(app.config.ssl_mode, SSL_NONE);
         assert_eq!(app.config.database_url, DEFAULT_REDIS_URL);
@@ -916,6 +1173,7 @@ mod tests {
     #[test]
     fn focus_progress_syncs_index() {
         let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // → Vta
         app.advance(); // → Protocol
         app.advance(); // → Did
         app.focus_progress();
@@ -934,7 +1192,8 @@ mod tests {
     #[test]
     fn jump_to_completed_step() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // → Protocol (Deployment completed)
+        app.advance(); // → Vta (Deployment completed)
+        app.advance(); // → Protocol (Vta completed)
         app.advance(); // → Did (Protocol completed)
         app.focus_progress();
         app.progress_index = 0; // Deployment
@@ -945,11 +1204,99 @@ mod tests {
     #[test]
     fn jump_to_incomplete_step_does_nothing() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // → Protocol
+        app.advance(); // → Vta
         app.focus_progress();
-        app.progress_index = 5; // Database (not completed)
+        app.progress_index = 6; // Database (not completed)
         let before = app.current_step;
         app.jump_to_progress_step();
         assert_eq!(app.current_step, before); // unchanged
+    }
+
+    // ── VTA integration tests ─────────────────────────────────────────
+
+    #[test]
+    fn vta_yes_then_online_advances() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // Deployment → Vta
+        assert_eq!(app.current_step, WizardStep::Vta);
+
+        // Select "Yes — use VTA"
+        app.selection_index = 0;
+        app.select_current();
+        // Should still be on Vta step, showing connectivity options
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert!(app.config.use_vta);
+
+        // Select "Online"
+        app.selection_index = 0;
+        app.select_current();
+        // Should advance to Protocol
+        assert_eq!(app.current_step, WizardStep::Protocol);
+        assert!(app.config.use_vta);
+        assert_eq!(app.config.vta_mode, VTA_MODE_ONLINE);
+        assert_eq!(app.config.did_method, DID_VTA);
+        assert_eq!(app.config.secret_storage, STORAGE_VTA);
+        assert_eq!(app.config.admin_did_mode, ADMIN_VTA);
+    }
+
+    #[test]
+    fn vta_no_advances_without_mode() {
+        let mut app = WizardApp::new("test.toml".into());
+        // Select "Local development" which sets use_vta=true and VTA defaults
+        app.selection_index = 0;
+        app.select_current(); // Deployment → Vta (with defaults: use_vta=true, did=VTA, storage=VTA)
+        assert_eq!(app.current_step, WizardStep::Vta);
+
+        // The deployment defaults set use_vta=true, so we see connectivity options.
+        // First go back to Yes/No by pressing Esc.
+        app.go_back();
+        assert!(!app.config.use_vta);
+
+        // Select "No — manage independently"
+        app.selection_index = 1;
+        app.select_current();
+        // Should advance to Protocol
+        assert_eq!(app.current_step, WizardStep::Protocol);
+        assert!(!app.config.use_vta);
+        assert_eq!(app.config.did_method, DID_PEER);
+        assert_eq!(app.config.secret_storage, STORAGE_STRING);
+        assert_eq!(app.config.vta_mode, "");
+    }
+
+    #[test]
+    fn did_options_exclude_vta_when_disabled() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = false;
+        app.current_step = WizardStep::Did;
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 3);
+    }
+
+    #[test]
+    fn did_options_include_vta_when_enabled() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = true;
+        app.current_step = WizardStep::Did;
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 4);
+    }
+
+    #[test]
+    fn go_back_from_vta_connectivity_shows_yes_no() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // Deployment → Vta
+        assert_eq!(app.current_step, WizardStep::Vta);
+
+        // Select "Yes" to enter connectivity sub-selection
+        app.selection_index = 0;
+        app.select_current();
+        assert!(app.config.use_vta);
+        assert_eq!(app.current_step, WizardStep::Vta);
+
+        // Press Esc — should go back to Yes/No, not to Deployment
+        app.go_back();
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert!(!app.config.use_vta);
+        assert_eq!(app.selection_index, 0);
     }
 }

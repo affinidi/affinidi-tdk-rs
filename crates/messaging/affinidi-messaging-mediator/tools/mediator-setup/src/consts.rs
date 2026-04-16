@@ -30,6 +30,10 @@ pub const ADMIN_PASTE: &str = "Paste existing";
 pub const ADMIN_VTA: &str = "Copy from VTA";
 pub const ADMIN_SKIP: &str = "Skip";
 
+/// VTA connectivity modes
+pub const VTA_MODE_ONLINE: &str = "online";
+pub const VTA_MODE_COLD_START: &str = "cold-start";
+
 /// Default values
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
 pub const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";

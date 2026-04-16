@@ -142,6 +142,8 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     // Apply deployment defaults (identical across all deployment types)
     config.deployment_type = deployment.to_string();
+    config.use_vta = true;
+    config.vta_mode = VTA_MODE_ONLINE.into();
     config.didcomm_enabled = true;
     config.did_method = DID_VTA.into();
     config.secret_storage = STORAGE_VTA.into();
@@ -159,6 +161,14 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     println!("Mediator Setup (non-interactive)");
     println!("  Deployment:   {}", config.deployment_type);
+    println!(
+        "  VTA:          {}",
+        if config.use_vta {
+            format!("Enabled ({})", config.vta_mode)
+        } else {
+            "Disabled".into()
+        }
+    );
     println!("  Protocol:     {}", config.protocol_display());
     println!("  DID method:   {}", config.did_method);
     println!("  Key storage:  {}", config.secret_storage);
@@ -191,6 +201,14 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
     print_banner();
     println!("  \x1b[2mFrom recipe: {recipe_path}\x1b[0m\n");
     println!("  Deployment:   {}", config.deployment_type);
+    println!(
+        "  VTA:          {}",
+        if config.use_vta {
+            format!("Enabled ({})", config.vta_mode)
+        } else {
+            "Disabled".into()
+        }
+    );
     println!("  Protocol:     {}", config.protocol_display());
     println!("  DID method:   {}", config.did_method);
     println!("  Key storage:  {}", config.secret_storage);

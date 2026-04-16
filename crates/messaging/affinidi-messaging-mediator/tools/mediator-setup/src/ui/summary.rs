@@ -58,6 +58,12 @@ pub fn render_summary(
 
     // ── Identity ──
     add_section_header(&mut lines, "Identity", section_style);
+    let vta_display = if config.use_vta {
+        format!("Enabled ({})", config.vta_mode)
+    } else {
+        "Disabled".into()
+    };
+    add_field(&mut lines, "  VTA", &vta_display, label_style, value_style);
     add_field(
         &mut lines,
         "  DID Method",

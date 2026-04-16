@@ -38,6 +38,12 @@ pub struct DeploymentSection {
     /// `["didcomm"]`, `["tsp"]`, or `["didcomm", "tsp"]`
     #[serde(default = "default_protocols")]
     pub protocols: Vec<String>,
+    /// Whether VTA integration is enabled
+    #[serde(default)]
+    pub use_vta: bool,
+    /// VTA connectivity mode: `"online"` or `"cold-start"`
+    #[serde(default)]
+    pub vta_mode: Option<String>,
 }
 
 fn default_protocols() -> Vec<String> {
@@ -210,6 +216,20 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         ),
     };
 
+    // VTA integration
+    config.use_vta = recipe.deployment.use_vta;
+    config.vta_mode = recipe.deployment.vta_mode.clone().unwrap_or_default();
+
+    // Auto-detect: if recipe uses VTA storage/DID but use_vta is missing (backward compat)
+    if !config.use_vta
+        && (recipe.secrets.storage == STORAGE_VTA || recipe.identity.did_method == "vta")
+    {
+        config.use_vta = true;
+        if config.vta_mode.is_empty() {
+            config.vta_mode = VTA_MODE_ONLINE.into();
+        }
+    }
+
     // Protocols
     config.didcomm_enabled = false;
     config.tsp_enabled = false;
@@ -362,7 +382,12 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     if config.tsp_enabled {
         protocols.push("\"tsp\"");
     }
-    out.push_str(&format!("protocols = [{}]\n\n", protocols.join(", ")));
+    out.push_str(&format!("protocols = [{}]\n", protocols.join(", ")));
+    out.push_str(&format!("use_vta = {}\n", config.use_vta));
+    if config.use_vta && !config.vta_mode.is_empty() {
+        out.push_str(&format!("vta_mode = \"{}\"\n", config.vta_mode));
+    }
+    out.push('\n');
 
     // Identity
     out.push_str("[identity]\n");
@@ -492,6 +517,8 @@ mod tests {
             deployment: DeploymentSection {
                 deployment_type: "local".into(),
                 protocols: vec!["didcomm".into()],
+                use_vta: false,
+                vta_mode: None,
             },
             identity: IdentitySection::default(),
             secrets: SecretsSection::default(),
@@ -634,6 +661,8 @@ mod tests {
         let original = WizardConfig {
             config_path: "conf/mediator.toml".into(),
             deployment_type: DEPLOYMENT_SERVER.into(),
+            use_vta: false,
+            vta_mode: String::new(),
             didcomm_enabled: true,
             tsp_enabled: true,
             did_method: DID_PEER.into(),
@@ -660,5 +689,41 @@ mod tests {
         assert_eq!(restored.database_url, original.database_url);
         assert_eq!(restored.config_path, original.config_path);
         assert_eq!(restored.listen_address, original.listen_address);
+        assert_eq!(restored.use_vta, original.use_vta);
+    }
+
+    #[test]
+    fn test_recipe_round_trip_with_vta() {
+        let original = WizardConfig {
+            use_vta: true,
+            vta_mode: VTA_MODE_ONLINE.into(),
+            did_method: DID_VTA.into(),
+            secret_storage: STORAGE_VTA.into(),
+            admin_did_mode: ADMIN_VTA.into(),
+            ..WizardConfig::default()
+        };
+
+        let recipe_toml = from_wizard_config(&original);
+        assert!(recipe_toml.contains("use_vta = true"));
+        assert!(recipe_toml.contains("vta_mode = \"online\""));
+
+        let parsed: BuildRecipe = toml::from_str(&recipe_toml).unwrap();
+        let restored = to_wizard_config(&parsed).unwrap();
+
+        assert!(restored.use_vta);
+        assert_eq!(restored.vta_mode, VTA_MODE_ONLINE);
+        assert_eq!(restored.did_method, DID_VTA);
+        assert_eq!(restored.secret_storage, STORAGE_VTA);
+    }
+
+    #[test]
+    fn test_backward_compat_infers_vta() {
+        // Old recipe without use_vta but with VTA storage
+        let mut recipe = minimal_recipe();
+        recipe.identity.did_method = "vta".into();
+        recipe.secrets.storage = STORAGE_VTA.into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert!(config.use_vta, "should auto-detect VTA from storage/DID");
+        assert_eq!(config.vta_mode, VTA_MODE_ONLINE);
     }
 }

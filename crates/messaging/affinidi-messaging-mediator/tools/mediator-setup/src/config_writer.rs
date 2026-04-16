@@ -78,7 +78,7 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     doc["mediator_did"] = toml_edit::value(format!("did://{}", generated.mediator_did));
 
     // VTA section — update or remove based on config
-    if config.did_method == DID_VTA || config.secret_storage == STORAGE_VTA {
+    if config.use_vta || config.did_method == DID_VTA || config.secret_storage == STORAGE_VTA {
         // Keep [vta] section, update context
         if let Some(vta) = doc.get_mut("vta") {
             vta["credential"] = toml_edit::value("keyring://affinidi-mediator/vta-credential");
@@ -192,6 +192,8 @@ mod tests {
         let config = WizardConfig {
             config_path: "conf/mediator.toml".into(),
             deployment_type: "Local development".into(),
+            use_vta: false,
+            vta_mode: String::new(),
             didcomm_enabled: true,
             tsp_enabled: false,
             did_method: DID_PEER.into(),
@@ -236,6 +238,8 @@ mod tests {
         let config = WizardConfig {
             config_path: "conf/mediator.toml".into(),
             deployment_type: "Headless server".into(),
+            use_vta: true,
+            vta_mode: VTA_MODE_ONLINE.into(),
             didcomm_enabled: true,
             tsp_enabled: false,
             did_method: DID_VTA.into(),

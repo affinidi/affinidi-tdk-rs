@@ -36,6 +36,16 @@ type = "server"
 #   tsp     — Trust Spanning Protocol (experimental)
 protocols = ["didcomm"]
 
+# use_vta: enable VTA (Verifiable Trust Agent) integration
+#   true  — VTA manages DIDs and keys centrally (recommended for production)
+#   false — manage keys independently (local dev, no VTA dependency)
+use_vta = true
+
+# vta_mode: how the mediator connects to VTA (only when use_vta = true)
+#   "online"     — VTA is accessible, connection mode auto-detected from credential
+#   "cold-start" — VTA not accessible, use pre-provisioned/cached credentials
+vta_mode = "online"
+
 
 # ── Identity ────────────────────────────────────────────────────────────────
 [identity]
