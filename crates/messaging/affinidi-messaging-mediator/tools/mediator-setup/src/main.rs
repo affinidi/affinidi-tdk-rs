@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
                 prompt_config_path(&mut app.config);
 
                 println!("  Generating cryptographic material...\n");
-                match generate_and_write(&app.config).await {
+                match generate_and_write(&app.config, true).await {
                     Ok(()) => {
                         offer_build_and_guidance(&app.config);
                     }
@@ -178,7 +178,7 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     println!();
     println!("Generating cryptographic material...");
 
-    generate_and_write(&config).await?;
+    generate_and_write(&config, true).await?;
     offer_build_and_guidance(&config);
 
     Ok(())
@@ -212,7 +212,7 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
     println!();
     println!("  Generating cryptographic material...\n");
 
-    generate_and_write(&config).await?;
+    generate_and_write(&config, false).await?;
 
     let features = build_features(&config);
 
@@ -357,7 +357,10 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
 }
 
 /// Run all generators and write configuration files.
-async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
+/// When `save_recipe` is true, a `mediator-build.toml` recipe is saved alongside
+/// the config for reproducibility. Set to false when running from `--from` to
+/// avoid overwriting the input recipe.
+async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> anyhow::Result<()> {
     // Generate mediator DID + secrets
     let (mediator_did, mediator_secrets, did_doc) = match config.did_method.as_str() {
         "did:peer" => {
@@ -466,17 +469,19 @@ async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
         println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
     }
 
-    // Save build recipe for reproducibility
-    let recipe_path = std::path::Path::new(&config.config_path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("mediator-build.toml");
-    let recipe_content = recipe::from_wizard_config(config);
-    std::fs::write(&recipe_path, &recipe_content)?;
-    println!(
-        "  \x1b[32m\u{2714}\x1b[0m Build recipe:  \x1b[1m{}\x1b[0m",
-        recipe_path.display()
-    );
+    // Save build recipe for reproducibility (skip when running from --from)
+    if save_recipe {
+        let recipe_path = std::path::Path::new(&config.config_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("mediator-build.toml");
+        let recipe_content = recipe::from_wizard_config(config);
+        std::fs::write(&recipe_path, &recipe_content)?;
+        println!(
+            "  \x1b[32m\u{2714}\x1b[0m Build recipe:  \x1b[1m{}\x1b[0m",
+            recipe_path.display()
+        );
+    }
 
     // Generate Docker files for container deployments
     if config.deployment_type == "Container" {

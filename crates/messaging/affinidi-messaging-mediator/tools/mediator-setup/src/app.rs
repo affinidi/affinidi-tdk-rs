@@ -697,6 +697,7 @@ impl WizardApp {
     }
 
     /// Get the default selection index based on deployment defaults.
+    /// Get the default selection index based on deployment defaults.
     fn default_selection_index(&self) -> usize {
         match self.current_step {
             WizardStep::Protocol => 0, // Start at DIDComm toggle
@@ -731,5 +732,241 @@ impl WizardApp {
             },
             _ => 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── WizardStep navigation ──────────────────────────────────────────
+
+    #[test]
+    fn step_all_returns_8_steps_in_order() {
+        let steps = WizardStep::all();
+        assert_eq!(steps.len(), 8);
+        assert_eq!(steps[0], WizardStep::Deployment);
+        assert_eq!(steps[7], WizardStep::Summary);
+    }
+
+    #[test]
+    fn step_index_matches_position() {
+        for (i, step) in WizardStep::all().iter().enumerate() {
+            assert_eq!(step.index(), i);
+            assert_eq!(step.step_number(), i + 1);
+        }
+    }
+
+    #[test]
+    fn step_total_matches_all_len() {
+        assert_eq!(WizardStep::total(), WizardStep::all().len());
+    }
+
+    #[test]
+    fn first_step_has_no_prev() {
+        assert_eq!(WizardStep::Deployment.prev(), None);
+    }
+
+    #[test]
+    fn last_step_has_no_next() {
+        assert_eq!(WizardStep::Summary.next(), None);
+    }
+
+    #[test]
+    fn next_prev_are_inverses() {
+        let steps = WizardStep::all();
+        for i in 0..steps.len() - 1 {
+            let next = steps[i].next().unwrap();
+            assert_eq!(next, steps[i + 1]);
+            assert_eq!(next.prev().unwrap(), steps[i]);
+        }
+    }
+
+    // ── WizardConfig ───────────────────────────────────────────────────
+
+    #[test]
+    fn protocol_display_combinations() {
+        let mut cfg = WizardConfig::default();
+        cfg.didcomm_enabled = true;
+        cfg.tsp_enabled = false;
+        assert_eq!(cfg.protocol_display(), "DIDComm v2");
+
+        cfg.tsp_enabled = true;
+        assert_eq!(cfg.protocol_display(), "DIDComm v2 + TSP");
+
+        cfg.didcomm_enabled = false;
+        assert_eq!(cfg.protocol_display(), "TSP");
+
+        cfg.tsp_enabled = false;
+        assert_eq!(cfg.protocol_display(), "None (invalid)");
+    }
+
+    #[test]
+    fn default_config_has_sensible_values() {
+        let cfg = WizardConfig::default();
+        assert!(cfg.didcomm_enabled);
+        assert!(!cfg.tsp_enabled);
+        assert_eq!(cfg.config_path, "conf/mediator.toml");
+        assert_eq!(cfg.database_url, "redis://127.0.0.1/");
+        assert_eq!(cfg.listen_address, "0.0.0.0:7037");
+    }
+
+    // ── WizardApp state machine ────────────────────────────────────────
+
+    #[test]
+    fn new_app_starts_at_deployment() {
+        let app = WizardApp::new("conf/mediator.toml".into());
+        assert_eq!(app.current_step, WizardStep::Deployment);
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(app.focus, FocusPanel::Content);
+        assert!(!app.should_quit);
+        assert!(!app.write_config);
+    }
+
+    #[test]
+    fn advance_moves_to_next_step() {
+        let mut app = WizardApp::new("test.toml".into());
+        assert_eq!(app.current_step, WizardStep::Deployment);
+        app.advance();
+        assert_eq!(app.current_step, WizardStep::Protocol);
+        assert!(app.completed_steps().contains(&WizardStep::Deployment));
+    }
+
+    #[test]
+    fn advance_sets_text_input_for_database() {
+        let mut app = WizardApp::new("test.toml".into());
+        // Advance to Database step
+        while app.current_step != WizardStep::Admin {
+            app.advance();
+        }
+        // Admin → Summary should set Confirming
+        app.advance();
+        assert_eq!(app.current_step, WizardStep::Summary);
+        assert_eq!(app.mode, InputMode::Confirming);
+    }
+
+    #[test]
+    fn go_back_from_first_step_quits() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.go_back();
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn go_back_returns_to_previous_step() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // Deployment → Protocol
+        app.advance(); // Protocol → Did
+        assert_eq!(app.current_step, WizardStep::Did);
+        app.go_back();
+        assert_eq!(app.current_step, WizardStep::Protocol);
+    }
+
+    #[test]
+    fn go_back_from_summary_confirming_returns_to_admin() {
+        let mut app = WizardApp::new("test.toml".into());
+        // Advance to Summary
+        while app.current_step != WizardStep::Summary {
+            app.advance();
+        }
+        assert_eq!(app.mode, InputMode::Confirming);
+        app.go_back();
+        assert_eq!(app.current_step, WizardStep::Admin);
+    }
+
+    #[test]
+    fn move_up_down_bounds() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.selection_index = 0;
+        app.move_up();
+        assert_eq!(app.selection_index, 0); // stays at 0
+
+        let max = app.current_options().len() - 1;
+        app.selection_index = max;
+        app.move_down();
+        assert_eq!(app.selection_index, max); // stays at max
+    }
+
+    #[test]
+    fn protocol_toggle_prevents_deselecting_both() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.deployment_type = "Local development".into();
+        app.advance(); // → Protocol
+
+        // DIDComm is selected by default
+        assert!(app.config.didcomm_enabled);
+        assert!(!app.config.tsp_enabled);
+
+        // Toggle DIDComm off — should re-enable since it's the only one
+        app.selection_index = 0; // DIDComm toggle
+        app.select_current();
+        // At least one must remain enabled
+        assert!(app.config.didcomm_enabled || app.config.tsp_enabled);
+    }
+
+    #[test]
+    fn deployment_defaults_set_correctly() {
+        let mut app = WizardApp::new("test.toml".into());
+
+        // Select "Local development"
+        app.selection_index = 0;
+        app.select_current();
+
+        assert_eq!(app.config.deployment_type, "Local development");
+        assert!(app.config.didcomm_enabled);
+        assert_eq!(app.config.ssl_mode, "No SSL (TLS proxy)");
+        assert_eq!(app.config.database_url, "redis://127.0.0.1/");
+    }
+
+    #[test]
+    fn summary_enter_sets_write_config() {
+        let mut app = WizardApp::new("test.toml".into());
+        while app.current_step != WizardStep::Summary {
+            app.advance();
+        }
+        assert_eq!(app.mode, InputMode::Confirming);
+        app.select_current();
+        assert!(app.write_config);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn focus_progress_syncs_index() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // → Protocol
+        app.advance(); // → Did
+        app.focus_progress();
+        assert_eq!(app.focus, FocusPanel::Progress);
+        assert_eq!(app.progress_index, WizardStep::Did.index());
+    }
+
+    #[test]
+    fn focus_progress_blocked_during_text_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::TextInput;
+        app.focus_progress();
+        assert_eq!(app.focus, FocusPanel::Content); // didn't switch
+    }
+
+    #[test]
+    fn jump_to_completed_step() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // → Protocol (Deployment completed)
+        app.advance(); // → Did (Protocol completed)
+        app.focus_progress();
+        app.progress_index = 0; // Deployment
+        app.jump_to_progress_step();
+        assert_eq!(app.current_step, WizardStep::Deployment);
+    }
+
+    #[test]
+    fn jump_to_incomplete_step_does_nothing() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // → Protocol
+        app.focus_progress();
+        app.progress_index = 5; // Database (not completed)
+        let before = app.current_step;
+        app.jump_to_progress_step();
+        assert_eq!(app.current_step, before); // unchanged
     }
 }

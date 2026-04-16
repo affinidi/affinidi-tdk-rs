@@ -256,4 +256,117 @@ mod tests {
         assert!(toml.contains("mediator_secrets = \"vta://mediator\""));
         assert!(toml.contains("database_url = \"redis://redis.example.com/\""));
     }
+
+    #[test]
+    fn test_ssl_self_signed() {
+        let config = WizardConfig {
+            ssl_mode: "Self-signed".into(),
+            did_method: "did:peer".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            ssl_cert_path: Some("conf/keys/end.cert".into()),
+            ssl_key_path: Some("conf/keys/end.key".into()),
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(toml.contains("use_ssl = \"true\""));
+        assert!(toml.contains("ssl_certificate_file = \"conf/keys/end.cert\""));
+        assert!(toml.contains("ssl_key_file = \"conf/keys/end.key\""));
+    }
+
+    #[test]
+    fn test_ssl_existing_certificates() {
+        let config = WizardConfig {
+            ssl_mode: "Existing certificates".into(),
+            ssl_cert_path: "/etc/ssl/cert.pem".into(),
+            ssl_key_path: "/etc/ssl/key.pem".into(),
+            did_method: "did:peer".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("use_ssl = \"true\""));
+        assert!(toml.contains("ssl_certificate_file = \"/etc/ssl/cert.pem\""));
+        assert!(toml.contains("ssl_key_file = \"/etc/ssl/key.pem\""));
+    }
+
+    #[test]
+    fn test_no_admin_did_removes_field() {
+        let config = WizardConfig {
+            admin_did_mode: "Skip".into(),
+            did_method: "did:peer".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            admin_did: None,
+            admin_secret: None,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        // admin_did should not appear as a key=value (may appear in comments)
+        assert!(!toml.contains("admin_did = \"did://"));
+    }
+
+    #[test]
+    fn test_webvh_includes_self_hosted() {
+        let config = WizardConfig {
+            did_method: "did:webvh".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("did_web_self_hosted = \"file://./conf/mediator_did.json\""));
+    }
+
+    #[test]
+    fn test_non_webvh_removes_self_hosted() {
+        let config = WizardConfig {
+            did_method: "did:peer".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        // should not have did_web_self_hosted as a key=value
+        assert!(!toml.contains("did_web_self_hosted = \"file://"));
+    }
+
+    #[test]
+    fn test_all_secret_storage_refs() {
+        let cases = [
+            ("file://", "file://./conf/secrets.json"),
+            ("keyring://", "keyring://affinidi-mediator/secrets"),
+            ("aws_secrets://", "aws_secrets://mediator/secrets"),
+            ("gcp_secrets://", "gcp_secrets://mediator/secrets"),
+            ("azure_keyvault://", "azure_keyvault://mediator-secrets"),
+            ("vault://", "vault://secret/mediator/secrets"),
+            ("vta://", "vta://mediator"),
+        ];
+        for (storage, expected_ref) in cases {
+            let config = WizardConfig {
+                did_method: "did:peer".into(),
+                secret_storage: storage.into(),
+                ..WizardConfig::default()
+            };
+            let toml = generate_toml(&config, &test_generated()).unwrap();
+            assert!(
+                toml.contains(&format!("mediator_secrets = \"{expected_ref}\"")),
+                "storage={storage}: expected {expected_ref} in output"
+            );
+        }
+    }
+
+    #[test]
+    fn test_listen_address_set() {
+        let config = WizardConfig {
+            listen_address: "127.0.0.1:9090".into(),
+            did_method: "did:peer".into(),
+            secret_storage: "string://".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("listen_address = \"127.0.0.1:9090\""));
+    }
 }

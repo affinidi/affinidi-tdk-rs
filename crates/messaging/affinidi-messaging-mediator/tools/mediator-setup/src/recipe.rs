@@ -43,7 +43,7 @@ fn default_protocols() -> Vec<String> {
     vec!["didcomm".into()]
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct IdentitySection {
     /// `vta`, `did:peer`, `did:webvh`, or `import`
     #[serde(default = "default_did_method")]
@@ -56,7 +56,16 @@ fn default_did_method() -> String {
     "vta".into()
 }
 
-#[derive(Debug, Default, Deserialize)]
+impl Default for IdentitySection {
+    fn default() -> Self {
+        Self {
+            did_method: default_did_method(),
+            public_url: None,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SecretsSection {
     /// `string://`, `file://`, `keyring://`, `aws_secrets://`,
     /// `gcp_secrets://`, `azure_keyvault://`, `vault://`, or `vta://`
@@ -66,6 +75,14 @@ pub struct SecretsSection {
 
 fn default_storage() -> String {
     "vta://".into()
+}
+
+impl Default for SecretsSection {
+    fn default() -> Self {
+        Self {
+            storage: default_storage(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -442,5 +459,197 @@ mod tests {
         assert!(!recipe.contains("user:"), "username leaked into recipe");
         assert!(recipe.contains("prod-redis.example.com"));
         assert!(recipe.contains("Credentials were stripped"));
+    }
+
+    // ── needs_database_credentials ─────────────────────────────────────
+
+    #[test]
+    fn test_needs_credentials_placeholders() {
+        assert!(needs_database_credentials("redis://<host>:6379/"));
+        assert!(needs_database_credentials("redis://${DB_HOST}/"));
+        assert!(needs_database_credentials("$DATABASE_URL"));
+    }
+
+    #[test]
+    fn test_needs_credentials_normal_url() {
+        assert!(!needs_database_credentials("redis://127.0.0.1/"));
+        assert!(!needs_database_credentials("redis://prod-host:6379/2"));
+    }
+
+    // ── to_wizard_config validation ────────────────────────────────────
+
+    fn minimal_recipe() -> BuildRecipe {
+        BuildRecipe {
+            deployment: DeploymentSection {
+                deployment_type: "local".into(),
+                protocols: vec!["didcomm".into()],
+            },
+            identity: IdentitySection::default(),
+            secrets: SecretsSection::default(),
+            security: SecuritySection::default(),
+            database: DatabaseSection::default(),
+            output: OutputSection::default(),
+            install: InstallSection::default(),
+        }
+    }
+
+    #[test]
+    fn test_valid_recipe_converts() {
+        let config = to_wizard_config(&minimal_recipe()).unwrap();
+        assert_eq!(config.deployment_type, "Local development");
+        assert!(config.didcomm_enabled);
+        assert!(!config.tsp_enabled);
+        assert_eq!(config.did_method, "VTA managed");
+        assert_eq!(config.secret_storage, "vta://");
+    }
+
+    #[test]
+    fn test_all_deployment_types() {
+        for (input, expected) in [
+            ("local", "Local development"),
+            ("server", "Headless server"),
+            ("container", "Container"),
+        ] {
+            let mut recipe = minimal_recipe();
+            recipe.deployment.deployment_type = input.into();
+            let config = to_wizard_config(&recipe).unwrap();
+            assert_eq!(config.deployment_type, expected);
+        }
+    }
+
+    #[test]
+    fn test_invalid_deployment_type_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.deployment_type = "cloud".into();
+        assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_both_protocols() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec!["didcomm".into(), "tsp".into()];
+        let config = to_wizard_config(&recipe).unwrap();
+        assert!(config.didcomm_enabled);
+        assert!(config.tsp_enabled);
+    }
+
+    #[test]
+    fn test_no_protocols_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec![];
+        assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_invalid_protocol_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.protocols = vec!["grpc".into()];
+        assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_all_did_methods() {
+        for (input, expected) in [
+            ("vta", "VTA managed"),
+            ("did:peer", "did:peer"),
+            ("peer", "did:peer"),
+            ("did:webvh", "did:webvh"),
+            ("webvh", "did:webvh"),
+            ("import", "Import existing"),
+        ] {
+            let mut recipe = minimal_recipe();
+            recipe.identity.did_method = input.into();
+            if expected == "did:webvh" {
+                recipe.identity.public_url = Some("https://example.com".into());
+            }
+            let config = to_wizard_config(&recipe).unwrap();
+            assert_eq!(config.did_method, expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn test_webvh_requires_public_url() {
+        let mut recipe = minimal_recipe();
+        recipe.identity.did_method = "did:webvh".into();
+        recipe.identity.public_url = None;
+        assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_all_secret_storage_schemes() {
+        for scheme in [
+            "string://",
+            "file://",
+            "keyring://",
+            "aws_secrets://",
+            "gcp_secrets://",
+            "azure_keyvault://",
+            "vault://",
+            "vta://",
+        ] {
+            let mut recipe = minimal_recipe();
+            recipe.secrets.storage = scheme.into();
+            let config = to_wizard_config(&recipe).unwrap();
+            assert_eq!(config.secret_storage, scheme);
+        }
+    }
+
+    #[test]
+    fn test_invalid_secret_storage_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.secrets.storage = "dropbox://".into();
+        assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_ssl_existing_requires_paths() {
+        let mut recipe = minimal_recipe();
+        recipe.security.ssl = "existing".into();
+        recipe.security.ssl_cert = None;
+        recipe.security.ssl_key = None;
+        assert!(to_wizard_config(&recipe).is_err());
+
+        recipe.security.ssl_cert = Some("/path/cert.pem".into());
+        assert!(to_wizard_config(&recipe).is_err()); // still missing key
+
+        recipe.security.ssl_key = Some("/path/key.pem".into());
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.ssl_cert_path, "/path/cert.pem");
+        assert_eq!(config.ssl_key_path, "/path/key.pem");
+    }
+
+    // ── from_wizard_config round-trip ──────────────────────────────────
+
+    #[test]
+    fn test_recipe_round_trip() {
+        let original = WizardConfig {
+            config_path: "conf/mediator.toml".into(),
+            deployment_type: "Headless server".into(),
+            didcomm_enabled: true,
+            tsp_enabled: true,
+            did_method: "did:peer".into(),
+            public_url: String::new(),
+            secret_storage: "keyring://".into(),
+            ssl_mode: "No SSL (TLS proxy)".into(),
+            ssl_cert_path: String::new(),
+            ssl_key_path: String::new(),
+            database_url: "redis://127.0.0.1/3".into(),
+            admin_did_mode: "Skip".into(),
+            listen_address: "0.0.0.0:8080".into(),
+        };
+
+        let recipe_toml = from_wizard_config(&original);
+        let parsed: BuildRecipe = toml::from_str(&recipe_toml).unwrap();
+        let restored = to_wizard_config(&parsed).unwrap();
+
+        assert_eq!(restored.deployment_type, original.deployment_type);
+        assert_eq!(restored.didcomm_enabled, original.didcomm_enabled);
+        assert_eq!(restored.tsp_enabled, original.tsp_enabled);
+        assert_eq!(restored.did_method, original.did_method);
+        assert_eq!(restored.secret_storage, original.secret_storage);
+        assert_eq!(restored.ssl_mode, original.ssl_mode);
+        assert_eq!(restored.database_url, original.database_url);
+        assert_eq!(restored.config_path, original.config_path);
+        assert_eq!(restored.listen_address, original.listen_address);
     }
 }
