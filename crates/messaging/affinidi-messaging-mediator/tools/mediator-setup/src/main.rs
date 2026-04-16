@@ -408,11 +408,11 @@ fn print_banner() {
     let reset = "\x1b[0m";
 
     println!();
-    println!("{blue}     _    __  __ _       _     _ _ {reset}");
-    println!("{blue}    / \\  / _|/ _(_)_ __ (_) __| (_){reset}");
-    println!("{blue}   / _ \\| |_| |_| | '_ \\| |/ _` | |{reset}");
-    println!("{blue}  / ___ \\  _|  _| | | | | | (_| | |{reset}");
-    println!("{blue} /_/   \\_\\_| |_| |_|_| |_|_|\\__,_|_|{reset}");
+    println!("  {blue}    _    __  __ _       _     _ _{reset}");
+    println!("  {blue}   / \\  / _|/ _(_)_ __ (_) __| (_){reset}");
+    println!("  {blue}  / _ \\| |_| |_| | '_ \\| |/ _` | |{reset}");
+    println!("  {blue} / ___ \\  _|  _| | | | | | (_| | |{reset}");
+    println!("  {blue}/_/   \\_\\_| |_| |_|_| |_|_|\\__,_|_|{reset}");
     println!();
     println!("  {teal}\u{2588}\u{2588}\u{2588}{reset} {white}Messaging Mediator Setup{reset}");
     println!("  {dim}Secure, scalable DIDComm & TSP messaging infrastructure{reset}");
