@@ -3,6 +3,7 @@ mod cli;
 mod config_writer;
 mod docker;
 mod generators;
+mod recipe;
 mod secrets;
 mod ui;
 
@@ -35,6 +36,10 @@ const RENDERING_TICK_RATE: Duration = Duration::from_millis(250);
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    if let Some(ref recipe_path) = args.from {
+        return run_from_recipe(recipe_path).await;
+    }
 
     if args.non_interactive {
         return run_non_interactive(args).await;
@@ -175,6 +180,70 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     generate_and_write(&config).await?;
     offer_build_and_guidance(&config);
+
+    Ok(())
+}
+
+/// Run from a declarative build recipe TOML file (fully non-interactive).
+async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
+    let recipe = recipe::load(recipe_path)?;
+    let config = recipe::to_wizard_config(&recipe)?;
+
+    println!("Mediator Setup (from recipe: {recipe_path})");
+    println!("  Deployment:   {}", config.deployment_type);
+    println!("  Protocol:     {}", config.protocol_display());
+    println!("  DID method:   {}", config.did_method);
+    println!("  Key storage:  {}", config.secret_storage);
+    println!("  SSL/TLS:      {}", config.ssl_mode);
+    println!("  Database:     {}", config.database_url);
+    println!("  Admin:        {}", config.admin_did_mode);
+    println!("  Config file:  {}", config.config_path);
+    println!("  Listen:       {}", config.listen_address);
+    println!();
+    println!("Generating cryptographic material...");
+
+    generate_and_write(&config).await?;
+
+    // Auto-install if recipe says so
+    if recipe.install.enabled {
+        let features = build_features(&config);
+        let install_root = recipe.install.path.as_deref();
+        let install_args = build_install_args(&features, install_root);
+
+        let workspace_root = find_workspace_root();
+        let build_dir = workspace_root
+            .ok_or_else(|| anyhow::anyhow!("Cannot find workspace root for cargo install"))?;
+
+        let install_location = install_root.map(|r| format!("{r}/bin")).unwrap_or_else(|| {
+            let cargo_home = std::env::var("CARGO_HOME").unwrap_or_else(|_| "~/.cargo".into());
+            format!("{cargo_home}/bin")
+        });
+
+        println!("\nInstalling mediator to {install_location} (this may take a few minutes)...\n");
+
+        let status = Command::new("cargo")
+            .args(&install_args)
+            .current_dir(&build_dir)
+            .status();
+
+        match status {
+            Ok(exit) if exit.success() => {
+                println!("\nInstallation successful!");
+                print_run_command(&config.config_path, &install_location);
+            }
+            Ok(exit) => {
+                anyhow::bail!("cargo install failed with exit code: {}", exit);
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to run cargo: {}", e);
+            }
+        }
+    } else {
+        println!("\nConfiguration written. To build and install the mediator:");
+        let features = build_features(&config);
+        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
+        println!("  {install_cmd}");
+    }
 
     Ok(())
 }
@@ -378,6 +447,18 @@ async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
     if config.ssl_mode == "Self-signed" {
         println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
     }
+
+    // Save build recipe for reproducibility
+    let recipe_path = std::path::Path::new(&config.config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("mediator-build.toml");
+    let recipe_content = recipe::from_wizard_config(config);
+    std::fs::write(&recipe_path, &recipe_content)?;
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Build recipe:  \x1b[1m{}\x1b[0m",
+        recipe_path.display()
+    );
 
     // Generate Docker files for container deployments
     if config.deployment_type == "Container" {
@@ -641,6 +722,7 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
         println!("  \x1b[33mCannot find workspace root.\x1b[0m");
         print_manual_instructions(&install_cmd, &build_cmd, config);
+        print_final_summary(config);
         return;
     };
 
@@ -658,9 +740,11 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         Some(1) => {
             let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
             print_manual_instructions(&install_cmd, &build_cmd, config);
+            print_final_summary(config);
             return;
         }
         Some(2) | None => {
+            print_final_summary(config);
             return;
         }
         _ => {} // Install now (0)
@@ -727,6 +811,8 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
             print_manual_instructions(&install_cmd, &build_cmd, config);
         }
     }
+
+    print_final_summary(config);
 }
 
 /// Print manual build/run instructions when auto-install is skipped or fails.
@@ -742,4 +828,66 @@ fn print_manual_instructions(install_cmd: &str, build_cmd: &str, config: &app::W
     println!(
         "    \x1b[36mcargo run --release -p affinidi-messaging-mediator -- -c {abs_config}\x1b[0m"
     );
+}
+
+/// Print a final summary of everything that was created and what to do next.
+fn print_final_summary(config: &app::WizardConfig) {
+    let abs_config = resolve_config_path(&config.config_path);
+    let config_dir = std::path::Path::new(&config.config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+
+    println!("\n  \x1b[38;5;69m\u{2501}\u{2501}\u{2501} Summary \u{2501}\u{2501}\u{2501}\x1b[0m\n");
+
+    // Files created
+    println!("  \x1b[1mFiles created:\x1b[0m");
+    println!("    \x1b[36m{abs_config}\x1b[0m  — mediator configuration");
+
+    let recipe_path = config_dir.join("mediator-build.toml");
+    println!(
+        "    \x1b[36m{}\x1b[0m  — build recipe (reproducible setup)",
+        recipe_path.display()
+    );
+
+    if config.secret_storage == "file://" {
+        let secrets_path = config_dir.join("secrets.json");
+        println!(
+            "    \x1b[36m{}\x1b[0m  — \x1b[33mprivate keys (keep secure!)\x1b[0m",
+            secrets_path.display()
+        );
+    }
+
+    if config.ssl_mode == "Self-signed" {
+        println!("    \x1b[36mconf/keys/end.cert\x1b[0m  — SSL certificate");
+        println!("    \x1b[36mconf/keys/end.key\x1b[0m   — SSL private key");
+    }
+
+    if config.did_method == "did:webvh" {
+        let did_doc_path = config_dir.join("mediator_did.json");
+        println!(
+            "    \x1b[36m{}\x1b[0m  — DID document",
+            did_doc_path.display()
+        );
+    }
+
+    if config.deployment_type == "Container" {
+        println!("    \x1b[36mDockerfile\x1b[0m  — container build file");
+    }
+
+    // Key information
+    if config.secret_storage != "string://" && config.secret_storage != "file://" {
+        println!();
+        println!("  \x1b[1mSecrets:\x1b[0m");
+        println!("    Stored in: \x1b[36m{}\x1b[0m", config.secret_storage);
+    }
+
+    // Reproduce
+    println!();
+    println!("  \x1b[1mReproduce this setup:\x1b[0m");
+    println!(
+        "    \x1b[36mmediator-setup --from {}\x1b[0m",
+        recipe_path.display()
+    );
+
+    println!();
 }

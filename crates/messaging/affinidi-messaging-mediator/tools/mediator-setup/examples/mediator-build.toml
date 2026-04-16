@@ -1,0 +1,107 @@
+# ============================================================================
+# Mediator Build Recipe
+# ============================================================================
+#
+# A declarative configuration file for the mediator setup wizard.
+# Instead of answering interactive prompts, define all options here
+# and run:
+#
+#   mediator-setup --from mediator-build.toml
+#
+# This is ideal for CI/CD pipelines, reproducible deployments, and
+# sharing a standardised setup across a team.
+#
+# All sections except [deployment] are optional and use sensible defaults.
+# ============================================================================
+
+
+# ── Deployment ──────────────────────────────────────────────────────────────
+[deployment]
+# type: "local" | "server" | "container"
+#   local     — desktop / quick-start development
+#   server    — headless production (cloud or bare-metal)
+#   container — Docker image (generates Dockerfile alongside config)
+type = "server"
+
+# protocols: ["didcomm"] | ["tsp"] | ["didcomm", "tsp"]
+#   didcomm — DIDComm v2 (recommended, industry standard)
+#   tsp     — Trust Spanning Protocol (experimental)
+protocols = ["didcomm"]
+
+
+# ── Identity ────────────────────────────────────────────────────────────────
+[identity]
+# did_method: "vta" | "did:peer" | "did:webvh" | "import"
+#   vta       — VTA creates and manages the DID centrally (recommended)
+#   did:peer  — self-contained, no hosting required (good for local dev)
+#   did:webvh — production, requires a webvh server
+#   import    — bring your own DID and keys
+did_method = "vta"
+
+# public_url: required when did_method = "did:webvh"
+# public_url = "https://mediator.example.com"
+
+
+# ── Secrets ─────────────────────────────────────────────────────────────────
+[secrets]
+# storage: where cryptographic keys are stored
+#   "vta://"             — VTA managed with local caching (recommended)
+#   "keyring://"         — OS keyring (macOS Keychain, Linux Secret Service)
+#   "aws_secrets://"     — AWS Secrets Manager
+#   "gcp_secrets://"     — Google Cloud Secret Manager
+#   "azure_keyvault://"  — Azure Key Vault
+#   "vault://"           — HashiCorp Vault
+#   "file://"            — local file (conf/secrets.json) — NOT secure
+#   "string://"          — inline in config — NOT secure, dev/CI only
+storage = "vta://"
+
+
+# ── Security ────────────────────────────────────────────────────────────────
+[security]
+# ssl: "none" | "self-signed" | "existing"
+#   none        — run behind a TLS-terminating proxy (nginx, Caddy, ALB)
+#   self-signed — generate self-signed certs (local dev only)
+#   existing    — provide paths to existing cert + key files
+ssl = "none"
+
+# Required when ssl = "existing":
+# ssl_cert = "/path/to/cert.pem"
+# ssl_key  = "/path/to/key.pem"
+
+# admin: "generate" | "skip" | "import"
+#   generate — create a new Ed25519 admin did:key
+#   skip     — configure admin later
+#   import   — use an existing DID (set admin_did below)
+admin = "generate"
+
+# Required when admin = "import":
+# admin_did = "did:key:z6Mk..."
+
+
+# ── Database ────────────────────────────────────────────────────────────────
+[database]
+# Redis connection URL. Use database partitions (e.g. redis://host/1)
+# to isolate data when sharing a Redis instance across applications.
+url = "redis://127.0.0.1/"
+
+
+# ── Output ──────────────────────────────────────────────────────────────────
+[output]
+# Path for the generated mediator.toml configuration file.
+config_path = "conf/mediator.toml"
+
+# Listen address for the mediator (ip:port).
+listen_address = "0.0.0.0:7037"
+
+
+# ── Install ─────────────────────────────────────────────────────────────────
+[install]
+# Set to true to automatically run `cargo install` after generating config.
+# When false, the recipe only generates configuration files.
+enabled = false
+
+# Custom install root (passed as `cargo install --root <path>`).
+# The binary is placed at <path>/bin/mediator.
+# Omit to use the default (~/.cargo/bin).
+# Note: custom paths may require elevated permissions (sudo).
+# path = "/usr/local"

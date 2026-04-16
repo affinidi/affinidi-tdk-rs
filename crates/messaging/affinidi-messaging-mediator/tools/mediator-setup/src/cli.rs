@@ -49,6 +49,10 @@ pub struct Args {
     /// Run without interactive TUI — uses CLI args and deployment defaults
     #[arg(long)]
     pub non_interactive: bool,
+
+    /// Load a build recipe TOML file (non-interactive, fully declarative)
+    #[arg(long, value_name = "FILE")]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
