@@ -5,26 +5,80 @@ pub mod summary;
 pub mod text_input;
 pub mod theme;
 
-use ratatui::{
-    prelude::*,
-    widgets::{Block, Borders, Paragraph},
-};
+use ratatui::{prelude::*, widgets::Paragraph};
 
 use crate::app::{InputMode, WizardApp};
+
+/// Draw a gradient border around a rect, with colors fading from purple to blue.
+/// Returns the inner area (1 cell inset on each side).
+fn render_gradient_border(frame: &mut Frame, area: Rect, title: &str) -> Rect {
+    let buf = frame.buffer_mut();
+    let h = area.height;
+
+    // Rounded border characters
+    const TL: &str = "╭";
+    const TR: &str = "╮";
+    const BL: &str = "╰";
+    const BR: &str = "╯";
+    const HZ: &str = "─";
+    const VT: &str = "│";
+
+    for row in 0..h {
+        let y = area.y + row;
+        let color = theme::gradient_color(row, h);
+        let style = Style::default().fg(color);
+
+        if row == 0 {
+            // Top border: ╭───── title ─────╮
+            buf[(area.x, y)].set_symbol(TL).set_style(style);
+            buf[(area.x + area.width - 1, y)]
+                .set_symbol(TR)
+                .set_style(style);
+            for x in (area.x + 1)..(area.x + area.width - 1) {
+                buf[(x, y)].set_symbol(HZ).set_style(style);
+            }
+            // Title overlay
+            let title_start = area.x + 2;
+            let padded = format!(" {title} ");
+            for (i, ch) in padded.chars().enumerate() {
+                let x = title_start + i as u16;
+                if x < area.x + area.width - 2 {
+                    buf[(x, y)].set_char(ch).set_style(theme::title_style());
+                }
+            }
+        } else if row == h - 1 {
+            // Bottom border
+            buf[(area.x, y)].set_symbol(BL).set_style(style);
+            buf[(area.x + area.width - 1, y)]
+                .set_symbol(BR)
+                .set_style(style);
+            for x in (area.x + 1)..(area.x + area.width - 1) {
+                buf[(x, y)].set_symbol(HZ).set_style(style);
+            }
+        } else {
+            // Side borders
+            buf[(area.x, y)].set_symbol(VT).set_style(style);
+            buf[(area.x + area.width - 1, y)]
+                .set_symbol(VT)
+                .set_style(style);
+        }
+    }
+
+    // Return inner rect
+    Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
 
 /// Render the full wizard layout.
 pub fn render(frame: &mut Frame, app: &WizardApp) {
     let size = frame.area();
 
-    // Outer border with title
-    let outer_block = Block::default()
-        .title(" Affinidi Mediator Setup ")
-        .title_style(theme::title_style())
-        .borders(Borders::ALL)
-        .border_style(theme::border_style());
-
-    let inner = outer_block.inner(size);
-    frame.render_widget(outer_block, size);
+    // Outer gradient border
+    let inner = render_gradient_border(frame, size, "Affinidi Mediator Setup");
 
     // Bottom help bar (2 lines: 1 blank + 1 help)
     let help_height = 2u16;
