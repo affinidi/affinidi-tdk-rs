@@ -635,7 +635,7 @@ impl WizardApp {
                 self.mode = InputMode::TextInput;
                 self.text_input = Input::new(self.config.database_url.clone());
             } else if self.current_step == WizardStep::Summary {
-                self.mode = InputMode::Selecting;
+                self.mode = InputMode::Confirming;
             } else {
                 self.mode = InputMode::Selecting;
             }
@@ -648,7 +648,21 @@ impl WizardApp {
                 self.mode = InputMode::Selecting;
             }
             InputMode::Confirming => {
-                self.mode = InputMode::Selecting;
+                // On Summary, Esc goes back to the previous step
+                if self.current_step == WizardStep::Summary {
+                    if let Some(prev) = self.current_step.prev() {
+                        self.completed.retain(|s| *s != prev);
+                        self.current_step = prev;
+                        self.selection_index = self.default_selection_index();
+                        self.mode = InputMode::Selecting;
+                        if self.current_step == WizardStep::Database {
+                            self.mode = InputMode::TextInput;
+                            self.text_input = Input::new(self.config.database_url.clone());
+                        }
+                    }
+                } else {
+                    self.mode = InputMode::Selecting;
+                }
             }
             InputMode::Selecting => {
                 if let Some(prev) = self.current_step.prev() {
