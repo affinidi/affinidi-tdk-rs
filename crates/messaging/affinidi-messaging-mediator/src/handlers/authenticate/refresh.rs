@@ -60,12 +60,12 @@ pub async fn authentication_refresh(
         };
 
         // Unpack the message
-        let (msg, unpack_metadata) = match didcomm_compat::unpack(
-            &s,
-            &state.did_resolver,
-            &*state.config.security.mediator_secrets,
-        )
-        .await
+        let (msg, unpack_metadata) = match envelope
+            .unpack(
+                &state.did_resolver,
+                &*state.config.security.mediator_secrets,
+            )
+            .await
         {
             Ok(ok) => ok,
             Err(e) => {

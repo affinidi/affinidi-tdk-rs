@@ -82,12 +82,12 @@ async fn handle_inbound_didcomm(
             Some(to_did) => {
                 if to_did == &state.config.mediator_did {
                     // Message is to the mediator
-                    let (msg, metadata) = match didcomm_compat::unpack(
-                        message,
-                        &state.did_resolver,
-                        &*state.config.security.mediator_secrets,
-                    )
-                    .await
+                    let (msg, metadata) = match envelope
+                        .unpack(
+                            &state.did_resolver,
+                            &*state.config.security.mediator_secrets,
+                        )
+                        .await
                     {
                         Ok(ok) => ok,
                         Err(e) => {
