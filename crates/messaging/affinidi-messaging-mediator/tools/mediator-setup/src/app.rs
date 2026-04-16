@@ -304,31 +304,20 @@ impl WizardApp {
                 SelectionOption::new("Container", "Docker image for container orchestration"),
             ],
             WizardStep::Vta => {
-                if !self.config.use_vta {
-                    // Initial Yes/No question
-                    vec![
-                        SelectionOption::new(
-                            "Yes — use VTA",
-                            "Centralized key and DID management via Verifiable Trust Agent",
-                        ),
-                        SelectionOption::new(
-                            "No — manage independently",
-                            "Generate and manage keys locally or via cloud secret stores",
-                        ),
-                    ]
-                } else {
-                    // VTA connectivity mode sub-selection
-                    vec![
-                        SelectionOption::new(
-                            "Online (VTA is accessible)",
-                            "Connection mode auto-detected from credential",
-                        ),
-                        SelectionOption::new(
-                            "Cold-start (VTA not accessible)",
-                            "Use pre-provisioned or cached credentials",
-                        ),
-                    ]
-                }
+                vec![
+                    SelectionOption::new(
+                        "VTA Online",
+                        "VTA is accessible — connection mode auto-detected from credential",
+                    ),
+                    SelectionOption::new(
+                        "VTA Cold-start",
+                        "VTA not accessible — use pre-provisioned or cached credentials",
+                    ),
+                    SelectionOption::new(
+                        "No VTA",
+                        "Manage keys and DIDs independently (local dev, cloud secret stores)",
+                    ),
+                ]
             }
             WizardStep::Protocol => {
                 let didcomm_check = if self.config.didcomm_enabled {
@@ -464,21 +453,12 @@ impl WizardApp {
                 2 => "Same as server, plus generates a Dockerfile and docker-compose.yml with correct feature flags.".into(),
                 _ => String::new(),
             },
-            WizardStep::Vta => {
-                if !self.config.use_vta {
-                    match self.selection_index {
-                        0 => "VTA provides centralized key management, DID provisioning, and credential lifecycle. Recommended for production deployments.".into(),
-                        1 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
-                        _ => String::new(),
-                    }
-                } else {
-                    match self.selection_index {
-                        0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode (gRPC/REST) is auto-detected from the credential.".into(),
-                        1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during bootstrap.".into(),
-                        _ => String::new(),
-                    }
-                }
-            }
+            WizardStep::Vta => match self.selection_index {
+                0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode is auto-detected from the credential. Recommended for production.".into(),
+                1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during initial bootstrap.".into(),
+                2 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
+                _ => String::new(),
+            },
             WizardStep::Protocol => match self.selection_index {
                 0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments.".into(),
                 1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm.".into(),
@@ -574,38 +554,26 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Vta => {
-                if !self.config.use_vta {
-                    // Yes/No question
-                    match self.selection_index {
-                        0 => {
-                            // Yes — show connectivity sub-selection
-                            self.config.use_vta = true;
-                            self.selection_index = 0;
-                        }
-                        1 => {
-                            // No — manage independently
-                            self.config.use_vta = false;
-                            self.apply_vta_defaults();
-                            self.advance();
-                        }
-                        _ => return,
+                match self.selection_index {
+                    0 => {
+                        // VTA Online
+                        self.config.use_vta = true;
+                        self.config.vta_mode = VTA_MODE_ONLINE.into();
                     }
-                } else {
-                    // Online/Cold-start sub-selection
-                    match self.selection_index {
-                        0 => {
-                            self.config.vta_mode = VTA_MODE_ONLINE.into();
-                            self.apply_vta_defaults();
-                            self.advance();
-                        }
-                        1 => {
-                            self.config.vta_mode = VTA_MODE_COLD_START.into();
-                            self.apply_vta_defaults();
-                            self.advance();
-                        }
-                        _ => return,
+                    1 => {
+                        // VTA Cold-start
+                        self.config.use_vta = true;
+                        self.config.vta_mode = VTA_MODE_COLD_START.into();
                     }
+                    2 => {
+                        // No VTA
+                        self.config.use_vta = false;
+                        self.config.vta_mode = String::new();
+                    }
+                    _ => return,
                 }
+                self.apply_vta_defaults();
+                self.advance();
             }
             WizardStep::Protocol => {
                 match self.selection_index {
@@ -850,13 +818,6 @@ impl WizardApp {
                 }
             }
             InputMode::Selecting => {
-                // Special handling for VTA connectivity sub-selection
-                if self.current_step == WizardStep::Vta && self.config.use_vta {
-                    // Go back from Online/Cold-start to Yes/No
-                    self.config.use_vta = false;
-                    self.selection_index = 0;
-                    return;
-                }
                 if let Some(prev) = self.current_step.prev() {
                     self.completed.retain(|s| *s != prev);
                     self.current_step = prev;
@@ -893,13 +854,12 @@ impl WizardApp {
     /// Get the default selection index based on deployment defaults.
     fn default_selection_index(&self) -> usize {
         match self.current_step {
-            WizardStep::Vta => {
-                if self.config.use_vta {
-                    0
-                } else {
-                    1
-                }
-            }
+            WizardStep::Vta => match self.config.vta_mode.as_str() {
+                VTA_MODE_ONLINE => 0,
+                VTA_MODE_COLD_START => 1,
+                _ if self.config.use_vta => 0, // VTA enabled but no mode yet
+                _ => 2,                        // No VTA
+            },
             WizardStep::Protocol => 0, // Start at DIDComm toggle
             WizardStep::Did => {
                 if self.config.use_vta {
@@ -1220,17 +1180,10 @@ mod tests {
         app.advance(); // Deployment → Vta
         assert_eq!(app.current_step, WizardStep::Vta);
 
-        // Select "Yes — use VTA"
+        // Select "VTA Online" (index 0)
         app.selection_index = 0;
         app.select_current();
-        // Should still be on Vta step, showing connectivity options
-        assert_eq!(app.current_step, WizardStep::Vta);
-        assert!(app.config.use_vta);
-
-        // Select "Online"
-        app.selection_index = 0;
-        app.select_current();
-        // Should advance to Protocol
+        // Should advance directly to Protocol
         assert_eq!(app.current_step, WizardStep::Protocol);
         assert!(app.config.use_vta);
         assert_eq!(app.config.vta_mode, VTA_MODE_ONLINE);
@@ -1240,27 +1193,38 @@ mod tests {
     }
 
     #[test]
-    fn vta_no_advances_without_mode() {
+    fn vta_cold_start_sets_defaults() {
         let mut app = WizardApp::new("test.toml".into());
-        // Select "Local development" which sets use_vta=true and VTA defaults
+        // Select deployment to set VTA defaults
         app.selection_index = 0;
-        app.select_current(); // Deployment → Vta (with defaults: use_vta=true, did=VTA, storage=VTA)
-        assert_eq!(app.current_step, WizardStep::Vta);
+        app.select_current(); // Deployment → Vta
 
-        // The deployment defaults set use_vta=true, so we see connectivity options.
-        // First go back to Yes/No by pressing Esc.
-        app.go_back();
-        assert!(!app.config.use_vta);
-
-        // Select "No — manage independently"
+        // Select "VTA Cold-start" (index 1)
         app.selection_index = 1;
         app.select_current();
-        // Should advance to Protocol
+        assert_eq!(app.current_step, WizardStep::Protocol);
+        assert!(app.config.use_vta);
+        assert_eq!(app.config.vta_mode, VTA_MODE_COLD_START);
+        assert_eq!(app.config.did_method, DID_VTA);
+    }
+
+    #[test]
+    fn vta_no_clears_vta_options() {
+        let mut app = WizardApp::new("test.toml".into());
+        // Select deployment to set VTA defaults (did_method=DID_VTA, etc.)
+        app.selection_index = 0;
+        app.select_current(); // Deployment → Vta
+        assert_eq!(app.config.did_method, DID_VTA);
+
+        // Select "No VTA" (index 2)
+        app.selection_index = 2;
+        app.select_current();
         assert_eq!(app.current_step, WizardStep::Protocol);
         assert!(!app.config.use_vta);
+        // apply_vta_defaults should have switched VTA values to non-VTA
         assert_eq!(app.config.did_method, DID_PEER);
         assert_eq!(app.config.secret_storage, STORAGE_STRING);
-        assert_eq!(app.config.vta_mode, "");
+        assert!(app.config.vta_mode.is_empty());
     }
 
     #[test]
@@ -1269,7 +1233,7 @@ mod tests {
         app.config.use_vta = false;
         app.current_step = WizardStep::Did;
         let opts = app.current_options();
-        assert_eq!(opts.len(), 3);
+        assert_eq!(opts.len(), 3); // webvh, peer, import
     }
 
     #[test]
@@ -1278,25 +1242,14 @@ mod tests {
         app.config.use_vta = true;
         app.current_step = WizardStep::Did;
         let opts = app.current_options();
-        assert_eq!(opts.len(), 4);
+        assert_eq!(opts.len(), 4); // VTA, webvh, peer, import
     }
 
     #[test]
-    fn go_back_from_vta_connectivity_shows_yes_no() {
+    fn vta_step_has_three_options() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // Deployment → Vta
-        assert_eq!(app.current_step, WizardStep::Vta);
-
-        // Select "Yes" to enter connectivity sub-selection
-        app.selection_index = 0;
-        app.select_current();
-        assert!(app.config.use_vta);
-        assert_eq!(app.current_step, WizardStep::Vta);
-
-        // Press Esc — should go back to Yes/No, not to Deployment
-        app.go_back();
-        assert_eq!(app.current_step, WizardStep::Vta);
-        assert!(!app.config.use_vta);
-        assert_eq!(app.selection_index, 0);
+        app.current_step = WizardStep::Vta;
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 3); // Online, Cold-start, No VTA
     }
 }
