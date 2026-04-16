@@ -6,7 +6,8 @@ use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection, PubSub};
 
 use semver::{Version, VersionReq};
-use std::{thread::sleep, time::Duration};
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{Level, event, info, warn};
 
 pub mod config;
@@ -71,7 +72,7 @@ impl DatabaseHandler {
                 Err(err) => {
                     event!(Level::WARN, "Error connecting to database: {}", err);
                     event!(Level::WARN, "Retrying database connection in 10 seconds");
-                    sleep(Duration::from_secs(10));
+                    sleep(Duration::from_secs(10)).await;
                 }
             }
         };
@@ -102,7 +103,7 @@ impl DatabaseHandler {
                         err
                     );
                     event!(Level::WARN, "Retrying database connection in 10 seconds");
-                    sleep(Duration::from_secs(10));
+                    sleep(Duration::from_secs(10)).await;
                 }
             }
         }

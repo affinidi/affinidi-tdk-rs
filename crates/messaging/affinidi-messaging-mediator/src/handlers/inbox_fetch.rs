@@ -59,7 +59,10 @@ pub async fn inbox_fetch_handler(
 
         // Check for valid start_id (unixtime in milliseconds including+1 digit so we are ok for another 3,114 years!)
         // Supports up to 999 messages per millisecond
-        let re = Regex::new(r"\d{13,14}-\d{1,3}$").expect("hardcoded regex is valid");
+        static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+            Regex::new(r"\d{13,14}-\d{1,3}$").expect("hardcoded regex is valid")
+        });
+        let re = &*RE;
         if let Some(start_id) = &body.start_id && ! re.is_match(start_id) {
                 return Err(MediatorError::problem_with_log(
                     42, session.session_id, None,

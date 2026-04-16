@@ -2,7 +2,7 @@ use super::super::message_inbound::InboundMessage;
 use super::AuthRefreshResponse;
 use super::helpers::{_create_access_token, _create_refresh_token};
 use crate::common::time::unix_timestamp_secs;
-use crate::didcomm_compat::{self, MetaEnvelope};
+use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
     database::session::{SessionClaims, SessionState},

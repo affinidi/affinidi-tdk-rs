@@ -2,6 +2,51 @@
 
 ## Changelog history
 
+## 16th April 2026
+
+### 0.14.0 — Setup Wizard, Monitoring, Redis Optimization
+
+- **FEAT:** Interactive TUI setup wizard (`mediator-setup`) replacing three
+  fragmented tools (setup_environment, generate_mediator_config, mediator-setup-vta)
+  - Real crypto generation: did:peer, did:webvh, did:key, JWT (Ed25519), SSL
+  - Non-interactive CLI mode (`--non-interactive`) for CI/CD
+  - Reconfiguration mode (backs up existing config)
+  - TSP marked as experimental
+- **FEAT:** Real-time monitoring TUI (`mediator-monitor`) — btop-inspired dashboard
+  - Polls `GET /admin/status` for version, uptime, connections, message throughput,
+    forwarding queue depth, circuit breaker state
+  - Rate calculations from 30-snapshot sliding window (msg/s, bytes/s)
+- **FEAT:** Admin status endpoint (`GET /admin/status`) — JSON operational data for
+  monitoring tools. Redis password masked in response.
+- **FEAT:** Sequential migration registry replacing version-coupled schema upgrades
+  - Each migration has unique ID, tracked in Redis `SCHEMA_MIGRATIONS` set
+  - Automatic bootstrap from legacy `GLOBAL:SCHEMA_VERSION`
+  - 6 invariant tests for migration registry integrity
+- **FEAT:** Error code registry (`error_codes.rs`) — 37 error codes documented as
+  named constants organized by category
+- **FEAT:** Prometheus metrics expanded to 24 names with type annotations
+  (counter/gauge/histogram). Instrumented: inbound messages, store latency,
+  circuit breaker state, ACL denials.
+- **FEAT:** Redis auth/TLS startup warnings for unauthenticated or unencrypted connections
+- **FEAT:** Configurable circuit breaker thresholds (was hardcoded 5/10s)
+- **PERF:** Lua `store_message` — MAXLEN trimming on per-DID streams
+- **PERF:** Lua `fetch_messages` — batch MGET (N+1 calls → 2)
+- **PERF:** Lua `clean_start_streaming` — SPOP batch limit (500)
+- **PERF:** DIDComm unpack — eliminated double JSON parse per encrypted message
+  (~10-15% CPU reduction)
+- **PERF:** EndpointRateTracker — O(n) Vec replaced with O(1) time-bucketed counter
+- **PERF:** Static regex in inbox_fetch (was compiled per-request)
+- **SECURITY:** Lua `delete_message` — explicit admin_did_hash replaces magic string
+- **FIX:** Blocking `std::thread::sleep()` in async database retry loops replaced
+  with `tokio::time::sleep()` (critical: was blocking the tokio runtime)
+- **FIX:** ForwardingProcessor panic replaced with Result return
+- **FIX:** All forwarding ACK/delete/enqueue errors now logged (were silently discarded)
+- **FIX:** Unused `self` imports cleaned up from auth handlers
+- **REMOVED:** `setup_environment`, `generate_mediator_config` binaries (helpers crate)
+- **REMOVED:** `mediator-setup-vta` binary and `setup` feature flag
+- **REMOVED:** Old `upgrades/` migration system
+- **CHORE:** Tools reorganized into `tools/` subdirectory
+
 ## 15th April 2026
 
 - **DOC:** Added README section on running without a secure credential store

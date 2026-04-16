@@ -1,7 +1,7 @@
 #[cfg(feature = "didcomm")]
 use crate::common::time::unix_timestamp_secs;
 #[cfg(feature = "didcomm")]
-use crate::didcomm_compat::{self, MetaEnvelope};
+use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 use crate::{SharedData, database::session::Session, messages::store::store_message};

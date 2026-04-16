@@ -171,7 +171,13 @@ pub async fn start() {
         let _config = config.processors.forwarding.clone();
         let fwd_token = shutdown_token.clone();
         tokio::spawn(async move {
-            let processor = ForwardingProcessor::new(_config, _database);
+            let processor = match ForwardingProcessor::new(_config, _database) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Failed to create forwarding processor: {}", e);
+                    return;
+                }
+            };
             tokio::select! {
                 result = processor.start() => {
                     if let Err(e) = result {

@@ -167,24 +167,32 @@ pub struct ForwardingProcessor {
 }
 
 impl ForwardingProcessor {
-    pub fn new(config: ForwardingConfig, database: Database) -> Self {
+    pub fn new(
+        config: ForwardingConfig,
+        database: Database,
+    ) -> Result<Self, affinidi_messaging_mediator_common::errors::MediatorError> {
         let consumer_name = format!("processor_{}", Uuid::new_v4());
         info!(
             "ForwardingProcessor created: consumer={}, group={}",
             consumer_name, config.consumer_group
         );
-        let http_pool = Arc::new(
-            HttpClientPool::new(config.accept_invalid_certs)
-                .expect("Failed to create HTTP client pool"),
-        );
-        Self {
+        let http_pool = Arc::new(HttpClientPool::new(config.accept_invalid_certs).map_err(
+            |e| {
+                affinidi_messaging_mediator_common::errors::MediatorError::InternalError(
+                    17,
+                    "forwarding".into(),
+                    format!("Failed to create HTTP client pool: {e}"),
+                )
+            },
+        )?);
+        Ok(Self {
             config,
             database,
             consumer_name,
             endpoints: Arc::new(RwLock::new(HashMap::new())),
             http_pool,
             ws_pool: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     /// Start the forwarding processor. This runs indefinitely.
@@ -330,11 +338,20 @@ impl ForwardingProcessor {
                     msg.to_did_hash, msg.from_did_hash, endpoint_url
                 );
             }
-            let _ = self
+            if let Err(e) = self
                 .database
                 .forward_queue_ack(&self.config.consumer_group, &expired_ids)
-                .await;
-            let _ = self.database.forward_queue_delete(&expired_ids).await;
+                .await
+            {
+                warn!("Failed to ACK {} expired entries: {}", expired_ids.len(), e);
+            }
+            if let Err(e) = self.database.forward_queue_delete(&expired_ids).await {
+                warn!(
+                    "Failed to delete {} expired entries: {}",
+                    expired_ids.len(),
+                    e
+                );
+            }
         }
 
         if active.is_empty() {
@@ -441,11 +458,16 @@ impl ForwardingProcessor {
         // ACK and delete succeeded messages
         if !succeeded.is_empty() {
             let count = succeeded.len();
-            let _ = self
+            if let Err(e) = self
                 .database
                 .forward_queue_ack(&self.config.consumer_group, &succeeded)
-                .await;
-            let _ = self.database.forward_queue_delete(&succeeded).await;
+                .await
+            {
+                warn!("Failed to ACK {} succeeded entries: {}", count, e);
+            }
+            if let Err(e) = self.database.forward_queue_delete(&succeeded).await {
+                warn!("Failed to delete {} succeeded entries: {}", count, e);
+            }
             debug!("ACKed {} forwarded messages for {}", count, endpoint_url);
 
             // Reset failure counter on success
@@ -482,11 +504,16 @@ impl ForwardingProcessor {
                         msg.to_did_hash, msg.from_did_hash, endpoint_url, msg.retry_count
                     );
                     let ids = [msg.stream_id.as_str()];
-                    let _ = self
+                    if let Err(e) = self
                         .database
                         .forward_queue_ack(&self.config.consumer_group, &ids)
-                        .await;
-                    let _ = self.database.forward_queue_delete(&ids).await;
+                        .await
+                    {
+                        warn!("Failed to ACK abandoned entry: {e}");
+                    }
+                    if let Err(e) = self.database.forward_queue_delete(&ids).await {
+                        warn!("Failed to delete abandoned entry: {e}");
+                    }
 
                     // Send problem report to the original sender if we know their DID
                     if self.config.report_errors && !msg.from_did.is_empty() {
@@ -499,14 +526,21 @@ impl ForwardingProcessor {
 
                     // ACK the old entry
                     let ids = [msg.stream_id.as_str()];
-                    let _ = self
+                    if let Err(e) = self
                         .database
                         .forward_queue_ack(&self.config.consumer_group, &ids)
-                        .await;
-                    let _ = self.database.forward_queue_delete(&ids).await;
+                        .await
+                    {
+                        warn!("Failed to ACK retry entry: {e}");
+                    }
+                    if let Err(e) = self.database.forward_queue_delete(&ids).await {
+                        warn!("Failed to delete retry entry: {e}");
+                    }
 
                     // Enqueue new entry with incremented retry count
-                    let _ = self.database.forward_queue_enqueue(&retry_entry).await;
+                    if let Err(e) = self.database.forward_queue_enqueue(&retry_entry).await {
+                        error!("Failed to re-enqueue retry entry (message may be lost): {e}");
+                    }
                 }
             }
 
