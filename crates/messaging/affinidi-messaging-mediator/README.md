@@ -9,36 +9,112 @@ A mediator and relay service supporting
 Handles connections, permissions, and message routing between messaging
 participants.
 
+## Quick Start
+
+### 1. Start Redis
+
+```bash
+docker run --name=redis-local --publish=6379:6379 --hostname=redis \
+  --restart=on-failure --detach redis:latest
+```
+
+### 2. Run the Setup Wizard
+
+The setup wizard generates all configuration, keys, and secrets in one step:
+
+```bash
+cargo run --bin mediator-setup
+```
+
+The interactive TUI guides you through:
+
+1. **Deployment type** — local dev, headless server, or container
+2. **Protocol** — DIDComm v2 (recommended) or TSP (experimental)
+3. **DID configuration** — did:peer, did:webvh, or VTA-managed
+4. **Key storage** — inline, file, OS keyring, AWS Secrets Manager, or VTA
+5. **SSL/TLS** — none (use a proxy), existing certs, or self-signed
+6. **Database** — Redis connection URL
+7. **Admin account** — generate did:key, paste existing, or skip
+
+The wizard generates:
+- `conf/mediator.toml` — full configuration with real cryptographic material
+- `conf/secrets.json` — mediator secrets (if using `file://` storage)
+- `conf/keys/` — SSL certificates (if using self-signed)
+- Admin DID and private key (displayed on screen — save securely)
+
+### 3. Build and Run
+
+After the wizard completes, it prints the exact build and run commands:
+
+```bash
+# Default DIDComm build
+cargo build --release -p affinidi-messaging-mediator
+
+# Run with generated config
+cargo run --release -p affinidi-messaging-mediator -- -c conf/mediator.toml
+```
+
+## Non-Interactive Setup (CI/CD)
+
+For automated environments, use the `--non-interactive` flag:
+
+```bash
+# Quick local development setup (all defaults)
+cargo run --bin mediator-setup -- --non-interactive
+
+# Production server with specific options
+cargo run --bin mediator-setup -- --non-interactive \
+  --deployment server \
+  --did-method webvh \
+  --public-url "mediator.example.com/mediator/v1" \
+  --secret-storage aws \
+  --database-url "redis://redis.internal:6379/"
+
+# Container deployment
+cargo run --bin mediator-setup -- --non-interactive \
+  --deployment container \
+  --did-method peer \
+  --secret-storage file
+```
+
+Available CLI options:
+
+| Flag | Values | Default |
+|---|---|---|
+| `--deployment` | `local`, `server`, `container` | `local` |
+| `--protocol` | `didcomm`, `tsp` | `didcomm` |
+| `--did-method` | `peer`, `webvh`, `vta` | per deployment |
+| `--public-url` | URL string | (required for webvh) |
+| `--secret-storage` | `inline`, `file`, `keyring`, `aws`, `vta` | per deployment |
+| `--ssl` | `none`, `self-signed` | `none` |
+| `--database-url` | Redis URL | `redis://127.0.0.1/` |
+| `--admin` | `generate`, `skip` | `generate` |
+| `--listen-address` | `ip:port` | `0.0.0.0:7037` |
+| `-c, --config` | file path | `conf/mediator.toml` |
+
 ## Feature Flags
 
 Protocol and integration support is controlled via Cargo feature flags.
 
 | Feature | Default | Description |
 |---|---|---|
-| `didcomm` | Yes | DIDComm v2 protocol support (authentication, inbound/outbound, OOB discovery) |
-| `tsp` | No | Trust Spanning Protocol support |
+| `didcomm` | Yes | DIDComm v2 protocol support |
+| `tsp` | No | Trust Spanning Protocol support (experimental) |
 | `vta-aws-secrets` | No | VTA credential storage via AWS Secrets Manager |
 | `vta-keyring` | No | VTA credential storage via OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service) |
-| `setup` | No | Interactive `mediator-setup-vta` CLI wizard |
 
 ```bash
 # DIDComm only (default)
-cargo build
+cargo build -p affinidi-messaging-mediator
+
+# With VTA keyring support (needed when config uses keyring:// credentials)
+cargo build -p affinidi-messaging-mediator --features vta-keyring
+
+# With VTA AWS support
+cargo build -p affinidi-messaging-mediator --features vta-aws-secrets
 
 # TSP only
-cargo build --no-default-features --features tsp
-
-# Both protocols
-cargo build --features "didcomm,tsp"
-
-# With VTA support (OS keyring — default config requires this)
-cargo build --features vta-keyring
-
-# With VTA support (AWS production)
-cargo build --features vta-aws-secrets
-
-# Build the VTA setup wizard
-cargo build --bin mediator-setup-vta --features setup
+cargo build -p affinidi-messaging-mediator --no-default-features --features tsp
 ```
 
 ## Architecture
@@ -58,69 +134,6 @@ graph TD
 - Docker (for Redis)
 - Redis 8.0+
 
-## Running the Mediator
-
-### 1. Start Redis
-
-```bash
-docker run --name=redis-local --publish=6379:6379 --hostname=redis \
-  --restart=on-failure --detach redis:latest
-```
-
-### 2. Configure the Environment
-
-Run from the `affinidi-messaging` directory:
-
-```bash
-cargo run --bin setup_environment
-```
-
-This generates:
-- Mediator DID and secrets
-- Administration DID and secrets
-- SSL certificates for local development
-- Optionally, test user DIDs
-
-### 3. Start the Mediator
-
-The default `conf/mediator.toml` uses a `keyring://` credential for VTA
-integration. This requires the `vta-keyring` feature flag, which is **not**
-enabled by default. Choose one of the following approaches:
-
-**Option A: Enable the `vta-keyring` feature** (recommended for local development
-with VTA credentials stored in your OS keyring):
-
-```bash
-cd affinidi-messaging-mediator
-export REDIS_URL=redis://@localhost:6379
-cargo run --features vta-keyring
-```
-
-This uses the OS keyring backend: **macOS Keychain**, **Windows Credential
-Manager**, or **Linux Secret Service** (e.g. GNOME Keyring, KWallet).
-
-**Option B: Use an inline credential** (no extra feature flags needed):
-
-Edit `conf/mediator.toml` and change the `[vta]` credential from `keyring://`
-to `string://`:
-
-```toml
-[vta]
-credential = "string://<paste-your-base64url-credential-here>"
-context = "mediator-local"
-```
-
-Then run without additional flags:
-
-```bash
-cd affinidi-messaging-mediator
-export REDIS_URL=redis://@localhost:6379
-cargo run
-```
-
-See [VTA Integration](#vta-integration-centralized-key-management) below for
-all credential storage options.
-
 ## VTA Integration (Centralized Key Management)
 
 The mediator can use a [Verifiable Trust Agent (VTA)](https://github.com/OpenVTC/verifiable-trust-infrastructure)
@@ -128,24 +141,14 @@ for centralized DID and key management instead of local file-based secrets.
 
 See [docs/vta-setup-guide.md](docs/vta-setup-guide.md) for the full step-by-step guide.
 
-### Quick Start with Setup Wizard
+### Using the Setup Wizard with VTA
 
-The fastest way to configure VTA integration:
+When running `cargo run --bin mediator-setup`, select:
+- **DID Configuration** > "Configure via VTA"
+- **Key Storage** > "VTA managed (vta://)"
 
-```bash
-# Build the setup wizard
-cargo build --bin mediator-setup-vta --features setup
-
-# Run it (uses conf/mediator.toml by default)
-cargo run --bin mediator-setup-vta --features setup
-
-# Or specify a config path
-cargo run --bin mediator-setup-vta --features setup -- --config path/to/mediator.toml
-```
-
-The wizard accepts a **Context Provision Bundle** from `pnm contexts provision`
-(recommended) and auto-configures the credential, context, DID, and
-`mediator.toml` in a single flow.
+The wizard will prompt for your VTA credential (Context Provision Bundle or
+Credential Bundle) and configure the mediator accordingly.
 
 ### Quick Start without a Secure Credential Store
 
@@ -173,7 +176,7 @@ export VTA_CREDENTIAL="string://eyJkaWQ..."
 export VTA_CONTEXT="mediator"
 export MEDIATOR_DID="vta://mediator"
 export MEDIATOR_SECRETS="vta://mediator"
-cargo run
+cargo run -p affinidi-messaging-mediator
 ```
 
 > **Note:** With `string://`, VTA secrets are **not cached** between restarts.
@@ -246,6 +249,7 @@ See the `mediator.toml` configuration file for details on each mode.
 
 | Crate | Description |
 |---|---|
+| [`affinidi-messaging-mediator-setup`](./affinidi-messaging-mediator-setup/) | Interactive TUI setup wizard |
 | [`affinidi-messaging-mediator-processors`](./affinidi-messaging-mediator-processors/) | Scalable parallel processors (message expiry, forwarding) |
 | `affinidi-messaging-mediator-common` | Shared types for the mediator |
 

@@ -25,7 +25,7 @@ use ratatui::{
 use tokio_stream::StreamExt;
 use tui_input::InputRequest;
 
-use app::{InputMode, WizardApp};
+use app::{InputMode, WizardApp, WizardConfig};
 use cli::Args;
 
 const RENDERING_TICK_RATE: Duration = Duration::from_millis(250);
@@ -35,16 +35,23 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     if args.non_interactive {
-        eprintln!("Non-interactive mode is not yet implemented.");
-        std::process::exit(1);
+        return run_non_interactive(args).await;
     }
 
-    let mut app = WizardApp::new(args.config);
-
-    // Apply CLI-provided deployment type if given
-    if let Some(deployment) = args.deployment {
-        app.config.deployment_type = deployment.to_string();
+    // Check for existing config — offer reconfiguration
+    let config_path = args.config.clone();
+    if std::path::Path::new(&config_path).exists() {
+        eprintln!("Existing configuration found at: {config_path}");
+        eprintln!("The wizard will generate a new configuration.");
+        eprintln!("The existing file will be backed up to {config_path}.bak");
+        eprintln!();
+        std::fs::copy(&config_path, format!("{config_path}.bak"))?;
     }
+
+    let mut app = WizardApp::new(config_path);
+
+    // Apply CLI-provided options to pre-fill wizard
+    apply_cli_args(&args, &mut app.config);
 
     let mut terminal = setup_terminal()?;
 
@@ -72,6 +79,90 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Apply CLI arguments to the wizard config as pre-filled defaults.
+fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
+    if let Some(ref deployment) = args.deployment {
+        config.deployment_type = deployment.to_string();
+    }
+    if let Some(ref protocol) = args.protocol {
+        config.protocol = protocol.to_string();
+    }
+    if let Some(ref did_method) = args.did_method {
+        config.did_method = did_method.to_string();
+    }
+    if let Some(ref public_url) = args.public_url {
+        config.public_url = public_url.clone();
+    }
+    if let Some(ref secret_storage) = args.secret_storage {
+        config.secret_storage = secret_storage.to_string();
+    }
+    if let Some(ref ssl) = args.ssl {
+        config.ssl_mode = ssl.to_string();
+    }
+    if let Some(ref database_url) = args.database_url {
+        config.database_url = database_url.clone();
+    }
+    if let Some(ref admin) = args.admin {
+        config.admin_did_mode = admin.to_string();
+    }
+    if let Some(ref listen_address) = args.listen_address {
+        config.listen_address = listen_address.clone();
+    }
+}
+
+/// Non-interactive mode: build config from CLI args + deployment defaults, then generate.
+async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
+    let deployment = args.deployment.unwrap_or(cli::DeploymentType::Local);
+
+    let mut config = WizardConfig::default();
+    config.config_path = args.config.clone();
+
+    // Apply deployment defaults first
+    config.deployment_type = deployment.to_string();
+    match deployment {
+        cli::DeploymentType::Local => {
+            config.protocol = "DIDComm v2".into();
+            config.did_method = "did:peer".into();
+            config.secret_storage = "string://".into();
+            config.ssl_mode = "No SSL (TLS proxy)".into();
+            config.database_url = "redis://127.0.0.1/".into();
+            config.admin_did_mode = "Generate did:key".into();
+        }
+        cli::DeploymentType::Server | cli::DeploymentType::Container => {
+            config.protocol = "DIDComm v2".into();
+            config.did_method = "did:webvh".into();
+            config.secret_storage = "aws_secrets://".into();
+            config.ssl_mode = "No SSL (TLS proxy)".into();
+            config.database_url = "redis://127.0.0.1/".into();
+            config.admin_did_mode = "Generate did:key".into();
+        }
+    }
+
+    // Override with any explicit CLI args
+    apply_cli_args(&args, &mut config);
+
+    // Validate required fields for did:webvh
+    if config.did_method == "did:webvh" && config.public_url.is_empty() {
+        anyhow::bail!("--public-url is required when using did:webvh in non-interactive mode");
+    }
+
+    println!("Mediator Setup (non-interactive)");
+    println!("  Deployment:   {}", config.deployment_type);
+    println!("  Protocol:     {}", config.protocol);
+    println!("  DID method:   {}", config.did_method);
+    println!("  Key storage:  {}", config.secret_storage);
+    println!("  SSL/TLS:      {}", config.ssl_mode);
+    println!("  Database:     {}", config.database_url);
+    println!("  Admin:        {}", config.admin_did_mode);
+    println!();
+    println!("Generating cryptographic material...");
+
+    generate_and_write(&config).await?;
+    print_build_command(&config);
+
+    Ok(())
 }
 
 async fn run_event_loop(

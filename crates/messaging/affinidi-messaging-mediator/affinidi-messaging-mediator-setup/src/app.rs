@@ -215,8 +215,8 @@ impl WizardApp {
                     "Industry-standard DID-based messaging",
                 ),
                 SelectionOption::new(
-                    "TSP (Trust Spanning Protocol)",
-                    "Lightweight trust protocol",
+                    "TSP (Trust Spanning Protocol) [experimental]",
+                    "Lightweight trust protocol — experimental support",
                 ),
             ],
             WizardStep::Did => vec![
@@ -298,7 +298,7 @@ impl WizardApp {
             },
             WizardStep::Protocol => match self.selection_index {
                 0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments.".into(),
-                1 => "TSP (Trust Spanning Protocol) is a lightweight alternative. Experimental support.".into(),
+                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported with TSP yet.".into(),
                 _ => String::new(),
             },
             WizardStep::Did => match self.selection_index {
