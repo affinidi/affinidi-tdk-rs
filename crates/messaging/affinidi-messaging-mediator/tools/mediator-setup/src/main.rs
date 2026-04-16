@@ -198,7 +198,8 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
         anyhow::bail!("Database credentials required but not provided");
     }
 
-    println!("Mediator Setup (from recipe: {recipe_path})");
+    print_banner();
+    println!("  \x1b[2mFrom recipe: {recipe_path}\x1b[0m\n");
     println!("  Deployment:   {}", config.deployment_type);
     println!("  Protocol:     {}", config.protocol_display());
     println!("  DID method:   {}", config.did_method);
@@ -209,15 +210,17 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
     println!("  Config file:  {}", config.config_path);
     println!("  Listen:       {}", config.listen_address);
     println!();
-    println!("Generating cryptographic material...");
+    println!("  Generating cryptographic material...\n");
 
     generate_and_write(&config).await?;
 
+    let features = build_features(&config);
+
     // Auto-install if recipe says so
     if recipe.install.enabled {
-        let features = build_features(&config);
         let install_root = recipe.install.path.as_deref();
         let install_args = build_install_args(&features, install_root);
+        let install_cmd = format!("cargo {}", install_args.join(" "));
 
         let workspace_root = find_workspace_root();
         let build_dir = workspace_root
@@ -228,7 +231,11 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
             format!("{cargo_home}/bin")
         });
 
-        println!("\nInstalling mediator to {install_location} (this may take a few minutes)...\n");
+        println!("  \x1b[1mInstall command:\x1b[0m\n    \x1b[36m{install_cmd}\x1b[0m\n");
+        println!(
+            "  \x1b[38;5;69mInstalling mediator to {install_location} \
+             (this may take a few minutes)...\x1b[0m\n"
+        );
 
         let status = Command::new("cargo")
             .args(&install_args)
@@ -237,7 +244,7 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
 
         match status {
             Ok(exit) if exit.success() => {
-                println!("\nInstallation successful!");
+                println!("\n  \x1b[32m\u{2714} Installation successful!\x1b[0m\n");
                 print_run_command(&config.config_path, &install_location);
             }
             Ok(exit) => {
@@ -248,11 +255,13 @@ async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
             }
         }
     } else {
-        println!("\nConfiguration written. To build and install the mediator:");
-        let features = build_features(&config);
         let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
-        println!("  {install_cmd}");
+        let build_cmd = format!("cargo {}", build_cargo_args(&features).join(" "));
+        println!("  \x1b[1mTo install:\x1b[0m\n    \x1b[36m{install_cmd}\x1b[0m\n");
+        println!("  \x1b[1mTo build from source:\x1b[0m\n    \x1b[36m{build_cmd}\x1b[0m\n");
     }
+
+    print_final_summary(&config);
 
     Ok(())
 }
