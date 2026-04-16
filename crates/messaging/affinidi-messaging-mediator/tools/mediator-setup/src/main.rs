@@ -400,22 +400,20 @@ async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
 }
 
 fn print_banner() {
-    // ANSI color codes: 38;5;69 = cornflower blue, 38;5;43 = teal accent
-    let blue = "\x1b[38;5;69m";
-    let teal = "\x1b[38;5;43m";
-    let white = "\x1b[38;5;255m";
-    let dim = "\x1b[2m";
-    let reset = "\x1b[0m";
+    // Gradient from purple (141) → blue (69) → cyan (43) across rows
+    let r = "\x1b[0m";
 
     println!();
-    println!("  {blue}    _    __  __ _       _     _ _{reset}");
-    println!("  {blue}   / \\  / _|/ _(_)_ __ (_) __| (_){reset}");
-    println!("  {blue}  / _ \\| |_| |_| | '_ \\| |/ _` | |{reset}");
-    println!("  {blue} / ___ \\  _|  _| | | | | | (_| | |{reset}");
-    println!("  {blue}/_/   \\_\\_| |_| |_|_| |_|_|\\__,_|_|{reset}");
+    println!("  \x1b[38;5;141m    ___    _________       _     ___ {r}");
+    println!("  \x1b[38;5;135m   /   |  / __/ __(_)___  (_)___/ (_){r}");
+    println!("  \x1b[38;5;105m  / /| | / /_/ /_/ / __ \\/ / __  / / {r}");
+    println!("  \x1b[38;5;69m / ___ |/ __/ __/ / / / / / /_/ / /  {r}");
+    println!("  \x1b[38;5;33m/_/  |_/_/ /_/ /_/_/ /_/_/\\__,_/_/   {r}");
     println!();
-    println!("  {teal}\u{2588}\u{2588}\u{2588}{reset} {white}Messaging Mediator Setup{reset}");
-    println!("  {dim}Secure, scalable DIDComm & TSP messaging infrastructure{reset}");
+    println!(
+        "  \x1b[38;5;43m\u{2501}\u{2501}\u{2501}\x1b[0m \x1b[1;38;5;255mMediator Setup\x1b[0m"
+    );
+    println!("  \x1b[2mSecure, scalable DIDComm & TSP messaging infrastructure\x1b[0m");
     println!();
 }
 
