@@ -22,6 +22,14 @@ pub fn render_summary(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let label_style = Style::default()
+        .fg(theme::PRIMARY)
+        .add_modifier(Modifier::BOLD);
+    let value_style = Style::default().fg(theme::TEXT);
+    let section_style = Style::default()
+        .fg(theme::ACCENT)
+        .add_modifier(Modifier::BOLD);
+
     let mut lines: Vec<Line> = Vec::new();
 
     lines.push(Line::from(Span::styled(
@@ -30,34 +38,85 @@ pub fn render_summary(
     )));
     lines.push(Line::from(""));
 
-    // Deployment
-    add_field(&mut lines, "Deployment", &config.deployment_type);
-
-    // Protocol
-    add_field(&mut lines, "Protocol", &config.protocol_display());
-
-    // DID
-    add_field(&mut lines, "DID Method", &config.did_method);
-    if !config.public_url.is_empty() {
-        add_field(&mut lines, "Public URL", &config.public_url);
-    }
-
-    // Key Storage
-    add_field(&mut lines, "Key Storage", &config.secret_storage);
-
-    // SSL
-    add_field(&mut lines, "SSL/TLS", &config.ssl_mode);
-
-    // Database
-    add_field(&mut lines, "Database", &config.database_url);
-
-    // Admin
-    add_field(&mut lines, "Admin DID", &config.admin_did_mode);
-
-    // Output files
+    // ── Deployment ──
+    add_section_header(&mut lines, "Deployment", section_style);
+    add_field(
+        &mut lines,
+        "  Type",
+        &config.deployment_type,
+        label_style,
+        value_style,
+    );
+    add_field(
+        &mut lines,
+        "  Protocol",
+        &config.protocol_display(),
+        label_style,
+        value_style,
+    );
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Output:", theme::info_style())));
-    add_field(&mut lines, "Config file", &config.config_path);
+
+    // ── Identity ──
+    add_section_header(&mut lines, "Identity", section_style);
+    add_field(
+        &mut lines,
+        "  DID Method",
+        &config.did_method,
+        label_style,
+        value_style,
+    );
+    if !config.public_url.is_empty() {
+        add_field(
+            &mut lines,
+            "  Public URL",
+            &config.public_url,
+            label_style,
+            value_style,
+        );
+    }
+    add_field(
+        &mut lines,
+        "  Key Storage",
+        &config.secret_storage,
+        label_style,
+        value_style,
+    );
+    lines.push(Line::from(""));
+
+    // ── Security ──
+    add_section_header(&mut lines, "Security", section_style);
+    add_field(
+        &mut lines,
+        "  SSL/TLS",
+        &config.ssl_mode,
+        label_style,
+        value_style,
+    );
+    add_field(
+        &mut lines,
+        "  Admin DID",
+        &config.admin_did_mode,
+        label_style,
+        value_style,
+    );
+    lines.push(Line::from(""));
+
+    // ── Infrastructure ──
+    add_section_header(&mut lines, "Infrastructure", section_style);
+    add_field(
+        &mut lines,
+        "  Database",
+        &config.database_url,
+        label_style,
+        value_style,
+    );
+    add_field(
+        &mut lines,
+        "  Config file",
+        &config.config_path,
+        label_style,
+        value_style,
+    );
 
     // Confirm button
     lines.push(Line::from(""));
@@ -83,9 +142,26 @@ pub fn render_summary(
     frame.render_widget(paragraph, inner);
 }
 
-fn add_field(lines: &mut Vec<Line<'_>>, label: &str, value: &str) {
+fn add_section_header<'a>(lines: &mut Vec<Line<'a>>, title: &'a str, style: Style) {
     lines.push(Line::from(vec![
-        Span::styled(format!("  {label}: "), theme::dim_style()),
-        Span::styled(value.to_string(), theme::normal_style()),
+        Span::styled("── ", Style::default().fg(theme::BORDER)),
+        Span::styled(title, style),
+        Span::styled(" ──", Style::default().fg(theme::BORDER)),
+    ]));
+}
+
+fn add_field<'a>(
+    lines: &mut Vec<Line<'a>>,
+    label: &'a str,
+    value: &str,
+    label_style: Style,
+    value_style: Style,
+) {
+    // Right-align labels to a fixed width for clean columns
+    let padded_label = format!("{label:>14}");
+    lines.push(Line::from(vec![
+        Span::styled(padded_label, label_style),
+        Span::styled("  ", Style::default()),
+        Span::styled(value.to_string(), value_style),
     ]));
 }
