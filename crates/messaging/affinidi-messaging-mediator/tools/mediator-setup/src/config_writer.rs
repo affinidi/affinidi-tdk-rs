@@ -28,6 +28,9 @@ pub struct GeneratedValues {
 /// This is the authoritative source of all config fields and their defaults.
 const DEFAULT_TEMPLATE: &str = include_str!("../../../conf/mediator.toml");
 
+/// Redis Lua functions required by the mediator at runtime.
+const ATM_FUNCTIONS_LUA: &str = include_str!("../../../conf/atm-functions.lua");
+
 /// Write the mediator configuration file and any associated secret files.
 pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::Result<()> {
     let toml_content = generate_toml(config, generated)?;
@@ -39,6 +42,10 @@ pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyho
     }
 
     fs::write(path, &toml_content)?;
+
+    // Write the Redis Lua functions file alongside the config
+    let lua_path = config_dir(config).join("atm-functions.lua");
+    fs::write(&lua_path, ATM_FUNCTIONS_LUA)?;
 
     // Write secrets file if using file:// storage
     if config.secret_storage == "file://" {
@@ -207,7 +214,7 @@ mod tests {
         assert!(toml.contains("jwt_authorization_secret = \"string://test_jwt_secret_base64url\""));
 
         // Verify fields from template that wizard doesn't touch are preserved
-        assert!(toml.contains("database_pool_size"));
+        // database_pool_size was removed from template (deprecated)
         assert!(toml.contains("database_timeout"));
         assert!(toml.contains("[streaming]"));
         assert!(toml.contains("[did_resolver]"));

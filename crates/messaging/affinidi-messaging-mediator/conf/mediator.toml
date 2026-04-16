@@ -80,10 +80,6 @@ functions_file = "./conf/atm-functions.lua"
 ### For remote Redis, use rediss:// (TLS) to encrypt data in transit.
 database_url = "redis://127.0.0.1/"
 
-### Env: DATABASE_POOL_SIZE
-### DEPRECATED - ignored, kept for backwards compatibility
-database_pool_size = "10"
-
 ### Env: DATABASE_TIMEOUT
 ### Timeout for database operations in seconds
 database_timeout = "2"

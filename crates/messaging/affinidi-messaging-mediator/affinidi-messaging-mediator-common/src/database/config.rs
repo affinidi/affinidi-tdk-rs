@@ -7,7 +7,9 @@ use crate::errors::MediatorError;
 pub struct DatabaseConfigRaw {
     pub functions_file: String,
     pub database_url: String,
-    pub database_pool_size: String,
+    /// DEPRECATED — ignored, kept only for backwards compatibility with old config files.
+    #[serde(default)]
+    pub database_pool_size: Option<String>,
     pub database_timeout: String,
     pub scripts_path: Option<String>,
 }
@@ -44,7 +46,11 @@ impl std::convert::TryFrom<DatabaseConfigRaw> for DatabaseConfig {
         Ok(DatabaseConfig {
             functions_file: Some(raw.functions_file),
             database_url: raw.database_url,
-            database_pool_size: raw.database_pool_size.parse().unwrap_or(10),
+            database_pool_size: raw
+                .database_pool_size
+                .as_deref()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
             database_timeout: raw.database_timeout.parse().unwrap_or(2),
             circuit_breaker_threshold: 5,
             circuit_breaker_recovery_secs: 10,

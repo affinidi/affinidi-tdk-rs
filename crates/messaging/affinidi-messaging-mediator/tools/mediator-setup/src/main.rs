@@ -442,9 +442,16 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
         println!("  DID document: {}", doc_path.display());
     }
 
+    let conf_dir = std::path::Path::new(&config.config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
     println!(
-        "  \x1b[32m\u{2714}\x1b[0m Configuration written to: \x1b[1m{}\x1b[0m",
+        "  \x1b[32m\u{2714}\x1b[0m Configuration: \x1b[1m{}\x1b[0m",
         config.config_path
+    );
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Lua functions: \x1b[1m{}\x1b[0m",
+        conf_dir.join("atm-functions.lua").display()
     );
 
     // Display admin DID info to user
@@ -865,6 +872,10 @@ fn print_final_summary(config: &app::WizardConfig) {
     // Files created
     println!("  \x1b[1mFiles created:\x1b[0m");
     println!("    \x1b[36m{abs_config}\x1b[0m  — mediator configuration");
+    println!(
+        "    \x1b[36m{}\x1b[0m  — Redis Lua functions",
+        config_dir.join("atm-functions.lua").display()
+    );
 
     let recipe_path = config_dir.join("mediator-build.toml");
     println!(

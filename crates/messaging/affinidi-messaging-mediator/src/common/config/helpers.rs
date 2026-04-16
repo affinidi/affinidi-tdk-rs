@@ -107,7 +107,7 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
     // Database
     env_override!(config.database.functions_file, "DATABASE_FUNCTIONS_FILE");
     env_override!(config.database.database_url, "DATABASE_URL");
-    env_override!(config.database.database_pool_size, "DATABASE_POOL_SIZE");
+    env_override_opt!(config.database.database_pool_size, "DATABASE_POOL_SIZE");
     env_override!(config.database.database_timeout, "DATABASE_TIMEOUT");
 
     // Security
