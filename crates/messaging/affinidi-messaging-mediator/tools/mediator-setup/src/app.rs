@@ -199,7 +199,6 @@ pub struct WizardApp {
     /// Index of highlighted step in the progress panel (left panel)
     pub progress_index: usize,
     pub should_quit: bool,
-    pub quit_confirm: bool,
     pub write_config: bool,
     completed: Vec<WizardStep>,
 }
@@ -217,7 +216,6 @@ impl WizardApp {
             focus: FocusPanel::Content,
             progress_index: 0,
             should_quit: false,
-            quit_confirm: false,
             write_config: false,
             completed: Vec::new(),
         }
@@ -673,6 +671,9 @@ impl WizardApp {
                         self.mode = InputMode::TextInput;
                         self.text_input = Input::new(self.config.database_url.clone());
                     }
+                } else {
+                    // First step — Esc quits the wizard
+                    self.should_quit = true;
                 }
             }
         }
@@ -693,18 +694,6 @@ impl WizardApp {
 
     pub fn handle_text_input(&mut self, req: InputRequest) {
         self.text_input.handle(req);
-    }
-
-    pub fn request_quit(&mut self) {
-        if self.quit_confirm {
-            self.should_quit = true;
-        } else {
-            self.quit_confirm = true;
-        }
-    }
-
-    pub fn cancel_quit(&mut self) {
-        self.quit_confirm = false;
     }
 
     /// Get the default selection index based on deployment defaults.

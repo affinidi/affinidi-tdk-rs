@@ -65,6 +65,10 @@ async fn main() -> anyhow::Result<()> {
         Ok(()) => {
             if app.write_config {
                 print_banner();
+
+                // Ask for config file location
+                prompt_config_path(&mut app.config);
+
                 println!("  Generating cryptographic material...\n");
                 match generate_and_write(&app.config).await {
                     Ok(()) => {
@@ -207,24 +211,9 @@ async fn run_event_loop(
 }
 
 fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers) {
-    // Ctrl+C or Ctrl+Q always triggers quit confirmation
-    if (code == KeyCode::Char('c') || code == KeyCode::Char('q'))
-        && modifiers.contains(KeyModifiers::CONTROL)
-    {
-        app.request_quit();
-        return;
-    }
-
-    // Quit confirmation overlay
-    if app.quit_confirm {
-        match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-                app.should_quit = true;
-            }
-            _ => {
-                app.cancel_quit();
-            }
-        }
+    // Ctrl+C always quits immediately (no confirmation)
+    if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
         return;
     }
 
@@ -509,8 +498,24 @@ fn resolve_config_path(config_path: &str) -> String {
     config_path.to_string()
 }
 
+/// Prompt the user for the config file save location.
+fn prompt_config_path(config: &mut app::WizardConfig) {
+    let default = &config.config_path;
+    print!("  \x1b[1mConfig file location\x1b[0m [{}]: ", default);
+    let _ = io::stdout().flush();
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_ok() {
+        let input = input.trim();
+        if !input.is_empty() {
+            config.config_path = input.to_string();
+        }
+    }
+    println!();
+}
+
 /// Build the `cargo install` arguments for the mediator.
-fn build_install_args(features: &[&str]) -> Vec<String> {
+fn build_install_args(features: &[&str], install_root: Option<&str>) -> Vec<String> {
     let mut args = vec![
         "install".to_string(),
         "--path".to_string(),
@@ -523,11 +528,16 @@ fn build_install_args(features: &[&str]) -> Vec<String> {
         args.push(features.join(","));
     }
 
+    if let Some(root) = install_root {
+        args.push("--root".to_string());
+        args.push(root.to_string());
+    }
+
     args
 }
 
 /// Print the run command for the mediator binary.
-fn print_run_command(config_path: &str) {
+fn print_run_command(config_path: &str, install_location: &str) {
     let abs_config = resolve_config_path(config_path);
     println!("  \x1b[1mTo start the mediator:\x1b[0m");
     if abs_config == "conf/mediator.toml" || abs_config.ends_with("/conf/mediator.toml") {
@@ -536,14 +546,12 @@ fn print_run_command(config_path: &str) {
         println!("    \x1b[36mmediator -c {abs_config}\x1b[0m");
     }
     println!();
-    println!("  \x1b[2mThe mediator binary is installed at ~/.cargo/bin/mediator\x1b[0m");
+    println!("  \x1b[2mThe mediator binary is installed at {install_location}/mediator\x1b[0m");
 }
 
 /// Offer to install the mediator after configuration.
 fn offer_build_and_guidance(config: &app::WizardConfig) {
     let features = build_features(config);
-    let install_args = build_install_args(&features);
-    let install_cmd = format!("cargo {}", install_args.join(" "));
     let build_args = build_cargo_args(&features);
     let build_cmd = format!("cargo {}", build_args.join(" "));
 
@@ -558,13 +566,14 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     let build_dir = if let Some(root) = workspace_root {
         root
     } else {
+        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
         println!("  \x1b[33mCannot find workspace root.\x1b[0m");
         print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     };
 
-    println!("  The mediator can be installed as a binary to ~/.cargo/bin/");
-    println!("  so you can run it from anywhere.\n");
+    println!("  The mediator can be installed as a binary so you can run");
+    println!("  it from anywhere.\n");
     println!("  \x1b[1m[1]\x1b[0m Install now (may take a few minutes)");
     println!("  \x1b[1m[2]\x1b[0m Show manual instructions\n");
     print!("  Choose [\x1b[1m1\x1b[0m/2]: ");
@@ -572,19 +581,56 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
 
     let mut input = String::new();
     if io::stdin().read_line(&mut input).is_err() {
+        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
         println!("  Could not read input.");
         print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     }
 
-    let input = input.trim();
-    if input == "2" {
+    let choice = input.trim();
+    if choice == "2" {
+        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
         println!();
         print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     }
 
-    println!("\n  \x1b[38;5;69mInstalling mediator (this may take a few minutes)...\x1b[0m\n");
+    // Ask for custom install path
+    let cargo_home = std::env::var("CARGO_HOME").unwrap_or_else(|_| "~/.cargo".to_string());
+    let default_bin = format!("{cargo_home}/bin");
+
+    println!();
+    print!("  \x1b[1mInstall location\x1b[0m [{}]: ", default_bin);
+    let _ = io::stdout().flush();
+
+    let mut path_input = String::new();
+    let install_root = if io::stdin().read_line(&mut path_input).is_ok() {
+        let trimmed = path_input.trim();
+        if trimmed.is_empty() || trimmed == default_bin {
+            None
+        } else {
+            println!(
+                "\n  \x1b[33mNote: installing to a custom path may require elevated \
+                 permissions (sudo).\x1b[0m"
+            );
+            Some(trimmed.to_string())
+        }
+    } else {
+        None
+    };
+
+    let install_args = build_install_args(&features, install_root.as_deref());
+    let install_cmd = format!("cargo {}", install_args.join(" "));
+
+    let install_location = install_root
+        .as_ref()
+        .map(|r| format!("{r}/bin"))
+        .unwrap_or_else(|| default_bin.clone());
+
+    println!(
+        "\n  \x1b[38;5;69mInstalling mediator to {install_location} \
+         (this may take a few minutes)...\x1b[0m\n"
+    );
 
     let status = Command::new("cargo")
         .args(&install_args)
@@ -594,7 +640,7 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     match status {
         Ok(exit) if exit.success() => {
             println!("\n  \x1b[32m\u{2714} Installation successful!\x1b[0m\n");
-            print_run_command(&config.config_path);
+            print_run_command(&config.config_path, &install_location);
         }
         Ok(exit) => {
             eprintln!(

@@ -97,14 +97,14 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
 
     // Render help bar
     let help_text = match app.mode {
-        InputMode::TextInput => "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  Ctrl+Q Quit",
-        InputMode::Confirming => "Enter Confirm  Esc Cancel  Ctrl+Q Quit",
+        InputMode::TextInput => "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel",
+        InputMode::Confirming => "Enter Confirm  Esc Back",
         _ => match app.focus {
             crate::app::FocusPanel::Content => {
-                "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  Ctrl+Q Quit"
+                "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back"
             }
             crate::app::FocusPanel::Progress => {
-                "\u{2191}\u{2193} Navigate  Enter Jump  \u{2192} Options  Ctrl+Q Quit"
+                "\u{2191}\u{2193} Navigate  Enter Jump  \u{2192} Options  Esc Back"
             }
         },
     };
