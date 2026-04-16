@@ -306,8 +306,10 @@ async fn run_event_loop(
 }
 
 fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers) {
-    // Ctrl+C always quits immediately (no confirmation)
-    if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+    // F10 or Ctrl+C quits immediately
+    if code == KeyCode::F(10)
+        || (code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
+    {
         app.should_quit = true;
         return;
     }
