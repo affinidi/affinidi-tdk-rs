@@ -7,11 +7,12 @@
 --        [3] message length in bytes
 --        [4] to_did_hash
 --        [5] from_did_hash <optional>
+--        [6] receive_queue_maxlen <optional, 0 or absent = no limit>
 local function store_message(keys, args)
     -- Do we have the correct number of arguments?
     -- from_did_hash can be optional!!! Means an anonymous message
-    if #args < 4 and #args > 5 then
-        return redis.error_reply('store_message: expected 4 or 5 arguments')
+    if #args < 4 or #args > 6 then
+        return redis.error_reply('store_message: expected 4 to 6 arguments')
     end
 
     -- set response type to Version 3
@@ -23,6 +24,12 @@ local function store_message(keys, args)
     local bytes = tonumber(args[3])
     if bytes == nil then
         return redis.error_reply('store_message: invalid bytes')
+    end
+
+    -- Stream MAXLEN for per-DID queues (0 = unlimited)
+    local queue_maxlen = 0
+    if #args >= 6 then
+        queue_maxlen = tonumber(args[6]) or 0
     end
 
     -- Store message
@@ -39,17 +46,30 @@ local function store_message(keys, args)
     -- Update the receiver records
     redis.call('HINCRBY', 'DID:' .. args[4], 'RECEIVE_QUEUE_BYTES', bytes)
     redis.call('HINCRBY', 'DID:' .. args[4], 'RECEIVE_QUEUE_COUNT', 1)
-    -- If changing the fields in the future, update the fetch_messages function
-    local RQ = redis.call('XADD', 'RECEIVE_Q:' .. args[4], time .. '-*', 'MSG_ID', keys[1], 'BYTES', bytes, 'FROM',
-        args[5])
+
+    -- XADD with optional MAXLEN to bound per-DID stream growth
+    local RQ
+    if queue_maxlen > 0 then
+        RQ = redis.call('XADD', 'RECEIVE_Q:' .. args[4], 'MAXLEN', '~', queue_maxlen, time .. '-*',
+            'MSG_ID', keys[1], 'BYTES', bytes, 'FROM', args[5])
+    else
+        RQ = redis.call('XADD', 'RECEIVE_Q:' .. args[4], time .. '-*',
+            'MSG_ID', keys[1], 'BYTES', bytes, 'FROM', args[5])
+    end
 
     -- Update the sender records
     local SQ = nil
-    if table.getn(args) == 5 then
+    if #args >= 5 and args[5] ~= nil and args[5] ~= "ANONYMOUS" then
         -- Update the sender records
         redis.call('HINCRBY', 'DID:' .. args[5], 'SEND_QUEUE_BYTES', bytes)
         redis.call('HINCRBY', 'DID:' .. args[5], 'SEND_QUEUE_COUNT', 1)
-        SQ = redis.call('XADD', 'SEND_Q:' .. args[5], time .. '-*', 'MSG_ID', keys[1], 'BYTES', bytes, 'TO', args[4])
+        if queue_maxlen > 0 then
+            SQ = redis.call('XADD', 'SEND_Q:' .. args[5], 'MAXLEN', '~', queue_maxlen, time .. '-*',
+                'MSG_ID', keys[1], 'BYTES', bytes, 'TO', args[4])
+        else
+            SQ = redis.call('XADD', 'SEND_Q:' .. args[5], time .. '-*',
+                'MSG_ID', keys[1], 'BYTES', bytes, 'TO', args[4])
+        end
     end
 
     -- Update message MetaData
@@ -63,7 +83,8 @@ end
 
 -- delete_message
 -- keys = message_hash
--- args = [1] did_hash
+-- args = [1] did_hash (owner requesting deletion)
+--        [2] admin_did_hash (the mediator's admin DID hash, for permission check)
 local function delete_message(keys, args)
     -- Correct number of keys?
     if #keys ~= 1 then
@@ -71,8 +92,8 @@ local function delete_message(keys, args)
     end
 
     -- Correct number of args?
-    if #args ~= 1 then
-        return redis.error_reply('delete_message: Requires DID hash argument')
+    if #args < 1 or #args > 2 then
+        return redis.error_reply('delete_message: Requires 1-2 arguments (did_hash, optional admin_did_hash)')
     end
 
     -- set response type to Version 3
@@ -86,7 +107,10 @@ local function delete_message(keys, args)
     end
 
     -- Check that the requesting DID has some form of ownership of this message
-    if meta.map.TO ~= args[1] and meta.map.FROM ~= args[1] and args[1] ~= "ADMIN" then
+    -- Allowed if: requester is TO, requester is FROM, or requester matches admin_did_hash
+    local is_owner = (meta.map.TO == args[1]) or (meta.map.FROM == args[1])
+    local is_admin = (#args >= 2 and args[1] == args[2])
+    if not is_owner and not is_admin then
         return redis.error_reply('PERMISSION_DENIED: Requesting DID does not have ownership of this message')
     end
 
@@ -145,9 +169,27 @@ local function fetch_messages(keys, args)
     -- Get list of messages from stream
     local list = redis.call('XRANGE', 'RECEIVE_Q:' .. keys[1], start_id, '+', 'COUNT', args[2])
 
-    local fetched_messages = {}
-    -- unpack the XRANGE list
+    -- Collect message IDs for batch retrieval
+    local msg_ids = {}
+    local stream_entries = {}
     for x, element in ipairs(list) do
+        stream_entries[x] = element
+        -- element[2] is the fields array: [MSG_ID, id, BYTES, bytes, FROM, from]
+        msg_ids[x] = element[2][2]
+    end
+
+    -- Batch fetch all message bodies with MGET
+    local msg_bodies = {}
+    if #msg_ids > 0 then
+        local mget_keys = {}
+        for i, id in ipairs(msg_ids) do
+            mget_keys[i] = 'MSG:' .. id
+        end
+        msg_bodies = redis.call('MGET', unpack(mget_keys))
+    end
+
+    local fetched_messages = {}
+    for x, element in ipairs(stream_entries) do
         -- element[1] = stream_id
         -- element[2] = array of Stream Fields
         for i, sub_element in ipairs(element) do
@@ -166,12 +208,11 @@ local function fetch_messages(keys, args)
                 table.insert(fetched_messages[x], 'FROM_DID')
                 table.insert(fetched_messages[x], sub_element[6])
 
-                -- fetch the message
+                -- Use pre-fetched message body from MGET
                 table.insert(fetched_messages[x], 'MSG')
-                local msg = redis.call('GET', 'MSG:' .. sub_element[2])
-                table.insert(fetched_messages[x], msg)
+                table.insert(fetched_messages[x], msg_bodies[x])
 
-                -- fetch the message metadata
+                -- fetch the message metadata (still per-message, small fixed-size hash)
                 local meta = redis.call('HGETALL', 'MSG:META:' .. sub_element[2])
                 for k, v in pairs(meta.map) do
                     table.insert(fetched_messages[x], 'META_' .. k)
@@ -201,12 +242,12 @@ local function clean_start_streaming(keys, args)
     -- set response type to Version 3
     redis.setresp(3)
 
-    -- Prepend an exclusive start_id if it exists
     local key = 'STREAMING_SESSIONS:' .. keys[1]
 
-    -- Clean up sessions
+    -- Clean up sessions in batches to avoid blocking the Redis event loop
     local counter = 0
-    while (true) do
+    local max_batch = 500
+    while (counter < max_batch) do
         local response = redis.call('SPOP', key, 1)
 
         -- No more items in the set
@@ -219,7 +260,6 @@ local function clean_start_streaming(keys, args)
             session = k
             counter = counter + 1
         end
-
 
         -- remove from global session list
         redis.call('HDEL', 'GLOBAL_STREAMING', session)

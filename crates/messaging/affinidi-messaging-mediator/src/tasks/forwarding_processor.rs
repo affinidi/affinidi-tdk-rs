@@ -521,6 +521,7 @@ impl ForwardingProcessor {
                 &msg.from_did_hash,
                 Some("SYSTEM"),
                 now + 300,
+                0, // No MAXLEN for system-generated problem reports
             )
             .await
         {

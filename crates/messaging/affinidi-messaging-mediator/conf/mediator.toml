@@ -70,6 +70,14 @@ functions_file = "./conf/atm-functions.lua"
 
 ### Env: DATABASE_URL
 ### URL of the Redis compatible database
+### Supported schemes:
+###   redis://127.0.0.1/                    — local, no auth (dev only)
+###   redis://:password@host:6379/          — with password authentication
+###   redis://user:password@host:6379/      — with ACL user + password
+###   rediss://:password@host:6379/         — TLS encrypted connection
+###   redis://127.0.0.1/1                   — use database partition 1
+### SECURITY: Always use authentication (requirepass or ACLs) in production.
+### For remote Redis, use rediss:// (TLS) to encrypt data in transit.
 database_url = "redis://127.0.0.1/"
 
 ### Env: DATABASE_POOL_SIZE

@@ -110,6 +110,9 @@ impl DatabaseHandler {
         // Check the version of Redis Server
         database.check_server_version().await?;
 
+        // Warn if Redis connection has no authentication
+        database.check_auth_warning(&config.database_url);
+
         Ok(database)
     }
 
@@ -288,6 +291,46 @@ impl DatabaseHandler {
                 vec![],
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
+        }
+    }
+
+    /// Log a warning if the Redis connection URL has no authentication configured.
+    /// Local connections (127.0.0.1, localhost, unix sockets) get a softer warning.
+    fn check_auth_warning(&self, url: &str) {
+        let is_tls = url.starts_with("rediss://");
+        let is_local = url.contains("127.0.0.1")
+            || url.contains("localhost")
+            || url.contains("[::1]")
+            || url.starts_with("unix://");
+
+        // Check for password in URL: redis://:password@host or redis://user:pass@host
+        let has_auth = url.contains('@');
+
+        if !has_auth {
+            if is_local {
+                warn!(
+                    "Redis connection has no authentication (password). \
+                     This is acceptable for local development but should be \
+                     secured with requirepass or ACLs for any shared environment."
+                );
+            } else {
+                warn!(
+                    "SECURITY WARNING: Redis connection has no authentication! \
+                     Configure a password: redis://:yourpassword@host:port/ \
+                     or use Redis ACLs. Unauthenticated remote Redis is a critical security risk."
+                );
+            }
+        }
+
+        if !is_tls && !is_local {
+            warn!(
+                "Redis connection is not using TLS (rediss://). \
+                 For production deployments, use rediss:// to encrypt data in transit."
+            );
+        }
+
+        if is_tls {
+            info!("Redis TLS connection detected (rediss://)");
         }
     }
 }

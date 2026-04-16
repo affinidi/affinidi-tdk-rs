@@ -103,7 +103,13 @@ impl Database {
 
             // Delete the message
             self.handler
-                .delete_message(Some(&session.session_id), did_hash, message_hash, None)
+                .delete_message(
+                    Some(&session.session_id),
+                    did_hash,
+                    message_hash,
+                    None,
+                    None,
+                )
                 .await?;
 
             // Delete the stream entry

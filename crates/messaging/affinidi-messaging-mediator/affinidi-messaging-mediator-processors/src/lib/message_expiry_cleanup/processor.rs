@@ -14,13 +14,20 @@ pub struct MessageExpiryCleanupProcessor {
     _config: MessageExpiryCleanupConfig,
     /// Database handler for the Mediator
     pub(crate) database: DatabaseHandler,
+    /// SHA256 hash of the admin DID, used for delete permission in Lua scripts
+    pub(crate) admin_did_hash: String,
 }
 
 impl MessageExpiryCleanupProcessor {
-    pub fn new(config: MessageExpiryCleanupConfig, database: DatabaseHandler) -> Self {
+    pub fn new(
+        config: MessageExpiryCleanupConfig,
+        database: DatabaseHandler,
+        admin_did_hash: String,
+    ) -> Self {
         MessageExpiryCleanupProcessor {
             _config: config,
             database,
+            admin_did_hash,
         }
     }
 

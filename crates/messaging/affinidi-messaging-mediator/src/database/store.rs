@@ -17,6 +17,7 @@ impl Database {
     /// Returns the message_id (hash of the message)
     /// - expires_at: The timestamp at which the message expires (since epoch in seconds)
     /// - `from_hash`: The hash of the DID of the sender
+    /// - `queue_maxlen`: Max entries per RECEIVE_Q/SEND_Q stream (0 = unlimited)
     pub async fn store_message(
         &self,
         session_id: &str,
@@ -24,6 +25,7 @@ impl Database {
         to_did_hash: &str,
         from_hash: Option<&str>,
         expires_at: u64,
+        queue_maxlen: usize,
     ) -> Result<String, MediatorError> {
         let _span = span!(Level::DEBUG, "store_message", session_id = session_id);
         async move {
@@ -39,25 +41,26 @@ impl Database {
             );
 
             let mut conn = self.get_connection().await?;
-            redis::cmd("FCALL")
-                .arg("store_message")
+            let mut cmd = redis::cmd("FCALL");
+            cmd.arg("store_message")
                 .arg(1)
                 .arg(&message_hash)
                 .arg(message)
                 .arg(expires_at)
                 .arg(message.len())
                 .arg(to_did_hash)
-                .arg(from_hash)
-                .exec_async(&mut conn)
-                .await
-                .map_err(|err| {
-                    event!(Level::ERROR, "Couldn't store message in database: {}", err);
-                    MediatorError::DatabaseError(
-                        14,
-                        session_id.into(),
-                        format!("Couldn't store message in database: {err}"),
-                    )
-                })?;
+                .arg(from_hash);
+            if queue_maxlen > 0 {
+                cmd.arg(queue_maxlen);
+            }
+            cmd.exec_async(&mut conn).await.map_err(|err| {
+                event!(Level::ERROR, "Couldn't store message in database: {}", err);
+                MediatorError::DatabaseError(
+                    14,
+                    session_id.into(),
+                    format!("Couldn't store message in database: {err}"),
+                )
+            })?;
 
             info!(
                 "Message hash({}) from({}) to({}) stored in database",

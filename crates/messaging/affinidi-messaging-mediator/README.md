@@ -134,6 +134,65 @@ graph TD
 - Docker (for Redis)
 - Redis 8.0+
 
+## Redis Security
+
+The mediator uses Redis for all message storage, session management, and queue
+processing. Securing Redis is critical for production deployments.
+
+### Authentication
+
+Always configure Redis authentication in production:
+
+```bash
+# With password (requirepass)
+redis://:yourpassword@host:6379/
+
+# With ACL user and password (Redis 6+)
+redis://mediator:secretpass@host:6379/
+```
+
+Set the password in `mediator.toml`:
+
+```toml
+[database]
+database_url = "redis://:yourpassword@redis.internal:6379/"
+```
+
+Or via environment variable:
+
+```bash
+export DATABASE_URL="redis://:yourpassword@redis.internal:6379/"
+```
+
+### TLS Encryption
+
+For encrypted connections, use the `rediss://` scheme (note the double `s`):
+
+```toml
+[database]
+database_url = "rediss://:yourpassword@redis.internal:6379/"
+```
+
+### Security Recommendations
+
+| Environment | Minimum Requirements |
+|---|---|
+| **Local dev** | No auth required (mediator logs a warning) |
+| **Shared/staging** | Password authentication (`requirepass`) |
+| **Production** | ACL users + TLS (`rediss://`) + network isolation |
+
+The mediator automatically logs warnings at startup:
+- **No authentication**: Warning for remote Redis, info-level for localhost
+- **No TLS**: Warning when connecting to remote Redis without `rediss://`
+
+### Database Partitions
+
+When sharing a Redis instance across applications, use database partitions:
+
+```toml
+database_url = "redis://127.0.0.1/1"  # Uses database 1 (0-15 available)
+```
+
 ## VTA Integration (Centralized Key Management)
 
 The mediator can use a [Verifiable Trust Agent (VTA)](https://github.com/OpenVTC/verifiable-trust-infrastructure)

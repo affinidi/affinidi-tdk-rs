@@ -64,9 +64,17 @@ impl MessageExpiryCleanupProcessor {
             })?;
 
             if let Some(msg_id) = msg_id {
+                // Pass the admin DID hash twice: once as requester, once as the admin
+                // identity. The Lua script grants delete permission when both match.
                 if self
                     .database
-                    .delete_message(None, "ADMIN", &msg_id, None)
+                    .delete_message(
+                        None,
+                        &self.admin_did_hash,
+                        &msg_id,
+                        None,
+                        Some(&self.admin_did_hash),
+                    )
                     .await
                     .is_ok()
                 {

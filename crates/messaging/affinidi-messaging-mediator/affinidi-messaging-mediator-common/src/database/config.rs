@@ -18,6 +18,10 @@ pub struct DatabaseConfig {
     pub database_url: String,
     pub database_pool_size: usize,
     pub database_timeout: u32,
+    /// Number of consecutive failures before the circuit breaker opens
+    pub circuit_breaker_threshold: u32,
+    /// Seconds to wait before probing Redis after circuit opens
+    pub circuit_breaker_recovery_secs: u64,
 }
 
 impl Default for DatabaseConfig {
@@ -27,6 +31,8 @@ impl Default for DatabaseConfig {
             database_url: "redis://127.0.0.1/".into(),
             database_pool_size: 10,
             database_timeout: 2,
+            circuit_breaker_threshold: 5,
+            circuit_breaker_recovery_secs: 10,
         }
     }
 }
@@ -40,6 +46,8 @@ impl std::convert::TryFrom<DatabaseConfigRaw> for DatabaseConfig {
             database_url: raw.database_url,
             database_pool_size: raw.database_pool_size.parse().unwrap_or(10),
             database_timeout: raw.database_timeout.parse().unwrap_or(2),
+            circuit_breaker_threshold: 5,
+            circuit_breaker_recovery_secs: 10,
         })
     }
 }

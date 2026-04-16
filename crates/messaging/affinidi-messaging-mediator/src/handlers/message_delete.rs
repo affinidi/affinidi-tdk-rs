@@ -70,7 +70,7 @@ pub async fn message_delete_handler(
             let result = state
                 .database
                 .handler
-                .delete_message(Some(&session.session_id), &session.did_hash, message, None)
+                .delete_message(Some(&session.session_id), &session.did_hash, message, None, None)
                 .await;
 
             match result {

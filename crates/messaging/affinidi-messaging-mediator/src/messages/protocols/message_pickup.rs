@@ -474,6 +474,7 @@ pub(crate) async fn messages_received(
                             &session.did_hash,
                             msg_id,
                             Some(&thid),
+                            None,
                         )
                         .await
                     {

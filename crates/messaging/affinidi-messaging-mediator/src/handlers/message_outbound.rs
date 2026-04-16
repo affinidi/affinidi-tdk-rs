@@ -64,6 +64,7 @@ pub async fn message_outbound_handler(
                                 &session.did_hash,
                                 msg_id,
                                 None,
+                                None,
                             )
                             .await
                         {

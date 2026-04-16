@@ -86,7 +86,11 @@ pub async fn start() {
     };
 
     // Convert from the common generic DatabaseHandler to the Mediator specific Database
-    let database = Database::new(database);
+    let database = Database::new(
+        database,
+        config.database.circuit_breaker_threshold,
+        config.database.circuit_breaker_recovery_secs,
+    );
 
     database
         .initialize(&config)
@@ -143,9 +147,11 @@ pub async fn start() {
     if config.processors.message_expiry_cleanup.enabled {
         let _database = database.handler.clone(); // Clone the DatabaseHandler for the message expiry cleanup thread
         let _config = config.processors.message_expiry_cleanup.clone();
+        let _admin_did_hash = config.mediator_did_hash.clone();
         let cleanup_token = shutdown_token.clone();
         tokio::spawn(async move {
-            let _processor = MessageExpiryCleanupProcessor::new(_config, _database);
+            let _processor =
+                MessageExpiryCleanupProcessor::new(_config, _database, _admin_did_hash);
             tokio::select! {
                 result = _processor.start() => {
                     if let Err(e) = result {

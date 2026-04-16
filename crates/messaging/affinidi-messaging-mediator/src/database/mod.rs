@@ -35,12 +35,18 @@ pub struct Database {
 }
 
 impl Database {
-    /// Create a new Database with a circuit breaker.
-    /// Opens the circuit after 5 consecutive failures, recovers after 10 seconds.
-    pub fn new(handler: DatabaseHandler) -> Self {
+    /// Create a new Database with a configurable circuit breaker.
+    pub fn new(
+        handler: DatabaseHandler,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+    ) -> Self {
         Self {
             handler,
-            circuit_breaker: Arc::new(CircuitBreaker::new(5, 10)),
+            circuit_breaker: Arc::new(CircuitBreaker::new(
+                circuit_breaker_threshold,
+                circuit_breaker_recovery_secs,
+            )),
         }
     }
 
