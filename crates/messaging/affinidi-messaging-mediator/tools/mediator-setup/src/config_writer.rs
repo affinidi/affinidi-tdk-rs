@@ -4,6 +4,7 @@ use affinidi_secrets_resolver::secrets::Secret;
 use toml_edit::DocumentMut;
 
 use crate::app::WizardConfig;
+use crate::consts::*;
 
 /// Generated cryptographic material from the wizard generators.
 pub struct GeneratedValues {
@@ -48,7 +49,7 @@ pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyho
     fs::write(&lua_path, ATM_FUNCTIONS_LUA)?;
 
     // Write secrets file if using file:// storage
-    if config.secret_storage == "file://" {
+    if config.secret_storage == STORAGE_FILE {
         let secrets_path = config_dir(config).join("secrets.json");
         crate::generators::secrets::write_secrets_file(
             &generated.mediator_secrets,
@@ -77,7 +78,7 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     doc["mediator_did"] = toml_edit::value(format!("did://{}", generated.mediator_did));
 
     // VTA section — update or remove based on config
-    if config.did_method == "VTA managed" || config.secret_storage == "vta://" {
+    if config.did_method == DID_VTA || config.secret_storage == STORAGE_VTA {
         // Keep [vta] section, update context
         if let Some(vta) = doc.get_mut("vta") {
             vta["credential"] = toml_edit::value("keyring://affinidi-mediator/vta-credential");
@@ -100,7 +101,7 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
         }
 
         // Self-hosted DID document
-        if config.did_method == "did:webvh" {
+        if config.did_method == DID_WEBVH {
             server["did_web_self_hosted"] = toml_edit::value("file://./conf/mediator_did.json");
         } else {
             server
@@ -118,33 +119,33 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     if let Some(sec) = doc.get_mut("security") {
         // Mediator secrets reference
         let secrets_ref = match config.secret_storage.as_str() {
-            "string://" => {
+            STORAGE_STRING => {
                 let b64 =
                     crate::generators::secrets::secrets_to_base64(&generated.mediator_secrets)?;
-                format!("string://{b64}")
+                format!("{STORAGE_STRING}{b64}")
             }
-            "file://" => "file://./conf/secrets.json".into(),
-            "keyring://" => "keyring://affinidi-mediator/secrets".into(),
-            "aws_secrets://" => "aws_secrets://mediator/secrets".into(),
-            "gcp_secrets://" => "gcp_secrets://mediator/secrets".into(),
-            "azure_keyvault://" => "azure_keyvault://mediator-secrets".into(),
-            "vault://" => "vault://secret/mediator/secrets".into(),
-            "vta://" => "vta://mediator".into(),
+            STORAGE_FILE => format!("{STORAGE_FILE}./conf/secrets.json"),
+            STORAGE_KEYRING => format!("{STORAGE_KEYRING}affinidi-mediator/secrets"),
+            STORAGE_AWS => format!("{STORAGE_AWS}mediator/secrets"),
+            STORAGE_GCP => format!("{STORAGE_GCP}mediator/secrets"),
+            STORAGE_AZURE => format!("{STORAGE_AZURE}mediator-secrets"),
+            STORAGE_VAULT => format!("{STORAGE_VAULT}secret/mediator/secrets"),
+            STORAGE_VTA => format!("{STORAGE_VTA}mediator"),
             other => other.to_string(),
         };
         sec["mediator_secrets"] = toml_edit::value(&secrets_ref);
 
         // SSL
         match config.ssl_mode.as_str() {
-            "No SSL (TLS proxy)" => {
+            SSL_NONE => {
                 sec["use_ssl"] = toml_edit::value("false");
             }
-            "Existing certificates" => {
+            SSL_EXISTING => {
                 sec["use_ssl"] = toml_edit::value("true");
                 sec["ssl_certificate_file"] = toml_edit::value(&config.ssl_cert_path);
                 sec["ssl_key_file"] = toml_edit::value(&config.ssl_key_path);
             }
-            "Self-signed" => {
+            SSL_SELF_SIGNED => {
                 sec["use_ssl"] = toml_edit::value("true");
                 let cert = generated
                     .ssl_cert_path
@@ -193,15 +194,15 @@ mod tests {
             deployment_type: "Local development".into(),
             didcomm_enabled: true,
             tsp_enabled: false,
-            did_method: "did:peer".into(),
+            did_method: DID_PEER.into(),
             public_url: String::new(),
-            secret_storage: "string://".into(),
-            ssl_mode: "No SSL (TLS proxy)".into(),
+            secret_storage: STORAGE_STRING.into(),
+            ssl_mode: SSL_NONE.into(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
-            database_url: "redis://127.0.0.1/".into(),
-            admin_did_mode: "Generate did:key".into(),
-            listen_address: "0.0.0.0:7037".into(),
+            database_url: DEFAULT_REDIS_URL.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            listen_address: DEFAULT_LISTEN_ADDR.into(),
         };
 
         let toml = generate_toml(&config, &test_generated()).unwrap();
@@ -237,15 +238,15 @@ mod tests {
             deployment_type: "Headless server".into(),
             didcomm_enabled: true,
             tsp_enabled: false,
-            did_method: "VTA managed".into(),
+            did_method: DID_VTA.into(),
             public_url: String::new(),
-            secret_storage: "vta://".into(),
-            ssl_mode: "No SSL (TLS proxy)".into(),
+            secret_storage: STORAGE_VTA.into(),
+            ssl_mode: SSL_NONE.into(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
             database_url: "redis://redis.example.com/".into(),
-            admin_did_mode: "Generate did:key".into(),
-            listen_address: "0.0.0.0:7037".into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            listen_address: DEFAULT_LISTEN_ADDR.into(),
         };
 
         let generated = GeneratedValues {
@@ -267,9 +268,9 @@ mod tests {
     #[test]
     fn test_ssl_self_signed() {
         let config = WizardConfig {
-            ssl_mode: "Self-signed".into(),
-            did_method: "did:peer".into(),
-            secret_storage: "string://".into(),
+            ssl_mode: SSL_SELF_SIGNED.into(),
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let generated = GeneratedValues {
@@ -286,11 +287,11 @@ mod tests {
     #[test]
     fn test_ssl_existing_certificates() {
         let config = WizardConfig {
-            ssl_mode: "Existing certificates".into(),
+            ssl_mode: SSL_EXISTING.into(),
             ssl_cert_path: "/etc/ssl/cert.pem".into(),
             ssl_key_path: "/etc/ssl/key.pem".into(),
-            did_method: "did:peer".into(),
-            secret_storage: "string://".into(),
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let toml = generate_toml(&config, &test_generated()).unwrap();
@@ -302,9 +303,9 @@ mod tests {
     #[test]
     fn test_no_admin_did_removes_field() {
         let config = WizardConfig {
-            admin_did_mode: "Skip".into(),
-            did_method: "did:peer".into(),
-            secret_storage: "string://".into(),
+            admin_did_mode: ADMIN_SKIP.into(),
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let generated = GeneratedValues {
@@ -320,8 +321,8 @@ mod tests {
     #[test]
     fn test_webvh_includes_self_hosted() {
         let config = WizardConfig {
-            did_method: "did:webvh".into(),
-            secret_storage: "string://".into(),
+            did_method: DID_WEBVH.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let toml = generate_toml(&config, &test_generated()).unwrap();
@@ -331,8 +332,8 @@ mod tests {
     #[test]
     fn test_non_webvh_removes_self_hosted() {
         let config = WizardConfig {
-            did_method: "did:peer".into(),
-            secret_storage: "string://".into(),
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let toml = generate_toml(&config, &test_generated()).unwrap();
@@ -343,17 +344,17 @@ mod tests {
     #[test]
     fn test_all_secret_storage_refs() {
         let cases = [
-            ("file://", "file://./conf/secrets.json"),
-            ("keyring://", "keyring://affinidi-mediator/secrets"),
-            ("aws_secrets://", "aws_secrets://mediator/secrets"),
-            ("gcp_secrets://", "gcp_secrets://mediator/secrets"),
-            ("azure_keyvault://", "azure_keyvault://mediator-secrets"),
-            ("vault://", "vault://secret/mediator/secrets"),
-            ("vta://", "vta://mediator"),
+            (STORAGE_FILE, "file://./conf/secrets.json"),
+            (STORAGE_KEYRING, "keyring://affinidi-mediator/secrets"),
+            (STORAGE_AWS, "aws_secrets://mediator/secrets"),
+            (STORAGE_GCP, "gcp_secrets://mediator/secrets"),
+            (STORAGE_AZURE, "azure_keyvault://mediator-secrets"),
+            (STORAGE_VAULT, "vault://secret/mediator/secrets"),
+            (STORAGE_VTA, "vta://mediator"),
         ];
         for (storage, expected_ref) in cases {
             let config = WizardConfig {
-                did_method: "did:peer".into(),
+                did_method: DID_PEER.into(),
                 secret_storage: storage.into(),
                 ..WizardConfig::default()
             };
@@ -369,8 +370,8 @@ mod tests {
     fn test_listen_address_set() {
         let config = WizardConfig {
             listen_address: "127.0.0.1:9090".into(),
-            did_method: "did:peer".into(),
-            secret_storage: "string://".into(),
+            did_method: DID_PEER.into(),
+            secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
         let toml = generate_toml(&config, &test_generated()).unwrap();

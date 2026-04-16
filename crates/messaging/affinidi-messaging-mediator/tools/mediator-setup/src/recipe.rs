@@ -10,6 +10,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::app::WizardConfig;
+use crate::consts::*;
 
 /// Top-level build recipe.
 #[derive(Debug, Deserialize)]
@@ -200,9 +201,9 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
 
     // Deployment type
     config.deployment_type = match recipe.deployment.deployment_type.as_str() {
-        "local" => "Local development".into(),
-        "server" => "Headless server".into(),
-        "container" => "Container".into(),
+        "local" => DEPLOYMENT_LOCAL.into(),
+        "server" => DEPLOYMENT_SERVER.into(),
+        "container" => DEPLOYMENT_CONTAINER.into(),
         other => anyhow::bail!(
             "Invalid deployment.type '{}': expected 'local', 'server', or 'container'",
             other
@@ -225,17 +226,17 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
 
     // DID method
     config.did_method = match recipe.identity.did_method.as_str() {
-        "vta" => "VTA managed".into(),
-        "did:peer" | "peer" => "did:peer".into(),
-        "did:webvh" | "webvh" => "did:webvh".into(),
-        "import" => "Import existing".into(),
+        "vta" => DID_VTA.into(),
+        "did:peer" | "peer" => DID_PEER.into(),
+        "did:webvh" | "webvh" => DID_WEBVH.into(),
+        "import" => DID_IMPORT.into(),
         other => anyhow::bail!(
             "Invalid identity.did_method '{}': expected 'vta', 'did:peer', 'did:webvh', or 'import'",
             other
         ),
     };
 
-    if config.did_method == "did:webvh" {
+    if config.did_method == DID_WEBVH {
         config.public_url = recipe.identity.public_url.clone().ok_or_else(|| {
             anyhow::anyhow!("identity.public_url is required when did_method = 'did:webvh'")
         })?;
@@ -245,18 +246,26 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
 
     // Secrets
     config.secret_storage = match recipe.secrets.storage.as_str() {
-        s @ ("string://" | "file://" | "keyring://" | "aws_secrets://" | "gcp_secrets://"
-        | "azure_keyvault://" | "vault://" | "vta://") => s.to_string(),
+        s @ (STORAGE_STRING | STORAGE_FILE | STORAGE_KEYRING | STORAGE_AWS | STORAGE_GCP
+        | STORAGE_AZURE | STORAGE_VAULT | STORAGE_VTA) => s.to_string(),
         other => anyhow::bail!(
-            "Invalid secrets.storage '{}': expected a valid scheme (string://, file://, keyring://, aws_secrets://, gcp_secrets://, azure_keyvault://, vault://, vta://)",
-            other
+            "Invalid secrets.storage '{}': expected a valid scheme ({}, {}, {}, {}, {}, {}, {}, {})",
+            other,
+            STORAGE_STRING,
+            STORAGE_FILE,
+            STORAGE_KEYRING,
+            STORAGE_AWS,
+            STORAGE_GCP,
+            STORAGE_AZURE,
+            STORAGE_VAULT,
+            STORAGE_VTA
         ),
     };
 
     // Security
     config.ssl_mode = match recipe.security.ssl.as_str() {
-        "none" => "No SSL (TLS proxy)".into(),
-        "self-signed" | "self_signed" => "Self-signed".into(),
+        "none" => SSL_NONE.into(),
+        "self-signed" | "self_signed" => SSL_SELF_SIGNED.into(),
         "existing" => {
             config.ssl_cert_path = recipe.security.ssl_cert.clone().ok_or_else(|| {
                 anyhow::anyhow!("security.ssl_cert is required when ssl = 'existing'")
@@ -264,7 +273,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
             config.ssl_key_path = recipe.security.ssl_key.clone().ok_or_else(|| {
                 anyhow::anyhow!("security.ssl_key is required when ssl = 'existing'")
             })?;
-            "Existing certificates".into()
+            SSL_EXISTING.into()
         }
         other => anyhow::bail!(
             "Invalid security.ssl '{}': expected 'none', 'self-signed', or 'existing'",
@@ -273,11 +282,11 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     };
 
     config.admin_did_mode = match recipe.security.admin.as_str() {
-        "generate" => "Generate did:key".into(),
-        "skip" => "Skip".into(),
+        "generate" => ADMIN_GENERATE.into(),
+        "skip" => ADMIN_SKIP.into(),
         "import" => {
             // TODO: handle imported admin DID
-            "Paste existing".into()
+            ADMIN_PASTE.into()
         }
         other => anyhow::bail!(
             "Invalid security.admin '{}': expected 'generate', 'skip', or 'import'",
@@ -339,9 +348,9 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     // Deployment
     out.push_str("[deployment]\n");
     let deployment_type = match config.deployment_type.as_str() {
-        "Local development" => "local",
-        "Headless server" => "server",
-        "Container" => "container",
+        DEPLOYMENT_LOCAL => "local",
+        DEPLOYMENT_SERVER => "server",
+        DEPLOYMENT_CONTAINER => "container",
         _ => "local",
     };
     out.push_str(&format!("type = \"{deployment_type}\"\n"));
@@ -358,10 +367,10 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     // Identity
     out.push_str("[identity]\n");
     let did_method = match config.did_method.as_str() {
-        "VTA managed" => "vta",
-        "did:peer" => "did:peer",
-        "did:webvh" => "did:webvh",
-        "Import existing" => "import",
+        DID_VTA => "vta",
+        DID_PEER => "did:peer",
+        DID_WEBVH => "did:webvh",
+        DID_IMPORT => "import",
         _ => "vta",
     };
     out.push_str(&format!("did_method = \"{did_method}\"\n"));
@@ -377,9 +386,9 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     // Security
     out.push_str("[security]\n");
     let ssl = match config.ssl_mode.as_str() {
-        "No SSL (TLS proxy)" => "none",
-        "Self-signed" => "self-signed",
-        "Existing certificates" => "existing",
+        SSL_NONE => "none",
+        SSL_SELF_SIGNED => "self-signed",
+        SSL_EXISTING => "existing",
         _ => "none",
     };
     out.push_str(&format!("ssl = \"{ssl}\"\n"));
@@ -388,9 +397,9 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
         out.push_str(&format!("ssl_key = \"{}\"\n", config.ssl_key_path));
     }
     let admin = match config.admin_did_mode.as_str() {
-        "Generate did:key" => "generate",
-        "Skip" => "skip",
-        "Paste existing" => "import",
+        ADMIN_GENERATE => "generate",
+        ADMIN_SKIP => "skip",
+        ADMIN_PASTE => "import",
         _ => "generate",
     };
     out.push_str(&format!("admin = \"{admin}\"\n\n"));
@@ -496,19 +505,19 @@ mod tests {
     #[test]
     fn test_valid_recipe_converts() {
         let config = to_wizard_config(&minimal_recipe()).unwrap();
-        assert_eq!(config.deployment_type, "Local development");
+        assert_eq!(config.deployment_type, DEPLOYMENT_LOCAL);
         assert!(config.didcomm_enabled);
         assert!(!config.tsp_enabled);
-        assert_eq!(config.did_method, "VTA managed");
-        assert_eq!(config.secret_storage, "vta://");
+        assert_eq!(config.did_method, DID_VTA);
+        assert_eq!(config.secret_storage, STORAGE_VTA);
     }
 
     #[test]
     fn test_all_deployment_types() {
         for (input, expected) in [
-            ("local", "Local development"),
-            ("server", "Headless server"),
-            ("container", "Container"),
+            ("local", DEPLOYMENT_LOCAL),
+            ("server", DEPLOYMENT_SERVER),
+            ("container", DEPLOYMENT_CONTAINER),
         ] {
             let mut recipe = minimal_recipe();
             recipe.deployment.deployment_type = input.into();
@@ -550,16 +559,16 @@ mod tests {
     #[test]
     fn test_all_did_methods() {
         for (input, expected) in [
-            ("vta", "VTA managed"),
-            ("did:peer", "did:peer"),
-            ("peer", "did:peer"),
-            ("did:webvh", "did:webvh"),
-            ("webvh", "did:webvh"),
-            ("import", "Import existing"),
+            ("vta", DID_VTA),
+            ("did:peer", DID_PEER),
+            ("peer", DID_PEER),
+            ("did:webvh", DID_WEBVH),
+            ("webvh", DID_WEBVH),
+            ("import", DID_IMPORT),
         ] {
             let mut recipe = minimal_recipe();
             recipe.identity.did_method = input.into();
-            if expected == "did:webvh" {
+            if expected == DID_WEBVH {
                 recipe.identity.public_url = Some("https://example.com".into());
             }
             let config = to_wizard_config(&recipe).unwrap();
@@ -578,14 +587,14 @@ mod tests {
     #[test]
     fn test_all_secret_storage_schemes() {
         for scheme in [
-            "string://",
-            "file://",
-            "keyring://",
-            "aws_secrets://",
-            "gcp_secrets://",
-            "azure_keyvault://",
-            "vault://",
-            "vta://",
+            STORAGE_STRING,
+            STORAGE_FILE,
+            STORAGE_KEYRING,
+            STORAGE_AWS,
+            STORAGE_GCP,
+            STORAGE_AZURE,
+            STORAGE_VAULT,
+            STORAGE_VTA,
         ] {
             let mut recipe = minimal_recipe();
             recipe.secrets.storage = scheme.into();
@@ -624,17 +633,17 @@ mod tests {
     fn test_recipe_round_trip() {
         let original = WizardConfig {
             config_path: "conf/mediator.toml".into(),
-            deployment_type: "Headless server".into(),
+            deployment_type: DEPLOYMENT_SERVER.into(),
             didcomm_enabled: true,
             tsp_enabled: true,
-            did_method: "did:peer".into(),
+            did_method: DID_PEER.into(),
             public_url: String::new(),
-            secret_storage: "keyring://".into(),
-            ssl_mode: "No SSL (TLS proxy)".into(),
+            secret_storage: STORAGE_KEYRING.into(),
+            ssl_mode: SSL_NONE.into(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
             database_url: "redis://127.0.0.1/3".into(),
-            admin_did_mode: "Skip".into(),
+            admin_did_mode: ADMIN_SKIP.into(),
             listen_address: "0.0.0.0:8080".into(),
         };
 

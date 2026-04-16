@@ -1,6 +1,7 @@
 mod app;
 mod cli;
 mod config_writer;
+mod consts;
 mod docker;
 mod generators;
 mod recipe;
@@ -30,6 +31,7 @@ use tui_input::InputRequest;
 
 use app::{InputMode, WizardApp, WizardConfig};
 use cli::Args;
+use consts::*;
 
 const RENDERING_TICK_RATE: Duration = Duration::from_millis(250);
 
@@ -138,32 +140,20 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     let mut config = WizardConfig::default();
     config.config_path = args.config.clone();
 
-    // Apply deployment defaults first
+    // Apply deployment defaults (identical across all deployment types)
     config.deployment_type = deployment.to_string();
-    match deployment {
-        cli::DeploymentType::Local => {
-            config.didcomm_enabled = true;
-            config.did_method = "VTA managed".into();
-            config.secret_storage = "vta://".into();
-            config.ssl_mode = "No SSL (TLS proxy)".into();
-            config.database_url = "redis://127.0.0.1/".into();
-            config.admin_did_mode = "Generate did:key".into();
-        }
-        cli::DeploymentType::Server | cli::DeploymentType::Container => {
-            config.didcomm_enabled = true;
-            config.did_method = "VTA managed".into();
-            config.secret_storage = "vta://".into();
-            config.ssl_mode = "No SSL (TLS proxy)".into();
-            config.database_url = "redis://127.0.0.1/".into();
-            config.admin_did_mode = "Generate did:key".into();
-        }
-    }
+    config.didcomm_enabled = true;
+    config.did_method = DID_VTA.into();
+    config.secret_storage = STORAGE_VTA.into();
+    config.ssl_mode = SSL_NONE.into();
+    config.database_url = DEFAULT_REDIS_URL.into();
+    config.admin_did_mode = ADMIN_GENERATE.into();
 
     // Override with any explicit CLI args
     apply_cli_args(&args, &mut config);
 
     // Validate required fields for did:webvh
-    if config.did_method == "did:webvh" && config.public_url.is_empty() {
+    if config.did_method == DID_WEBVH && config.public_url.is_empty() {
         anyhow::bail!("--public-url is required when using did:webvh in non-interactive mode");
     }
 
@@ -363,7 +353,7 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
 async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> anyhow::Result<()> {
     // Generate mediator DID + secrets
     let (mediator_did, mediator_secrets, did_doc) = match config.did_method.as_str() {
-        "did:peer" => {
+        DID_PEER => {
             let service_uri = if config.public_url.is_empty() {
                 None
             } else {
@@ -372,7 +362,7 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
             let (did, secrets) = generators::did_peer::generate_did_peer(service_uri)?;
             (did, secrets, None)
         }
-        "did:webvh" => {
+        DID_WEBVH => {
             let host = if config.public_url.is_empty() {
                 "localhost:7037/mediator/v1"
             } else {
@@ -382,7 +372,7 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
             let result = generators::did_webvh::generate_did_webvh(host, secure).await?;
             (result.did, result.secrets, Some(result.did_doc))
         }
-        "VTA managed" => {
+        DID_VTA => {
             // VTA-managed DIDs are referenced by scheme, no local generation needed
             ("vta://mediator".into(), vec![], None)
         }
@@ -401,16 +391,16 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
 
     // Generate admin DID
     let (admin_did, admin_secret) = match config.admin_did_mode.as_str() {
-        "Generate did:key" => {
+        ADMIN_GENERATE => {
             let (did, secret) = generators::did_key::generate_admin_did_key()?;
             (Some(did), Some(secret))
         }
-        "Skip" => (None, None),
+        ADMIN_SKIP => (None, None),
         _ => (None, None),
     };
 
     // Generate self-signed SSL if requested
-    let (ssl_cert_path, ssl_key_path) = if config.ssl_mode == "Self-signed" {
+    let (ssl_cert_path, ssl_key_path) = if config.ssl_mode == SSL_SELF_SIGNED {
         let (cert, key) = generators::ssl::generate_self_signed_cert("conf/keys")?;
         (Some(cert), Some(key))
     } else {
@@ -468,11 +458,11 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
         }
     }
 
-    if config.secret_storage == "file://" {
+    if config.secret_storage == STORAGE_FILE {
         println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
     }
 
-    if config.ssl_mode == "Self-signed" {
+    if config.ssl_mode == SSL_SELF_SIGNED {
         println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
     }
 
@@ -491,7 +481,7 @@ async fn generate_and_write(config: &app::WizardConfig, save_recipe: bool) -> an
     }
 
     // Generate Docker files for container deployments
-    if config.deployment_type == "Container" {
+    if config.deployment_type == DEPLOYMENT_CONTAINER {
         docker::generate_dockerfile(config, ".")?;
     }
 
@@ -545,11 +535,11 @@ fn build_features(config: &app::WizardConfig) -> Vec<&'static str> {
     }
 
     match config.secret_storage.as_str() {
-        "keyring://" => features.push("vta-keyring"),
-        "aws_secrets://" => features.push("vta-aws-secrets"),
-        "gcp_secrets://" => features.push("vta-gcp-secrets"),
-        "azure_keyvault://" => features.push("vta-azure-keyvault"),
-        "vault://" => features.push("vta-hashicorp-vault"),
+        STORAGE_KEYRING => features.push("vta-keyring"),
+        STORAGE_AWS => features.push("vta-aws-secrets"),
+        STORAGE_GCP => features.push("vta-gcp-secrets"),
+        STORAGE_AZURE => features.push("vta-azure-keyvault"),
+        STORAGE_VAULT => features.push("vta-hashicorp-vault"),
         _ => {}
     }
 
@@ -883,7 +873,7 @@ fn print_final_summary(config: &app::WizardConfig) {
         recipe_path.display()
     );
 
-    if config.secret_storage == "file://" {
+    if config.secret_storage == STORAGE_FILE {
         let secrets_path = config_dir.join("secrets.json");
         println!(
             "    \x1b[36m{}\x1b[0m  — \x1b[33mprivate keys (keep secure!)\x1b[0m",
@@ -891,12 +881,12 @@ fn print_final_summary(config: &app::WizardConfig) {
         );
     }
 
-    if config.ssl_mode == "Self-signed" {
+    if config.ssl_mode == SSL_SELF_SIGNED {
         println!("    \x1b[36mconf/keys/end.cert\x1b[0m  — SSL certificate");
         println!("    \x1b[36mconf/keys/end.key\x1b[0m   — SSL private key");
     }
 
-    if config.did_method == "did:webvh" {
+    if config.did_method == DID_WEBVH {
         let did_doc_path = config_dir.join("mediator_did.json");
         println!(
             "    \x1b[36m{}\x1b[0m  — DID document",
@@ -904,12 +894,12 @@ fn print_final_summary(config: &app::WizardConfig) {
         );
     }
 
-    if config.deployment_type == "Container" {
+    if config.deployment_type == DEPLOYMENT_CONTAINER {
         println!("    \x1b[36mDockerfile\x1b[0m  — container build file");
     }
 
     // Key information
-    if config.secret_storage != "string://" && config.secret_storage != "file://" {
+    if config.secret_storage != STORAGE_STRING && config.secret_storage != STORAGE_FILE {
         println!();
         println!("  \x1b[1mSecrets:\x1b[0m");
         println!("    Stored in: \x1b[36m{}\x1b[0m", config.secret_storage);

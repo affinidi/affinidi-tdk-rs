@@ -1,5 +1,6 @@
 use tui_input::{Input, InputRequest};
 
+use crate::consts::*;
 use crate::ui::selection::SelectionOption;
 
 /// All wizard steps in order.
@@ -171,7 +172,7 @@ impl WizardConfig {
 impl Default for WizardConfig {
     fn default() -> Self {
         Self {
-            config_path: "conf/mediator.toml".into(),
+            config_path: DEFAULT_CONFIG_PATH.into(),
             deployment_type: String::new(),
             didcomm_enabled: true,
             tsp_enabled: false,
@@ -181,9 +182,9 @@ impl Default for WizardConfig {
             ssl_mode: String::new(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
-            database_url: "redis://127.0.0.1/".into(),
+            database_url: DEFAULT_REDIS_URL.into(),
             admin_did_mode: String::new(),
-            listen_address: "0.0.0.0:7037".into(),
+            listen_address: DEFAULT_LISTEN_ADDR.into(),
         }
     }
 }
@@ -453,9 +454,9 @@ impl WizardApp {
         match self.current_step {
             WizardStep::Deployment => {
                 self.config.deployment_type = match self.selection_index {
-                    0 => "Local development".into(),
-                    1 => "Headless server".into(),
-                    2 => "Container".into(),
+                    0 => DEPLOYMENT_LOCAL.into(),
+                    1 => DEPLOYMENT_SERVER.into(),
+                    2 => DEPLOYMENT_CONTAINER.into(),
                     _ => return,
                 };
                 self.apply_deployment_defaults();
@@ -487,10 +488,10 @@ impl WizardApp {
             }
             WizardStep::Did => {
                 self.config.did_method = match self.selection_index {
-                    0 => "VTA managed".into(),
-                    1 => "did:webvh".into(),
-                    2 => "did:peer".into(),
-                    3 => "Import existing".into(),
+                    0 => DID_VTA.into(),
+                    1 => DID_WEBVH.into(),
+                    2 => DID_PEER.into(),
+                    3 => DID_IMPORT.into(),
                     _ => return,
                 };
                 // For did:webvh, collect the public URL
@@ -503,23 +504,23 @@ impl WizardApp {
             }
             WizardStep::KeyStorage => {
                 self.config.secret_storage = match self.selection_index {
-                    0 => "vta://".into(),
-                    1 => "keyring://".into(),
-                    2 => "aws_secrets://".into(),
-                    3 => "gcp_secrets://".into(),
-                    4 => "azure_keyvault://".into(),
-                    5 => "vault://".into(),
-                    6 => "file://".into(),
-                    7 => "string://".into(),
+                    0 => STORAGE_VTA.into(),
+                    1 => STORAGE_KEYRING.into(),
+                    2 => STORAGE_AWS.into(),
+                    3 => STORAGE_GCP.into(),
+                    4 => STORAGE_AZURE.into(),
+                    5 => STORAGE_VAULT.into(),
+                    6 => STORAGE_FILE.into(),
+                    7 => STORAGE_STRING.into(),
                     _ => return,
                 };
                 self.advance();
             }
             WizardStep::Security => {
                 self.config.ssl_mode = match self.selection_index {
-                    0 => "No SSL (TLS proxy)".into(),
-                    1 => "Existing certificates".into(),
-                    2 => "Self-signed".into(),
+                    0 => SSL_NONE.into(),
+                    1 => SSL_EXISTING.into(),
+                    2 => SSL_SELF_SIGNED.into(),
                     _ => return,
                 };
                 // For existing certs, collect file paths
@@ -537,10 +538,10 @@ impl WizardApp {
             }
             WizardStep::Admin => {
                 self.config.admin_did_mode = match self.selection_index {
-                    0 => "Generate did:key".into(),
-                    1 => "Paste existing".into(),
-                    2 => "Copy from VTA".into(),
-                    3 => "Skip".into(),
+                    0 => ADMIN_GENERATE.into(),
+                    1 => ADMIN_PASTE.into(),
+                    2 => ADMIN_VTA.into(),
+                    3 => ADMIN_SKIP.into(),
                     _ => return,
                 };
                 self.advance();
@@ -592,32 +593,14 @@ impl WizardApp {
     /// Apply sensible defaults based on deployment type selection.
     fn apply_deployment_defaults(&mut self) {
         match self.config.deployment_type.as_str() {
-            "Local development" => {
+            DEPLOYMENT_LOCAL | DEPLOYMENT_SERVER | DEPLOYMENT_CONTAINER => {
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
-                self.config.did_method = "VTA managed".into();
-                self.config.secret_storage = "vta://".into();
-                self.config.ssl_mode = "No SSL (TLS proxy)".into();
-                self.config.database_url = "redis://127.0.0.1/".into();
-                self.config.admin_did_mode = "Generate did:key".into();
-            }
-            "Headless server" => {
-                self.config.didcomm_enabled = true;
-                self.config.tsp_enabled = false;
-                self.config.did_method = "VTA managed".into();
-                self.config.secret_storage = "vta://".into();
-                self.config.ssl_mode = "No SSL (TLS proxy)".into();
-                self.config.database_url = "redis://127.0.0.1/".into();
-                self.config.admin_did_mode = "Generate did:key".into();
-            }
-            "Container" => {
-                self.config.didcomm_enabled = true;
-                self.config.tsp_enabled = false;
-                self.config.did_method = "VTA managed".into();
-                self.config.secret_storage = "vta://".into();
-                self.config.ssl_mode = "No SSL (TLS proxy)".into();
-                self.config.database_url = "redis://127.0.0.1/".into();
-                self.config.admin_did_mode = "Generate did:key".into();
+                self.config.did_method = DID_VTA.into();
+                self.config.secret_storage = STORAGE_VTA.into();
+                self.config.ssl_mode = SSL_NONE.into();
+                self.config.database_url = DEFAULT_REDIS_URL.into();
+                self.config.admin_did_mode = ADMIN_GENERATE.into();
             }
             _ => {}
         }
@@ -702,32 +685,32 @@ impl WizardApp {
         match self.current_step {
             WizardStep::Protocol => 0, // Start at DIDComm toggle
             WizardStep::Did => match self.config.did_method.as_str() {
-                "VTA managed" => 0,
-                "did:webvh" => 1,
-                "did:peer" => 2,
-                "Import existing" => 3,
+                DID_VTA => 0,
+                DID_WEBVH => 1,
+                DID_PEER => 2,
+                DID_IMPORT => 3,
                 _ => 0,
             },
             WizardStep::KeyStorage => match self.config.secret_storage.as_str() {
-                "vta://" => 0,
-                "keyring://" => 1,
-                "aws_secrets://" => 2,
-                "gcp_secrets://" => 3,
-                "azure_keyvault://" => 4,
-                "vault://" => 5,
-                "file://" => 6,
-                "string://" => 7,
+                STORAGE_VTA => 0,
+                STORAGE_KEYRING => 1,
+                STORAGE_AWS => 2,
+                STORAGE_GCP => 3,
+                STORAGE_AZURE => 4,
+                STORAGE_VAULT => 5,
+                STORAGE_FILE => 6,
+                STORAGE_STRING => 7,
                 _ => 0,
             },
             WizardStep::Security => match self.config.ssl_mode.as_str() {
-                "Existing certificates" => 1,
-                "Self-signed" => 2,
+                SSL_EXISTING => 1,
+                SSL_SELF_SIGNED => 2,
                 _ => 0,
             },
             WizardStep::Admin => match self.config.admin_did_mode.as_str() {
-                "Paste existing" => 1,
-                "Copy from VTA" => 2,
-                "Skip" => 3,
+                ADMIN_PASTE => 1,
+                ADMIN_VTA => 2,
+                ADMIN_SKIP => 3,
                 _ => 0,
             },
             _ => 0,
@@ -806,16 +789,16 @@ mod tests {
         let cfg = WizardConfig::default();
         assert!(cfg.didcomm_enabled);
         assert!(!cfg.tsp_enabled);
-        assert_eq!(cfg.config_path, "conf/mediator.toml");
-        assert_eq!(cfg.database_url, "redis://127.0.0.1/");
-        assert_eq!(cfg.listen_address, "0.0.0.0:7037");
+        assert_eq!(cfg.config_path, DEFAULT_CONFIG_PATH);
+        assert_eq!(cfg.database_url, DEFAULT_REDIS_URL);
+        assert_eq!(cfg.listen_address, DEFAULT_LISTEN_ADDR);
     }
 
     // ── WizardApp state machine ────────────────────────────────────────
 
     #[test]
     fn new_app_starts_at_deployment() {
-        let app = WizardApp::new("conf/mediator.toml".into());
+        let app = WizardApp::new(DEFAULT_CONFIG_PATH.into());
         assert_eq!(app.current_step, WizardStep::Deployment);
         assert_eq!(app.mode, InputMode::Selecting);
         assert_eq!(app.focus, FocusPanel::Content);
@@ -890,7 +873,7 @@ mod tests {
     #[test]
     fn protocol_toggle_prevents_deselecting_both() {
         let mut app = WizardApp::new("test.toml".into());
-        app.config.deployment_type = "Local development".into();
+        app.config.deployment_type = DEPLOYMENT_LOCAL.into();
         app.advance(); // → Protocol
 
         // DIDComm is selected by default
@@ -912,10 +895,10 @@ mod tests {
         app.selection_index = 0;
         app.select_current();
 
-        assert_eq!(app.config.deployment_type, "Local development");
+        assert_eq!(app.config.deployment_type, DEPLOYMENT_LOCAL);
         assert!(app.config.didcomm_enabled);
-        assert_eq!(app.config.ssl_mode, "No SSL (TLS proxy)");
-        assert_eq!(app.config.database_url, "redis://127.0.0.1/");
+        assert_eq!(app.config.ssl_mode, SSL_NONE);
+        assert_eq!(app.config.database_url, DEFAULT_REDIS_URL);
     }
 
     #[test]
