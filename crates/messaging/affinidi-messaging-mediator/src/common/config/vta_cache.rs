@@ -1,4 +1,4 @@
-use aws_config::SdkConfig;
+use super::AwsConfig;
 use tracing::debug;
 use vta_sdk::did_secrets::DidSecretsBundle;
 use vta_sdk::integration::SecretCache;
@@ -15,7 +15,7 @@ pub struct MediatorSecretCache {
     /// - `aws_secrets://<name>-cache` — AWS Secrets Manager
     /// - `keyring://<service>/secrets-cache` — OS keyring
     backend: String,
-    aws_config: SdkConfig,
+    aws_config: Option<AwsConfig>,
 }
 
 impl MediatorSecretCache {
@@ -23,7 +23,7 @@ impl MediatorSecretCache {
     ///
     /// Appends `-cache` to the credential backend path so that the cached secrets
     /// bundle is stored alongside (but separate from) the credential itself.
-    pub fn from_credential_config(credential_config: &str, aws_config: &SdkConfig) -> Self {
+    pub fn from_credential_config(credential_config: &str, aws_config: &Option<AwsConfig>) -> Self {
         let backend = derive_cache_backend(credential_config);
         debug!("VTA secret cache backend: {backend}");
         Self {
@@ -71,7 +71,10 @@ impl SecretCache for MediatorSecretCache {
             "aws_secrets" if !path.is_empty() => {
                 #[cfg(feature = "vta-aws-secrets")]
                 {
-                    let asm = aws_sdk_secretsmanager::Client::new(&self.aws_config);
+                    let asm =
+                        aws_sdk_secretsmanager::Client::new(self.aws_config.as_ref().expect(
+                            "aws_config must be Some when vta-aws-secrets feature is enabled",
+                        ));
                     // Try update first, create if not found
                     match asm
                         .put_secret_value()
@@ -144,7 +147,10 @@ impl SecretCache for MediatorSecretCache {
             "aws_secrets" if !path.is_empty() => {
                 #[cfg(feature = "vta-aws-secrets")]
                 {
-                    let asm = aws_sdk_secretsmanager::Client::new(&self.aws_config);
+                    let asm =
+                        aws_sdk_secretsmanager::Client::new(self.aws_config.as_ref().expect(
+                            "aws_config must be Some when vta-aws-secrets feature is enabled",
+                        ));
                     match asm.get_secret_value().secret_id(path).send().await {
                         Ok(resp) => resp.secret_string,
                         Err(_) => None, // Secret doesn't exist yet

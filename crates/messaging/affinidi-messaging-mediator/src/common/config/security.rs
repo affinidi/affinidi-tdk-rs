@@ -1,7 +1,7 @@
+use super::AwsConfig;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use aws_config::SdkConfig;
 use http::{
     HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
@@ -152,7 +152,7 @@ impl SecurityConfigRaw {
     pub(crate) async fn convert(
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
-        aws_config: &SdkConfig,
+        aws_config: &Option<AwsConfig>,
         vta_bundle: Option<&DidSecretsBundle>,
     ) -> Result<SecurityConfig, MediatorError> {
         let warn_default = |field: &str, value: &str, default: &str| {

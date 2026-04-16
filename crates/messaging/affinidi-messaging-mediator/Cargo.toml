@@ -17,8 +17,8 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
-## Default: DIDComm v2 protocol support.
-default = ["didcomm"]
+## Default: DIDComm v2 + AWS integration.
+default = ["didcomm", "aws"]
 
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.
@@ -35,10 +35,16 @@ tsp = ["dep:affinidi-tsp"]
 ## `keyring://` scheme for VTA credentials.
 vta-keyring = ["dep:keyring"]
 
+## AWS integration — Secrets Manager, Systems Manager Parameter Store.
+## Required when mediator.toml uses `aws_secrets://` or `aws_parameter_store://`
+## schemes. Included in default features for backward compatibility.
+## To build without AWS: --no-default-features --features didcomm
+aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm"]
+
 ## VTA credential storage via AWS Secrets Manager. Required when mediator.toml
 ## uses `aws_secrets://` scheme for VTA credentials. Requires AWS credentials
 ## configured (env vars, instance profile, or ~/.aws/credentials).
-vta-aws-secrets = []
+vta-aws-secrets = ["aws"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
@@ -82,11 +88,12 @@ redis = { version = "1.1", features = [
 # ── DID Infrastructure ───────────────────────────────────────────────────
 didwebvh-rs = "0.4"
 
-# ── AWS Integration ──────────────────────────────────────────────────────
-## Used for VTA credential storage (aws_secrets://) and DID hosting (aws_parameter_store://)
-aws-config = "1"
-aws-sdk-secretsmanager = "1"
-aws-sdk-ssm = "1"
+# ── AWS Integration (optional, behind `aws` feature) ────────────────────
+## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)
+## To build without: --no-default-features --features didcomm
+aws-config = { version = "1", optional = true }
+aws-sdk-secretsmanager = { version = "1", optional = true }
+aws-sdk-ssm = { version = "1", optional = true }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }

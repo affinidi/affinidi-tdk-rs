@@ -2,8 +2,11 @@ use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
+#[cfg(feature = "aws")]
 use aws_config::SdkConfig;
+#[cfg(feature = "aws")]
 use aws_sdk_secretsmanager;
+#[cfg(feature = "aws")]
 use aws_sdk_ssm::types::ParameterType;
 use base64::prelude::*;
 use std::{
@@ -16,8 +19,44 @@ use std::{
 use tracing::{error, info, warn};
 use vta_sdk::client::VtaClient;
 
+use super::AwsConfig;
 use super::VtaConfigRaw;
 use super::processors::ForwardingConfig;
+
+/// Check if any config field uses an AWS scheme, requiring AWS SDK initialization.
+pub(crate) fn config_needs_aws(raw: &super::ConfigRaw) -> bool {
+    let aws_prefixes =
+        |s: &str| s.starts_with("aws_secrets://") || s.starts_with("aws_parameter_store://");
+    aws_prefixes(&raw.mediator_did)
+        || aws_prefixes(&raw.server.admin_did)
+        || aws_prefixes(&raw.security.mediator_secrets)
+        || aws_prefixes(&raw.security.jwt_authorization_secret)
+        || raw
+            .server
+            .did_web_self_hosted
+            .as_ref()
+            .is_some_and(|s| aws_prefixes(s))
+        || raw
+            .vta
+            .as_ref()
+            .is_some_and(|v| aws_prefixes(&v.credential))
+}
+
+/// Extract the AWS `SdkConfig` from an `Option<AwsConfig>`, returning a clear
+/// error when AWS is needed but not available.
+#[cfg(feature = "aws")]
+fn require_aws_config<'a>(
+    aws_config: &'a Option<AwsConfig>,
+    context: &str,
+) -> Result<&'a SdkConfig, MediatorError> {
+    aws_config.as_ref().ok_or_else(|| {
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            format!("{context} requires AWS but AWS SDK was not initialized"),
+        )
+    })
+}
 
 /// Parse a `scheme://path` config string, returning `(scheme, path)`.
 ///
@@ -269,7 +308,7 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
 pub(crate) async fn load_secrets(
     secrets_resolver: &Arc<ThreadedSecretsResolver>,
     secrets: &str,
-    aws_config: &SdkConfig,
+    #[cfg_attr(not(feature = "aws"), allow(unused_variables))] aws_config: &Option<AwsConfig>,
     vta_bundle: Option<&vta_sdk::did_secrets::DidSecretsBundle>,
 ) -> Result<(), MediatorError> {
     let (scheme, path) = parse_scheme(secrets, "mediator_secrets")?;
@@ -310,39 +349,70 @@ pub(crate) async fn load_secrets(
         return Ok(());
     }
 
-    // File / AWS path: fetch JSON content then parse
+    // Fetch JSON content based on scheme, then parse
     let content: String = match scheme {
-        "file" => read_file_lines(path)?.concat(),
-        "aws_secrets" => {
-            let asm = aws_sdk_secretsmanager::Client::new(aws_config);
-
-            let response = asm
-                .get_secret_value()
-                .secret_id(path)
-                .send()
-                .await
-                .map_err(|e| {
-                    error!("Could not get secret value. {e:?}");
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("Could not get secret value. {e:?}"),
-                    )
-                })?;
-            response.secret_string.ok_or_else(|| {
-                error!("No secret string found in response");
+        "string" => {
+            // Base64url-encoded JSON — used by the setup wizard for local dev
+            let decoded = BASE64_URL_SAFE_NO_PAD.decode(path).map_err(|err| {
+                error!("Could not decode base64url `mediator_secrets` content. {err}");
                 MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "No secret string found in response".into(),
+                    format!("Could not decode base64url `mediator_secrets` content. {err}"),
+                )
+            })?;
+            String::from_utf8(decoded).map_err(|err| {
+                error!("Decoded `mediator_secrets` is not valid UTF-8. {err}");
+                MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Decoded `mediator_secrets` is not valid UTF-8. {err}"),
                 )
             })?
+        }
+        "file" => read_file_lines(path)?.concat(),
+        "aws_secrets" => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(aws_config, "mediator_secrets (aws_secrets://)")?;
+                let asm = aws_sdk_secretsmanager::Client::new(cfg);
+
+                let response = asm
+                    .get_secret_value()
+                    .secret_id(path)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        error!("Could not get secret value. {e:?}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Could not get secret value. {e:?}"),
+                        )
+                    })?;
+                response.secret_string.ok_or_else(|| {
+                    error!("No secret string found in response");
+                    MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        "No secret string found in response".into(),
+                    )
+                })?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "aws_secrets:// requires the 'aws' feature. Rebuild with: cargo build --features aws".into(),
+                ));
+            }
         }
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
                 "NA".into(),
-                "Invalid `mediator_secrets` format! Expecting file://, aws_secrets://, or vta:// ...".into(),
+                "Invalid `mediator_secrets` format! Expecting string://, file://, aws_secrets://, or vta://".into(),
             ));
         }
     };
@@ -430,14 +500,34 @@ where
 /// Supports did://, aws_parameter_store://, and vta:// (Verifiable Trust Agent) schemes.
 pub(crate) async fn read_did_config(
     did_config: &str,
-    aws_config: &SdkConfig,
+    aws_config: &Option<AwsConfig>,
     field_name: &str,
     vta_client: Option<&VtaClient>,
 ) -> Result<String, MediatorError> {
     let (scheme, path) = parse_scheme(did_config, field_name)?;
     let content: String = match scheme {
         "did" => path.to_string(),
-        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
+        "aws_parameter_store" => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(
+                    aws_config,
+                    &format!("{field_name} (aws_parameter_store://)"),
+                )?;
+                aws_parameter_store(path, cfg).await?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = (path, aws_config);
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!(
+                        "aws_parameter_store:// for {field_name} requires the 'aws' feature. Rebuild with: cargo build --features aws"
+                    ),
+                ));
+            }
+        }
         "vta" => {
             let client = vta_client.ok_or_else(|| {
                 MediatorError::ConfigError(
@@ -481,36 +571,52 @@ pub(crate) async fn read_did_config(
 /// Can take a basic string, or fetch from AWS Secrets Manager
 pub(crate) async fn config_jwt_secret(
     jwt_secret: &str,
-    aws_config: &SdkConfig,
+    aws_config: &Option<AwsConfig>,
 ) -> Result<Vec<u8>, MediatorError> {
     let (scheme, path) = parse_scheme(jwt_secret, "jwt_authorization_secret")?;
     let content: String = match scheme {
         "string" => path.to_string(),
         "aws_secrets" => {
-            info!("Loading JWT secret from AWS Secrets Manager");
-            let asm = aws_sdk_secretsmanager::Client::new(aws_config);
+            #[cfg(feature = "aws")]
+            {
+                info!("Loading JWT secret from AWS Secrets Manager");
+                let cfg =
+                    require_aws_config(aws_config, "jwt_authorization_secret (aws_secrets://)")?;
+                let asm = aws_sdk_secretsmanager::Client::new(cfg);
 
-            let response = asm
-                .get_secret_value()
-                .secret_id(path)
-                .send()
-                .await
-                .map_err(|e| {
-                    error!("Could not get secret value. {e:?}");
+                let response = asm
+                    .get_secret_value()
+                    .secret_id(path)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        error!("Could not get secret value. {e:?}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!("Could not get secret value. {e:?}"),
+                        )
+                    })?;
+                response.secret_string.ok_or_else(|| {
+                    error!("No secret string found in response");
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Could not get secret value. {e:?}"),
+                        "No secret string found in response".into(),
                     )
-                })?;
-            response.secret_string.ok_or_else(|| {
-                error!("No secret string found in response");
-                MediatorError::ConfigError(
+                })?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = (path, aws_config);
+                return Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "No secret string found in response".into(),
-                )
-            })?
+                    "aws_secrets:// for jwt_authorization_secret requires the 'aws' feature. \
+                     Rebuild with: cargo build --features aws"
+                        .into(),
+                ));
+            }
         }
         _ => return Err(MediatorError::ConfigError(
             12,
@@ -559,6 +665,7 @@ pub(crate) fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
     }
 }
 
+#[cfg(feature = "aws")]
 pub(crate) async fn aws_parameter_store(
     parameter_name: &str,
     aws_config: &SdkConfig,
@@ -623,12 +730,27 @@ pub(crate) async fn aws_parameter_store(
 /// Reads document from file or aws_parameter_store
 pub(crate) async fn read_document(
     document_path: &str,
-    aws_config: &SdkConfig,
+    aws_config: &Option<AwsConfig>,
 ) -> Result<String, MediatorError> {
     let (scheme, path) = parse_scheme(document_path, "document_path")?;
     let content: String = match scheme {
         "file" => read_file_lines(path)?.concat(),
-        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
+        "aws_parameter_store" => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(aws_config, "document_path (aws_parameter_store://)")?;
+                aws_parameter_store(path, cfg).await?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = (path, aws_config);
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "aws_parameter_store:// requires the 'aws' feature. Rebuild with: cargo build --features aws".into(),
+                ));
+            }
+        }
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
@@ -649,7 +771,9 @@ pub(crate) async fn read_document(
 /// - `keyring://<service>/<user>` - Load from OS keyring (requires `vta-keyring` feature)
 pub(crate) async fn load_vta_credential(
     credential_config: &str,
-    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))] aws_config: &SdkConfig,
+    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))] aws_config: &Option<
+        AwsConfig,
+    >,
 ) -> Result<String, MediatorError> {
     let (scheme, path) = parse_scheme(credential_config, "vta.credential")?;
 
@@ -662,7 +786,8 @@ pub(crate) async fn load_vta_credential(
             #[cfg(feature = "vta-aws-secrets")]
             {
                 info!("Loading VTA credential from AWS Secrets Manager");
-                let asm = aws_sdk_secretsmanager::Client::new(aws_config);
+                let cfg = require_aws_config(aws_config, "vta.credential (aws_secrets://)")?;
+                let asm = aws_sdk_secretsmanager::Client::new(cfg);
                 let response = asm
                     .get_secret_value()
                     .secret_id(path)

@@ -20,8 +20,17 @@ use affinidi_messaging_mediator_common::{
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use async_convert::{TryFrom, async_trait};
+#[cfg(feature = "aws")]
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
+
+/// AWS SDK configuration type — conditionally compiled.
+/// When the `aws` feature is enabled, this is `aws_config::SdkConfig`.
+/// When disabled, this is `()` (zero-size placeholder).
+#[cfg(feature = "aws")]
+pub(crate) type AwsConfig = aws_config::SdkConfig;
+#[cfg(not(feature = "aws"))]
+pub(crate) type AwsConfig = ();
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
@@ -198,14 +207,37 @@ impl TryFrom<ConfigRaw> for Config {
     type Error = MediatorError;
 
     async fn try_from(raw: ConfigRaw) -> Result<Self, Self::Error> {
-        // Set up AWS Configuration
-        // Region is resolved in order: AWS_REGION env var → EC2 instance metadata →
-        // ~/.aws/config. Only override if explicitly set via env var.
-        let mut aws_builder = aws_config::defaults(BehaviorVersion::latest());
-        if let Ok(region) = env::var("AWS_REGION") {
-            aws_builder = aws_builder.region(Region::new(region));
-        }
-        let aws_config = aws_builder.load().await;
+        // Lazy AWS initialization — only load AWS SDK config when an AWS scheme
+        // is actually used in the configuration. This avoids the 3+ second IMDS
+        // timeout on non-AWS machines.
+        let needs_aws = helpers::config_needs_aws(&raw);
+
+        #[cfg(feature = "aws")]
+        let aws_config: Option<AwsConfig> = if needs_aws {
+            info!("AWS scheme detected in config — initializing AWS SDK");
+            let mut builder = aws_config::defaults(BehaviorVersion::latest());
+            if let Ok(region) = env::var("AWS_REGION") {
+                builder = builder.region(Region::new(region));
+            }
+            Some(builder.load().await)
+        } else {
+            None
+        };
+
+        #[cfg(not(feature = "aws"))]
+        let aws_config: Option<AwsConfig> = {
+            if needs_aws {
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "Configuration uses aws_secrets:// or aws_parameter_store:// but the 'aws' \
+                     feature is not enabled. Rebuild with: cargo build --features aws"
+                        .into(),
+                ));
+            }
+            None
+        };
+
         let mut tags = HashMap::from([("app".to_string(), "mediator".to_string())]);
         for (key, value) in env::vars() {
             if key.get(..13) == Some("MEDIATOR_TAG_")
