@@ -81,6 +81,7 @@ impl CircuitBreaker {
         self.consecutive_failures.store(0, Ordering::Relaxed);
         let prev = self.state.swap(STATE_CLOSED, Ordering::AcqRel);
         if prev == STATE_HALF_OPEN {
+            metrics::gauge!(super::metrics::names::CIRCUIT_BREAKER_STATE).set(0.0);
             info!("Circuit breaker: HalfOpen → Closed (Redis recovered)");
         }
     }
@@ -94,6 +95,9 @@ impl CircuitBreaker {
                 if failures >= self.failure_threshold {
                     self.state.store(STATE_OPEN, Ordering::Release);
                     self.opened_at.store(now_secs(), Ordering::Release);
+                    metrics::counter!(super::metrics::names::CIRCUIT_BREAKER_TRIPS_TOTAL)
+                        .increment(1);
+                    metrics::gauge!(super::metrics::names::CIRCUIT_BREAKER_STATE).set(1.0);
                     error!(
                         "Circuit breaker: Closed → Open (threshold {} reached, {} consecutive failures)",
                         self.failure_threshold, failures

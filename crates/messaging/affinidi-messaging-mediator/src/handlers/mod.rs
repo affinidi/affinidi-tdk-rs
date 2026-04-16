@@ -9,6 +9,7 @@ use axum::{
 };
 use http::StatusCode;
 
+pub mod admin_status;
 #[cfg(feature = "didcomm")]
 pub mod authenticate;
 pub mod inbox_fetch;

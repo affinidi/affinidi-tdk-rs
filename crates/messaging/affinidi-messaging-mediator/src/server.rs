@@ -8,7 +8,7 @@ use crate::{
         request_id::RequestIdLayer,
     },
     database::Database,
-    handlers::{application_routes, health_checker_handler, readiness_handler},
+    handlers::{admin_status, application_routes, health_checker_handler, readiness_handler},
     tasks::{
         forwarding_processor::ForwardingProcessor, statistics::statistics,
         websocket_streaming::StreamingTask,
@@ -285,7 +285,12 @@ pub async fn start() {
         // Deep readiness check for load balancers and orchestrators
         .route(
             format!("{}readyz", &config.api_prefix).as_str(),
-            get(readiness_handler).with_state(shared_state),
+            get(readiness_handler).with_state(shared_state.clone()),
+        )
+        // Admin status endpoint for monitoring tools (mediator-monitor TUI, etc.)
+        .route(
+            format!("{}admin/status", &config.api_prefix).as_str(),
+            get(admin_status::admin_status_handler).with_state(shared_state),
         );
 
     // Add Prometheus metrics endpoint if metrics recorder is available

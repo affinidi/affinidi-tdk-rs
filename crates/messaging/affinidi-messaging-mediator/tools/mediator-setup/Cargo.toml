@@ -32,8 +32,8 @@ base64 = "0.22"
 url = "2"
 
 # Affinidi TDK — DID generation, secrets, crypto
-affinidi-tdk = { path = "../../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
-affinidi-secrets-resolver = { path = "../../../core/affinidi-secrets-resolver" }
+affinidi-tdk = { path = "../../../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-secrets-resolver = { path = "../../../../core/affinidi-secrets-resolver" }
 
 # DID:webvh
 didwebvh-rs = "0.4"

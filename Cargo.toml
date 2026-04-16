@@ -42,7 +42,8 @@ members = [
   "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common",
   "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors",
   "crates/messaging/affinidi-messaging-mediator",
-  "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-setup",
+  "crates/messaging/affinidi-messaging-mediator/tools/mediator-setup",
+  "crates/messaging/affinidi-messaging-mediator/tools/mediator-monitor",
   "crates/messaging/affinidi-messaging-text-client",
 
   # Trust: trust infrastructure

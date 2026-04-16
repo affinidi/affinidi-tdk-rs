@@ -1,0 +1,39 @@
+[package]
+name = "affinidi-messaging-mediator-monitor"
+version = "0.1.0"
+description = "Real-time TUI monitoring dashboard for Affinidi Messaging Mediator"
+edition.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "mediator-monitor"
+path = "src/main.rs"
+
+[dependencies]
+# TUI framework
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+
+# HTTP client for polling mediator
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1"
+
+# Time formatting
+chrono = "0.4"
+
+[lints]
+workspace = true

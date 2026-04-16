@@ -1,4 +1,7 @@
+use std::time::Instant;
+
 use super::Database;
+use crate::common::metrics::names;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use serde::{Deserialize, Serialize};
 use sha256::digest;
@@ -40,6 +43,7 @@ impl Database {
                 message.len()
             );
 
+            let start = Instant::now();
             let mut conn = self.get_connection().await?;
             let mut cmd = redis::cmd("FCALL");
             cmd.arg("store_message")
@@ -61,6 +65,10 @@ impl Database {
                     format!("Couldn't store message in database: {err}"),
                 )
             })?;
+
+            metrics::histogram!(names::MESSAGE_STORE_DURATION_SECONDS)
+                .record(start.elapsed().as_secs_f64());
+            metrics::counter!(names::MESSAGES_STORED_TOTAL).increment(1);
 
             info!(
                 "Message hash({}) from({}) to({}) stored in database",

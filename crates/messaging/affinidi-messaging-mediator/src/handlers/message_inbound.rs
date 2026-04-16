@@ -9,6 +9,8 @@ use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use tracing::{Instrument, Level, span};
 
+use crate::common::metrics::names;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RecipientHeader {
     pub kid: String,
@@ -45,6 +47,7 @@ pub async fn message_inbound_handler(
     async move {
         // ACL Check
         if !session.acls.get_send_messages().0 {
+            metrics::counter!(names::ACL_DENIALS_TOTAL, "action" => "send").increment(1);
             return Err(MediatorError::problem(
                 44,
                 session.session_id,
@@ -77,6 +80,9 @@ pub async fn message_inbound_handler(
                 .into());
             }
         };
+
+        metrics::counter!(names::MESSAGES_INBOUND_TOTAL).increment(1);
+        metrics::counter!(names::MESSAGE_BYTES_INBOUND_TOTAL).increment(s.len() as u64);
 
         let response = handle_inbound(&state, &session, &s).await?;
 
