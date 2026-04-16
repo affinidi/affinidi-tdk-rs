@@ -81,6 +81,7 @@ pub struct SecuritySection {
     #[serde(default = "default_admin")]
     pub admin: String,
     /// Pre-existing admin DID (when `admin = "import"`)
+    #[allow(dead_code)] // will be used when admin DID import is implemented
     pub admin_did: Option<String>,
 }
 

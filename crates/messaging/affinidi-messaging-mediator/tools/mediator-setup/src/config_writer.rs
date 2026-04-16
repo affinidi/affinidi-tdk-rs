@@ -16,6 +16,7 @@ pub struct GeneratedValues {
     /// Admin DID (if generated)
     pub admin_did: Option<String>,
     /// Admin secret (if generated — displayed to user, not stored in config)
+    #[allow(dead_code)] // read in main.rs, not by config_writer
     pub admin_secret: Option<Secret>,
     /// SSL cert path (if self-signed was generated)
     pub ssl_cert_path: Option<String>,

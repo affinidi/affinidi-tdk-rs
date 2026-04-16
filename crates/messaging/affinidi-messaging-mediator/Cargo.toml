@@ -17,8 +17,9 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
-## Default: DIDComm v2 + AWS integration.
-default = ["didcomm", "aws"]
+## Default: DIDComm v2 protocol support.
+## AWS integration is opt-in: use --features aws when deploying to AWS.
+default = ["didcomm"]
 
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.

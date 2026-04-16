@@ -8,6 +8,7 @@ use crate::ui::theme;
 /// A single option in a selection list.
 pub struct SelectionOption {
     pub label: String,
+    #[allow(dead_code)] // stored per-option, info text rendered via current_info_text()
     pub info: String,
 }
 
