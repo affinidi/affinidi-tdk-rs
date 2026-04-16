@@ -80,7 +80,9 @@ impl WizardStep {
             },
             Self::Protocol => StepData {
                 title: format!("Step {num}/{total}: Messaging Protocol"),
-                description: "Which messaging protocol should the mediator use?".into(),
+                description:
+                    "Toggle protocols with Enter. At least one required. Press Esc to continue."
+                        .into(),
             },
             Self::Did => StepData {
                 title: format!("Step {num}/{total}: DID Configuration"),
@@ -130,7 +132,10 @@ pub enum InputMode {
 pub struct WizardConfig {
     pub config_path: String,
     pub deployment_type: String,
-    pub protocol: String,
+    /// DIDComm v2 protocol enabled (default: true)
+    pub didcomm_enabled: bool,
+    /// TSP protocol enabled (experimental, default: false)
+    pub tsp_enabled: bool,
     pub did_method: String,
     pub public_url: String,
     pub secret_storage: String,
@@ -142,12 +147,25 @@ pub struct WizardConfig {
     pub listen_address: String,
 }
 
+impl WizardConfig {
+    /// Return a display string for the selected protocols.
+    pub fn protocol_display(&self) -> String {
+        match (self.didcomm_enabled, self.tsp_enabled) {
+            (true, true) => "DIDComm v2 + TSP".into(),
+            (true, false) => "DIDComm v2".into(),
+            (false, true) => "TSP".into(),
+            (false, false) => "None (invalid)".into(),
+        }
+    }
+}
+
 impl Default for WizardConfig {
     fn default() -> Self {
         Self {
             config_path: "conf/mediator.toml".into(),
             deployment_type: String::new(),
-            protocol: String::new(),
+            didcomm_enabled: true,
+            tsp_enabled: false,
             did_method: String::new(),
             public_url: String::new(),
             secret_storage: String::new(),
@@ -209,34 +227,55 @@ impl WizardApp {
                 ),
                 SelectionOption::new("Container", "Docker image for container orchestration"),
             ],
-            WizardStep::Protocol => vec![
-                SelectionOption::new(
-                    "DIDComm v2 (recommended)",
-                    "Industry-standard DID-based messaging",
-                ),
-                SelectionOption::new(
-                    "TSP (Trust Spanning Protocol) [experimental]",
-                    "Lightweight trust protocol — experimental support",
-                ),
-            ],
+            WizardStep::Protocol => {
+                let didcomm_check = if self.config.didcomm_enabled {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let tsp_check = if self.config.tsp_enabled {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                vec![
+                    SelectionOption::new(
+                        format!("{didcomm_check} DIDComm v2 (recommended)"),
+                        "Industry-standard DID-based messaging",
+                    ),
+                    SelectionOption::new(
+                        format!("{tsp_check} TSP (Trust Spanning Protocol) [experimental]"),
+                        "Lightweight trust protocol — experimental support",
+                    ),
+                    SelectionOption::new("Continue >", "Proceed to the next step"),
+                ]
+            }
             WizardStep::Did => vec![
-                SelectionOption::new("Generate did:peer", "Simplest option — no hosting required"),
-                SelectionOption::new("Generate did:webvh", "Production — requires a webvh server"),
-                SelectionOption::new("Import existing DID", "Paste an existing DID string"),
-                SelectionOption::new("Configure via VTA", "Centralized key management via VTA"),
+                SelectionOption::new(
+                    "Configure via VTA (recommended)",
+                    "Centralized key management — VTA creates and hosts your DID",
+                ),
+                SelectionOption::new(
+                    "Generate did:webvh",
+                    "Production — generates random keys you must manage yourself",
+                ),
+                SelectionOption::new(
+                    "Generate did:peer",
+                    "Quick start — generates random keys, no hosting required",
+                ),
+                SelectionOption::new(
+                    "Import existing DID",
+                    "Paste an existing DID string and secrets",
+                ),
             ],
             WizardStep::KeyStorage => vec![
                 SelectionOption::new(
-                    "Inline in config (string://)",
-                    "Embedded in mediator.toml — dev/CI only",
-                ),
-                SelectionOption::new(
-                    "Local file (file://)",
-                    "Stored in secrets.json — simple deployments",
+                    "VTA managed (vta://) [recommended]",
+                    "Centralized key management via Verifiable Trust Agent",
                 ),
                 SelectionOption::new(
                     "OS Keyring (keyring://)",
-                    "macOS Keychain, Linux Secret Service",
+                    "macOS Keychain, Linux Secret Service, Windows Credential Manager",
                 ),
                 SelectionOption::new(
                     "AWS Secrets Manager (aws_secrets://)",
@@ -244,16 +283,23 @@ impl WizardApp {
                 ),
                 SelectionOption::new(
                     "Google Cloud Secret Manager (gcp_secrets://)",
-                    "GCP cloud production",
+                    "GCP cloud production — coming soon",
                 ),
                 SelectionOption::new(
                     "Azure Key Vault (azure_keyvault://)",
-                    "Azure cloud production",
+                    "Azure cloud production — coming soon",
                 ),
-                SelectionOption::new("HashiCorp Vault (vault://)", "Enterprise / multi-cloud"),
                 SelectionOption::new(
-                    "VTA managed (vta://)",
-                    "Centralized via Verifiable Trust Agent",
+                    "HashiCorp Vault (vault://)",
+                    "Enterprise / multi-cloud — coming soon",
+                ),
+                SelectionOption::new(
+                    "Local file (file://)",
+                    "Stored in secrets.json — NOT secure for production",
+                ),
+                SelectionOption::new(
+                    "Inline in config (string://)",
+                    "Embedded in mediator.toml — dev/CI only, NOT secure",
                 ),
             ],
             WizardStep::Security => vec![
@@ -298,25 +344,26 @@ impl WizardApp {
             },
             WizardStep::Protocol => match self.selection_index {
                 0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments.".into(),
-                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported with TSP yet.".into(),
+                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm.".into(),
+                2 => "Proceed to the next step with selected protocols.".into(),
                 _ => String::new(),
             },
             WizardStep::Did => match self.selection_index {
-                0 => "did:peer is self-contained — no hosting required. Best for local dev and testing.".into(),
-                1 => "did:webvh requires a webvh server to host the DID document. Best for production deployments.".into(),
-                2 => "Import a DID you've already created. You'll need to provide the DID string and secrets.".into(),
-                3 => "Use your Verifiable Trust Agent (VTA) to create and manage the mediator's DID.".into(),
+                0 => "VTA creates and manages the mediator's DID and keys centrally. Supports did:peer and did:webvh (configurable in VTA). Recommended for production.".into(),
+                1 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
+                2 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
+                3 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
                 _ => String::new(),
             },
             WizardStep::KeyStorage => match self.selection_index {
-                0 => "Secrets are embedded directly in mediator.toml. Simple but not secure for production.".into(),
-                1 => "Secrets written to conf/secrets.json. Easy to manage, no external dependencies.".into(),
-                2 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager).".into(),
-                3 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured.".into(),
-                4 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
-                5 => "Store secrets in Azure Key Vault. Coming soon.".into(),
-                6 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
-                7 => "Secrets managed by VTA with local caching for offline cold-start.".into(),
+                0 => "Keys managed by VTA with local caching for offline cold-start. Most secure — keys never leave the VTA boundary.".into(),
+                1 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
+                2 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                3 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
+                4 => "Store secrets in Azure Key Vault. Coming soon.".into(),
+                5 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
+                6 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
+                7 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
                 _ => String::new(),
             },
             WizardStep::Security => match self.selection_index {
@@ -353,22 +400,38 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Protocol => {
-                self.config.protocol = match self.selection_index {
-                    0 => "DIDComm v2".into(),
-                    1 => "TSP".into(),
+                match self.selection_index {
+                    0 => self.config.didcomm_enabled = !self.config.didcomm_enabled,
+                    1 => self.config.tsp_enabled = !self.config.tsp_enabled,
+                    2 => {
+                        // "Continue" option — advance if at least one protocol selected
+                        if !self.config.didcomm_enabled && !self.config.tsp_enabled {
+                            return; // Can't continue with no protocol
+                        }
+                        self.advance();
+                        return;
+                    }
                     _ => return,
-                };
-                self.advance();
+                }
+                // Don't allow deselecting both
+                if !self.config.didcomm_enabled && !self.config.tsp_enabled {
+                    // Re-enable the one they just toggled off
+                    match self.selection_index {
+                        0 => self.config.didcomm_enabled = true,
+                        1 => self.config.tsp_enabled = true,
+                        _ => {}
+                    }
+                }
             }
             WizardStep::Did => {
                 self.config.did_method = match self.selection_index {
-                    0 => "did:peer".into(),
+                    0 => "VTA managed".into(),
                     1 => "did:webvh".into(),
-                    2 => "Import existing".into(),
-                    3 => "VTA managed".into(),
+                    2 => "did:peer".into(),
+                    3 => "Import existing".into(),
                     _ => return,
                 };
-                // For did:webvh, we'll need to collect the public URL
+                // For did:webvh, collect the public URL
                 if self.selection_index == 1 {
                     self.mode = InputMode::TextInput;
                     self.text_input = Input::new(self.config.public_url.clone());
@@ -378,14 +441,14 @@ impl WizardApp {
             }
             WizardStep::KeyStorage => {
                 self.config.secret_storage = match self.selection_index {
-                    0 => "string://".into(),
-                    1 => "file://".into(),
-                    2 => "keyring://".into(),
-                    3 => "aws_secrets://".into(),
-                    4 => "gcp_secrets://".into(),
-                    5 => "azure_keyvault://".into(),
-                    6 => "vault://".into(),
-                    7 => "vta://".into(),
+                    0 => "vta://".into(),
+                    1 => "keyring://".into(),
+                    2 => "aws_secrets://".into(),
+                    3 => "gcp_secrets://".into(),
+                    4 => "azure_keyvault://".into(),
+                    5 => "vault://".into(),
+                    6 => "file://".into(),
+                    7 => "string://".into(),
                     _ => return,
                 };
                 self.advance();
@@ -468,7 +531,8 @@ impl WizardApp {
     fn apply_deployment_defaults(&mut self) {
         match self.config.deployment_type.as_str() {
             "Local development" => {
-                self.config.protocol = "DIDComm v2".into();
+                self.config.didcomm_enabled = true;
+                self.config.tsp_enabled = false;
                 self.config.did_method = "did:peer".into();
                 self.config.secret_storage = "string://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
@@ -476,7 +540,8 @@ impl WizardApp {
                 self.config.admin_did_mode = "Generate did:key".into();
             }
             "Headless server" => {
-                self.config.protocol = "DIDComm v2".into();
+                self.config.didcomm_enabled = true;
+                self.config.tsp_enabled = false;
                 self.config.did_method = "did:webvh".into();
                 self.config.secret_storage = "aws_secrets://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
@@ -484,7 +549,8 @@ impl WizardApp {
                 self.config.admin_did_mode = "Generate did:key".into();
             }
             "Container" => {
-                self.config.protocol = "DIDComm v2".into();
+                self.config.didcomm_enabled = true;
+                self.config.tsp_enabled = false;
                 self.config.did_method = "did:webvh".into();
                 self.config.secret_storage = "aws_secrets://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
@@ -566,24 +632,23 @@ impl WizardApp {
     /// Get the default selection index based on deployment defaults.
     fn default_selection_index(&self) -> usize {
         match self.current_step {
-            WizardStep::Protocol => match self.config.protocol.as_str() {
-                "TSP" => 1,
-                _ => 0,
-            },
+            WizardStep::Protocol => 0, // Start at DIDComm toggle
             WizardStep::Did => match self.config.did_method.as_str() {
+                "VTA managed" => 0,
                 "did:webvh" => 1,
-                "Import existing" => 2,
-                "VTA managed" => 3,
+                "did:peer" => 2,
+                "Import existing" => 3,
                 _ => 0,
             },
             WizardStep::KeyStorage => match self.config.secret_storage.as_str() {
-                "file://" => 1,
-                "keyring://" => 2,
-                "aws_secrets://" => 3,
-                "gcp_secrets://" => 4,
-                "azure_keyvault://" => 5,
-                "vault://" => 6,
-                "vta://" => 7,
+                "vta://" => 0,
+                "keyring://" => 1,
+                "aws_secrets://" => 2,
+                "gcp_secrets://" => 3,
+                "azure_keyvault://" => 4,
+                "vault://" => 5,
+                "file://" => 6,
+                "string://" => 7,
                 _ => 0,
             },
             WizardStep::Security => match self.config.ssl_mode.as_str() {

@@ -89,7 +89,14 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
         config.deployment_type = deployment.to_string();
     }
     if let Some(ref protocol) = args.protocol {
-        config.protocol = protocol.to_string();
+        match protocol {
+            cli::Protocol::Didcomm => {
+                config.didcomm_enabled = true;
+            }
+            cli::Protocol::Tsp => {
+                config.tsp_enabled = true;
+            }
+        }
     }
     if let Some(ref did_method) = args.did_method {
         config.did_method = did_method.to_string();
@@ -125,7 +132,7 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     config.deployment_type = deployment.to_string();
     match deployment {
         cli::DeploymentType::Local => {
-            config.protocol = "DIDComm v2".into();
+            config.didcomm_enabled = true;
             config.did_method = "did:peer".into();
             config.secret_storage = "string://".into();
             config.ssl_mode = "No SSL (TLS proxy)".into();
@@ -133,7 +140,7 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
             config.admin_did_mode = "Generate did:key".into();
         }
         cli::DeploymentType::Server | cli::DeploymentType::Container => {
-            config.protocol = "DIDComm v2".into();
+            config.didcomm_enabled = true;
             config.did_method = "did:webvh".into();
             config.secret_storage = "aws_secrets://".into();
             config.ssl_mode = "No SSL (TLS proxy)".into();
@@ -152,7 +159,7 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 
     println!("Mediator Setup (non-interactive)");
     println!("  Deployment:   {}", config.deployment_type);
-    println!("  Protocol:     {}", config.protocol);
+    println!("  Protocol:     {}", config.protocol_display());
     println!("  DID method:   {}", config.did_method);
     println!("  Key storage:  {}", config.secret_storage);
     println!("  SSL/TLS:      {}", config.ssl_mode);
@@ -395,9 +402,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow
 fn build_features(config: &app::WizardConfig) -> Vec<&'static str> {
     let mut features = Vec::new();
 
-    match config.protocol.as_str() {
-        "TSP" => features.push("tsp"),
-        _ => features.push("didcomm"),
+    if config.didcomm_enabled {
+        features.push("didcomm");
+    }
+    if config.tsp_enabled {
+        features.push("tsp");
     }
 
     match config.secret_storage.as_str() {

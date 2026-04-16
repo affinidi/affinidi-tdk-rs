@@ -243,7 +243,8 @@ mod tests {
         let config = WizardConfig {
             config_path: "conf/mediator.toml".into(),
             deployment_type: "Local development".into(),
-            protocol: "DIDComm v2".into(),
+            didcomm_enabled: true,
+            tsp_enabled: false,
             did_method: "did:peer".into(),
             public_url: String::new(),
             secret_storage: "string://".into(),
@@ -271,7 +272,8 @@ mod tests {
         let config = WizardConfig {
             config_path: "conf/mediator.toml".into(),
             deployment_type: "Headless server".into(),
-            protocol: "DIDComm v2".into(),
+            didcomm_enabled: true,
+            tsp_enabled: false,
             did_method: "VTA managed".into(),
             public_url: "https://mediator.example.com/mediator/v1".into(),
             secret_storage: "vta://".into(),

@@ -34,7 +34,7 @@ pub fn render_summary(
     add_field(&mut lines, "Deployment", &config.deployment_type);
 
     // Protocol
-    add_field(&mut lines, "Protocol", &config.protocol);
+    add_field(&mut lines, "Protocol", &config.protocol_display());
 
     // DID
     add_field(&mut lines, "DID Method", &config.did_method);

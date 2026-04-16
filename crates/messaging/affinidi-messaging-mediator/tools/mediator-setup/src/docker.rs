@@ -70,9 +70,11 @@ CMD ["mediator", "-c", "conf/mediator.toml"]
 fn build_features(config: &WizardConfig) -> Vec<&'static str> {
     let mut features = Vec::new();
 
-    match config.protocol.as_str() {
-        "TSP" => features.push("tsp"),
-        _ => features.push("didcomm"),
+    if config.didcomm_enabled {
+        features.push("didcomm");
+    }
+    if config.tsp_enabled {
+        features.push("tsp");
     }
 
     match config.secret_storage.as_str() {
