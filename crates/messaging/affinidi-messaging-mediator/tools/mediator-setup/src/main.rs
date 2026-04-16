@@ -498,6 +498,78 @@ fn resolve_config_path(config_path: &str) -> String {
     config_path.to_string()
 }
 
+/// Inline selector: renders options with arrow-key navigation in the terminal.
+/// Returns the index of the selected option, or `None` if the user pressed Esc/Ctrl+C.
+fn inline_select(prompt: &str, options: &[&str], default: usize) -> Option<usize> {
+    use ratatui::crossterm::event as ct;
+
+    let mut selected = default;
+
+    // Print the prompt
+    println!("  {prompt}\n");
+
+    // Enter raw mode for key capture
+    if enable_raw_mode().is_err() {
+        return Some(default);
+    }
+
+    loop {
+        // Render options (overwrite previous lines)
+        for (i, option) in options.iter().enumerate() {
+            if i == selected {
+                // Turquoise bold with › indicator
+                print!("\r  \x1b[38;5;80m\x1b[1m› {option}\x1b[0m\x1b[K");
+            } else {
+                print!("\r  \x1b[2m  {option}\x1b[0m\x1b[K");
+            }
+            if i < options.len() - 1 {
+                println!();
+            }
+        }
+        let _ = io::stdout().flush();
+
+        // Wait for key
+        if let Ok(ct::Event::Key(key)) = ct::read() {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if selected > 0 {
+                        selected -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if selected < options.len() - 1 {
+                        selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    return Some(selected);
+                }
+                KeyCode::Esc => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    return None;
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
+        // Move cursor back up to re-render
+        if options.len() > 1 {
+            print!("\x1b[{}A", options.len() - 1);
+        }
+    }
+}
+
 /// Prompt the user for the config file save location.
 fn prompt_config_path(config: &mut app::WizardConfig) {
     let default = &config.config_path;
@@ -572,27 +644,26 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         return;
     };
 
-    println!("  The mediator can be installed as a binary so you can run");
-    println!("  it from anywhere.\n");
-    println!("  \x1b[1m[1]\x1b[0m Install now (may take a few minutes)");
-    println!("  \x1b[1m[2]\x1b[0m Show manual instructions\n");
-    print!("  Choose [\x1b[1m1\x1b[0m/2]: ");
-    let _ = io::stdout().flush();
+    let choice = inline_select(
+        "The mediator can be installed as a binary so you can run it from anywhere.",
+        &[
+            "Install now (may take a few minutes)",
+            "Show manual instructions",
+            "Skip",
+        ],
+        0,
+    );
 
-    let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_err() {
-        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
-        println!("  Could not read input.");
-        print_manual_instructions(&install_cmd, &build_cmd, config);
-        return;
-    }
-
-    let choice = input.trim();
-    if choice == "2" {
-        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
-        println!();
-        print_manual_instructions(&install_cmd, &build_cmd, config);
-        return;
+    match choice {
+        Some(1) => {
+            let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
+            print_manual_instructions(&install_cmd, &build_cmd, config);
+            return;
+        }
+        Some(2) | None => {
+            return;
+        }
+        _ => {} // Install now (0)
     }
 
     // Ask for custom install path
