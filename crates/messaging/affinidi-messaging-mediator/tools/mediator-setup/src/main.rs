@@ -549,18 +549,25 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
 
     // Try to find workspace root
     let workspace_root = find_workspace_root();
-    let cwd = std::env::current_dir().ok();
-    let in_workspace = match (&workspace_root, &cwd) {
-        (Some(root), Some(current)) => current.starts_with(root),
-        _ => false,
-    };
 
     println!(
         "\n  \x1b[38;5;69m\u{2501}\u{2501}\u{2501} Next Steps \u{2501}\u{2501}\u{2501}\x1b[0m\n"
     );
 
-    // Ask if user wants to install now
-    print!("  Install the mediator to ~/.cargo/bin? [\x1b[1mY\x1b[0m/n] ");
+    // Determine build directory first — we need it for both install and manual instructions
+    let build_dir = if let Some(root) = workspace_root {
+        root
+    } else {
+        println!("  \x1b[33mCannot find workspace root.\x1b[0m");
+        print_manual_instructions(&install_cmd, &build_cmd, config);
+        return;
+    };
+
+    println!("  The mediator can be installed as a binary to ~/.cargo/bin/");
+    println!("  so you can run it from anywhere.\n");
+    println!("  \x1b[1m[1]\x1b[0m Install now (may take a few minutes)");
+    println!("  \x1b[1m[2]\x1b[0m Show manual instructions\n");
+    print!("  Choose [\x1b[1m1\x1b[0m/2]: ");
     let _ = io::stdout().flush();
 
     let mut input = String::new();
@@ -570,27 +577,12 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         return;
     }
 
-    let input = input.trim().to_lowercase();
-    if !input.is_empty() && input != "y" && input != "yes" {
+    let input = input.trim();
+    if input == "2" {
         println!();
         print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     }
-
-    // Determine build directory
-    let build_dir = if in_workspace {
-        cwd.unwrap()
-    } else if let Some(root) = workspace_root {
-        println!(
-            "  \x1b[2mChanging to workspace root: {}\x1b[0m",
-            root.display()
-        );
-        root
-    } else {
-        println!("  \x1b[33mCannot find workspace root.\x1b[0m");
-        print_manual_instructions(&install_cmd, &build_cmd, config);
-        return;
-    };
 
     println!("\n  \x1b[38;5;69mInstalling mediator (this may take a few minutes)...\x1b[0m\n");
 
