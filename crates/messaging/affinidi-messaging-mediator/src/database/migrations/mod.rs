@@ -57,7 +57,13 @@ impl MigrationDef {
     }
 }
 
-/// Returns all migrations in order. New migrations are appended here.
+/// Returns all migrations in sequential order. New migrations are appended here.
+///
+/// **Invariants** (enforced by tests):
+/// - IDs must be unique
+/// - IDs must be in ascending order
+/// - Names must be unique
+/// - Legacy versions (if any) must be valid semver
 pub(crate) fn all_migrations() -> Vec<MigrationDef> {
     vec![
         MigrationDef {
@@ -73,4 +79,91 @@ pub(crate) fn all_migrations() -> Vec<MigrationDef> {
             legacy_version: Some("0.14.0"),
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn test_migration_ids_are_unique() {
+        let migrations = all_migrations();
+        let mut ids = HashSet::new();
+        for m in &migrations {
+            assert!(
+                ids.insert(m.id),
+                "Duplicate migration ID: {} ({})",
+                m.id,
+                m.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_migration_ids_are_ascending() {
+        let migrations = all_migrations();
+        for window in migrations.windows(2) {
+            assert!(
+                window[0].id < window[1].id,
+                "Migration IDs not in ascending order: {} ({}) should be before {} ({})",
+                window[0].id,
+                window[0].name,
+                window[1].id,
+                window[1].name
+            );
+        }
+    }
+
+    #[test]
+    fn test_migration_names_are_unique() {
+        let migrations = all_migrations();
+        let mut names = HashSet::new();
+        for m in &migrations {
+            assert!(
+                names.insert(m.name),
+                "Duplicate migration name: {} (id: {})",
+                m.name,
+                m.id
+            );
+        }
+    }
+
+    #[test]
+    fn test_legacy_versions_are_valid_semver() {
+        let migrations = all_migrations();
+        for m in &migrations {
+            if let Some(lv) = m.legacy_version {
+                assert!(
+                    semver::Version::parse(lv).is_ok(),
+                    "Migration {} ({}) has invalid legacy_version: {}",
+                    m.id,
+                    m.name,
+                    lv
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_migration_names_not_empty() {
+        let migrations = all_migrations();
+        for m in &migrations {
+            assert!(!m.name.is_empty(), "Migration {} has empty name", m.id);
+            assert!(
+                !m.description.is_empty(),
+                "Migration {} ({}) has empty description",
+                m.id,
+                m.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_at_least_one_migration_exists() {
+        assert!(
+            !all_migrations().is_empty(),
+            "Migration registry should not be empty"
+        );
+    }
 }

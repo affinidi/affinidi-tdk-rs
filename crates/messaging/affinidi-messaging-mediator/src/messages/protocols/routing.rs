@@ -653,7 +653,7 @@ pub(crate) async fn process(
                 let now_ms = unix_timestamp_millis();
 
                 // Get the sender's full DID for problem reports
-                let from_did = msg.from.clone().unwrap_or_default();
+                let from_did = msg.from.as_deref().unwrap_or("").to_string();
 
                 let entry = ForwardQueueEntry {
                     stream_id: String::new(), // Set by Redis on XADD
