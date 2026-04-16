@@ -11,28 +11,29 @@ name = "mediator-monitor"
 path = "src/main.rs"
 
 [dependencies]
-# TUI framework
+# ── TUI Framework ────────────────────────────────────────────────────────
+## Note: pinned to 0.29/0.28 to match workspace (text-client, mediator-setup).
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
 
-# CLI
-clap = { version = "4.5", features = ["derive"] }
+# ── CLI ──────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
 
-# Async runtime
+# ── Async Runtime ────────────────────────────────────────────────────────
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 
-# HTTP client for polling mediator
+# ── HTTP Client (polls mediator /admin/status endpoint) ──────────────────
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# ── Serialization ────────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
-# Error handling
+# ── Error Handling ───────────────────────────────────────────────────────
 anyhow = "1"
 
-# Time formatting
+# ── Time Formatting ──────────────────────────────────────────────────────
 chrono = "0.4"
 
 [lints]

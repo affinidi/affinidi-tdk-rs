@@ -17,84 +17,129 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
+## Default: DIDComm v2 protocol support.
 default = ["didcomm"]
+
+## DIDComm v2 — industry-standard DID-based secure messaging.
+## Enables inbound/outbound message handling, authentication, and OOB discovery.
+## Mutually exclusive with `tsp` at runtime (only one protocol active).
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding"]
+
+## TSP (Trust Spanning Protocol) — lightweight alternative to DIDComm.
+## EXPERIMENTAL: not all mediator features are supported yet.
+## Mutually exclusive with `didcomm` at runtime.
 tsp = ["dep:affinidi-tsp"]
-# VTA credential storage backends (at least one required for production VTA use)
-# string:// is always available for dev/CI without either feature
+
+## VTA credential storage via OS keyring (macOS Keychain, Windows Credential
+## Manager, Linux Secret Service). Required when mediator.toml uses
+## `keyring://` scheme for VTA credentials.
 vta-keyring = ["dep:keyring"]
+
+## VTA credential storage via AWS Secrets Manager. Required when mediator.toml
+## uses `aws_secrets://` scheme for VTA credentials. Requires AWS credentials
+## configured (env vars, instance profile, or ~/.aws/credentials).
 vta-aws-secrets = []
 
 [dependencies]
-# Affinidi Crates
+# ── Affinidi Crates ──────────────────────────────────────────────────────
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
+## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", optional = true }
+## Optional: Trust Spanning Protocol (activated by `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
+## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)
 affinidi-encoding = { version = "0.1", optional = true }
+## Background processors: message expiry cleanup, forwarding
 affinidi-messaging-mediator-processors = { version = "0.13", path = "affinidi-messaging-mediator-processors" }
+## Shared types: DatabaseHandler, errors, config structs
 affinidi-messaging-mediator-common = { version = "0.13", path = "affinidi-messaging-mediator-common" }
+## DID resolution with in-memory cache (capacity: 1000 DIDs, TTL: 300s)
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
+## VTA SDK for centralized DID/key management via Verifiable Trust Agent
 vta-sdk = { version = "0.3", features = ["integration"] }
 
-# External Crates
-didwebvh-rs = "0.4"
-ahash = { version = "0.8", features = ["serde"] }
-async-convert = "1"
-aws-config = "1.8"
-aws-sdk-secretsmanager = "1"
-aws-sdk-ssm = "1"
+# ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
 axum-extra = { version = "0.12", features = ["typed-header"] }
+## TLS termination for direct HTTPS (alternative: use a reverse proxy)
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-base64 = "0.22"
-chrono = "0.4"
-hostname = "0.4"
-keyring = { version = "3", optional = true }
 http = "1"
-jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
-itertools = "0.14"
-num-format = "0.4.4"
-rand = "0.10"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+
+# ── Database (Redis) ─────────────────────────────────────────────────────
+## Redis 7.1+ required. Uses multiplexed connection (not pool).
+## TLS: use `rediss://` URL scheme. Auth: `redis://:password@host/`.
 redis = { version = "1.1", features = [
-  "tokio-rustls-comp",
-  "tls-rustls-insecure",
-  "connection-manager",
-  "ahash",
+  "tokio-rustls-comp",       # TLS via rustls (for rediss:// URLs)
+  "tls-rustls-insecure",     # Allow self-signed certs (dev only, controlled by config)
+  "connection-manager",      # Auto-reconnecting multiplexed connection
+  "ahash",                   # Faster hashing for internal maps
 ] }
-regex = "1.12"
+
+# ── DID Infrastructure ───────────────────────────────────────────────────
+didwebvh-rs = "0.4"
+
+# ── AWS Integration ──────────────────────────────────────────────────────
+## Used for VTA credential storage (aws_secrets://) and DID hosting (aws_parameter_store://)
+aws-config = "1"
+aws-sdk-secretsmanager = "1"
+aws-sdk-ssm = "1"
+
+# ── Cryptography & Security ─────────────────────────────────────────────
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 ring = { version = "0.17", features = ["std"] }
-rustls = { version = "0.23", default-features = false, features = [
-  "aws_lc_rs",
-  "tls12",
-] }
-semver = "1.0"
-serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
-sha256 = "1.6"
-subtle = "2.6"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }
+## OS keyring for VTA credential storage (activated by `vta-keyring` feature)
+keyring = { version = "3", optional = true }
+## Constant-time comparison for DID authorization checks
+subtle = "2"
+
+# ── Serialization & Encoding ────────────────────────────────────────────
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+base64 = "0.22"
+toml = "1"
+sha256 = "1"
+url = "2"
+
+# ── Async Runtime ────────────────────────────────────────────────────────
 tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
-governor = "0.10"
-metrics = "0.24"
-metrics-exporter-prometheus = "0.18"
-toml = "1"
-tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
-tracing = { version = "0.1", features = ["valuable"] }
-tracing-subscriber = { version = "0.3", features = [
-  "env-filter",
-  "fmt",
-  "json",
-  "valuable",
-] }
-url = "2"
-uuid = { version = "1.22", features = ["v4", "fast-rng"] }
-reqwest = { version = "0.13", features = ["rustls", "json"] }
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+async-convert = "1"
 futures-util = "0.3"
 
+# ── Observability ────────────────────────────────────────────────────────
+## Prometheus metrics via /metrics endpoint
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+tracing = { version = "0.1", features = ["valuable"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "valuable"] }
+
+# ── Rate Limiting & Resilience ───────────────────────────────────────────
+## Per-IP and per-DID rate limiting (in-memory, not distributed)
+governor = "0.10"
+
+# ── HTTP Client (for forwarding to remote mediators) ─────────────────────
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+
+# ── Utilities ────────────────────────────────────────────────────────────
+ahash = { version = "0.8", features = ["serde"] }
+chrono = "0.4"
+hostname = "0.4"
+itertools = "0.14"
+num-format = "0.4"
+rand = "0.10"
+regex = "1"
+semver = "1"
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+
 [dev-dependencies]
-lazy_static = "1.5"
+lazy_static = "1"
+
+[lints]
+workspace = true

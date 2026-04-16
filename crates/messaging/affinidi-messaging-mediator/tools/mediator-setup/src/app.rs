@@ -292,7 +292,7 @@ impl WizardApp {
         match self.current_step {
             WizardStep::Deployment => match self.selection_index {
                 0 => "Sets sensible defaults for local development: did:peer, inline secrets, no SSL, localhost Redis.".into(),
-                1 => "Sets defaults for production: did:webvh, external secret storage, TLS proxy, remote Redis.".into(),
+                1 => "Sets defaults for production: did:webvh, external secret storage, TLS proxy, local or remote Redis.".into(),
                 2 => "Same as server, plus generates a Dockerfile and docker-compose.yml with correct feature flags.".into(),
                 _ => String::new(),
             },
