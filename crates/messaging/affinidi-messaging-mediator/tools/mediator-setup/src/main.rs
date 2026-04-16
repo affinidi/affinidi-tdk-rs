@@ -497,60 +497,84 @@ fn find_workspace_root() -> Option<PathBuf> {
     None
 }
 
-/// Offer to build the mediator after configuration.
+/// Resolve the absolute config path for the run command.
+fn resolve_config_path(config_path: &str) -> String {
+    if Path::new(config_path).is_absolute() {
+        return config_path.to_string();
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(abs) = cwd.join(config_path).canonicalize() {
+            return abs.to_string_lossy().into_owned();
+        }
+    }
+    config_path.to_string()
+}
+
+/// Build the `cargo install` arguments for the mediator.
+fn build_install_args(features: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "install".to_string(),
+        "--path".to_string(),
+        "crates/messaging/affinidi-messaging-mediator".to_string(),
+    ];
+
+    if features.len() > 1 || (features.len() == 1 && features[0] != "didcomm") {
+        args.push("--no-default-features".to_string());
+        args.push("--features".to_string());
+        args.push(features.join(","));
+    }
+
+    args
+}
+
+/// Print the run command for the mediator binary.
+fn print_run_command(config_path: &str) {
+    let abs_config = resolve_config_path(config_path);
+    println!("  \x1b[1mTo start the mediator:\x1b[0m");
+    if abs_config == "conf/mediator.toml" || abs_config.ends_with("/conf/mediator.toml") {
+        println!("    \x1b[36mmediator\x1b[0m");
+    } else {
+        println!("    \x1b[36mmediator -c {abs_config}\x1b[0m");
+    }
+    println!();
+    println!("  \x1b[2mThe mediator binary is installed at ~/.cargo/bin/mediator\x1b[0m");
+}
+
+/// Offer to install the mediator after configuration.
 fn offer_build_and_guidance(config: &app::WizardConfig) {
     let features = build_features(config);
-    let cargo_args = build_cargo_args(&features);
-    let build_cmd = format!("cargo {}", cargo_args.join(" "));
-
-    println!(
-        "\n  \x1b[38;5;69m\u{2501}\u{2501}\u{2501} Next Steps \u{2501}\u{2501}\u{2501}\x1b[0m\n"
-    );
-    println!("  \x1b[1mBuild:\x1b[0m");
-    println!("    \x1b[36m{build_cmd}\x1b[0m");
-    println!();
-    println!("  \x1b[1mRun:\x1b[0m");
-    println!(
-        "    \x1b[36mcargo run --release -p affinidi-messaging-mediator -- -c {}\x1b[0m",
-        config.config_path
-    );
+    let install_args = build_install_args(&features);
+    let install_cmd = format!("cargo {}", install_args.join(" "));
+    let build_args = build_cargo_args(&features);
+    let build_cmd = format!("cargo {}", build_args.join(" "));
 
     // Try to find workspace root
     let workspace_root = find_workspace_root();
     let cwd = std::env::current_dir().ok();
-
     let in_workspace = match (&workspace_root, &cwd) {
         (Some(root), Some(current)) => current.starts_with(root),
         _ => false,
     };
 
-    if !in_workspace {
-        if let Some(ref root) = workspace_root {
-            println!("\nNote: You are not in the workspace root. The build command needs");
-            println!("to be run from: {}", root.display());
-        } else {
-            println!("\nNote: Could not find the workspace root (Cargo.toml with [workspace]).");
-            println!(
-                "Make sure you run the build command from the affinidi-tdk-rs root directory."
-            );
-            return;
-        }
-    }
+    println!(
+        "\n  \x1b[38;5;69m\u{2501}\u{2501}\u{2501} Next Steps \u{2501}\u{2501}\u{2501}\x1b[0m\n"
+    );
 
-    // Ask if user wants to build now
-    println!();
-    print!("Build the mediator now? [Y/n] ");
+    // Ask if user wants to install now
+    print!("  Install the mediator to ~/.cargo/bin? [\x1b[1mY\x1b[0m/n] ");
     let _ = io::stdout().flush();
 
     let mut input = String::new();
     if io::stdin().read_line(&mut input).is_err() {
-        println!("Could not read input. Run the build command manually.");
+        println!("  Could not read input.");
+        print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     }
 
     let input = input.trim().to_lowercase();
     if !input.is_empty() && input != "y" && input != "yes" {
-        println!("Skipping build. Run the commands above when ready.");
+        println!();
+        print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     }
 
@@ -558,76 +582,56 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     let build_dir = if in_workspace {
         cwd.unwrap()
     } else if let Some(root) = workspace_root {
-        println!("Changing to workspace root: {}", root.display());
+        println!(
+            "  \x1b[2mChanging to workspace root: {}\x1b[0m",
+            root.display()
+        );
         root
     } else {
-        println!("Cannot determine build directory. Run the build command manually.");
+        println!("  \x1b[33mCannot find workspace root.\x1b[0m");
+        print_manual_instructions(&install_cmd, &build_cmd, config);
         return;
     };
 
-    println!("\nBuilding mediator (this may take a few minutes)...\n");
+    println!("\n  \x1b[38;5;69mInstalling mediator (this may take a few minutes)...\x1b[0m\n");
 
     let status = Command::new("cargo")
-        .args(&cargo_args)
+        .args(&install_args)
         .current_dir(&build_dir)
         .status();
 
     match status {
         Ok(exit) if exit.success() => {
-            println!("\nBuild successful!");
-            println!("\nTo start the mediator:");
-
-            // Build the run command relative to the workspace root
-            let config_path = if Path::new(&config.config_path).is_absolute() {
-                config.config_path.clone()
-            } else {
-                // If config path is relative, make it relative to where the user ran the wizard
-                if let Ok(original_cwd) = std::env::current_dir() {
-                    if let Ok(abs) = original_cwd.join(&config.config_path).canonicalize() {
-                        abs.to_string_lossy().into_owned()
-                    } else {
-                        config.config_path.clone()
-                    }
-                } else {
-                    config.config_path.clone()
-                }
-            };
-
-            let mut run_args = vec![
-                "run",
-                "--release",
-                "-p",
-                "affinidi-messaging-mediator",
-                "--",
-            ];
-            if config_path != "conf/mediator.toml" {
-                run_args.push("-c");
-                // Can't push config_path directly since it's a String, print separately
-                println!(
-                    "  cd {} && cargo {} -c {}",
-                    build_dir.display(),
-                    run_args.join(" "),
-                    config_path
-                );
-            } else {
-                println!(
-                    "  cd {} && cargo {}",
-                    build_dir.display(),
-                    run_args.join(" ")
-                );
-            }
+            println!("\n  \x1b[32m\u{2714} Installation successful!\x1b[0m\n");
+            print_run_command(&config.config_path);
         }
         Ok(exit) => {
-            eprintln!("\nBuild failed with exit code: {}", exit);
-            eprintln!("Check the build output above for errors.");
-            eprintln!("You can retry manually with:");
-            eprintln!("  cd {} && {}", build_dir.display(), build_cmd);
+            eprintln!(
+                "\n  \x1b[31m\u{2718} Install failed (exit code: {})\x1b[0m",
+                exit
+            );
+            eprintln!("  Check the output above for errors. You can retry with:");
+            eprintln!("    cd {} && {}", build_dir.display(), install_cmd);
         }
         Err(e) => {
-            eprintln!("\nFailed to run cargo: {e}");
-            eprintln!("Is cargo installed and in your PATH?");
-            eprintln!("You can build manually with:");
-            eprintln!("  cd {} && {}", build_dir.display(), build_cmd);
+            eprintln!("\n  \x1b[31mFailed to run cargo: {e}\x1b[0m");
+            eprintln!("  Is cargo installed and in your PATH?");
+            print_manual_instructions(&install_cmd, &build_cmd, config);
         }
     }
+}
+
+/// Print manual build/run instructions when auto-install is skipped or fails.
+fn print_manual_instructions(install_cmd: &str, build_cmd: &str, config: &app::WizardConfig) {
+    let abs_config = resolve_config_path(&config.config_path);
+
+    println!("  \x1b[1mOption 1 — Install (recommended):\x1b[0m");
+    println!("    \x1b[36m{install_cmd}\x1b[0m");
+    println!("    \x1b[36mmediator -c {abs_config}\x1b[0m");
+    println!();
+    println!("  \x1b[1mOption 2 — Build and run from source:\x1b[0m");
+    println!("    \x1b[36m{build_cmd}\x1b[0m");
+    println!(
+        "    \x1b[36mcargo run --release -p affinidi-messaging-mediator -- -c {abs_config}\x1b[0m"
+    );
 }
