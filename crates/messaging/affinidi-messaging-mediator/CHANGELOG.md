@@ -4,6 +4,21 @@
 
 ## 15th April 2026
 
+### 0.13.1 — Startup Hardening
+
+- **BREAKING:** LUA scripts file (`database.functions_file`) is now required in
+  mediator configuration. Previously, omitting it silently skipped script loading
+  and returned successfully; the mediator now exits with an error if it is not
+  specified. Ensure your `mediator.toml` includes a valid `functions_file` path.
+- **CHORE:** Replaced all `unwrap()`/`expect()`/`process::exit()` calls in
+  startup and runtime code with typed `Result` propagation via `MediatorError`
+  - `start()` now returns `Result<(), MediatorError>`; `main()` prints the error
+    and exits non-zero on failure
+  - Database initialization, TLS config, streaming task, DID resolver, and
+    signal handler installation all use explicit error handling
+- **CHORE:** Rate limiter construction uses safe `NonZeroU32` checks instead of
+  `expect()` (applies to both per-IP and per-DID rate limiters)
+
 - **DOC:** Added README section on running without a secure credential store
   (`string://` usage for dev/CI without keyring or AWS Secrets Manager)
 
