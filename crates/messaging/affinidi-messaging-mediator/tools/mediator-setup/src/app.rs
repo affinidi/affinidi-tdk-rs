@@ -597,8 +597,8 @@ impl WizardApp {
             "Local development" => {
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
-                self.config.did_method = "did:peer".into();
-                self.config.secret_storage = "string://".into();
+                self.config.did_method = "VTA managed".into();
+                self.config.secret_storage = "vta://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
                 self.config.database_url = "redis://127.0.0.1/".into();
                 self.config.admin_did_mode = "Generate did:key".into();
@@ -606,8 +606,8 @@ impl WizardApp {
             "Headless server" => {
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
-                self.config.did_method = "did:webvh".into();
-                self.config.secret_storage = "aws_secrets://".into();
+                self.config.did_method = "VTA managed".into();
+                self.config.secret_storage = "vta://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
                 self.config.database_url = "redis://127.0.0.1/".into();
                 self.config.admin_did_mode = "Generate did:key".into();
@@ -615,8 +615,8 @@ impl WizardApp {
             "Container" => {
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
-                self.config.did_method = "did:webvh".into();
-                self.config.secret_storage = "aws_secrets://".into();
+                self.config.did_method = "VTA managed".into();
+                self.config.secret_storage = "vta://".into();
                 self.config.ssl_mode = "No SSL (TLS proxy)".into();
                 self.config.database_url = "redis://127.0.0.1/".into();
                 self.config.admin_did_mode = "Generate did:key".into();

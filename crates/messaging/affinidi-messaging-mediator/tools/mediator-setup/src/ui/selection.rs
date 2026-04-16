@@ -28,12 +28,21 @@ pub fn render_selection(
     description: &str,
     options: &[SelectionOption],
     selected: usize,
+    focused: bool,
 ) {
     let block = Block::default()
         .title(format!(" {title} "))
-        .title_style(theme::title_style())
+        .title_style(if focused {
+            theme::selected_style()
+        } else {
+            theme::title_style()
+        })
         .borders(Borders::ALL)
-        .border_style(theme::border_style())
+        .border_style(if focused {
+            theme::selected_style()
+        } else {
+            theme::border_style()
+        })
         .padding(Padding::new(1, 1, 1, 0));
 
     let inner = block.inner(area);

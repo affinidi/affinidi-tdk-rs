@@ -134,16 +134,16 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     match deployment {
         cli::DeploymentType::Local => {
             config.didcomm_enabled = true;
-            config.did_method = "did:peer".into();
-            config.secret_storage = "string://".into();
+            config.did_method = "VTA managed".into();
+            config.secret_storage = "vta://".into();
             config.ssl_mode = "No SSL (TLS proxy)".into();
             config.database_url = "redis://127.0.0.1/".into();
             config.admin_did_mode = "Generate did:key".into();
         }
         cli::DeploymentType::Server | cli::DeploymentType::Container => {
             config.didcomm_enabled = true;
-            config.did_method = "did:webvh".into();
-            config.secret_storage = "aws_secrets://".into();
+            config.did_method = "VTA managed".into();
+            config.secret_storage = "vta://".into();
             config.ssl_mode = "No SSL (TLS proxy)".into();
             config.database_url = "redis://127.0.0.1/".into();
             config.admin_did_mode = "Generate did:key".into();
@@ -207,9 +207,11 @@ async fn run_event_loop(
 }
 
 fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers) {
-    // Ctrl+C always quits
-    if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
-        app.should_quit = true;
+    // Ctrl+C or Ctrl+Q always triggers quit confirmation
+    if (code == KeyCode::Char('c') || code == KeyCode::Char('q'))
+        && modifiers.contains(KeyModifiers::CONTROL)
+    {
+        app.request_quit();
         return;
     }
 
@@ -255,7 +257,6 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         },
         InputMode::Selecting => match app.focus {
             app::FocusPanel::Content => match code {
-                KeyCode::Char('q') => app.request_quit(),
                 KeyCode::Up | KeyCode::Char('k') => app.move_up(),
                 KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                 KeyCode::Enter => app.select_current(),
@@ -264,7 +265,6 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                 _ => {}
             },
             app::FocusPanel::Progress => match code {
-                KeyCode::Char('q') => app.request_quit(),
                 KeyCode::Up | KeyCode::Char('k') => app.progress_up(),
                 KeyCode::Down | KeyCode::Char('j') => app.progress_down(),
                 KeyCode::Enter => app.jump_to_progress_step(),
@@ -275,7 +275,6 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         InputMode::Confirming => match code {
             KeyCode::Enter => app.select_current(),
             KeyCode::Esc => app.go_back(),
-            KeyCode::Char('q') => app.request_quit(),
             _ => {}
         },
     }

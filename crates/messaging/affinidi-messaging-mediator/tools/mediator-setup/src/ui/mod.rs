@@ -97,16 +97,14 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
 
     // Render help bar
     let help_text = match app.mode {
-        InputMode::TextInput => {
-            "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  Tab Next field"
-        }
-        InputMode::Confirming => "Enter Confirm  Esc Cancel",
+        InputMode::TextInput => "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  Ctrl+Q Quit",
+        InputMode::Confirming => "Enter Confirm  Esc Cancel  Ctrl+Q Quit",
         _ => match app.focus {
             crate::app::FocusPanel::Content => {
-                "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  q Quit"
+                "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  Ctrl+Q Quit"
             }
             crate::app::FocusPanel::Progress => {
-                "\u{2191}\u{2193} Navigate  Enter Jump to step  \u{2192} Back to options  q Quit"
+                "\u{2191}\u{2193} Navigate  Enter Jump  \u{2192} Options  Ctrl+Q Quit"
             }
         },
     };
@@ -151,6 +149,7 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
 fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     let step = app.current_step;
     let step_data = step.step_data();
+    let content_focused = app.focus == crate::app::FocusPanel::Content;
 
     // Split right panel: options area + info box
     let chunks = Layout::default()
@@ -179,6 +178,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 &step_data.description,
                 &options,
                 app.selection_index,
+                content_focused,
             );
         }
     }
