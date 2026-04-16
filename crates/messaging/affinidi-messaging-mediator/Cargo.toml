@@ -16,11 +16,6 @@ repository.workspace = true
 name = "mediator"
 path = "src/main.rs"
 
-[[bin]]
-name = "mediator-setup-vta"
-path = "src/bin/setup_vta.rs"
-required-features = ["setup"]
-
 [features]
 default = ["didcomm"]
 didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding"]
@@ -29,8 +24,6 @@ tsp = ["dep:affinidi-tsp"]
 # string:// is always available for dev/CI without either feature
 vta-keyring = ["dep:keyring"]
 vta-aws-secrets = []
-# Interactive VTA setup wizard (mediator-setup-vta binary)
-setup = ["dep:dialoguer", "dep:console", "dep:affinidi-encoding"]
 
 [dependencies]
 # Affinidi Crates
@@ -59,8 +52,6 @@ base64 = "0.22"
 chrono = "0.4"
 hostname = "0.4"
 keyring = { version = "3", optional = true }
-dialoguer = { version = "0.12", optional = true }
-console = { version = "0.16", optional = true }
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["aws_lc_rs"] }
 itertools = "0.14"
