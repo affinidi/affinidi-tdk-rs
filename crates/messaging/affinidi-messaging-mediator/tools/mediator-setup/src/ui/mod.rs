@@ -47,7 +47,14 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
             "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  Tab Next field"
         }
         InputMode::Confirming => "Enter Confirm  Esc Cancel",
-        _ => "\u{2191}\u{2193} Navigate  Enter Select  Esc Back  q Quit",
+        _ => match app.focus {
+            crate::app::FocusPanel::Content => {
+                "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  q Quit"
+            }
+            crate::app::FocusPanel::Progress => {
+                "\u{2191}\u{2193} Navigate  Enter Jump to step  \u{2192} Back to options  q Quit"
+            }
+        },
     };
     let help = Paragraph::new(Line::from(Span::styled(
         format!("  {help_text}"),
@@ -73,7 +80,14 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
         .split(main_area);
 
     // Left: progress panel
-    progress::render_progress(frame, chunks[0], app.current_step, &app.completed_steps());
+    progress::render_progress(
+        frame,
+        chunks[0],
+        app.current_step,
+        &app.completed_steps(),
+        app.focus,
+        app.progress_index,
+    );
 
     // Right: current step content
     render_step_content(frame, chunks[1], app);

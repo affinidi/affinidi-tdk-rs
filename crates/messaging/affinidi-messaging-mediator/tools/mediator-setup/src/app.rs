@@ -119,12 +119,21 @@ pub struct StepData {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
-    /// Navigating a selection list
+    /// Navigating a selection list in the right panel
     Selecting,
     /// Typing into a text field
     TextInput,
     /// Confirming an action (summary write)
     Confirming,
+}
+
+/// Which panel has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusPanel {
+    /// Right panel — step content (options, text input)
+    Content,
+    /// Left panel — step progress list (click to jump to a step)
+    Progress,
 }
 
 /// Accumulated configuration choices from the wizard.
@@ -186,6 +195,9 @@ pub struct WizardApp {
     pub selection_index: usize,
     pub text_input: Input,
     pub mode: InputMode,
+    pub focus: FocusPanel,
+    /// Index of highlighted step in the progress panel (left panel)
+    pub progress_index: usize,
     pub should_quit: bool,
     pub quit_confirm: bool,
     pub write_config: bool,
@@ -202,10 +214,62 @@ impl WizardApp {
             selection_index: 0,
             text_input: Input::default(),
             mode: InputMode::Selecting,
+            focus: FocusPanel::Content,
+            progress_index: 0,
             should_quit: false,
             quit_confirm: false,
             write_config: false,
             completed: Vec::new(),
+        }
+    }
+
+    /// Switch focus to the progress panel (left)
+    pub fn focus_progress(&mut self) {
+        if self.mode == InputMode::TextInput {
+            return; // Don't switch away from text input
+        }
+        self.focus = FocusPanel::Progress;
+        self.progress_index = self.current_step.index();
+    }
+
+    /// Switch focus to the content panel (right)
+    pub fn focus_content(&mut self) {
+        self.focus = FocusPanel::Content;
+    }
+
+    /// Move progress highlight up
+    pub fn progress_up(&mut self) {
+        if self.progress_index > 0 {
+            self.progress_index -= 1;
+        }
+    }
+
+    /// Move progress highlight down
+    pub fn progress_down(&mut self) {
+        let max = WizardStep::all().len().saturating_sub(1);
+        if self.progress_index < max {
+            self.progress_index += 1;
+        }
+    }
+
+    /// Jump to the step highlighted in the progress panel.
+    /// All state is preserved — we just change the current step.
+    pub fn jump_to_progress_step(&mut self) {
+        let steps = WizardStep::all();
+        if let Some(&step) = steps.get(self.progress_index) {
+            // Can only jump to completed steps or the current step
+            if self.completed.contains(&step) || step == self.current_step {
+                self.current_step = step;
+                self.selection_index = self.default_selection_index();
+                // Set mode based on step type
+                if step == WizardStep::Database {
+                    self.mode = InputMode::TextInput;
+                    self.text_input = Input::new(self.config.database_url.clone());
+                } else {
+                    self.mode = InputMode::Selecting;
+                }
+                self.focus = FocusPanel::Content;
+            }
         }
     }
 

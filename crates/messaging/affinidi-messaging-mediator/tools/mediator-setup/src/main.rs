@@ -64,18 +64,19 @@ async fn main() -> anyhow::Result<()> {
     match result {
         Ok(()) => {
             if app.write_config {
-                println!("\nGenerating cryptographic material...");
+                print_banner();
+                println!("  Generating cryptographic material...\n");
                 match generate_and_write(&app.config).await {
                     Ok(()) => {
                         offer_build_and_guidance(&app.config);
                     }
                     Err(e) => {
-                        eprintln!("\nError: {e}");
+                        eprintln!("\n\x1b[31mError: {e}\x1b[0m");
                         std::process::exit(1);
                     }
                 }
             } else {
-                println!("\nSetup cancelled.");
+                println!("\n\x1b[33mSetup cancelled.\x1b[0m");
             }
             Ok(())
         }
@@ -252,13 +253,24 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
             }
             _ => {}
         },
-        InputMode::Selecting => match code {
-            KeyCode::Char('q') => app.request_quit(),
-            KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-            KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-            KeyCode::Enter => app.select_current(),
-            KeyCode::Esc => app.go_back(),
-            _ => {}
+        InputMode::Selecting => match app.focus {
+            app::FocusPanel::Content => match code {
+                KeyCode::Char('q') => app.request_quit(),
+                KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                KeyCode::Enter => app.select_current(),
+                KeyCode::Esc => app.go_back(),
+                KeyCode::Left => app.focus_progress(),
+                _ => {}
+            },
+            app::FocusPanel::Progress => match code {
+                KeyCode::Char('q') => app.request_quit(),
+                KeyCode::Up | KeyCode::Char('k') => app.progress_up(),
+                KeyCode::Down | KeyCode::Char('j') => app.progress_down(),
+                KeyCode::Enter => app.jump_to_progress_step(),
+                KeyCode::Right | KeyCode::Esc => app.focus_content(),
+                _ => {}
+            },
         },
         InputMode::Confirming => match code {
             KeyCode::Enter => app.select_current(),
@@ -352,25 +364,31 @@ async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
         println!("  DID document: {}", doc_path.display());
     }
 
-    println!("\nConfiguration written to: {}", config.config_path);
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Configuration written to: \x1b[1m{}\x1b[0m",
+        config.config_path
+    );
 
     // Display admin DID info to user
     if let Some(ref did) = admin_did {
-        println!("\nAdmin DID: {did}");
+        println!("  \x1b[32m\u{2714}\x1b[0m Admin DID: \x1b[36m{did}\x1b[0m");
         if let Some(ref secret) = admin_secret {
             if let Ok(privkey) = secret.get_private_keymultibase() {
-                println!("\n  IMPORTANT: Save this admin private key securely!");
-                println!("  Private key (multibase): {privkey}");
+                println!();
+                println!(
+                    "  \x1b[33m\u{26A0}  IMPORTANT: Save this admin private key securely!\x1b[0m"
+                );
+                println!("  \x1b[2mPrivate key (multibase): {privkey}\x1b[0m");
             }
         }
     }
 
     if config.secret_storage == "file://" {
-        println!("  Secrets: conf/secrets.json");
+        println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
     }
 
     if config.ssl_mode == "Self-signed" {
-        println!("  SSL certificates: conf/keys/");
+        println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
     }
 
     // Generate Docker files for container deployments
@@ -379,6 +397,26 @@ async fn generate_and_write(config: &app::WizardConfig) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn print_banner() {
+    // ANSI color codes: 38;5;69 = cornflower blue, 38;5;43 = teal accent
+    let blue = "\x1b[38;5;69m";
+    let teal = "\x1b[38;5;43m";
+    let white = "\x1b[38;5;255m";
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+
+    println!();
+    println!("{blue}     _    __  __ _       _     _ _ {reset}");
+    println!("{blue}    / \\  / _|/ _(_)_ __ (_) __| (_){reset}");
+    println!("{blue}   / _ \\| |_| |_| | '_ \\| |/ _` | |{reset}");
+    println!("{blue}  / ___ \\  _|  _| | | | | | (_| | |{reset}");
+    println!("{blue} /_/   \\_\\_| |_| |_|_| |_|_|\\__,_|_|{reset}");
+    println!();
+    println!("  {teal}\u{2588}\u{2588}\u{2588}{reset} {white}Messaging Mediator Setup{reset}");
+    println!("  {dim}Secure, scalable DIDComm & TSP messaging infrastructure{reset}");
+    println!();
 }
 
 fn setup_terminal() -> anyhow::Result<Terminal<CrosstermBackend<Stdout>>> {
@@ -467,12 +505,15 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     let cargo_args = build_cargo_args(&features);
     let build_cmd = format!("cargo {}", cargo_args.join(" "));
 
-    println!("\n--- Next Steps ---\n");
-    println!("Build command:");
-    println!("  {build_cmd}");
-    println!("\nRun command:");
     println!(
-        "  cargo run --release -p affinidi-messaging-mediator -- -c {}",
+        "\n  \x1b[38;5;69m\u{2501}\u{2501}\u{2501} Next Steps \u{2501}\u{2501}\u{2501}\x1b[0m\n"
+    );
+    println!("  \x1b[1mBuild:\x1b[0m");
+    println!("    \x1b[36m{build_cmd}\x1b[0m");
+    println!();
+    println!("  \x1b[1mRun:\x1b[0m");
+    println!(
+        "    \x1b[36mcargo run --release -p affinidi-messaging-mediator -- -c {}\x1b[0m",
         config.config_path
     );
 
