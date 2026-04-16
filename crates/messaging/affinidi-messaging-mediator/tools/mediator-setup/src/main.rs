@@ -7,7 +7,9 @@ mod secrets;
 mod ui;
 
 use std::{
-    io::{self, Stdout},
+    io::{self, Stdout, Write},
+    path::{Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 
@@ -65,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("\nGenerating cryptographic material...");
                 match generate_and_write(&app.config).await {
                     Ok(()) => {
-                        print_build_command(&app.config);
+                        offer_build_and_guidance(&app.config);
                     }
                     Err(e) => {
                         eprintln!("\nError: {e}");
@@ -160,7 +162,7 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     println!("Generating cryptographic material...");
 
     generate_and_write(&config).await?;
-    print_build_command(&config);
+    offer_build_and_guidance(&config);
 
     Ok(())
 }
@@ -389,7 +391,8 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow
     Ok(terminal.show_cursor()?)
 }
 
-fn print_build_command(config: &app::WizardConfig) {
+/// Build the feature flags list based on wizard config choices.
+fn build_features(config: &app::WizardConfig) -> Vec<&'static str> {
     let mut features = Vec::new();
 
     match config.protocol.as_str() {
@@ -406,19 +409,177 @@ fn print_build_command(config: &app::WizardConfig) {
         _ => {}
     }
 
-    println!("\nTo build the mediator:");
-    if features.len() == 1 && features[0] == "didcomm" {
-        println!("  cargo build --release -p affinidi-messaging-mediator");
-    } else {
-        println!(
-            "  cargo build --release -p affinidi-messaging-mediator --no-default-features --features {}",
-            features.join(",")
-        );
+    features
+}
+
+/// Build the cargo build arguments for the mediator.
+fn build_cargo_args(features: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        "--release".to_string(),
+        "-p".to_string(),
+        "affinidi-messaging-mediator".to_string(),
+    ];
+
+    if features.len() > 1 || (features.len() == 1 && features[0] != "didcomm") {
+        args.push("--no-default-features".to_string());
+        args.push("--features".to_string());
+        args.push(features.join(","));
     }
 
-    println!("\nTo run:");
+    args
+}
+
+/// Find the workspace root by walking up from the current directory
+/// looking for a Cargo.toml that contains [workspace].
+fn find_workspace_root() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
+                if contents.contains("[workspace]") {
+                    return Some(dir);
+                }
+            }
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// Offer to build the mediator after configuration.
+fn offer_build_and_guidance(config: &app::WizardConfig) {
+    let features = build_features(config);
+    let cargo_args = build_cargo_args(&features);
+    let build_cmd = format!("cargo {}", cargo_args.join(" "));
+
+    println!("\n--- Next Steps ---\n");
+    println!("Build command:");
+    println!("  {build_cmd}");
+    println!("\nRun command:");
     println!(
         "  cargo run --release -p affinidi-messaging-mediator -- -c {}",
         config.config_path
     );
+
+    // Try to find workspace root
+    let workspace_root = find_workspace_root();
+    let cwd = std::env::current_dir().ok();
+
+    let in_workspace = match (&workspace_root, &cwd) {
+        (Some(root), Some(current)) => current.starts_with(root),
+        _ => false,
+    };
+
+    if !in_workspace {
+        if let Some(ref root) = workspace_root {
+            println!("\nNote: You are not in the workspace root. The build command needs");
+            println!("to be run from: {}", root.display());
+        } else {
+            println!("\nNote: Could not find the workspace root (Cargo.toml with [workspace]).");
+            println!(
+                "Make sure you run the build command from the affinidi-tdk-rs root directory."
+            );
+            return;
+        }
+    }
+
+    // Ask if user wants to build now
+    println!();
+    print!("Build the mediator now? [Y/n] ");
+    let _ = io::stdout().flush();
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        println!("Could not read input. Run the build command manually.");
+        return;
+    }
+
+    let input = input.trim().to_lowercase();
+    if !input.is_empty() && input != "y" && input != "yes" {
+        println!("Skipping build. Run the commands above when ready.");
+        return;
+    }
+
+    // Determine build directory
+    let build_dir = if in_workspace {
+        cwd.unwrap()
+    } else if let Some(root) = workspace_root {
+        println!("Changing to workspace root: {}", root.display());
+        root
+    } else {
+        println!("Cannot determine build directory. Run the build command manually.");
+        return;
+    };
+
+    println!("\nBuilding mediator (this may take a few minutes)...\n");
+
+    let status = Command::new("cargo")
+        .args(&cargo_args)
+        .current_dir(&build_dir)
+        .status();
+
+    match status {
+        Ok(exit) if exit.success() => {
+            println!("\nBuild successful!");
+            println!("\nTo start the mediator:");
+
+            // Build the run command relative to the workspace root
+            let config_path = if Path::new(&config.config_path).is_absolute() {
+                config.config_path.clone()
+            } else {
+                // If config path is relative, make it relative to where the user ran the wizard
+                if let Ok(original_cwd) = std::env::current_dir() {
+                    if let Ok(abs) = original_cwd.join(&config.config_path).canonicalize() {
+                        abs.to_string_lossy().into_owned()
+                    } else {
+                        config.config_path.clone()
+                    }
+                } else {
+                    config.config_path.clone()
+                }
+            };
+
+            let mut run_args = vec![
+                "run",
+                "--release",
+                "-p",
+                "affinidi-messaging-mediator",
+                "--",
+            ];
+            if config_path != "conf/mediator.toml" {
+                run_args.push("-c");
+                // Can't push config_path directly since it's a String, print separately
+                println!(
+                    "  cd {} && cargo {} -c {}",
+                    build_dir.display(),
+                    run_args.join(" "),
+                    config_path
+                );
+            } else {
+                println!(
+                    "  cd {} && cargo {}",
+                    build_dir.display(),
+                    run_args.join(" ")
+                );
+            }
+        }
+        Ok(exit) => {
+            eprintln!("\nBuild failed with exit code: {}", exit);
+            eprintln!("Check the build output above for errors.");
+            eprintln!("You can retry manually with:");
+            eprintln!("  cd {} && {}", build_dir.display(), build_cmd);
+        }
+        Err(e) => {
+            eprintln!("\nFailed to run cargo: {e}");
+            eprintln!("Is cargo installed and in your PATH?");
+            eprintln!("You can build manually with:");
+            eprintln!("  cd {} && {}", build_dir.display(), build_cmd);
+        }
+    }
 }
