@@ -12,6 +12,14 @@
 # sharing a standardised setup across a team.
 #
 # All sections except [deployment] are optional and use sensible defaults.
+#
+# SECURITY: This file is safe to commit to version control.
+# No secrets, passwords, or private keys are stored here.
+# When the wizard auto-generates this file, credentials embedded in
+# URLs (e.g. Redis passwords) are automatically stripped.
+#
+# To supply credentials at runtime:
+#   DATABASE_URL="redis://:secret@host/" mediator-setup --from mediator-build.toml
 # ============================================================================
 
 
@@ -82,6 +90,9 @@ admin = "generate"
 [database]
 # Redis connection URL. Use database partitions (e.g. redis://host/1)
 # to isolate data when sharing a Redis instance across applications.
+#
+# DO NOT put passwords in this file — use the DATABASE_URL env var instead:
+#   DATABASE_URL="redis://:password@host:6379/" mediator-setup --from mediator-build.toml
 url = "redis://127.0.0.1/"
 
 

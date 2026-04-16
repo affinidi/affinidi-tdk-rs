@@ -187,7 +187,16 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 /// Run from a declarative build recipe TOML file (fully non-interactive).
 async fn run_from_recipe(recipe_path: &str) -> anyhow::Result<()> {
     let recipe = recipe::load(recipe_path)?;
-    let config = recipe::to_wizard_config(&recipe)?;
+    let mut config = recipe::to_wizard_config(&recipe)?;
+
+    // Check if database URL needs credentials — allow env var override
+    if let Ok(env_url) = std::env::var("DATABASE_URL") {
+        config.database_url = env_url;
+    } else if recipe::needs_database_credentials(&config.database_url) {
+        eprintln!("The database URL in the recipe needs credentials.");
+        eprintln!("Set DATABASE_URL environment variable or update the recipe.");
+        anyhow::bail!("Database credentials required but not provided");
+    }
 
     println!("Mediator Setup (from recipe: {recipe_path})");
     println!("  Deployment:   {}", config.deployment_type);
