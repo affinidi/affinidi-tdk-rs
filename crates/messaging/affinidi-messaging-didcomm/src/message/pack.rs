@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn pack_signed_roundtrip() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
 
         let msg =
             Message::new("test-type", serde_json::json!({"data": 42})).from("did:example:alice");
@@ -245,7 +245,7 @@ mod tests {
     /// as an attachment in a wrapper message.
     #[test]
     fn pack_signed_then_authcrypt() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
         let sender_ka = PrivateKeyAgreement::generate(Curve::X25519);
         let recipient_ka = PrivateKeyAgreement::generate(Curve::X25519);
 

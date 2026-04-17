@@ -30,9 +30,19 @@ impl Es256Signer {
         })
     }
 
-    /// Generate a new random P-256 key pair.
+    /// Generate a new random P-256 key pair using the OS RNG.
     pub fn generate() -> Self {
-        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        Self::generate_with_rng(&mut p256::elliptic_curve::rand_core::OsRng)
+    }
+
+    /// Generate a new P-256 key pair using a caller-supplied RNG.
+    ///
+    /// Useful for tests that need deterministic keys via a seeded RNG.
+    pub fn generate_with_rng<R>(rng: &mut R) -> Self
+    where
+        R: p256::elliptic_curve::rand_core::CryptoRng + p256::elliptic_curve::rand_core::RngCore,
+    {
+        let signing_key = SigningKey::random(rng);
         Self {
             signing_key,
             kid: None,

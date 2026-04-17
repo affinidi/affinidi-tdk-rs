@@ -178,7 +178,7 @@ pub fn message_digest(packed: &PackedMessage) -> [u8; 32] {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+    use rand_core::OsRng;
     use x25519_dalek::{PublicKey, StaticSecret};
 
     struct TestKeys {
