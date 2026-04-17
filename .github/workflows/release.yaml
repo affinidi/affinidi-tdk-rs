@@ -15,5 +15,13 @@ jobs:
       auditIgnore: "RUSTSEC-2022-0040,RUSTSEC-2023-0071,RUSTSEC-2024-0373"
       ubuntu-rust-deps: "libdbus-1-dev libssl-dev libchafa-dev"
       release_debug: true
-      workspace_publish: true
+      # `workspace_publish: true` uses `cargo publish --workspace`, which errors on
+      # the first crate whose current version is already on crates.io instead of
+      # skipping it. When we ship a targeted patch (e.g. four-of-many crates for a
+      # security fix), that behaviour blocks the whole release. The legacy
+      # per-crate path in pipeline-rust compares local vs. remote versions and
+      # skips already-published crates, which is what we want for partial releases.
+      # Re-enable workspace_publish once pipeline-rust grows a skip-already-published
+      # option (or when a release genuinely bumps every workspace member).
+      workspace_publish: false
       release_dry_run: false
