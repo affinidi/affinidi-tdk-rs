@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.3.2"
+version = "0.3.3"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -25,12 +25,12 @@ affinidi-encoding = "0.1"
 
 # External Crates
 base64 = "0.22"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2.0"
-url = { version = "2.5", features = ["serde"] }
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-zeroize = { version = "1.8", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = { version = "2", features = ["serde"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { version = "1", features = ["derive"] }
 
 [lints]
 workspace = true

@@ -3,14 +3,22 @@ use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use tracing::info;
 
 pub(crate) mod http;
+#[cfg(feature = "network")]
 pub(crate) mod websocket;
 
 pub fn application_routes(shared_data: &SharedData, config: &Config) -> Router {
     let mut app = Router::new();
 
+    #[cfg(feature = "network")]
     if config.enable_websocket_endpoint {
         info!("Enabling WebSocket Resolver endpoint");
         app = app.route("/ws", get(websocket::websocket_handler));
+    }
+    #[cfg(not(feature = "network"))]
+    if config.enable_websocket_endpoint {
+        info!(
+            "WebSocket Resolver endpoint requested but `network` feature is disabled — skipping /ws"
+        );
     }
 
     if config.enable_http_endpoint {

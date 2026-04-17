@@ -124,7 +124,29 @@ impl AsyncResolver for PkhResolver {
 // ---------------------------------------------------------------------------
 
 /// Resolver for `did:web` — Web DID method.
-pub struct WebResolver;
+///
+/// Backed by [`affinidi_did_web`], which sits on `reqwest 0.13` / `rustls 0.23`
+/// instead of the spruceid `did-web` crate's `reqwest 0.11` / `rustls 0.21`
+/// stack — clearing the rustls-webpki advisories that previously came in
+/// transitively through this resolver.
+pub struct WebResolver {
+    inner: affinidi_did_web::DIDWeb,
+}
+
+impl WebResolver {
+    /// Create a resolver with the default HTTP client.
+    pub fn new() -> Self {
+        Self {
+            inner: affinidi_did_web::DIDWeb::new(),
+        }
+    }
+}
+
+impl Default for WebResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl AsyncResolver for WebResolver {
     fn name(&self) -> &str {
@@ -140,20 +162,9 @@ impl AsyncResolver for WebResolver {
                 return None;
             }
 
-            let method = did_web::DIDWeb;
             let did_str = did.to_string();
-            use ssi_dids_core::DIDResolver;
-            let ssi_did = match ssi_dids_core::DID::new(&did_str) {
-                Ok(d) => d,
-                Err(e) => {
-                    return Some(Err(ResolverError::InvalidDocument(format!(
-                        "Invalid DID: {e}"
-                    ))));
-                }
-            };
-
-            Some(match method.resolve(ssi_did).await {
-                Ok(res) => document_from_ssi_output(res.document.into_document()),
+            Some(match self.inner.resolve(&did_str).await {
+                Ok(doc) => Ok(doc),
                 Err(e) => {
                     error!("did:web resolution error: {e:?}");
                     Err(ResolverError::ResolutionFailed(e.to_string()))

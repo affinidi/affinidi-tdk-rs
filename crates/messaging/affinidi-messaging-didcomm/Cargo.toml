@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.13.1"
+version = "0.13.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -18,12 +18,12 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 
 [dependencies]
 # Crypto — key agreement
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 p256 = { version = "0.13", features = ["ecdh", "jwk"] }
 k256 = { version = "0.13", features = ["ecdh", "jwk"] }
 
 # Crypto — signing
-ed25519-dalek = { version = "2.2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 
 # Crypto — content encryption (A256CBC-HS512) and key wrap (A256KW)
 aes = "0.8"
@@ -32,17 +32,17 @@ hmac = "0.12"
 sha2 = "0.10"
 
 # Encoding / serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-base64ct = { version = "1.6", features = ["alloc"] }
-url = { version = "2.5", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64ct = { version = "1", features = ["alloc"] }
+url = { version = "2", features = ["serde"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 # Misc
-rand_core = { version = "0.6.4", features = ["getrandom"] }
-subtle = "2.6"
-zeroize = { version = "1.8", features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+subtle = "2"
+zeroize = { version = "1", features = ["derive"] }
 
 # Optional — messaging-core trait integration
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }

@@ -14,6 +14,7 @@ members = [
   "crates/identity/did-methods/did-example",
   "crates/identity/did-methods/did-scid",
   "crates/identity/did-methods/did-ebsi",
+  "crates/identity/did-methods/did-web",
   "crates/identity/affinidi-did-resolver-traits",
   "crates/identity/affinidi-did-authentication",
 
@@ -66,7 +67,7 @@ license = "Apache-2.0"
 keywords = ["ssi", "affinidi"]
 repository = "https://github.com/affinidi/affinidi-tdk-rs"
 publish = true
-rust-version = "1.90.0"
+rust-version = "1.94.0"
 
 [workspace.dependencies]
 tokio = "1"
@@ -90,6 +91,7 @@ affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
 affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
+affinidi-did-web = { path = "crates/identity/did-methods/did-web" }
 did-scid = { path = "crates/identity/did-methods/did-scid" }
 
 [workspace.lints.clippy]

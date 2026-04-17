@@ -186,9 +186,15 @@ fn expand_env_vars(raw_config: &Vec<String>) -> Vec<String> {
     result
 }
 
-pub fn init(reload_handle: Option<Handle<LevelFilter, Registry>>) -> Result<Config, CacheError> {
+/// Default config path used when no `-c` flag is supplied.
+pub const DEFAULT_CONFIG_PATH: &str = "conf/cache-conf.toml";
+
+pub fn init(
+    config_path: &str,
+    reload_handle: Option<Handle<LevelFilter, Registry>>,
+) -> Result<Config, CacheError> {
     // Read configuration file parameters
-    let config = read_config_file("conf/cache-conf.toml")?;
+    let config = read_config_file(config_path)?;
 
     // Setup logging
     if let Some(reload_handle) = &reload_handle {
