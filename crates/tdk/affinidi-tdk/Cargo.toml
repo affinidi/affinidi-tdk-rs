@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.6.3"
+version = "0.6.4"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords.workspace = true
 repository.workspace = true
-publish = false
+publish.workspace = true
 rust-version.workspace = true
 
 [features]

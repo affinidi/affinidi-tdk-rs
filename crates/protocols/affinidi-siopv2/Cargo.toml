@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-siopv2"
 description = "Self-Issued OpenID Provider v2 (SIOPv2) for decentralized authentication."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords = ["ssi", "affinidi", "siopv2", "openid", "self-issued"]
 repository.workspace = true
-publish = false
+publish.workspace = true
 rust-version.workspace = true
 
 [[example]]

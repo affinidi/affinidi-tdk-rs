@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-trust-lists"
 description = "EU Trusted Lists (ETSI TS 119 612) for eIDAS 2.0 trust infrastructure."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords = ["ssi", "affinidi", "eidas", "trust-list", "etsi"]
 repository.workspace = true
-publish = false
+publish.workspace = true
 rust-version.workspace = true
 
 [[example]]

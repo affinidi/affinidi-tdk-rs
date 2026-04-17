@@ -65,12 +65,21 @@ Per-crate version history is summarised here; for the full code history see
   feature on the `bls12_381_plus` dependency. No code change; the same
   hash-to-curve primitives are still enabled via `elliptic-curve`'s
   `hash2curve` feature.
-- **`publish = false` sweep** — every workspace crate whose local manifest
-  version already matches the version on crates.io is now explicitly
-  `publish = false`, so the release workflow only uploads the five crates
-  that actually moved this cycle (`affinidi-bbs`,
-  `affinidi-did-resolver-cache-sdk`, `affinidi-did-web`,
-  `affinidi-oid4vc-core`, `affinidi-tsp`).
+- **MSRV + pin-relaxation cascade bump** — every publishable workspace
+  library received a patch version bump (e.g. `affinidi-messaging-sdk
+  0.16.3 → 0.16.4`, `affinidi-tdk 0.6.3 → 0.6.4`, `affinidi-messaging-mediator
+  0.13.0 → 0.13.1`, `affinidi-data-integrity 0.5.0 → 0.5.1`, and so on across
+  all 31 touched libraries) so that downstream consumers receive the new
+  1.94 MSRV floor and the loose pins together instead of on a delayed
+  schedule. The five crates with *material* changes
+  (`affinidi-bbs 0.1.1`, `affinidi-did-resolver-cache-sdk 0.8.5`,
+  `affinidi-did-web 0.1.0`, `affinidi-oid4vc-core 0.1.1`,
+  `affinidi-tsp 0.1.1`) keep their previously-assigned versions.
+- **`affinidi-did-resolver-cache-server` 0.7.2 → 0.7.3** — publish flipped
+  back on (was `publish = false` historically; the binary is now
+  distributed via crates.io so operators can `cargo install` it).
+- **Still `publish = false`**: `affinidi-messaging-helpers` and
+  `affinidi-messaging-text-client`, which are repo-internal utilities.
 
 ### Notes
 

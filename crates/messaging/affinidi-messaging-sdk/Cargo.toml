@@ -1,12 +1,12 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.16.3"
+version = "0.16.4"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-publish = false
+publish.workspace = true
 license.workspace = true
 readme = "README.md"
 rust-version.workspace = true

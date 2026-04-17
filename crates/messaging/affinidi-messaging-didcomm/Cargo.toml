@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.13.1"
+version = "0.13.2"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords.workspace = true
 repository.workspace = true
-publish = false
+publish.workspace = true
 rust-version.workspace = true
 
 [features]

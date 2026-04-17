@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-openid4vp"
 description = "OpenID for Verifiable Presentations (OpenID4VP) implementation."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords = ["ssi", "affinidi", "openid4vp", "presentations"]
 repository.workspace = true
-publish = false
+publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]

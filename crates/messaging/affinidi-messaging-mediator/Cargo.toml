@@ -1,12 +1,12 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.13.0"
+version = "0.13.1"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-publish = false
+publish.workspace = true
 license.workspace = true
 readme = "README.md"
 rust-version.workspace = true
