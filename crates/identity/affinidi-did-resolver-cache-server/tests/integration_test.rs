@@ -1,3 +1,8 @@
+// The integration test exercises the WebSocket transport via the cache-sdk's
+// `network` mode, which is only available when the server is built with the
+// `network` feature. Skip the whole module under `--no-default-features`.
+#![cfg(feature = "network")]
+
 use affinidi_did_common::{
     DID as DIDCommon, Document, PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint,
     PeerServiceEndpointLong, one_or_many::OneOrMany,
