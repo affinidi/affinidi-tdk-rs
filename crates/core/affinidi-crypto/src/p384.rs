@@ -6,7 +6,7 @@ use p384::{
     ecdsa::{SigningKey, VerifyingKey},
     elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint},
 };
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 
 use crate::{CryptoError, ECParams, JWK, KeyType, Params, error::Result};
 
@@ -17,6 +17,13 @@ pub struct KeyPair {
     pub private_bytes: Vec<u8>,
     pub public_bytes: Vec<u8>,
     pub jwk: JWK,
+}
+
+/// Generates a random P-384 key pair using the OS RNG.
+///
+/// This is the infallible counterpart to [`generate`] when no seed is needed.
+pub fn generate_random() -> KeyPair {
+    generate(None).expect("generate(None) is infallible")
 }
 
 /// Generates a P-384 key pair

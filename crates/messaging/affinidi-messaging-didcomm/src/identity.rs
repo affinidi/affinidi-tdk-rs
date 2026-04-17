@@ -29,7 +29,7 @@ impl PrivateIdentity {
         let sig_kid = format!("{did}#key-signing-1");
 
         let ka_private = PrivateKeyAgreement::generate(Curve::X25519);
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
 
         Self {
             did,
@@ -47,7 +47,7 @@ impl PrivateIdentity {
         let sig_kid = format!("{did}#key-signing-1");
 
         let ka_private = PrivateKeyAgreement::generate(curve);
-        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
 
         Self {
             did,

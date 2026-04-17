@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn unpack_signed() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
         let pk = sk.verifying_key().to_bytes();
 
         let msg = Message::new("test", serde_json::json!({}));

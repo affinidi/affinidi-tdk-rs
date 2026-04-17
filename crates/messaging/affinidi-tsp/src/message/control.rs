@@ -3,7 +3,7 @@
 //! Control messages are sent as TSP message payloads with message type `Control`.
 //! They manage the explicit relationship lifecycle that distinguishes TSP from DIDComm.
 
-use rand::RngCore;
+use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::error::TspError;
@@ -11,7 +11,7 @@ use crate::error::TspError;
 /// Generate a cryptographically random 16-byte nonce.
 pub fn generate_nonce() -> [u8; 16] {
     let mut nonce = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut nonce);
+    rand_core::OsRng.fill_bytes(&mut nonce);
     nonce
 }
 

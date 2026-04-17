@@ -33,7 +33,7 @@ pub fn public_key_from_private(private_key: &[u8; 32]) -> [u8; 32] {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
+    use rand_core::OsRng;
 
     #[test]
     fn sign_verify_roundtrip() {

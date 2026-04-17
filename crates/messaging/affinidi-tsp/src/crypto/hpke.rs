@@ -7,7 +7,7 @@
 
 use aes_gcm::{AeadInPlace, Aes128Gcm, KeyInit, aead::generic_array::GenericArray};
 use hkdf::Hkdf;
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
