@@ -6,7 +6,7 @@ edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
 keywords.workspace = true
-publish.workspace = true
+publish = false
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
@@ -14,10 +14,10 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-did-common = "0.3"
-thiserror = "2.0"
+thiserror = "2"
 
 [dev-dependencies]
-tokio = { version = "1.49", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true

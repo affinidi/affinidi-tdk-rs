@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = false
 rust-version.workspace = true
 
 [dependencies]
@@ -22,9 +22,9 @@ affinidi-encoding = "0.1"
 base64 = "0.22"
 chrono = "0.4"
 reqwest = { version = "0.13", features = ["rustls", "json"] }
-serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
-thiserror = "2.0"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
 tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"
-uuid = { version = "1.20", features = ["v4", "fast-rng"] }
+uuid = { version = "1", features = ["v4", "fast-rng"] }

@@ -9,7 +9,7 @@ homepage.workspace = true
 license.workspace = true
 keywords = ["ssi", "ATM", "affinidi", "DIDComm"]
 repository.workspace = true
-publish.workspace = true
+publish = false
 rust-version.workspace = true
 
 [dependencies]
@@ -22,16 +22,16 @@ affinidi-did-common = "0.3"
 base64 = "0.22"
 chrono = "0.4"
 reqwest = { version = "0.13", features = ["rustls", "json"] }
-serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
-thiserror = "2.0"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
 tracing = "0.1"
-uuid = { version = "1.22", features = ["v4", "fast-rng"] }
+uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-secrets-resolver = "0.5"
 
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",

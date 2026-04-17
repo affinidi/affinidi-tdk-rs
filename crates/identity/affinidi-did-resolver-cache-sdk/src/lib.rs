@@ -472,7 +472,7 @@ impl DIDCacheClient {
         resolvers
             .entry(MethodName::Web)
             .or_default()
-            .push_back(Box::new(network_resolvers::WebResolver));
+            .push_back(Box::new(network_resolvers::WebResolver::new()));
         #[cfg(feature = "did-jwk")]
         resolvers
             .entry(MethodName::Jwk)
