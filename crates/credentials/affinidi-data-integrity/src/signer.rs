@@ -23,6 +23,7 @@
 use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 use async_trait::async_trait;
 use ed25519_dalek::{SigningKey, ed25519::signature::SignerMut};
+use zeroize::Zeroizing;
 
 use crate::DataIntegrityError;
 use crate::crypto_suites::CryptoSuite;
@@ -94,14 +95,17 @@ impl Signer for Secret {
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
         match self.get_key_type() {
             KeyType::Ed25519 => {
-                let private_bytes: [u8; 32] =
-                    self.get_private_bytes().try_into().map_err(|_| {
+                // Wrap the stack copy in Zeroizing so it clears on
+                // scope exit — matters for HSM-less deployments where
+                // Secret's private_bytes is the only key material.
+                let private_bytes: Zeroizing<[u8; 32]> =
+                    Zeroizing::new(self.get_private_bytes().try_into().map_err(|_| {
                         DataIntegrityError::InvalidPublicKey {
                             codec: None,
                             len: self.get_private_bytes().len(),
                             reason: "Ed25519 private key must be exactly 32 bytes".to_string(),
                         }
-                    })?;
+                    })?);
                 let mut signing_key = SigningKey::from_bytes(&private_bytes);
                 Ok(signing_key.sign(data).to_vec())
             }

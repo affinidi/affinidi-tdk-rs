@@ -37,6 +37,9 @@ pub fn generate_ml_dsa_44(seed: Option<&[u8; 32]>) -> KeyPair {
     let xi = seed_from(seed);
     let sk = <MlDsa44 as KeyGen>::from_seed(&xi);
     let vk_bytes: &[u8] = &sk.verifying_key().encode();
+    // The caller is expected to move the returned private_bytes into a
+    // ZeroizeOnDrop container (e.g. `Secret`) for proper cleanup. `xi`
+    // itself is zeroized on drop via the ml-dsa `zeroize` feature.
     KeyPair {
         key_type: KeyType::MlDsa44,
         private_bytes: AsRef::<[u8]>::as_ref(&xi).to_vec(),
@@ -75,9 +78,75 @@ fn seed_to_b32(seed: &[u8]) -> Result<B32> {
             seed.len()
         )));
     }
-    let mut arr = [0u8; 32];
+    // Stack-local copy is wiped on scope exit via Zeroizing; the final
+    // `B32` returned from ml-dsa is also zeroized on drop thanks to the
+    // `zeroize` feature we enable in affinidi-crypto's Cargo.toml.
+    let mut arr: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new([0u8; 32]);
     arr.copy_from_slice(seed);
-    Ok(B32::from(arr))
+    Ok(B32::from(*arr))
+}
+
+/// Pre-expanded ML-DSA signing key.
+///
+/// Calling `sign_ml_dsa_44(seed, msg)` re-expands the matrix `A_hat` on
+/// every call (≈ 80-100µs for ML-DSA-44, more for 65/87). An issuer
+/// signing thousands of credentials can cache the expanded key once and
+/// reuse it; this enum is the cache-friendly representation.
+///
+/// Wrap the resulting key in a [`zeroize::Zeroizing`] if you need the
+/// sensitive material cleared on drop — the ml-dsa crate zeroizes its
+/// internals by default, but the `Vec` / enum wrapper does not
+/// automatically.
+pub enum MlDsaExpandedKey {
+    MlDsa44(ml_dsa::SigningKey<MlDsa44>),
+    MlDsa65(ml_dsa::SigningKey<MlDsa65>),
+    MlDsa87(ml_dsa::SigningKey<MlDsa87>),
+}
+
+impl MlDsaExpandedKey {
+    /// Expands a seed for the given ML-DSA variant. The returned key
+    /// can be reused across many `sign` calls without re-expanding.
+    pub fn from_seed(key_type: KeyType, seed: &[u8]) -> Result<Self> {
+        let xi = seed_to_b32(seed)?;
+        match key_type {
+            KeyType::MlDsa44 => Ok(Self::MlDsa44(<MlDsa44 as KeyGen>::from_seed(&xi))),
+            KeyType::MlDsa65 => Ok(Self::MlDsa65(<MlDsa65 as KeyGen>::from_seed(&xi))),
+            KeyType::MlDsa87 => Ok(Self::MlDsa87(<MlDsa87 as KeyGen>::from_seed(&xi))),
+            other => Err(CryptoError::UnsupportedKeyType(format!(
+                "MlDsaExpandedKey::from_seed called with non-ML-DSA key type {other:?}"
+            ))),
+        }
+    }
+
+    /// Signs `data` with the already-expanded key.
+    pub fn sign(&self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::MlDsa44(sk) => {
+                let sig: Signature<MlDsa44> = sk.sign(data);
+                let bytes: &[u8] = &sig.encode();
+                bytes.to_vec()
+            }
+            Self::MlDsa65(sk) => {
+                let sig: Signature<MlDsa65> = sk.sign(data);
+                let bytes: &[u8] = &sig.encode();
+                bytes.to_vec()
+            }
+            Self::MlDsa87(sk) => {
+                let sig: Signature<MlDsa87> = sk.sign(data);
+                let bytes: &[u8] = &sig.encode();
+                bytes.to_vec()
+            }
+        }
+    }
+
+    /// The key type represented by this expanded key.
+    pub fn key_type(&self) -> KeyType {
+        match self {
+            Self::MlDsa44(_) => KeyType::MlDsa44,
+            Self::MlDsa65(_) => KeyType::MlDsa65,
+            Self::MlDsa87(_) => KeyType::MlDsa87,
+        }
+    }
 }
 
 /// Signs `data` with ML-DSA-44, given a 32-byte seed.

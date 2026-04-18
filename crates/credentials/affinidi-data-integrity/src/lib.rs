@@ -78,12 +78,21 @@ use sha2::{Digest, Sha256};
 use signer::Signer;
 use tracing::debug;
 
+pub mod caching_signer;
+pub mod conformance;
 pub mod crypto_suites;
+pub mod did_vm;
 pub mod error;
+pub mod multi;
 pub mod options;
 pub mod signer;
 pub mod suite_ops;
 pub mod verification_proof;
+
+pub use caching_signer::{CachingSigner, GetPrivateBytes};
+pub use conformance::verify_conformance;
+pub use did_vm::{DidKeyResolver, ResolvedKey, VerificationMethodResolver};
+pub use multi::{MultiVerifyResult, VerifyPolicy, verify_multi};
 
 /// BBS-2023 Data Integrity Cryptosuite for zero-knowledge selective disclosure.
 ///
@@ -200,6 +209,47 @@ impl DataIntegrityProof {
         S: Serialize,
     {
         verify_proof_internal(self, data_doc, public_key_bytes, &options)
+    }
+
+    /// Verifies a proof by resolving the public key from its
+    /// `verificationMethod` via a [`VerificationMethodResolver`].
+    ///
+    /// Use [`did_vm::DidKeyResolver`] for `did:key:` URIs (no I/O); plug
+    /// in a custom resolver for `did:web`, `did:webvh`, or any other
+    /// method. The library also checks that the resolved key's
+    /// [`KeyType`] matches the proof's cryptosuite — a cheap guard
+    /// against "right proof, wrong key" class bugs.
+    ///
+    /// Async because typical resolvers perform I/O (HTTP, cache lookups,
+    /// HSM introspection).
+    ///
+    /// [`KeyType`]: affinidi_secrets_resolver::secrets::KeyType
+    #[must_use = "ignoring a verification result is a security bug"]
+    pub async fn verify<S, R>(
+        &self,
+        data_doc: &S,
+        resolver: &R,
+        options: VerifyOptions,
+    ) -> Result<(), DataIntegrityError>
+    where
+        S: Serialize + Sync,
+        R: VerificationMethodResolver + ?Sized,
+    {
+        let resolved = resolver.resolve_vm(&self.verification_method).await?;
+
+        // Belt-and-braces key-type check. The CryptoSuiteOps verify will
+        // fail on a mismatched key anyway, but a typed error here is
+        // clearer to callers and saves the canonicalization work.
+        let compatible = self.cryptosuite.compatible_key_types();
+        if !compatible.is_empty() && !compatible.contains(&resolved.key_type) {
+            return Err(DataIntegrityError::KeyTypeMismatch {
+                expected: compatible.first().copied().unwrap_or_default(),
+                actual: resolved.key_type,
+                suite: self.cryptosuite,
+            });
+        }
+
+        verify_proof_internal(self, data_doc, &resolved.public_key_bytes, &options)
     }
 
     // ---- Deprecated legacy entry points ----
@@ -632,6 +682,48 @@ mod tests {
             output.as_str(),
             "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c7521b4f0e9851971998e732078544c96b36c3d01cedf7caa332359d6f1d83567014",
         );
+    }
+
+    #[tokio::test]
+    async fn sign_and_verify_via_did_key_resolver_ed25519() {
+        use crate::{DidKeyResolver, VerifyOptions};
+
+        let secret = Secret::generate_ed25519(None, Some(&[11u8; 32]));
+        let pk_mb = secret.get_public_keymultibase().unwrap();
+        // Use the library-built VM URI so the resolver can find the key.
+        let mut signer_secret = secret.clone();
+        signer_secret.id = format!("did:key:{pk_mb}#{pk_mb}");
+
+        let doc = json!({ "hello": "did:key" });
+        let proof = DataIntegrityProof::sign(&doc, &signer_secret, SignOptions::new())
+            .await
+            .expect("sign");
+
+        proof
+            .verify(&doc, &DidKeyResolver, VerifyOptions::new())
+            .await
+            .expect("verify via resolver");
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[tokio::test]
+    async fn sign_and_verify_via_did_key_resolver_ml_dsa() {
+        use crate::{DidKeyResolver, VerifyOptions};
+
+        let secret = Secret::generate_ml_dsa_44(None, Some(&[21u8; 32]));
+        let pk_mb = secret.get_public_keymultibase().unwrap();
+        let mut signer_secret = secret.clone();
+        signer_secret.id = format!("did:key:{pk_mb}#{pk_mb}");
+
+        let doc = json!({ "pqc": "did:key" });
+        let proof = DataIntegrityProof::sign(&doc, &signer_secret, SignOptions::new())
+            .await
+            .expect("sign");
+
+        proof
+            .verify(&doc, &DidKeyResolver, VerifyOptions::new())
+            .await
+            .expect("verify via resolver");
     }
 
     #[tokio::test]

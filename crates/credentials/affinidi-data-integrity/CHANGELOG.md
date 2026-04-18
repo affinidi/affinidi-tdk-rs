@@ -1,5 +1,136 @@
 # Affinidi Data Integrity Changelog
 
+## 18th April 2026 Release 0.5.4
+
+Large refactor for production-grade ergonomics. Contains multiple
+**breaking** API changes that are acceptable under pre-1.0 minor-version
+semantics. No wire-format changes, existing proofs still verify.
+Version stays at 0.5.x in this release so downstream consumers
+(didwebvh-rs 0.4.x, affinidi-tdk 0.6.x on crates.io) can continue to
+resolve the workspace until they migrate; a 0.6.x bump is tracked for a
+follow-up release once those consumers have updated.
+
+### Post-quantum cryptography (experimental)
+
+- **FEATURE:** `post-quantum` feature flag (off by default), umbrella for
+  `ml-dsa` and `slh-dsa` sub-flags. Enables four new cryptosuites from
+  W3C `di-quantum-safe` v0.3:
+  - `mldsa44-jcs-2024`, `mldsa44-rdfc-2024` (ML-DSA-44 / FIPS 204)
+  - `slhdsa128-jcs-2024`, `slhdsa128-rdfc-2024` (SLH-DSA-SHA2-128s / FIPS 205)
+- **FEATURE:** NIST ACVP known-answer vectors pin full SHA-256 of expected
+  public keys for ML-DSA-{44,65,87}; SLH-DSA-SHA2-128s full KAT.
+- **FEATURE:** Official multicodec registry values used throughout
+  (ML-DSA-44 priv-seed `0x131a`, etc.).
+
+### Unified sign/verify API
+
+- **BREAKING:** New `DataIntegrityProof::sign(doc, signer, SignOptions)`
+  entry point replaces the four-way
+  `sign_jcs_data` / `sign_jcs_data_with_suite` / `sign_rdfc_data` /
+  `sign_rdfc_data_with_suite` matrix. Canonicalization is derived from
+  the cryptosuite; the signer picks the default cryptosuite via the new
+  `Signer::cryptosuite()` default method.
+- **BREAKING:** New `DataIntegrityProof::verify_with_public_key(doc, pk, VerifyOptions)`
+  method — sync, returns `Result<(), DataIntegrityError>`, replaces the
+  top-level `verify_data_with_public_key` function.
+- **FEATURE:** New `DataIntegrityProof::verify(doc, resolver, VerifyOptions)`
+  async method — resolves the verification method via
+  `VerificationMethodResolver`. Ships with a no-I/O `DidKeyResolver` for
+  `did:key:` URIs.
+- **DEPRECATED:** Old `sign_jcs_data*` / `sign_rdfc_data*` methods and
+  `verify_data_with_public_key` function, kept as thin wrappers for one
+  minor version.
+
+### Options and error types
+
+- **FEATURE:** `SignOptions` and `VerifyOptions` with hand-rolled `with_*`
+  builders (no extra deps). Both are `#[non_exhaustive]` — new fields
+  ship as additive minor releases.
+- **BREAKING:** `DataIntegrityError` gained structured variants:
+  `UnsupportedCryptoSuite`, `KeyTypeMismatch`, `InvalidSignature` (+
+  `SignatureFailure::{Malformed, Invalid}`), `InvalidPublicKey`,
+  `Canonicalization`, `MalformedProof`, `Conformance`, `Signing` (wraps
+  arbitrary source errors), `Resolver`. The old string-payload variants
+  (`InputDataError`, `CryptoError`, `SecretsError`, `VerificationError`,
+  `RdfEncodingError`) are kept as `#[deprecated]`.
+- **BREAKING:** `DataIntegrityError`, `CryptoSuite`, and `KeyType` are
+  now `#[non_exhaustive]`.
+
+### Extensibility
+
+- **FEATURE:** `CryptoSuiteOps` trait with per-cryptosuite ZST impls in
+  `suite_ops.rs`. Adding a new cryptosuite is now one trait impl + one
+  enum variant + one match arm (down from ~5 scattered match arms in
+  0.5). No runtime registry; static dispatch via `&'static dyn`.
+- **FEATURE:** `Canonicalization` enum (`Jcs`, `Rdfc`, `Custom`) for
+  future non-JCS/non-RDFC suites.
+- **FEATURE:** `CryptoSuite::compatible_key_types()`,
+  `CryptoSuite::default_for_key_type(key_type)`, and `Display` impl
+  so downstream UI / key-generation flows don't re-match on suite names.
+
+### Multi-proof / hybrid migration
+
+- **FEATURE:** `DataIntegrityProof::sign_multi(doc, &[&dyn Signer], opts)`
+  emits one proof per signer, fail-fast on any error. Intended for
+  Ed25519 + ML-DSA hybrid signing during PQC migration.
+- **FEATURE:** `verify_multi(proofs, doc, resolver, opts, policy)` with
+  `VerifyPolicy::{RequireAll, RequireAny, RequireThreshold(n)}`. Returns
+  a `MultiVerifyResult` with per-proof outcomes and the policy decision.
+
+### Remote-signer support
+
+- **FEATURE:** `prepare_sign_input(doc, proof_config, suite) -> Vec<u8>`
+  returns the exact bytes a remote signer must sign — for KMS/HSM
+  integrations that hash out-of-band.
+- **FEATURE:** `examples/remote_signer_ed25519.rs` and
+  `examples/remote_signer_ml_dsa.rs` — worked examples with a mock
+  backend showing the Signer trait implementation pattern.
+
+### Performance
+
+- **FEATURE:** `CachingSigner<S: Signer>` wrapper caches the expanded
+  ML-DSA signing key. Benchmarks show ~33% sign-latency reduction for
+  ML-DSA-44 on cached paths (365 µs → 248 µs). No-op for Ed25519 and
+  SLH-DSA.
+- **FEATURE:** `MlDsaExpandedKey` in `affinidi-crypto` exposes the
+  pre-expanded primitive for custom caching strategies.
+
+### Spec conformance and regression testing
+
+- **FEATURE:** `verify_conformance(proof, expected_suite)` checks proof
+  shape against the spec (type, cryptosuite, proofPurpose,
+  verificationMethod, proofValue decodability, `created` format and
+  sanity) — independent of cryptographic verification. Catches
+  malformed-but-cryptographically-valid cross-implementation bugs.
+- **FEATURE:** `tests/fixtures/` with pinned deterministic proof outputs
+  per supported suite. Regression test re-signs with stored inputs and
+  asserts byte-for-byte equality. Regenerate with
+  `AFFINIDI_DATA_INTEGRITY_REGEN_FIXTURES=1`.
+
+### DID method helpers
+
+- **FEATURE:** `did_vm` module with `VerificationMethodResolver` trait,
+  `ResolvedKey` struct, and `DidKeyResolver` (handles `did:key:` with
+  no I/O, supporting all enabled multicodec prefixes including ML-DSA
+  and SLH-DSA).
+
+### Security hardening
+
+- **FEATURE:** `#[must_use = "ignoring a verification result is a security bug"]`
+  on `Signer::sign`, `DataIntegrityProof::verify_with_public_key`, and
+  `DataIntegrityProof::verify`.
+- **FEATURE:** Zeroize coverage — `ml-dsa` and `slh-dsa` built with
+  their `zeroize` features, `Zeroizing<>` wraps for intermediate stack
+  copies of private key material.
+- **FEATURE:** Panic audit — all `.unwrap()` / `.expect()` outside
+  `#[cfg(test)]` are bounded-and-documented or removed.
+- **FEATURE:** All signing deterministic across Ed25519, ML-DSA, SLH-DSA.
+  Regression tests pin identical outputs for identical inputs.
+
+### Migration guide
+
+See the README for a 0.5 → 0.6 call-site migration table.
+
 ## 12th March 2026 Release 0.5.0
 
 - **BREAKING:** Signing methods (`sign_jcs_data`, `sign_rdfc_data`) are now `async`
