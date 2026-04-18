@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 18th April 2026
+
+### DID Resolver Cache SDK (0.8.6)
+
+- **CHANGED:** Bumped `didwebvh-rs` dependency from `0.4` to `0.5`. Public
+  resolver API unchanged; enables the `data-integrity 0.5.4` migration
+  downstream.
+
 ## 17th April 2026
 
 ### DID Resolver Cache SDK (0.8.5)

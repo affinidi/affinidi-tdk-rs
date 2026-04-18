@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 18th April 2026
+
+### 0.13.2
+
+- **CHANGED:** Bumped `didwebvh-rs` dependency from `0.4` to `0.5` for the
+  data-integrity API refactor and PQC support in `affinidi-data-integrity 0.5.4`.
+  No behavioural change to the mediator — wire format is unchanged.
+
 ## 15th April 2026
 
 - **DOC:** Added README section on running without a secure credential store
