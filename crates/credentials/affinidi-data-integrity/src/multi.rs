@@ -122,6 +122,16 @@ impl DataIntegrityProof {
             ));
         }
 
+        // Pin `created` once for the whole batch so every emitted proof
+        // carries an identical timestamp. Without this, the first signer
+        // might run at t0 and the last at t0+~ms, producing proofs with
+        // different `created` fields — surprising for callers that do
+        // byte-exact interop.
+        let mut options = options;
+        if options.created.is_none() {
+            options.created = Some(chrono::Utc::now());
+        }
+
         let mut proofs = Vec::with_capacity(signers.len());
         for signer in signers {
             let proof = DataIntegrityProof::sign(data_doc, *signer, options.clone()).await?;
@@ -197,6 +207,22 @@ mod tests {
         let mut s = secret.clone();
         s.id = format!("did:key:{pk_mb}#{pk_mb}");
         s
+    }
+
+    #[tokio::test]
+    async fn sign_multi_pins_created_across_batch() {
+        // Without an explicit `created` in options, sign_multi still
+        // emits the same timestamp on every proof. Guards against
+        // timestamp drift from sequential Utc::now() calls.
+        let a = make_signer("ed25519", 10);
+        let b = make_signer("ed25519", 11);
+        let signers: Vec<&dyn Signer> = vec![&a, &b];
+        let doc = json!({"pin": "created"});
+        let proofs = DataIntegrityProof::sign_multi(&doc, &signers, SignOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(proofs.len(), 2);
+        assert_eq!(proofs[0].created, proofs[1].created);
     }
 
     #[tokio::test]

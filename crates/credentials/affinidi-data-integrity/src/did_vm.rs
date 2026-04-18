@@ -25,11 +25,26 @@ use async_trait::async_trait;
 use crate::DataIntegrityError;
 
 /// Decoded public key material from a verification method.
+///
+/// Construct via [`ResolvedKey::new`] to stay forward-compatible with
+/// future fields. Direct struct-literal construction is blocked by
+/// `#[non_exhaustive]`.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ResolvedKey {
     pub key_type: KeyType,
     pub public_key_bytes: Vec<u8>,
+}
+
+impl ResolvedKey {
+    /// Constructs a `ResolvedKey` for custom
+    /// [`VerificationMethodResolver`] implementations.
+    pub fn new(key_type: KeyType, public_key_bytes: Vec<u8>) -> Self {
+        Self {
+            key_type,
+            public_key_bytes,
+        }
+    }
 }
 
 /// Resolves a verification-method URI to its public key.

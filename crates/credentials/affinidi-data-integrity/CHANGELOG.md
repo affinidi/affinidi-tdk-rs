@@ -127,6 +127,15 @@ follow-up release once those consumers have updated.
 - **FEATURE:** All signing deterministic across Ed25519, ML-DSA, SLH-DSA.
   Regression tests pin identical outputs for identical inputs.
 
+### Deprecation schedule
+
+Deprecated APIs (`sign_jcs_data`, `sign_jcs_data_with_suite`,
+`sign_rdfc_data`, `sign_rdfc_data_with_suite`,
+`verify_data_with_public_key`, plus the string-payload
+`DataIntegrityError::{InputDataError, CryptoError, SecretsError,
+VerificationError, RdfEncodingError}` variants) are kept as
+`#[deprecated]` thin wrappers. **Planned removal in 0.6.0**.
+
 ### Migration guide
 
 See the README for a 0.5 → 0.6 call-site migration table.

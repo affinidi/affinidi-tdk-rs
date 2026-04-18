@@ -12,7 +12,12 @@ use crate::CryptoError;
 /// This enum is `#[non_exhaustive]`: new algorithms (hybrid schemes, future
 /// NIST standards, vendor-specific key types) will be added in minor
 /// releases without breaking match-all arms.
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Zeroize)]
+///
+/// No `Default` impl is provided on purpose: a key without a known
+/// algorithm is a programming error in this crate, not a sensible
+/// default state. `KeyType::Unknown` exists for parsing paths that
+/// receive an unrecognised curve or codec identifier.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Zeroize)]
 #[non_exhaustive]
 pub enum KeyType {
     Ed25519,
@@ -33,7 +38,8 @@ pub enum KeyType {
     /// SLH-DSA-SHA2-128s (FIPS 205) — stateless hash-based post-quantum signature.
     #[cfg(feature = "slh-dsa")]
     SlhDsaSha2_128s,
-    #[default]
+    /// Unrecognised or unsupported key type. Produced by parsing paths
+    /// on unknown curve identifiers; should never be constructed directly.
     Unknown,
 }
 

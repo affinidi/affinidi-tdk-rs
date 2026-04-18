@@ -29,7 +29,7 @@ ML-DSA-44 or SLH-DSA-SHA2-128s:
 
 ```ignore
 [dependencies]
-affinidi-data-integrity = { version = "0.6", features = ["post-quantum"] }
+affinidi-data-integrity = { version = "0.5", features = ["post-quantum"] }
 ```
 
 Then generate a PQC key — the library selects `mldsa44-jcs-2024` or
@@ -147,7 +147,7 @@ impl DataIntegrityProof {
                     .compatible_key_types()
                     .first()
                     .copied()
-                    .unwrap_or_default(),
+                    .unwrap_or(affinidi_secrets_resolver::secrets::KeyType::Unknown),
                 actual: signer.key_type(),
                 suite: crypto_suite,
             })?;
@@ -237,7 +237,10 @@ impl DataIntegrityProof {
         let compatible = self.cryptosuite.compatible_key_types();
         if !compatible.is_empty() && !compatible.contains(&resolved.key_type) {
             return Err(DataIntegrityError::KeyTypeMismatch {
-                expected: compatible.first().copied().unwrap_or_default(),
+                expected: compatible
+                    .first()
+                    .copied()
+                    .unwrap_or(affinidi_secrets_resolver::secrets::KeyType::Unknown),
                 actual: resolved.key_type,
                 suite: self.cryptosuite,
             });
@@ -410,7 +413,7 @@ where
         .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
     debug!("Proof options (JCS): {}", proof_jcs);
 
-    let hash_data = hashing_eddsa_jcs(&jcs, &proof_jcs);
+    let hash_data = hashing_jcs(&jcs, &proof_jcs);
     let signed = signer.sign(&hash_data).await?;
     proof_options.proof_value = Some(multibase::encode(Base::Base58Btc, &signed));
 
@@ -469,7 +472,7 @@ where
         DataIntegrityError::Canonicalization(format!("proof config serialize: {e}"))
     })?;
 
-    let hash_data = hashing_eddsa_rdfc(&doc_value, &proof_value)?;
+    let hash_data = hashing_rdfc(&doc_value, &proof_value)?;
     let signed = signer.sign(&hash_data).await?;
     proof_options.proof_value = Some(multibase::encode(Base::Base58Btc, &signed));
 
@@ -549,7 +552,7 @@ where
         let proof_value_json = serde_json::to_value(&proof_config).map_err(|e| {
             DataIntegrityError::Canonicalization(format!("proof config serialize: {e}"))
         })?;
-        hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
+        hashing_rdfc(&doc_value, &proof_value_json)?
     } else {
         #[cfg(feature = "bbs-2023")]
         if matches!(proof_config.cryptosuite, CryptoSuite::Bbs2023) {
@@ -561,7 +564,7 @@ where
             .map_err(|e| DataIntegrityError::Canonicalization(format!("document: {e}")))?;
         let jcs_proof_config = to_string(&proof_config)
             .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
-        hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config)
+        hashing_jcs(&jcs_doc, &jcs_proof_config)
     };
 
     proof_config
@@ -574,7 +577,7 @@ where
 // -----------------------------------------------------------------------
 
 /// Hashing Algorithm for EDDSA JCS
-fn hashing_eddsa_jcs(transformed_document: &str, canonical_proof_config: &str) -> Vec<u8> {
+fn hashing_jcs(transformed_document: &str, canonical_proof_config: &str) -> Vec<u8> {
     [
         Sha256::digest(canonical_proof_config),
         Sha256::digest(transformed_document),
@@ -586,7 +589,7 @@ fn hashing_eddsa_jcs(transformed_document: &str, canonical_proof_config: &str) -
 /// Runs both document and proof config through the RDFC pipeline
 /// (JSON-LD expansion → RDF Dataset → RDFC-1.0 canonicalization → SHA-256)
 /// and concatenates the two 32-byte hashes.
-fn hashing_eddsa_rdfc(
+fn hashing_rdfc(
     document: &serde_json::Value,
     proof_config: &serde_json::Value,
 ) -> Result<Vec<u8>, DataIntegrityError> {
@@ -633,13 +636,13 @@ where
         let proof_value = serde_json::to_value(proof_config).map_err(|e| {
             DataIntegrityError::Canonicalization(format!("proof config serialize: {e}"))
         })?;
-        hashing_eddsa_rdfc(&doc_value, &proof_value)
+        hashing_rdfc(&doc_value, &proof_value)
     } else {
         let jcs_doc = to_string(data_doc)
             .map_err(|e| DataIntegrityError::Canonicalization(format!("document: {e}")))?;
         let jcs_proof = to_string(proof_config)
             .map_err(|e| DataIntegrityError::Canonicalization(format!("proof config: {e}")))?;
-        Ok(hashing_eddsa_jcs(&jcs_doc, &jcs_proof))
+        Ok(hashing_jcs(&jcs_doc, &jcs_proof))
     }
 }
 
@@ -669,11 +672,11 @@ mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::json;
 
-    use crate::{DataIntegrityProof, SignOptions, VerifyOptions, hashing_eddsa_jcs};
+    use crate::{DataIntegrityProof, SignOptions, VerifyOptions, hashing_jcs};
 
     #[test]
     fn hashing_working() {
-        let hash = hashing_eddsa_jcs("test1", "test2");
+        let hash = hashing_jcs("test1", "test2");
         let mut output = String::new();
         for x in hash {
             output.push_str(&format!("{x:02x}"));

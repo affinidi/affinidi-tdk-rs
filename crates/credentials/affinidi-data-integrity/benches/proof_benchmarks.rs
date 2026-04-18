@@ -68,10 +68,12 @@ fn suites_enabled() -> Vec<(CryptoSuite, &'static str)> {
     #[cfg(feature = "slh-dsa")]
     {
         out.push((CryptoSuite::SlhDsa128Jcs2024, "slhdsa128-jcs-2024"));
-        // slhdsa128-rdfc-2024 takes a very long time (tens of ms) —
-        // skip the RDFC variant in the default bench group so the full
-        // run doesn't stretch to half an hour. Users who want it can
-        // add it manually.
+        // slhdsa128-rdfc-2024 sign is dominated by the SLH-DSA signature
+        // (~117 ms on Apple M4 Pro) plus the RDFC expansion. With the
+        // default criterion sample_size=100 the bench group would take
+        // ~15 minutes — skip by default. Uncomment the push below for
+        // local deep-dive runs.
+        // out.push((CryptoSuite::SlhDsa128Rdfc2024, "slhdsa128-rdfc-2024"));
     }
     out
 }

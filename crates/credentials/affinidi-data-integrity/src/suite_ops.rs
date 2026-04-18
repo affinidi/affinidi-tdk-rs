@@ -19,6 +19,17 @@ use crate::DataIntegrityError;
 use crate::crypto_suites::CryptoSuite;
 
 /// Canonicalization algorithm used by a cryptosuite.
+///
+/// `Custom` is a marker variant: cryptosuites that do canonicalization
+/// out-of-band (BBS-2023's selective-disclosure pipeline is the only
+/// current example) use it to signal "don't route through the standard
+/// JCS/RDFC hash-then-sign path." The per-suite [`CryptoSuiteOps`]
+/// implementation is expected to handle verification itself.
+///
+/// Future non-JCS/non-RDFC suites (COSE, CBOR-based schemes) may
+/// warrant a callback-based variant; at that point this enum will gain
+/// a `Callback(...)` arm. The `#[non_exhaustive]` attribute makes that
+/// additive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Canonicalization {

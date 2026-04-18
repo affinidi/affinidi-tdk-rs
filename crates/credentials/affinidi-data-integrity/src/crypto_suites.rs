@@ -125,7 +125,7 @@ impl CryptoSuite {
             Ok(())
         } else {
             Err(DataIntegrityError::KeyTypeMismatch {
-                expected: compatible.first().copied().unwrap_or_default(),
+                expected: compatible.first().copied().unwrap_or(KeyType::Unknown),
                 actual: key_type,
                 suite: *self,
             })

@@ -23,7 +23,7 @@ post-quantum (ML-DSA, SLH-DSA) algorithms.
 |---|---|---|---|---|
 | `eddsa-jcs-2022` | Ed25519 | JCS (RFC 8785) | (default) | W3C Rec |
 | `eddsa-rdfc-2022` | Ed25519 | RDFC-1.0 (URDNA2015) | (default) | W3C Rec |
-| `bbs-2023` | BBS+ / BLS12-381 | JCS (selective disclosure) | `bbs-2023` | W3C CR |
+| `bbs-2023` | BBS+ / BLS12-381 | JCS (selective disclosure) | `bbs-2023` | W3C WD |
 | `mldsa44-jcs-2024` | ML-DSA-44 (FIPS 204) | JCS | `ml-dsa` / `post-quantum` | Experimental |
 | `mldsa44-rdfc-2024` | ML-DSA-44 | RDFC-1.0 | `ml-dsa` / `post-quantum` | Experimental |
 | `slhdsa128-jcs-2024` | SLH-DSA-SHA2-128s (FIPS 205) | JCS | `slh-dsa` / `post-quantum` | Experimental |
@@ -48,10 +48,10 @@ post-quantum (ML-DSA, SLH-DSA) algorithms.
 
 ```toml
 [dependencies]
-affinidi-data-integrity = "0.6"
+affinidi-data-integrity = "0.5"
 
 # With post-quantum cryptosuites:
-# affinidi-data-integrity = { version = "0.6", features = ["post-quantum"] }
+# affinidi-data-integrity = { version = "0.5", features = ["post-quantum"] }
 ```
 
 ## Quickstart
@@ -146,19 +146,21 @@ Benchmarks show ~33% latency reduction per sign for ML-DSA-44 on cached paths.
 
 Apple M4 Pro, `--release`, `cargo bench -p affinidi-data-integrity --features post-quantum`:
 
-| Cryptosuite | Sign | Proof size |
-|---|---:|---:|
-| `eddsa-jcs-2022` | 46 µs | 89 B |
-| `eddsa-rdfc-2022` | 198 µs | 89 B |
-| `mldsa44-jcs-2024` | 824 µs | ~3306 B |
-| `mldsa44-rdfc-2024` | 1055 µs | ~3306 B |
-| `slhdsa128-jcs-2024` | 117 ms | ~10730 B |
+| Cryptosuite | Sign | Sign (CachingSigner) | Proof size |
+|---|---:|---:|---:|
+| `eddsa-jcs-2022` | 46 µs | — | 89 B |
+| `eddsa-rdfc-2022` | 198 µs | — | 89 B |
+| `mldsa44-jcs-2024` | 373 µs | **248 µs** (‑33%) | ~3306 B |
+| `mldsa44-rdfc-2024` | ~500 µs | **~375 µs** (‑25%) | ~3306 B |
+| `slhdsa128-jcs-2024` | 117 ms | — | ~10730 B |
+
+`CachingSigner<S>` caches the expanded ML-DSA matrix after the first sign. Subsequent signs skip the ~80–100 µs re-expansion. Ed25519 and SLH-DSA don't have expansion-cacheable state.
 
 SLH-DSA trades signature speed for tiny keys (32 B public, 64 B private) and stateless-hash security — use it when signing rarely and long-term unforgeability matters more than throughput.
 
-## Migration from 0.5
+## Migration from ≤0.5.3 to 0.5.4
 
-Version 0.6 introduces a unified sign/verify API. The old entry points remain as `#[deprecated]` thin wrappers for one minor version.
+0.5.4 introduces a unified sign/verify API. The old entry points remain as `#[deprecated]` thin wrappers for one minor version (planned removal in 0.6.0). Breaking changes stay within pre-1.0 minor-version semantics and don't require downstream crate republishes that pin `^0.5`.
 
 | Old (0.5) | New (0.6) |
 |---|---|

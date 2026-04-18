@@ -53,13 +53,13 @@ pub struct SignOptions {
 impl SignOptions {
     /// Constructs an empty `SignOptions`. Equivalent to
     /// [`SignOptions::default`].
-    #[must_use]
+    #[must_use = "constructed options must be passed to sign/verify to take effect"]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the `@context` value placed on the emitted proof.
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_context(mut self, context: Vec<String>) -> Self {
         self.context = Some(context);
         self
@@ -68,7 +68,7 @@ impl SignOptions {
     /// Sets the `created` timestamp. Takes a typed `DateTime<Utc>`; the
     /// library serialises it to ISO-8601 (seconds precision, `Z`-suffix)
     /// at the serde boundary.
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_created(mut self, created: DateTime<Utc>) -> Self {
         self.created = Some(created);
         self
@@ -76,14 +76,14 @@ impl SignOptions {
 
     /// Overrides the cryptosuite that would otherwise be chosen by the
     /// signer's default ([`crate::signer::Signer::cryptosuite`]).
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_cryptosuite(mut self, suite: CryptoSuite) -> Self {
         self.cryptosuite = Some(suite);
         self
     }
 
     /// Overrides `proofPurpose`. The default is `"assertionMethod"`.
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_proof_purpose(mut self, purpose: impl Into<String>) -> Self {
         self.proof_purpose = Some(purpose.into());
         self
@@ -114,20 +114,20 @@ pub struct VerifyOptions {
 impl VerifyOptions {
     /// Constructs an empty `VerifyOptions`. Equivalent to
     /// [`VerifyOptions::default`].
-    #[must_use]
+    #[must_use = "constructed options must be passed to sign/verify to take effect"]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Sets the expected document `@context`.
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_expected_context(mut self, ctx: Vec<String>) -> Self {
         self.expected_context = Some(ctx);
         self
     }
 
     /// Restricts the set of cryptosuites the verifier will accept.
-    #[must_use]
+    #[must_use = "chained builder call returns self; assign or chain further"]
     pub fn with_allowed_suites(mut self, suites: Vec<CryptoSuite>) -> Self {
         self.allowed_suites = suites;
         self

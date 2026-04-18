@@ -1,6 +1,6 @@
 #[cfg(feature = "bbs-2023")]
 use crate::crypto_suites::CryptoSuite;
-use crate::{DataIntegrityError, DataIntegrityProof, hashing_eddsa_jcs, hashing_eddsa_rdfc};
+use crate::{DataIntegrityError, DataIntegrityProof, hashing_jcs, hashing_rdfc};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -103,7 +103,7 @@ where
             ))
         })?;
 
-        hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
+        hashing_rdfc(&doc_value, &proof_value_json)?
     } else {
         // BBS-2023 is the only JCS-variant that skips the normal verify path.
         #[cfg(feature = "bbs-2023")]
@@ -123,7 +123,7 @@ where
         })?;
         debug!("Proof options (JCS): {}", jcs_proof_config);
 
-        hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config)
+        hashing_jcs(&jcs_doc, &jcs_proof_config)
     };
 
     debug!(
