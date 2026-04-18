@@ -754,6 +754,95 @@ mod tests {
         );
     }
 
+    /// Varint-encoded multicodec prefix bytes for the given codec.
+    #[cfg(any(feature = "ml-dsa", feature = "slh-dsa"))]
+    fn varint_prefix(codec: u64) -> Vec<u8> {
+        let mut buf = [0u8; 10];
+        use unsigned_varint::encode;
+        let slice = encode::u64(codec, &mut buf);
+        slice.to_vec()
+    }
+
+    /// After multibase-decoding a multikey string, the first N bytes must
+    /// match the registered varint multicodec. This guards against the class
+    /// of bug where we invent our own codec value — tests that only sign and
+    /// verify cannot catch it because encode and decode use the same constant.
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn ml_dsa_multikey_uses_registered_codecs() {
+        use crate::multicodec::{
+            ML_DSA_44_PRIV_SEED, ML_DSA_44_PUB, ML_DSA_65_PRIV_SEED, ML_DSA_65_PUB,
+            ML_DSA_87_PRIV_SEED, ML_DSA_87_PUB,
+        };
+        use affinidi_crypto::KeyType;
+
+        let cases: &[(KeyType, u64, u64, usize, usize)] = &[
+            // (key_type, pub codec, priv-seed codec, pub_len, priv_len)
+            (
+                KeyType::MlDsa44,
+                ML_DSA_44_PUB,
+                ML_DSA_44_PRIV_SEED,
+                1312,
+                32,
+            ),
+            (
+                KeyType::MlDsa65,
+                ML_DSA_65_PUB,
+                ML_DSA_65_PRIV_SEED,
+                1952,
+                32,
+            ),
+            (
+                KeyType::MlDsa87,
+                ML_DSA_87_PUB,
+                ML_DSA_87_PRIV_SEED,
+                2592,
+                32,
+            ),
+        ];
+
+        for (kt, pub_code, priv_code, pub_len, priv_len) in cases {
+            let s = match kt {
+                KeyType::MlDsa44 => Secret::generate_ml_dsa_44(None, Some(&[1u8; 32])),
+                KeyType::MlDsa65 => Secret::generate_ml_dsa_65(None, Some(&[1u8; 32])),
+                KeyType::MlDsa87 => Secret::generate_ml_dsa_87(None, Some(&[1u8; 32])),
+                _ => unreachable!(),
+            };
+
+            let pub_mb = s.get_public_keymultibase().unwrap();
+            let (_, pub_raw) = multibase::decode(&pub_mb).unwrap();
+            let expected = varint_prefix(*pub_code);
+            assert_eq!(
+                &pub_raw[..expected.len()],
+                expected.as_slice(),
+                "{kt:?} pub codec prefix mismatch (expected {pub_code:#06x})"
+            );
+            assert_eq!(pub_raw.len() - expected.len(), *pub_len);
+
+            let priv_mb = s.get_private_keymultibase().unwrap();
+            let (_, priv_raw) = multibase::decode(&priv_mb).unwrap();
+            let expected = varint_prefix(*priv_code);
+            assert_eq!(
+                &priv_raw[..expected.len()],
+                expected.as_slice(),
+                "{kt:?} priv-seed codec prefix mismatch (expected {priv_code:#06x})"
+            );
+            assert_eq!(priv_raw.len() - expected.len(), *priv_len);
+        }
+    }
+
+    #[cfg(feature = "slh-dsa")]
+    #[test]
+    fn slh_dsa_multikey_uses_registered_public_codec() {
+        use crate::multicodec::SLH_DSA_SHA2_128S_PUB;
+        let s = Secret::generate_slh_dsa_sha2_128s(None);
+        let pub_mb = s.get_public_keymultibase().unwrap();
+        let (_, raw) = multibase::decode(&pub_mb).unwrap();
+        let expected = varint_prefix(SLH_DSA_SHA2_128S_PUB);
+        assert_eq!(&raw[..expected.len()], expected.as_slice());
+        assert_eq!(raw.len() - expected.len(), 32);
+    }
+
     #[cfg(feature = "slh-dsa")]
     #[test]
     fn slh_dsa_private_multibase_unsupported() {

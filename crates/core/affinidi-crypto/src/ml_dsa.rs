@@ -222,4 +222,73 @@ mod tests {
         let b = generate_ml_dsa_44(Some(&[42u8; 32]));
         assert_eq!(a.public_bytes, b.public_bytes);
     }
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn seed_32(h: &str) -> [u8; 32] {
+        let v = hex(h);
+        assert_eq!(v.len(), 32);
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&v);
+        a
+    }
+
+    /// NIST ACVP ML-DSA-keyGen-FIPS204 known-answer vectors, pinning the first
+    /// 32 bytes of each encoded public key derived from a fixed 32-byte seed.
+    ///
+    /// Source seeds: <https://github.com/usnistgov/ACVP-Server>
+    /// `gen-val/json-files/ML-DSA-keyGen-FIPS204/prompt.json` (first test case
+    /// per parameter set). ML-DSA-44 expected pk was cross-checked against
+    /// the matching `expectedResults.json` entry; the ML-DSA-65 and -87
+    /// expected-pk prefixes below were derived with the same seed using the
+    /// upstream `ml-dsa` crate and are pinned to lock in parameter-set
+    /// dispatch so any future regression is caught.
+    #[test]
+    fn ml_dsa_44_nist_kat_keygen() {
+        let seed = seed_32("D71361C000F9A7BC99DFB425BCB6BB27C32C36AB444FF3708B2D93B4E66D5B5B");
+        let expected_pk_prefix =
+            hex("B845FA2881407A59183071629B08223128116014FB58FF6BB4C8C9FE19CF5B0B");
+        let kp = generate_ml_dsa_44(Some(&seed));
+        assert_eq!(kp.public_bytes.len(), 1312);
+        assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+    }
+
+    #[test]
+    fn ml_dsa_65_nist_kat_keygen() {
+        let seed = seed_32("1BD67DC782B2958E189E315C040DD1F64C8AB232A6A170E1A7A52C33F10851B1");
+        let expected_pk_prefix =
+            hex("43AD6560D3BB684667A559EE6EC7C816020E5B65671F270F2353A8C912B6C26B");
+        let kp = generate_ml_dsa_65(Some(&seed));
+        assert_eq!(kp.public_bytes.len(), 1952);
+        assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+    }
+
+    #[test]
+    fn ml_dsa_87_nist_kat_keygen() {
+        let seed = seed_32("F7052FBB921759CD8716773BA6355630121D6927899FDDA5768E2BC240FCCB7B");
+        let expected_pk_prefix =
+            hex("18DFF392DEF5756EA23519A240E6B5CDCF912D89CD94DEC9DC71E53F8CDF37D9");
+        let kp = generate_ml_dsa_87(Some(&seed));
+        assert_eq!(kp.public_bytes.len(), 2592);
+        assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+    }
+
+    /// Param-set routing guard: the same seed must produce *different* public
+    /// keys across parameter sets. If dispatch ever routes MlDsa65 to MlDsa44
+    /// internals (or similar), this fails.
+    #[test]
+    fn ml_dsa_param_sets_are_distinct() {
+        let seed = [11u8; 32];
+        let k44 = generate_ml_dsa_44(Some(&seed));
+        let k65 = generate_ml_dsa_65(Some(&seed));
+        let k87 = generate_ml_dsa_87(Some(&seed));
+        assert_ne!(&k44.public_bytes[..32], &k65.public_bytes[..32]);
+        assert_ne!(&k44.public_bytes[..32], &k87.public_bytes[..32]);
+        assert_ne!(&k65.public_bytes[..32], &k87.public_bytes[..32]);
+    }
 }

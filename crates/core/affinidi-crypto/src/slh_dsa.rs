@@ -50,6 +50,13 @@ pub fn verify_slh_dsa_sha2_128s(public_key: &[u8], data: &[u8], signature: &[u8]
 mod tests {
     use super::*;
 
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
     #[test]
     fn slh_dsa_sha2_128s_roundtrip() {
         let kp = generate_slh_dsa_sha2_128s();
@@ -68,5 +75,28 @@ mod tests {
         let mut sig = sign_slh_dsa_sha2_128s(&kp.private_bytes, b"x").unwrap();
         sig[42] ^= 0x01;
         assert!(verify_slh_dsa_sha2_128s(&kp.public_bytes, b"x", &sig).is_err());
+    }
+
+    /// NIST ACVP SLH-DSA-keyGen-FIPS205 tcId=1 (SLH-DSA-SHA2-128s).
+    ///
+    /// Source: <https://github.com/usnistgov/ACVP-Server>
+    /// `gen-val/json-files/SLH-DSA-keyGen-FIPS205/{prompt,expectedResults}.json`.
+    /// Catches param-set dispatch and encoding regressions against the
+    /// authoritative FIPS 205 reference.
+    #[test]
+    fn slh_dsa_sha2_128s_nist_kat_keygen() {
+        let sk_seed = hex("173D04C938C1C36BF289C3C022D04B14");
+        let sk_prf = hex("63AE23C41AA546DA589774AC20B745C4");
+        let pk_seed = hex("0D794777914C99766827F0F09CA972BE");
+        let expected_pk = hex("0D794777914C99766827F0F09CA972BE0162C10219D422ADBA1359E6AA65299C");
+
+        let sk = SigningKey::<Sha2_128s>::slh_keygen_internal(&sk_seed, &sk_prf, &pk_seed);
+        let pk_bytes = sk.as_ref().to_bytes();
+        assert_eq!(pk_bytes.as_slice(), expected_pk.as_slice());
+
+        // And sanity-check: signing then verifying roundtrips under these NIST keys.
+        let sk_bytes = sk.to_bytes();
+        let sig = sign_slh_dsa_sha2_128s(sk_bytes.as_slice(), b"acvp-roundtrip").unwrap();
+        verify_slh_dsa_sha2_128s(pk_bytes.as_slice(), b"acvp-roundtrip", &sig).unwrap();
     }
 }
