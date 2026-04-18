@@ -128,9 +128,6 @@ impl DataIntegrityProof {
     /// set, otherwise from [`Signer::cryptosuite`]. Canonicalization
     /// (JCS or RDFC) is derived from the suite.
     ///
-    /// This is the unified entry point — it replaces the four-way
-    /// `sign_jcs_data` / `sign_jcs_data_with_suite` / `sign_rdfc_data` /
-    /// `sign_rdfc_data_with_suite` matrix.
     pub async fn sign<S>(
         data_doc: &S,
         signer: &dyn Signer,
@@ -248,136 +245,6 @@ impl DataIntegrityProof {
 
         verify_proof_internal(self, data_doc, &resolved.public_key_bytes, &options)
     }
-
-    // ---- Deprecated legacy entry points ----
-    // These remain for one minor release to give downstream consumers
-    // time to migrate to the unified `sign` / `verify_with_public_key`
-    // API. Remove in the next breaking release.
-
-    /// Creates a JCS (JSON Canonicalization Scheme) signature for the given data.
-    ///
-    /// **Deprecated** — prefer [`DataIntegrityProof::sign`] with
-    /// [`SignOptions`]. Example:
-    /// ```ignore
-    /// let proof = DataIntegrityProof::sign(
-    ///     &doc,
-    ///     &signer,
-    ///     SignOptions::new().with_context(ctx),
-    /// ).await?;
-    /// ```
-    #[deprecated(
-        since = "0.6.0",
-        note = "use DataIntegrityProof::sign with SignOptions"
-    )]
-    #[allow(deprecated)]
-    pub async fn sign_jcs_data<S>(
-        data_doc: &S,
-        context: Option<Vec<String>>,
-        signer: &dyn Signer,
-        created: Option<String>,
-    ) -> Result<DataIntegrityProof, DataIntegrityError>
-    where
-        S: Serialize,
-    {
-        DataIntegrityProof::sign_jcs_data_with_suite(
-            CryptoSuite::EddsaJcs2022,
-            data_doc,
-            context,
-            signer,
-            created,
-        )
-        .await
-    }
-
-    /// Creates a JCS signature with an explicit cryptosuite.
-    ///
-    /// **Deprecated** — prefer [`DataIntegrityProof::sign`] with
-    /// `SignOptions::new().with_cryptosuite(...)`.
-    #[deprecated(
-        since = "0.6.0",
-        note = "use DataIntegrityProof::sign with SignOptions"
-    )]
-    #[allow(deprecated)]
-    pub async fn sign_jcs_data_with_suite<S>(
-        crypto_suite: CryptoSuite,
-        data_doc: &S,
-        context: Option<Vec<String>>,
-        signer: &dyn Signer,
-        created: Option<String>,
-    ) -> Result<DataIntegrityProof, DataIntegrityError>
-    where
-        S: Serialize,
-    {
-        if crypto_suite.is_rdfc() {
-            return Err(DataIntegrityError::MalformedProof(format!(
-                "Cryptosuite {} uses RDFC canonicalization; call sign_rdfc_data_with_suite instead",
-                String::try_from(crypto_suite).unwrap_or_default()
-            )));
-        }
-        let options = SignOptions {
-            context,
-            created: parse_created_opt(created)?,
-            cryptosuite: Some(crypto_suite),
-            proof_purpose: None,
-        };
-        DataIntegrityProof::sign(data_doc, signer, options).await
-    }
-
-    /// Creates an RDFC signature for the given JSON-LD data.
-    ///
-    /// **Deprecated** — prefer [`DataIntegrityProof::sign`] with
-    /// `SignOptions::new().with_cryptosuite(CryptoSuite::EddsaRdfc2022)`.
-    #[deprecated(
-        since = "0.6.0",
-        note = "use DataIntegrityProof::sign with SignOptions"
-    )]
-    #[allow(deprecated)]
-    pub async fn sign_rdfc_data(
-        data_doc: &serde_json::Value,
-        context: Option<Vec<String>>,
-        signer: &dyn Signer,
-        created: Option<String>,
-    ) -> Result<DataIntegrityProof, DataIntegrityError> {
-        DataIntegrityProof::sign_rdfc_data_with_suite(
-            CryptoSuite::EddsaRdfc2022,
-            data_doc,
-            context,
-            signer,
-            created,
-        )
-        .await
-    }
-
-    /// Creates an RDFC signature with an explicit cryptosuite.
-    ///
-    /// **Deprecated** — prefer [`DataIntegrityProof::sign`] with
-    /// `SignOptions::new().with_cryptosuite(...)`.
-    #[deprecated(
-        since = "0.6.0",
-        note = "use DataIntegrityProof::sign with SignOptions"
-    )]
-    #[allow(deprecated)]
-    pub async fn sign_rdfc_data_with_suite(
-        crypto_suite: CryptoSuite,
-        data_doc: &serde_json::Value,
-        context: Option<Vec<String>>,
-        signer: &dyn Signer,
-        created: Option<String>,
-    ) -> Result<DataIntegrityProof, DataIntegrityError> {
-        if !crypto_suite.is_rdfc() {
-            return Err(DataIntegrityError::MalformedProof(format!(
-                "Cryptosuite {} uses JCS canonicalization; call sign_jcs_data_with_suite instead",
-                String::try_from(crypto_suite).unwrap_or_default()
-            )));
-        }
-        let options = SignOptions {
-            context,
-            created: parse_created_opt(created)?,
-            cryptosuite: Some(crypto_suite),
-            proof_purpose: None,
-        };
-        DataIntegrityProof::sign(data_doc, signer, options).await
-    }
 }
 
 // -----------------------------------------------------------------------
@@ -478,11 +345,6 @@ where
 
     Ok(proof_options)
 }
-
-// -----------------------------------------------------------------------
-// Internal verify helper (shared between the DataIntegrityProof method
-// and the deprecated top-level verify_data_with_public_key).
-// -----------------------------------------------------------------------
 
 fn verify_proof_internal<S>(
     proof: &DataIntegrityProof,
@@ -654,20 +516,7 @@ fn format_created(dt: DateTime<Utc>) -> String {
     dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn parse_created_opt(s: Option<String>) -> Result<Option<DateTime<Utc>>, DataIntegrityError> {
-    match s {
-        None => Ok(None),
-        Some(s) => s
-            .parse::<DateTime<Utc>>()
-            .map(Some)
-            .map_err(|e| DataIntegrityError::MalformedProof(format!("Invalid created date: {e}"))),
-    }
-}
-
 #[cfg(test)]
-// Tests exercise deprecated shims alongside the new API to verify the
-// migration path; silence the deprecation lint inside the module.
-#[allow(deprecated)]
 mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::json;
@@ -841,25 +690,22 @@ mod tests {
         assert_eq!(a.proof_value, b.proof_value, "ML-DSA must be deterministic");
     }
 
-    // Legacy-shim sanity checks — still need to work for downstream
-    // consumers during the deprecation window.
-
     #[tokio::test]
-    async fn test_sign_jcs_data_bad_key() {
+    async fn test_sign_bad_key() {
         let generic_doc = json!({"test": "test_data"});
         let pub_key = "zruqgFba156mDWfMUjJUSAKUvgCgF5NfgSYwSuEZuXpixts8tw3ot5BasjeyM65f8dzk5k6zgXf7pkbaaBnPrjCUmcJ";
         let pri_key = "z42tmXtqqQBLmEEwn8tfi1bA2ghBx9cBo6wo8a44kVJEiqyA";
         let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
             .expect("Couldn't create test key data");
         assert!(
-            DataIntegrityProof::sign_jcs_data(&generic_doc, None, &secret, None)
+            DataIntegrityProof::sign(&generic_doc, &secret, SignOptions::new())
                 .await
                 .is_err()
         );
     }
 
     #[tokio::test]
-    async fn test_sign_jcs_data_good() {
+    async fn test_sign_good() {
         let generic_doc = json!({"test": "test_data"});
         let pub_key = "z6MktDNePDZTvVcF5t6u362SsonU7HkuVFSMVCjSspQLDaBm";
         let pri_key = "z3u2UQyiY96d7VQaua8yiaSyQxq5Z5W5Qkpz7o2H2pc9BkEa";
@@ -871,9 +717,13 @@ mod tests {
             "context3".to_string(),
         ];
         assert!(
-            DataIntegrityProof::sign_jcs_data(&generic_doc, Some(context), &secret, None)
-                .await
-                .is_ok(),
+            DataIntegrityProof::sign(
+                &generic_doc,
+                &secret,
+                SignOptions::new().with_context(context)
+            )
+            .await
+            .is_ok(),
             "Signing failed"
         );
     }
@@ -881,26 +731,24 @@ mod tests {
     #[cfg(feature = "ml-dsa")]
     #[tokio::test]
     async fn sign_verify_jcs_ml_dsa_44() {
-        use crate::{crypto_suites::CryptoSuite, verification_proof::verify_data_with_public_key};
+        use crate::crypto_suites::CryptoSuite;
 
         let secret = Secret::generate_ml_dsa_44(Some("k-did#k-did"), Some(&[5u8; 32]));
         let doc = json!({"hello": "pqc"});
 
-        let proof = DataIntegrityProof::sign_jcs_data_with_suite(
-            CryptoSuite::MlDsa44Jcs2024,
+        let proof = DataIntegrityProof::sign(
             &doc,
-            None,
             &secret,
-            None,
+            SignOptions::new().with_cryptosuite(CryptoSuite::MlDsa44Jcs2024),
         )
         .await
         .expect("sign ml-dsa");
 
         assert_eq!(proof.cryptosuite, CryptoSuite::MlDsa44Jcs2024);
 
-        let result = verify_data_with_public_key(&doc, None, &proof, secret.get_public_bytes())
+        proof
+            .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
             .expect("verify ml-dsa");
-        assert!(result.verified);
     }
 
     #[cfg(feature = "ml-dsa")]
@@ -910,12 +758,10 @@ mod tests {
 
         let secret = Secret::generate_ml_dsa_44(Some("k"), Some(&[1u8; 32]));
         let doc = json!({"x": 1});
-        let err = DataIntegrityProof::sign_jcs_data_with_suite(
-            CryptoSuite::EddsaJcs2022,
+        let err = DataIntegrityProof::sign(
             &doc,
-            None,
             &secret,
-            None,
+            SignOptions::new().with_cryptosuite(CryptoSuite::EddsaJcs2022),
         )
         .await;
         assert!(err.is_err());
@@ -924,23 +770,21 @@ mod tests {
     #[cfg(feature = "slh-dsa")]
     #[tokio::test]
     async fn sign_verify_jcs_slh_dsa_128s() {
-        use crate::{crypto_suites::CryptoSuite, verification_proof::verify_data_with_public_key};
+        use crate::crypto_suites::CryptoSuite;
 
         let secret = Secret::generate_slh_dsa_sha2_128s(Some("k#k"));
         let doc = json!({"hello": "slh"});
 
-        let proof = DataIntegrityProof::sign_jcs_data_with_suite(
-            CryptoSuite::SlhDsa128Jcs2024,
+        let proof = DataIntegrityProof::sign(
             &doc,
-            None,
             &secret,
-            None,
+            SignOptions::new().with_cryptosuite(CryptoSuite::SlhDsa128Jcs2024),
         )
         .await
         .expect("sign slh-dsa");
 
-        let result = verify_data_with_public_key(&doc, None, &proof, secret.get_public_bytes())
+        proof
+            .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
             .expect("verify slh-dsa");
-        assert!(result.verified);
     }
 }

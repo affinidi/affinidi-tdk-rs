@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.6.4"
+version = "0.6.5"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -29,7 +29,7 @@ affinidi-tdk-common = "0.5"
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.1"
 affinidi-meeting-place = { version = "0.3", optional = true }
-affinidi-data-integrity = { version = "0.5",  optional = true }
+affinidi-data-integrity = { version = "0.6",  optional = true }
 
 # External Crates
 clap = { version = "4", features = ["derive"] }

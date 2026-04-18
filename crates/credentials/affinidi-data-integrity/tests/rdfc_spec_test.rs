@@ -1,12 +1,8 @@
-// These integration tests exercise the deprecated 0.5.x sign/verify
-// entry points to pin backward-compat behaviour. They are expected to
-// emit deprecation warnings; suppress them module-wide.
-#![allow(deprecated)]
-
 use affinidi_data_integrity::{
-    DataIntegrityProof, verification_proof::verify_data_with_public_key,
+    DataIntegrityProof, SignOptions, VerifyOptions, crypto_suites::CryptoSuite,
 };
 use affinidi_secrets_resolver::secrets::Secret;
+use chrono::DateTime;
 use serde_json::json;
 use tracing_subscriber::filter;
 
@@ -51,11 +47,14 @@ async fn eddsa_rdfc_2022_reference() {
     let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
         .expect("Couldn't create Secret");
 
-    let proof = DataIntegrityProof::sign_rdfc_data(
+    let created = "2023-02-24T23:36:38Z".parse::<DateTime<_>>().unwrap();
+    let proof = DataIntegrityProof::sign(
         &input_doc,
-        Some(context.clone()),
         &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
+        SignOptions::new()
+            .with_cryptosuite(CryptoSuite::EddsaRdfc2022)
+            .with_context(context.clone())
+            .with_created(created),
     )
     .await
     .expect("Couldn't sign Document");
@@ -71,12 +70,13 @@ async fn eddsa_rdfc_2022_reference() {
         "Proof value does not match W3C vc-di-eddsa B.1 expected output"
     );
 
-    // Verify round-trip through verify_data_with_public_key
-    let validated =
-        verify_data_with_public_key(&input_doc, Some(context), &proof, secret.get_public_bytes())
-            .expect("Couldn't validate doc");
-
-    assert!(validated.verified);
+    proof
+        .verify_with_public_key(
+            &input_doc,
+            secret.get_public_bytes(),
+            VerifyOptions::new().with_expected_context(context),
+        )
+        .expect("Couldn't validate doc");
 }
 
 /// Verify that a JCS-signed document cannot be verified through the RDFC path
@@ -114,25 +114,25 @@ async fn jcs_proof_cannot_verify_as_rdfc() {
     let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
         .expect("Couldn't create Secret");
 
-    // Sign with JCS
-    let mut jcs_proof = DataIntegrityProof::sign_jcs_data(
+    let created = "2023-02-24T23:36:38Z".parse::<DateTime<_>>().unwrap();
+    // Sign with JCS (default for Ed25519)
+    let mut jcs_proof = DataIntegrityProof::sign(
         &input_doc,
-        Some(context.clone()),
         &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
+        SignOptions::new()
+            .with_context(context.clone())
+            .with_created(created),
     )
     .await
     .expect("Couldn't sign Document with JCS");
 
     // Tamper with the cryptosuite to pretend it's RDFC
-    jcs_proof.cryptosuite = affinidi_data_integrity::crypto_suites::CryptoSuite::EddsaRdfc2022;
+    jcs_proof.cryptosuite = CryptoSuite::EddsaRdfc2022;
 
-    // Verification should fail
-    let result = verify_data_with_public_key(
+    let result = jcs_proof.verify_with_public_key(
         &input_doc,
-        Some(context),
-        &jcs_proof,
         secret.get_public_bytes(),
+        VerifyOptions::new().with_expected_context(context),
     );
 
     assert!(
@@ -176,25 +176,26 @@ async fn rdfc_proof_cannot_verify_as_jcs() {
     let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
         .expect("Couldn't create Secret");
 
+    let created = "2023-02-24T23:36:38Z".parse::<DateTime<_>>().unwrap();
     // Sign with RDFC
-    let mut rdfc_proof = DataIntegrityProof::sign_rdfc_data(
+    let mut rdfc_proof = DataIntegrityProof::sign(
         &input_doc,
-        Some(context.clone()),
         &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
+        SignOptions::new()
+            .with_cryptosuite(CryptoSuite::EddsaRdfc2022)
+            .with_context(context.clone())
+            .with_created(created),
     )
     .await
     .expect("Couldn't sign Document with RDFC");
 
     // Tamper with the cryptosuite to pretend it's JCS
-    rdfc_proof.cryptosuite = affinidi_data_integrity::crypto_suites::CryptoSuite::EddsaJcs2022;
+    rdfc_proof.cryptosuite = CryptoSuite::EddsaJcs2022;
 
-    // Verification should fail
-    let result = verify_data_with_public_key(
+    let result = rdfc_proof.verify_with_public_key(
         &input_doc,
-        Some(context),
-        &rdfc_proof,
         secret.get_public_bytes(),
+        VerifyOptions::new().with_expected_context(context),
     );
 
     assert!(

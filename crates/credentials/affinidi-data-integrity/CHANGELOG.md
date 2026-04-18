@@ -1,5 +1,37 @@
 # Affinidi Data Integrity Changelog
 
+## 18th April 2026 Release 0.6.0
+
+Follow-up release to 0.5.4 that removes the deprecated 0.5.x migration
+surface now that didwebvh-rs 0.5.0 and affinidi-tdk 0.6.x have migrated
+to the unified `sign` / `verify_with_public_key` API. No wire-format
+changes — existing proofs still verify.
+
+### Breaking removals
+
+- **BREAKING:** Removed deprecated sign methods
+  `DataIntegrityProof::sign_jcs_data`, `sign_jcs_data_with_suite`,
+  `sign_rdfc_data`, and `sign_rdfc_data_with_suite`. Use
+  [`DataIntegrityProof::sign`] with [`SignOptions`] and
+  `SignOptions::with_cryptosuite(...)` to select a non-default suite.
+- **BREAKING:** Removed deprecated free function
+  `verification_proof::verify_data_with_public_key`. Use
+  [`DataIntegrityProof::verify_with_public_key`] with [`VerifyOptions`]
+  — sync, returns `Result<(), DataIntegrityError>`.
+- **BREAKING:** Removed deprecated `DataIntegrityError` variants
+  `InputDataError`, `CryptoError`, `SecretsError`, `VerificationError`,
+  and `RdfEncodingError`. Match on the structured variants
+  (`UnsupportedCryptoSuite`, `InvalidSignature`, `InvalidPublicKey`,
+  `Canonicalization`, `MalformedProof`, `Conformance`, `Signing`,
+  `Resolver`) instead.
+
+### Internal
+
+- Internal `bbs_2023.rs` uses `DataIntegrityError::signing(e)` for BBS
+  sign / proof-gen failures and `InvalidSignature { suite: Bbs2023, ..}`
+  for proof-verify failures, clearing the 0.5.4 self-deprecation
+  warnings.
+
 ## 18th April 2026 Release 0.5.4
 
 Large refactor for production-grade ergonomics. Contains multiple

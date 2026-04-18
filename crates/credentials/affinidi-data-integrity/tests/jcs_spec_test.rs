@@ -1,12 +1,6 @@
-// These integration tests exercise the deprecated 0.5.x sign/verify
-// entry points to pin backward-compat behaviour. They are expected to
-// emit deprecation warnings; suppress them module-wide.
-#![allow(deprecated)]
-
-use affinidi_data_integrity::{
-    DataIntegrityProof, verification_proof::verify_data_with_public_key,
-};
+use affinidi_data_integrity::{DataIntegrityProof, SignOptions, VerifyOptions};
 use affinidi_secrets_resolver::secrets::Secret;
+use chrono::DateTime;
 use serde_json::json;
 use tracing_subscriber::filter;
 
@@ -18,7 +12,7 @@ async fn eddsa_jcs_2022_reference() {
         .with_env_filter(filter::EnvFilter::from_default_env())
         .finish();
     // use that subscriber to process traces emitted after this point
-    tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     let input_doc = json!( {
     "@context": [
@@ -52,20 +46,24 @@ async fn eddsa_jcs_2022_reference() {
     let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
         .expect("Couldn't create Secret");
 
-    let proof = DataIntegrityProof::sign_jcs_data(
+    let created = "2023-02-24T23:36:38Z".parse::<DateTime<_>>().unwrap();
+    let proof = DataIntegrityProof::sign(
         &input_doc,
-        Some(context.clone()),
         &secret,
-        Some("2023-02-24T23:36:38Z".to_string()),
+        SignOptions::new()
+            .with_context(context.clone())
+            .with_created(created),
     )
     .await
     .expect("Couldn't sign Document");
 
-    let validated =
-        verify_data_with_public_key(&input_doc, Some(context), &proof, secret.get_public_bytes())
-            .expect("Couldn't validate doc");
-
-    assert!(validated.verified);
+    proof
+        .verify_with_public_key(
+            &input_doc,
+            secret.get_public_bytes(),
+            VerifyOptions::new().with_expected_context(context),
+        )
+        .expect("Couldn't validate doc");
 
     let Some(proof_value) = &proof.proof_value else {
         panic!("Proof value should not be None");

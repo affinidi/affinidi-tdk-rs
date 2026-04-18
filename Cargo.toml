@@ -90,6 +90,8 @@ affinidi-messaging-didcomm = { path = "crates/messaging/affinidi-messaging-didco
 affinidi-messaging-sdk = { path = "crates/messaging/affinidi-messaging-sdk" }
 affinidi-did-authentication = { path = "crates/identity/affinidi-did-authentication" }
 affinidi-tdk-common = { path = "crates/tdk/affinidi-tdk-common" }
+affinidi-tdk = { path = "crates/tdk/affinidi-tdk" }
+affinidi-meeting-place = { path = "crates/applications/affinidi-meeting-place" }
 affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
 affinidi-did-web = { path = "crates/identity/did-methods/did-web" }
 did-scid = { path = "crates/identity/did-methods/did-scid" }

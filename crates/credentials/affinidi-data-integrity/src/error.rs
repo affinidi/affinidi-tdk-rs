@@ -3,11 +3,6 @@
 //! Variants carry enough structure for programmatic matching — callers can
 //! distinguish between "key is the wrong type" and "signature does not
 //! verify", which lead to different remediation paths.
-//!
-//! The legacy string-payload variants (`InputDataError`, `CryptoError`,
-//! `SecretsError`, `VerificationError`, `RdfEncodingError`) remain for
-//! backward compatibility but are `#[deprecated]` — new code should match
-//! on the structured variants instead.
 
 use affinidi_secrets_resolver::secrets::KeyType;
 use thiserror::Error;
@@ -40,7 +35,6 @@ impl std::fmt::Display for SignatureFailure {
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum DataIntegrityError {
-    // ---- Structured variants (preferred) ----
     /// The cryptosuite identifier is not recognised by this build, either
     /// because the name is unknown or because the matching Cargo feature is
     /// disabled.
@@ -98,32 +92,6 @@ pub enum DataIntegrityError {
     /// locate or decode the requested key.
     #[error("resolver error: {0}")]
     Resolver(String),
-
-    // ---- Deprecated legacy variants ----
-    /// Replaced by specific structured variants. Kept for one minor version
-    /// to let downstream consumers migrate.
-    #[deprecated(since = "0.6.0", note = "match on a structured variant instead")]
-    #[error("Input Data Error: {0}")]
-    InputDataError(String),
-
-    #[deprecated(since = "0.6.0", note = "use Signing or InvalidSignature instead")]
-    #[error("Crypto Error: {0}")]
-    CryptoError(String),
-
-    #[deprecated(since = "0.6.0", note = "use Signing or InvalidPublicKey instead")]
-    #[error("Secrets Error: {0}")]
-    SecretsError(String),
-
-    #[deprecated(
-        since = "0.6.0",
-        note = "use InvalidSignature, MalformedProof, or Conformance instead"
-    )]
-    #[error("Verification Error: {0}")]
-    VerificationError(String),
-
-    #[deprecated(since = "0.6.0", note = "use Canonicalization instead")]
-    #[error("RDF Encoding Error: {0}")]
-    RdfEncodingError(String),
 }
 
 impl DataIntegrityError {

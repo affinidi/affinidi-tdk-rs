@@ -183,7 +183,8 @@ impl TDK {
     }
 
     /// Verify a signed JSON Schema document which includes a DID lookup resolution step.
-    /// If you already have public key bytes, call [verify_data_with_public_key] instead.
+    /// If you already have public key bytes, call
+    /// [`DataIntegrityProof::verify_with_public_key`] directly instead.
     /// You must strip `proof` from the document as needed
     /// Context is a copy of any context that needs to be passed in
     #[cfg(feature = "data-integrity")]
