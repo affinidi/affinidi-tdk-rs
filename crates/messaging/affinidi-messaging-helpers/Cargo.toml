@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-helpers"
-version = "0.12.2"
+version = "0.12.3"
 description = "Affinidi Messaging Helpers"
 edition.workspace = true
 authors.workspace = true
@@ -37,7 +37,7 @@ affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
 affinidi-secrets-resolver = "0.5"
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
 
-didwebvh-rs = "0.4"
+didwebvh-rs = "0.5"
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }

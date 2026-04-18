@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.13.1"
+version = "0.13.2"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -46,7 +46,7 @@ affinidi-secrets-resolver = "0.5"
 vta-sdk = { version = "0.3", features = ["integration"] }
 
 # External Crates
-didwebvh-rs = "0.4"
+didwebvh-rs = "0.5"
 ahash = { version = "0.8", features = ["serde"] }
 async-convert = "1"
 aws-config = "1"
