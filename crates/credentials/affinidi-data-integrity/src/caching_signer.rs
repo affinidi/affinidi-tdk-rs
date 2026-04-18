@@ -18,9 +18,17 @@
 //! # Thread safety
 //!
 //! [`CachingSigner`] holds its cached expanded key behind a
-//! [`tokio::sync::OnceCell`] — the first concurrent caller populates
-//! it, every other caller waits on that single future. After first
-//! use, access is lock-free.
+//! [`std::sync::OnceLock`] — the first concurrent caller populates
+//! it, every other caller blocks briefly on the same init. After
+//! first use, access is lock-free.
+//!
+//! # Clone / sharing
+//!
+//! `CachingSigner<S>` intentionally does not implement `Clone`.
+//! `OnceLock` cannot be cloned (doing so would either duplicate the
+//! cached key — defeating the purpose — or require a shared cache
+//! with atomic reference counting). To share a signer across tokio
+//! tasks, wrap in `Arc<CachingSigner<_>>`.
 //!
 //! # Zeroize
 //!

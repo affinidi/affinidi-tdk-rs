@@ -154,11 +154,16 @@ pub struct MlDsa44Jcs2024;
 pub struct MlDsa44Rdfc2024;
 
 #[cfg(feature = "ml-dsa")]
-fn ml_dsa_44_verify(key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
+fn ml_dsa_44_verify(
+    suite: CryptoSuite,
+    key: &[u8],
+    data: &[u8],
+    sig: &[u8],
+) -> Result<(), DataIntegrityError> {
     use crate::SignatureFailure;
     affinidi_crypto::ml_dsa::verify_ml_dsa_44(key, data, sig).map_err(|_| {
         DataIntegrityError::InvalidSignature {
-            suite: CryptoSuite::MlDsa44Jcs2024,
+            suite,
             reason: SignatureFailure::Invalid,
         }
     })
@@ -176,7 +181,7 @@ impl CryptoSuiteOps for MlDsa44Jcs2024 {
         &[KeyType::MlDsa44]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        ml_dsa_44_verify(key, data, sig)
+        ml_dsa_44_verify(CryptoSuite::MlDsa44Jcs2024, key, data, sig)
     }
 }
 
@@ -192,7 +197,7 @@ impl CryptoSuiteOps for MlDsa44Rdfc2024 {
         &[KeyType::MlDsa44]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        ml_dsa_44_verify(key, data, sig)
+        ml_dsa_44_verify(CryptoSuite::MlDsa44Rdfc2024, key, data, sig)
     }
 }
 
@@ -208,11 +213,16 @@ pub struct SlhDsa128Jcs2024;
 pub struct SlhDsa128Rdfc2024;
 
 #[cfg(feature = "slh-dsa")]
-fn slh_dsa_verify(key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
+fn slh_dsa_verify(
+    suite: CryptoSuite,
+    key: &[u8],
+    data: &[u8],
+    sig: &[u8],
+) -> Result<(), DataIntegrityError> {
     use crate::SignatureFailure;
     affinidi_crypto::slh_dsa::verify_slh_dsa_sha2_128s(key, data, sig).map_err(|_| {
         DataIntegrityError::InvalidSignature {
-            suite: CryptoSuite::SlhDsa128Jcs2024,
+            suite,
             reason: SignatureFailure::Invalid,
         }
     })
@@ -230,7 +240,7 @@ impl CryptoSuiteOps for SlhDsa128Jcs2024 {
         &[KeyType::SlhDsaSha2_128s]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        slh_dsa_verify(key, data, sig)
+        slh_dsa_verify(CryptoSuite::SlhDsa128Jcs2024, key, data, sig)
     }
 }
 
@@ -246,6 +256,6 @@ impl CryptoSuiteOps for SlhDsa128Rdfc2024 {
         &[KeyType::SlhDsaSha2_128s]
     }
     fn verify(&self, key: &[u8], data: &[u8], sig: &[u8]) -> Result<(), DataIntegrityError> {
-        slh_dsa_verify(key, data, sig)
+        slh_dsa_verify(CryptoSuite::SlhDsa128Rdfc2024, key, data, sig)
     }
 }

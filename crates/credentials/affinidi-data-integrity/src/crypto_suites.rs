@@ -17,15 +17,18 @@ use crate::suite_ops::{self, Canonicalization, CryptoSuiteOps};
 #[non_exhaustive]
 pub enum CryptoSuite {
     /// EDDSA JCS 2022 spec
-    /// https://www.w3.org/TR/vc-di-eddsa/
+    ///
+    /// <https://www.w3.org/TR/vc-di-eddsa/>
     #[serde(rename = "eddsa-jcs-2022")]
     EddsaJcs2022,
     /// EDDSA RDFC 2022 spec
-    /// https://www.w3.org/TR/vc-di-eddsa/
+    ///
+    /// <https://www.w3.org/TR/vc-di-eddsa/>
     #[serde(rename = "eddsa-rdfc-2022")]
     EddsaRdfc2022,
-    /// BBS 2023 spec — BBS signatures with zero-knowledge selective disclosure
-    /// https://www.w3.org/TR/vc-di-bbs/
+    /// BBS 2023 spec — BBS signatures with zero-knowledge selective disclosure.
+    ///
+    /// <https://www.w3.org/TR/vc-di-bbs/>
     #[cfg(feature = "bbs-2023")]
     #[serde(rename = "bbs-2023")]
     Bbs2023,

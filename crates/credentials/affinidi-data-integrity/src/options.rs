@@ -1,5 +1,5 @@
-//! Options passed to [`DataIntegrityProof::sign`] and
-//! [`DataIntegrityProof::verify_with_public_key`].
+//! Options passed to [`crate::DataIntegrityProof::sign`] and
+//! [`crate::DataIntegrityProof::verify_with_public_key`].
 //!
 //! Both types are plain value structs with a hand-rolled `with_*` builder.
 //! No procedural macros, no extra dependencies. The builder style was
