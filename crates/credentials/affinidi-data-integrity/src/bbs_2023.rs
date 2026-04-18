@@ -65,8 +65,7 @@ pub fn sign_base(
 
     let msg_refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
 
-    let signature = bbs::sign(sk, pk, header, &msg_refs)
-        .map_err(|e| DataIntegrityError::CryptoError(format!("BBS sign failed: {e}")))?;
+    let signature = bbs::sign(sk, pk, header, &msg_refs).map_err(DataIntegrityError::signing)?;
 
     Ok((signature, messages))
 }
@@ -103,7 +102,7 @@ pub fn derive_proof(
         &msg_refs,
         disclosed_indexes,
     )
-    .map_err(|e| DataIntegrityError::CryptoError(format!("BBS proof generation failed: {e}")))
+    .map_err(DataIntegrityError::signing)
 }
 
 /// Verify a derived proof.
@@ -137,7 +136,11 @@ pub fn verify_proof(
         disclosed_indexes,
     )
     .map_err(|e| {
-        DataIntegrityError::VerificationError(format!("BBS proof verification failed: {e}"))
+        tracing::debug!("BBS proof verification failed: {e}");
+        DataIntegrityError::InvalidSignature {
+            suite: crate::crypto_suites::CryptoSuite::Bbs2023,
+            reason: crate::error::SignatureFailure::Invalid,
+        }
     })
 }
 
