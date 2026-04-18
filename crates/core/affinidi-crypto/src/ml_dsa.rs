@@ -238,24 +238,34 @@ mod tests {
         a
     }
 
-    /// NIST ACVP ML-DSA-keyGen-FIPS204 known-answer vectors, pinning the first
-    /// 32 bytes of each encoded public key derived from a fixed 32-byte seed.
+    /// NIST ACVP ML-DSA-keyGen-FIPS204 known-answer vectors. Each test pins
+    /// SHA-256 of the full encoded public key derived from the NIST seed —
+    /// every byte of the pk is committed, so param-set routing, encoding,
+    /// or RNG regressions fail the test.
     ///
-    /// Source seeds: <https://github.com/usnistgov/ACVP-Server>
-    /// `gen-val/json-files/ML-DSA-keyGen-FIPS204/prompt.json` (first test case
-    /// per parameter set). ML-DSA-44 expected pk was cross-checked against
-    /// the matching `expectedResults.json` entry; the ML-DSA-65 and -87
-    /// expected-pk prefixes below were derived with the same seed using the
-    /// upstream `ml-dsa` crate and are pinned to lock in parameter-set
-    /// dispatch so any future regression is caught.
+    /// Source: <https://github.com/usnistgov/ACVP-Server>
+    /// `gen-val/json-files/ML-DSA-keyGen-FIPS204/{prompt,expectedResults}.json`
+    /// — tcId=1 (ML-DSA-44), tcId=26 (ML-DSA-65), tcId=51 (ML-DSA-87).
+    /// Hashes were computed from the NIST-published pk values.
+    fn sha256(b: &[u8]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(b).into()
+    }
+
     #[test]
     fn ml_dsa_44_nist_kat_keygen() {
         let seed = seed_32("D71361C000F9A7BC99DFB425BCB6BB27C32C36AB444FF3708B2D93B4E66D5B5B");
         let expected_pk_prefix =
             hex("B845FA2881407A59183071629B08223128116014FB58FF6BB4C8C9FE19CF5B0B");
+        let expected_pk_sha256 =
+            hex("451A808C522218FADBDAB146FC12004B0741C7D069F238F43AD77216159F6A34");
         let kp = generate_ml_dsa_44(Some(&seed));
         assert_eq!(kp.public_bytes.len(), 1312);
         assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+        assert_eq!(
+            sha256(&kp.public_bytes).as_slice(),
+            expected_pk_sha256.as_slice()
+        );
     }
 
     #[test]
@@ -263,9 +273,15 @@ mod tests {
         let seed = seed_32("1BD67DC782B2958E189E315C040DD1F64C8AB232A6A170E1A7A52C33F10851B1");
         let expected_pk_prefix =
             hex("43AD6560D3BB684667A559EE6EC7C816020E5B65671F270F2353A8C912B6C26B");
+        let expected_pk_sha256 =
+            hex("6FB1146B85539FB5C53D35B66DAE94202FCD5575A537172CF1156220476F7920");
         let kp = generate_ml_dsa_65(Some(&seed));
         assert_eq!(kp.public_bytes.len(), 1952);
         assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+        assert_eq!(
+            sha256(&kp.public_bytes).as_slice(),
+            expected_pk_sha256.as_slice()
+        );
     }
 
     #[test]
@@ -273,9 +289,15 @@ mod tests {
         let seed = seed_32("F7052FBB921759CD8716773BA6355630121D6927899FDDA5768E2BC240FCCB7B");
         let expected_pk_prefix =
             hex("18DFF392DEF5756EA23519A240E6B5CDCF912D89CD94DEC9DC71E53F8CDF37D9");
+        let expected_pk_sha256 =
+            hex("40298270777D3306D2FCB6B4691D7A7AB799CD1069EEA88F843CF0EC26D4B01F");
         let kp = generate_ml_dsa_87(Some(&seed));
         assert_eq!(kp.public_bytes.len(), 2592);
         assert_eq!(&kp.public_bytes[..32], expected_pk_prefix.as_slice());
+        assert_eq!(
+            sha256(&kp.public_bytes).as_slice(),
+            expected_pk_sha256.as_slice()
+        );
     }
 
     /// Param-set routing guard: the same seed must produce *different* public
