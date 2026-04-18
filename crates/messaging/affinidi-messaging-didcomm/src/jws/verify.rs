@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn sign_verify_roundtrip() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
         let pk = sk.verifying_key().to_bytes();
 
         let payload = b"{\"type\":\"test\",\"body\":{}}";
@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn wrong_key_fails() {
-        let sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-        let wrong_pk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng)
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let wrong_pk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng)
             .verifying_key()
             .to_bytes();
 

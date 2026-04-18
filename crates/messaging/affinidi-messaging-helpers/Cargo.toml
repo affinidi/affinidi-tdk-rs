@@ -24,6 +24,12 @@ path = "src/mediator_administration/main.rs"
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
 ## TDK for DID resolution and crypto utilities
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
+## DIDComm message types — used by example binaries
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", features = ["messaging-core"] }
+## Protocol-agnostic messaging-core traits — used by `unified_messaging` example
+affinidi-messaging-core = { path = "../affinidi-messaging-core" }
+## TSP transport — used by `unified_messaging` and `protocol_comparison` examples
+affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
 
 # ── CLI / Interactive UI ─────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }
@@ -35,13 +41,22 @@ dialoguer = "0.12"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ahash = { version = "0.8", features = ["serde"] }
+## Base64 encoding/decoding — used by example binaries
+base64 = "0.22"
 
 # ── Utilities ────────────────────────────────────────────────────────────
 regex = "1"
 sha256 = "1"
 tokio = { workspace = true, features = ["full"] }
 tracing = { version = "0.1", features = ["valuable"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "valuable"] }
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "fmt",
+  "json",
+  "valuable",
+] }
+## UUIDs — used by example binaries (alice_bob, multi_device, etc.)
+uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [lints]
 workspace = true

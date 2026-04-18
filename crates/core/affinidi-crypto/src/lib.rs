@@ -24,3 +24,12 @@ pub mod p384;
 pub use error::CryptoError;
 pub use jwk::{ECParams, JWK, OctectParams, Params};
 pub use key_type::KeyType;
+
+#[cfg(feature = "ed25519")]
+pub use ed25519::KeyPair as Ed25519KeyPair;
+#[cfg(feature = "p256")]
+pub use p256::KeyPair as P256KeyPair;
+#[cfg(feature = "p384")]
+pub use p384::KeyPair as P384KeyPair;
+#[cfg(feature = "k256")]
+pub use secp256k1::KeyPair as Secp256k1KeyPair;

@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-bbs"
 description = "BBS Signatures (IETF draft-irtf-cfrg-bbs-signatures) implementation over BLS12-381."
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -17,16 +17,16 @@ name = "bbs_selective_disclosure"
 path = "examples/bbs_selective_disclosure.rs"
 
 [dependencies]
-bls12_381_plus = { version = "0.8", features = ["hashing", "alloc"] }
+bls12_381_plus = { version = "0.8", features = ["alloc"] }
 elliptic-curve = { version = "0.13", features = ["hash2curve"] }
 ff = "0.13"
 group = "0.13"
 hex = "0.4"
 rand = "0.9"
 sha2 = "0.10"
-thiserror = "2.0"
-zeroize = "1.8"
+thiserror = "2"
+zeroize = "1"
 
 [dev-dependencies]
-serde_json = "1.0"
+serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

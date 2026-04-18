@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.2.1"
+version = "0.2.2"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
-affinidi-did-common = "0.3.2"
+affinidi-did-common = "0.3"
 
 
 [[example]]

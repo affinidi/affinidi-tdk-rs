@@ -18,7 +18,17 @@ use tower_http::{
 use tracing::{Level, event};
 use tracing_subscriber::{filter, layer::SubscriberExt, reload, util::SubscriberInitExt};
 
+/// Start the cache-server using the default config path
+/// (`conf/cache-conf.toml`, relative to the working directory).
 pub async fn start() -> Result<(), DIDCacheError> {
+    start_with_config(crate::config::DEFAULT_CONFIG_PATH).await
+}
+
+/// Start the cache-server with an explicit config path.
+///
+/// Useful when the binary is installed in one location but its config lives
+/// elsewhere (passed via the `-c/--config` CLI flag in `main`).
+pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     // setup logging/tracing framework
     let filter = filter::LevelFilter::INFO; // This can be changed in the config file!
     let (filter, reload_handle) = reload::Layer::new(filter);
@@ -67,7 +77,7 @@ pub async fn start() -> Result<(), DIDCacheError> {
 
     event!(Level::INFO, "[Loading Affinidi DID Cache configuration]");
 
-    let config = init(Some(reload_handle)).expect("Couldn't initialize DID Cache!");
+    let config = init(config_path, Some(reload_handle)).expect("Couldn't initialize DID Cache!");
 
     // Use the affinidi-did-resolver-cache-sdk in local mode
     let cache_config = DIDCacheConfigBuilder::default()

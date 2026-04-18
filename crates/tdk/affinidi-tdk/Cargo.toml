@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.6.3"
+version = "0.6.4"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -32,13 +32,13 @@ affinidi-meeting-place = { version = "0.3", optional = true }
 affinidi-data-integrity = { version = "0.5",  optional = true }
 
 # External Crates
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-serde = { version = "1.0", features = ["derive"], optional = true }
-serde_json = "1.0"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = "1"
 tokio = { workspace = true, features = ["macros", "rt"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [

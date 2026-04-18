@@ -3,7 +3,7 @@
 //! The `KeyAgreement` enum provides curve-polymorphic ECDH operations,
 //! eliminating the combinatorial match-arm explosion of the legacy crate.
 
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zeroize::{Zeroize, ZeroizeOnDrop};
