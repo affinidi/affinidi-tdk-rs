@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-traits"
-version = "0.1.0"
+version = "0.1.1"
 description = "Resolver traits for pluggable DID resolution"
 edition.workspace = true
 authors.workspace = true
@@ -14,10 +14,10 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-did-common = "0.3"
-thiserror = "2.0"
+thiserror = "2"
 
 [dev-dependencies]
-tokio = { version = "1.49", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints]
 workspace = true
