@@ -1,6 +1,6 @@
 # Affinidi Crypto Changelog
 
-## 18th April 2026 (0.1.3)
+## 18th April 2026 (0.1.4)
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
   `ml-dsa` and `slh-dsa` sub-flags. Adds:
