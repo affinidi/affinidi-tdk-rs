@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-server"
-version = "0.7.3"
+version = "0.7.4"
 description = "Affinidi DID Network Cache + Resolver Service"
 edition.workspace = true
 authors.workspace = true
@@ -25,7 +25,7 @@ network = ["affinidi-did-resolver-cache-sdk/network"]
 affinidi-did-resolver-cache-sdk = { version = "0.8", default-features = true, path = "../affinidi-did-resolver-cache-sdk/" }
 affinidi-did-common = "0.3"
 
-didwebvh-rs = "0.4"
+didwebvh-rs = "0.5"
 
 # External Crates
 ahash = "0.8"

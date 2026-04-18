@@ -1,5 +1,23 @@
 # Affinidi Secrets Manager
 
+## 18th April 2026 (0.5.5)
+
+- **FEATURE:** `post-quantum` Cargo feature (off by default) with
+  `ml-dsa` and `slh-dsa` sub-flags. Adds `Secret::generate_ml_dsa_44`,
+  `generate_ml_dsa_65`, `generate_ml_dsa_87`, and
+  `generate_slh_dsa_sha2_128s` methods.
+- **FEATURE:** Multikey (multibase + multicodec) round-trip for
+  ML-DSA-{44,65,67} using the registered `-priv-seed` codecs
+  (`0x131a`–`0x131c`). SLH-DSA has no registered private-key codec;
+  `get_private_keymultibase` returns a descriptive error so callers
+  must persist raw private bytes themselves.
+- **SAFETY:** `get_public_keymultibase` for P-256 / P-384 / secp256k1
+  now bounds-checks `public_bytes` instead of panicking on out-of-range
+  indexing. Pre-existing latent issue surfaced by the PQC review.
+- **TESTS:** New varint-prefix pinning tests assert that emitted
+  multikeys use the exact official multicodec codes (guards against
+  drift toward invented codec values).
+
 ## 15th April 2026 (0.5.3)
 
 - **CHANGE:** Removed `multihash` crate dependency (yanked `core2` transitive dep)

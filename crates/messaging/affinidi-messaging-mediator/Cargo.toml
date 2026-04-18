@@ -87,7 +87,7 @@ redis = { version = "1.1", features = [
 ] }
 
 # ── DID Infrastructure ───────────────────────────────────────────────────
-didwebvh-rs = "0.4"
+didwebvh-rs = "0.5"
 
 # ── AWS Integration (optional, behind `aws` feature) ────────────────────
 ## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)

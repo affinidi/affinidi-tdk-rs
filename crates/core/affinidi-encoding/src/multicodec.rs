@@ -26,6 +26,21 @@ pub const P384_PRIV: u64 = 0x1307;
 pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
 
+// Post-quantum codecs — draft entries from the official multicodec table.
+// We store ML-DSA private keys as the 32-byte seed, so we use the
+// `-priv-seed` codes (0x131a–0x131c), not the 2560/4032/4896-byte
+// expanded-private codes (0x1317–0x1319).
+//
+// SLH-DSA has no private-key codec registered; `Secret::from_multibase`
+// and `get_private_keymultibase` return an error for SLH-DSA keys.
+pub const ML_DSA_44_PUB: u64 = 0x1210;
+pub const ML_DSA_44_PRIV_SEED: u64 = 0x131a;
+pub const ML_DSA_65_PUB: u64 = 0x1211;
+pub const ML_DSA_65_PRIV_SEED: u64 = 0x131b;
+pub const ML_DSA_87_PUB: u64 = 0x1212;
+pub const ML_DSA_87_PRIV_SEED: u64 = 0x131c;
+pub const SLH_DSA_SHA2_128S_PUB: u64 = 0x1220;
+
 /// Known codec types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Codec {
@@ -41,6 +56,13 @@ pub enum Codec {
     P384Priv,
     P521Pub,
     P521Priv,
+    MlDsa44Pub,
+    MlDsa44PrivSeed,
+    MlDsa65Pub,
+    MlDsa65PrivSeed,
+    MlDsa87Pub,
+    MlDsa87PrivSeed,
+    SlhDsaSha2_128sPub,
     Unknown(u64),
 }
 
@@ -60,6 +82,13 @@ impl Codec {
             P384_PRIV => Codec::P384Priv,
             P521_PUB => Codec::P521Pub,
             P521_PRIV => Codec::P521Priv,
+            ML_DSA_44_PUB => Codec::MlDsa44Pub,
+            ML_DSA_44_PRIV_SEED => Codec::MlDsa44PrivSeed,
+            ML_DSA_65_PUB => Codec::MlDsa65Pub,
+            ML_DSA_65_PRIV_SEED => Codec::MlDsa65PrivSeed,
+            ML_DSA_87_PUB => Codec::MlDsa87Pub,
+            ML_DSA_87_PRIV_SEED => Codec::MlDsa87PrivSeed,
+            SLH_DSA_SHA2_128S_PUB => Codec::SlhDsaSha2_128sPub,
             other => Codec::Unknown(other),
         }
     }
@@ -79,6 +108,13 @@ impl Codec {
             Codec::P384Priv => P384_PRIV,
             Codec::P521Pub => P521_PUB,
             Codec::P521Priv => P521_PRIV,
+            Codec::MlDsa44Pub => ML_DSA_44_PUB,
+            Codec::MlDsa44PrivSeed => ML_DSA_44_PRIV_SEED,
+            Codec::MlDsa65Pub => ML_DSA_65_PUB,
+            Codec::MlDsa65PrivSeed => ML_DSA_65_PRIV_SEED,
+            Codec::MlDsa87Pub => ML_DSA_87_PUB,
+            Codec::MlDsa87PrivSeed => ML_DSA_87_PRIV_SEED,
+            Codec::SlhDsaSha2_128sPub => SLH_DSA_SHA2_128S_PUB,
             Codec::Unknown(v) => v,
         }
     }
@@ -93,6 +129,10 @@ impl Codec {
                 | Codec::P256Pub
                 | Codec::P384Pub
                 | Codec::P521Pub
+                | Codec::MlDsa44Pub
+                | Codec::MlDsa65Pub
+                | Codec::MlDsa87Pub
+                | Codec::SlhDsaSha2_128sPub // SLH-DSA has no private codec registered
         )
     }
 
@@ -105,22 +145,40 @@ impl Codec {
             Codec::P256Pub => Some(33),      // compressed
             Codec::P384Pub => Some(49),      // compressed
             Codec::P521Pub => Some(67),      // compressed
+            // ML-DSA public keys: FIPS 204 fixed sizes
+            Codec::MlDsa44Pub => Some(1312),
+            Codec::MlDsa65Pub => Some(1952),
+            Codec::MlDsa87Pub => Some(2592),
+            // ML-DSA priv-seed codec (0x131a–0x131c): 32-byte seed (xi)
+            Codec::MlDsa44PrivSeed | Codec::MlDsa65PrivSeed | Codec::MlDsa87PrivSeed => Some(32),
+            // SLH-DSA-SHA2-128s public key: FIPS 205 (32 bytes)
+            Codec::SlhDsaSha2_128sPub => Some(32),
             _ => None,
         }
     }
 }
 
-/// A multicodec-encoded byte slice (borrowed)
+/// A multicodec-encoded byte slice (borrowed).
+///
+/// `#[repr(transparent)]` guarantees the same memory layout as `[u8]`,
+/// which `MultiEncoded::new` relies on when reinterpreting a borrowed
+/// byte slice as this DST.
 #[derive(Zeroize, ZeroizeOnDrop)]
+#[repr(transparent)]
 pub struct MultiEncoded([u8]);
 
 impl MultiEncoded {
-    /// Create a new multiencoded byte slice
-    /// Validates the codec encoding
+    /// Create a new multiencoded byte slice, validating the varint
+    /// prefix.
     pub fn new(bytes: &[u8]) -> Result<&Self, EncodingError> {
         unsigned_varint::decode::u64(bytes)
             .map_err(|e| EncodingError::InvalidMulticodec(format!("varint decode: {e}")))?;
 
+        // SAFETY: `MultiEncoded` is a `#[repr(transparent)]` wrapper
+        // around `[u8]`, so `&[u8]` and `&MultiEncoded` have identical
+        // memory layout (including DST metadata). The varint prefix has
+        // been validated above, so every subsequent call into `parts()`
+        // will see well-formed bytes.
         Ok(unsafe { &*(bytes as *const [u8] as *const MultiEncoded) })
     }
 
@@ -203,8 +261,11 @@ impl MultiEncodedBuf {
         &self.0
     }
 
-    /// Borrow as MultiEncoded slice
+    /// Borrow as MultiEncoded slice.
     pub fn as_multi_encoded(&self) -> &MultiEncoded {
+        // SAFETY: `MultiEncoded` is `#[repr(transparent)]` over `[u8]`.
+        // The varint prefix was validated when this `MultiEncodedBuf`
+        // was constructed (see `MultiEncodedBuf::new` / `encode_raw`).
         unsafe { &*(self.0.as_slice() as *const [u8] as *const MultiEncoded) }
     }
 }

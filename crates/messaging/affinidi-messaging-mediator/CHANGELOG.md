@@ -46,6 +46,9 @@
 - **REMOVED:** `mediator-setup-vta` binary and `setup` feature flag
 - **REMOVED:** Old `upgrades/` migration system
 - **CHORE:** Tools reorganized into `tools/` subdirectory
+- **CHANGED:** Bumped `didwebvh-rs` dependency from `0.4` to `0.5` for the
+  data-integrity API refactor and PQC support in `affinidi-data-integrity 0.5.4`.
+  No behavioural change to the mediator — wire format is unchanged.
 
 ## 15th April 2026
 
