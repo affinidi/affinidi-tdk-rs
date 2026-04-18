@@ -40,10 +40,43 @@ impl Signer for Secret {
     }
 
     async fn sign(&self, data: &[u8]) -> Result<Vec<u8>, DataIntegrityError> {
-        let private_bytes: [u8; 32] = self.get_private_bytes().try_into().map_err(|_| {
-            DataIntegrityError::CryptoError("Invalid private key length".to_string())
-        })?;
-        let mut signing_key = SigningKey::from_bytes(&private_bytes);
-        Ok(signing_key.sign(data).to_vec())
+        match self.get_key_type() {
+            KeyType::Ed25519 => {
+                let private_bytes: [u8; 32] =
+                    self.get_private_bytes().try_into().map_err(|_| {
+                        DataIntegrityError::CryptoError("Invalid Ed25519 private key length".into())
+                    })?;
+                let mut signing_key = SigningKey::from_bytes(&private_bytes);
+                Ok(signing_key.sign(data).to_vec())
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa44 => {
+                affinidi_crypto::ml_dsa::sign_ml_dsa_44(self.get_private_bytes(), data).map_err(
+                    |e| DataIntegrityError::CryptoError(format!("ML-DSA-44 sign failed: {e}")),
+                )
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa65 => {
+                affinidi_crypto::ml_dsa::sign_ml_dsa_65(self.get_private_bytes(), data).map_err(
+                    |e| DataIntegrityError::CryptoError(format!("ML-DSA-65 sign failed: {e}")),
+                )
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa87 => {
+                affinidi_crypto::ml_dsa::sign_ml_dsa_87(self.get_private_bytes(), data).map_err(
+                    |e| DataIntegrityError::CryptoError(format!("ML-DSA-87 sign failed: {e}")),
+                )
+            }
+            #[cfg(feature = "slh-dsa")]
+            KeyType::SlhDsaSha2_128s => {
+                affinidi_crypto::slh_dsa::sign_slh_dsa_sha2_128s(self.get_private_bytes(), data)
+                    .map_err(|e| {
+                        DataIntegrityError::CryptoError(format!("SLH-DSA sign failed: {e}"))
+                    })
+            }
+            other => Err(DataIntegrityError::CryptoError(format!(
+                "Signer for key type {other:?} is not implemented"
+            ))),
+        }
     }
 }

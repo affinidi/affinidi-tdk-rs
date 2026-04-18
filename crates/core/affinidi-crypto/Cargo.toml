@@ -18,6 +18,12 @@ p256 = ["dep:p256"]
 k256 = ["dep:k256"]
 p384 = ["dep:p384"]
 ed25519 = ["dep:ed25519-dalek"]
+# Post-quantum cryptography (experimental — W3C di-quantum-safe v0.3).
+# `post-quantum` is the umbrella flag; `ml-dsa` and `slh-dsa` can be enabled
+# individually. Off by default.
+post-quantum = ["ml-dsa", "slh-dsa"]
+ml-dsa = ["dep:ml-dsa", "dep:rand_core_10", "dep:rand_10"]
+slh-dsa = ["dep:slh-dsa", "dep:rand_core_10", "dep:rand_10"]
 
 [dependencies]
 affinidi-encoding = "0.1"
@@ -39,6 +45,12 @@ p384 = { version = "0.13", features = [
   "ecdsa-core",
   "arithmetic",
 ], optional = true }
+ml-dsa = { version = "0.1.0-rc.8", features = ["rand_core"], optional = true }
+slh-dsa = { version = "0.2.0-rc.4", optional = true }
+# PQC crates (ml-dsa, slh-dsa) require rand_core 0.10 via `signature` v3. A
+# second copy of rand_core coexists with the 0.6 one used by other primitives.
+rand_core_10 = { package = "rand_core", version = "0.10", optional = true }
+rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "thread_rng"], optional = true }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

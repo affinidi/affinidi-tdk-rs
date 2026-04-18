@@ -1,7 +1,6 @@
-use crate::{
-    DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite, hashing_eddsa_jcs,
-    hashing_eddsa_rdfc,
-};
+#[cfg(feature = "bbs-2023")]
+use crate::crypto_suites::CryptoSuite;
+use crate::{DataIntegrityError, DataIntegrityProof, hashing_eddsa_jcs, hashing_eddsa_rdfc};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -81,46 +80,42 @@ where
         }
     }
 
-    // Dispatch based on cryptosuite
-    let hash_data = match &proof.cryptosuite {
-        CryptoSuite::EddsaJcs2022 => {
-            let jcs_doc = to_string(&signed_doc).map_err(|e| {
-                DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
-            })?;
-            debug!("JCS String: {}", jcs_doc);
+    // Cryptosuites share the same hashing pipeline; canonicalization is the
+    // only axis that varies (JCS vs RDFC).
+    let hash_data = if proof.cryptosuite.is_rdfc() {
+        let doc_value = serde_json::to_value(signed_doc).map_err(|e| {
+            DataIntegrityError::InputDataError(format!(
+                "Failed to serialize document to Value: {e}"
+            ))
+        })?;
 
-            let jcs_proof_config = to_string(&proof).map_err(|e| {
-                DataIntegrityError::InputDataError(format!(
-                    "Failed to canonicalize proof config: {e}"
-                ))
-            })?;
-            debug!("Proof options (JCS): {}", jcs_proof_config);
+        let proof_value_json = serde_json::to_value(&proof).map_err(|e| {
+            DataIntegrityError::InputDataError(format!(
+                "Failed to serialize proof config to Value: {e}"
+            ))
+        })?;
 
-            hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config)
-        }
-        CryptoSuite::EddsaRdfc2022 => {
-            let doc_value = serde_json::to_value(signed_doc).map_err(|e| {
-                DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize document to Value: {e}"
-                ))
-            })?;
-
-            let proof_value_json = serde_json::to_value(&proof).map_err(|e| {
-                DataIntegrityError::InputDataError(format!(
-                    "Failed to serialize proof config to Value: {e}"
-                ))
-            })?;
-
-            hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
-        }
-        // BBS-2023 uses zero-knowledge proofs, not direct signature verification.
-        // Use the bbs_2023 module for BBS proof verification.
+        hashing_eddsa_rdfc(&doc_value, &proof_value_json)?
+    } else {
+        // BBS-2023 is the only JCS-variant that skips the normal verify path.
         #[cfg(feature = "bbs-2023")]
-        CryptoSuite::Bbs2023 => {
+        if matches!(proof.cryptosuite, CryptoSuite::Bbs2023) {
             return Err(DataIntegrityError::InputDataError(
                 "BBS-2023 proofs must be verified via bbs_2023::verify_proof, not verify_data_with_public_key".into(),
             ));
         }
+
+        let jcs_doc = to_string(&signed_doc).map_err(|e| {
+            DataIntegrityError::InputDataError(format!("Failed to canonicalize document: {e}"))
+        })?;
+        debug!("JCS String: {}", jcs_doc);
+
+        let jcs_proof_config = to_string(&proof).map_err(|e| {
+            DataIntegrityError::InputDataError(format!("Failed to canonicalize proof config: {e}"))
+        })?;
+        debug!("Proof options (JCS): {}", jcs_proof_config);
+
+        hashing_eddsa_jcs(&jcs_doc, &jcs_proof_config)
     };
 
     debug!(

@@ -77,8 +77,34 @@ impl DataIntegrityProof {
     where
         S: Serialize,
     {
-        // Initialise as required
-        let crypto_suite = CryptoSuite::EddsaJcs2022;
+        DataIntegrityProof::sign_jcs_data_with_suite(
+            CryptoSuite::EddsaJcs2022,
+            data_doc,
+            context,
+            signer,
+            created,
+        )
+        .await
+    }
+
+    /// Creates a JCS signature with an explicit cryptosuite. Use this to sign
+    /// with post-quantum suites (`mldsa44-jcs-2024`, `slhdsa128-jcs-2024`).
+    pub async fn sign_jcs_data_with_suite<S>(
+        crypto_suite: CryptoSuite,
+        data_doc: &S,
+        context: Option<Vec<String>>,
+        signer: &dyn Signer,
+        created: Option<String>,
+    ) -> Result<DataIntegrityProof, DataIntegrityError>
+    where
+        S: Serialize,
+    {
+        if crypto_suite.is_rdfc() {
+            return Err(DataIntegrityError::InputDataError(format!(
+                "Cryptosuite {} uses RDFC canonicalization; call sign_rdfc_data_with_suite instead",
+                String::try_from(crypto_suite).unwrap_or_default()
+            )));
+        }
         crypto_suite.validate_key_type(signer.key_type())?;
         debug!(
             "CryptoSuite: {}",
@@ -155,7 +181,31 @@ impl DataIntegrityProof {
         signer: &dyn Signer,
         created: Option<String>,
     ) -> Result<DataIntegrityProof, DataIntegrityError> {
-        let crypto_suite = CryptoSuite::EddsaRdfc2022;
+        DataIntegrityProof::sign_rdfc_data_with_suite(
+            CryptoSuite::EddsaRdfc2022,
+            data_doc,
+            context,
+            signer,
+            created,
+        )
+        .await
+    }
+
+    /// Creates an RDFC signature with an explicit cryptosuite. Use this to sign
+    /// with post-quantum suites (`mldsa44-rdfc-2024`, `slhdsa128-rdfc-2024`).
+    pub async fn sign_rdfc_data_with_suite(
+        crypto_suite: CryptoSuite,
+        data_doc: &serde_json::Value,
+        context: Option<Vec<String>>,
+        signer: &dyn Signer,
+        created: Option<String>,
+    ) -> Result<DataIntegrityProof, DataIntegrityError> {
+        if !crypto_suite.is_rdfc() {
+            return Err(DataIntegrityError::InputDataError(format!(
+                "Cryptosuite {} uses JCS canonicalization; call sign_jcs_data_with_suite instead",
+                String::try_from(crypto_suite).unwrap_or_default()
+            )));
+        }
         crypto_suite.validate_key_type(signer.key_type())?;
         debug!(
             "CryptoSuite: {}",
@@ -296,6 +346,72 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[tokio::test]
+    async fn sign_verify_jcs_ml_dsa_44() {
+        use crate::{crypto_suites::CryptoSuite, verification_proof::verify_data_with_public_key};
+
+        let secret = Secret::generate_ml_dsa_44(Some("k-did#k-did"), Some(&[5u8; 32]));
+        let doc = json!({"hello": "pqc"});
+
+        let proof = DataIntegrityProof::sign_jcs_data_with_suite(
+            CryptoSuite::MlDsa44Jcs2024,
+            &doc,
+            None,
+            &secret,
+            None,
+        )
+        .await
+        .expect("sign ml-dsa");
+
+        assert_eq!(proof.cryptosuite, CryptoSuite::MlDsa44Jcs2024);
+
+        let result = verify_data_with_public_key(&doc, None, &proof, secret.get_public_bytes())
+            .expect("verify ml-dsa");
+        assert!(result.verified);
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[tokio::test]
+    async fn sign_wrong_suite_for_key_fails() {
+        use crate::crypto_suites::CryptoSuite;
+
+        let secret = Secret::generate_ml_dsa_44(Some("k"), Some(&[1u8; 32]));
+        let doc = json!({"x": 1});
+        let err = DataIntegrityProof::sign_jcs_data_with_suite(
+            CryptoSuite::EddsaJcs2022,
+            &doc,
+            None,
+            &secret,
+            None,
+        )
+        .await;
+        assert!(err.is_err());
+    }
+
+    #[cfg(feature = "slh-dsa")]
+    #[tokio::test]
+    async fn sign_verify_jcs_slh_dsa_128s() {
+        use crate::{crypto_suites::CryptoSuite, verification_proof::verify_data_with_public_key};
+
+        let secret = Secret::generate_slh_dsa_sha2_128s(Some("k#k"));
+        let doc = json!({"hello": "slh"});
+
+        let proof = DataIntegrityProof::sign_jcs_data_with_suite(
+            CryptoSuite::SlhDsa128Jcs2024,
+            &doc,
+            None,
+            &secret,
+            None,
+        )
+        .await
+        .expect("sign slh-dsa");
+
+        let result = verify_data_with_public_key(&doc, None, &proof, secret.get_public_bytes())
+            .expect("verify slh-dsa");
+        assert!(result.verified);
     }
 
     #[tokio::test]

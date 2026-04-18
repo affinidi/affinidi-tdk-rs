@@ -18,6 +18,10 @@ p256 = ["affinidi-crypto/p256"]
 k256 = ["affinidi-crypto/k256"]
 p384 = ["affinidi-crypto/p384"]
 ed25519 = ["affinidi-crypto/ed25519"]
+# Post-quantum cryptography (experimental). Off by default.
+post-quantum = ["ml-dsa", "slh-dsa"]
+ml-dsa = ["affinidi-crypto/ml-dsa"]
+slh-dsa = ["affinidi-crypto/slh-dsa"]
 
 [dependencies]
 affinidi-crypto = "0.1"

@@ -23,6 +23,22 @@ pub enum CryptoSuite {
     #[cfg(feature = "bbs-2023")]
     #[serde(rename = "bbs-2023")]
     Bbs2023,
+    /// ML-DSA-44 with JCS canonicalization — W3C `di-quantum-safe` v0.3 (experimental).
+    #[cfg(feature = "ml-dsa")]
+    #[serde(rename = "mldsa44-jcs-2024")]
+    MlDsa44Jcs2024,
+    /// ML-DSA-44 with RDFC canonicalization — W3C `di-quantum-safe` v0.3 (experimental).
+    #[cfg(feature = "ml-dsa")]
+    #[serde(rename = "mldsa44-rdfc-2024")]
+    MlDsa44Rdfc2024,
+    /// SLH-DSA-SHA2-128s with JCS canonicalization — W3C `di-quantum-safe` v0.3 (experimental).
+    #[cfg(feature = "slh-dsa")]
+    #[serde(rename = "slhdsa128-jcs-2024")]
+    SlhDsa128Jcs2024,
+    /// SLH-DSA-SHA2-128s with RDFC canonicalization — W3C `di-quantum-safe` v0.3 (experimental).
+    #[cfg(feature = "slh-dsa")]
+    #[serde(rename = "slhdsa128-rdfc-2024")]
+    SlhDsa128Rdfc2024,
 }
 
 impl TryFrom<&str> for CryptoSuite {
@@ -34,6 +50,14 @@ impl TryFrom<&str> for CryptoSuite {
             "eddsa-rdfc-2022" => Ok(CryptoSuite::EddsaRdfc2022),
             #[cfg(feature = "bbs-2023")]
             "bbs-2023" => Ok(CryptoSuite::Bbs2023),
+            #[cfg(feature = "ml-dsa")]
+            "mldsa44-jcs-2024" => Ok(CryptoSuite::MlDsa44Jcs2024),
+            #[cfg(feature = "ml-dsa")]
+            "mldsa44-rdfc-2024" => Ok(CryptoSuite::MlDsa44Rdfc2024),
+            #[cfg(feature = "slh-dsa")]
+            "slhdsa128-jcs-2024" => Ok(CryptoSuite::SlhDsa128Jcs2024),
+            #[cfg(feature = "slh-dsa")]
+            "slhdsa128-rdfc-2024" => Ok(CryptoSuite::SlhDsa128Rdfc2024),
             _ => Err(DataIntegrityError::InputDataError(format!(
                 "Unsupported crypto suite: {value}",
             ))),
@@ -58,6 +82,14 @@ impl TryFrom<CryptoSuite> for String {
             CryptoSuite::EddsaRdfc2022 => Ok("eddsa-rdfc-2022".to_string()),
             #[cfg(feature = "bbs-2023")]
             CryptoSuite::Bbs2023 => Ok("bbs-2023".to_string()),
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Jcs2024 => Ok("mldsa44-jcs-2024".to_string()),
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Rdfc2024 => Ok("mldsa44-rdfc-2024".to_string()),
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Jcs2024 => Ok("slhdsa128-jcs-2024".to_string()),
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Rdfc2024 => Ok("slhdsa128-rdfc-2024".to_string()),
         }
     }
 }
@@ -65,17 +97,49 @@ impl TryFrom<CryptoSuite> for String {
 impl CryptoSuite {
     /// Validates that the given key type is compatible with this cryptosuite.
     pub fn validate_key_type(&self, key_type: KeyType) -> Result<(), DataIntegrityError> {
+        let bad = |expected: &str| {
+            DataIntegrityError::InputDataError(format!(
+                "Unsupported key type {key_type:?} for cryptosuite {} (expected {expected})",
+                String::try_from(*self).unwrap_or_default()
+            ))
+        };
         match self {
             CryptoSuite::EddsaJcs2022 | CryptoSuite::EddsaRdfc2022 => match key_type {
                 KeyType::Ed25519 => Ok(()),
-                _ => Err(DataIntegrityError::InputDataError(format!(
-                    "Unsupported key type {key_type:?} for cryptosuite {}",
-                    String::try_from(*self).unwrap_or_default()
-                ))),
+                _ => Err(bad("Ed25519")),
             },
             // BBS-2023 uses BLS12-381 keys, not traditional key types
             #[cfg(feature = "bbs-2023")]
             CryptoSuite::Bbs2023 => Ok(()),
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Jcs2024 | CryptoSuite::MlDsa44Rdfc2024 => match key_type {
+                KeyType::MlDsa44 => Ok(()),
+                _ => Err(bad("ML-DSA-44")),
+            },
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Jcs2024 | CryptoSuite::SlhDsa128Rdfc2024 => match key_type {
+                KeyType::SlhDsaSha2_128s => Ok(()),
+                _ => Err(bad("SLH-DSA-SHA2-128s")),
+            },
+        }
+    }
+
+    /// Returns `true` if this cryptosuite uses RDFC canonicalization,
+    /// `false` for JCS.
+    pub fn is_rdfc(&self) -> bool {
+        match self {
+            CryptoSuite::EddsaJcs2022 => false,
+            CryptoSuite::EddsaRdfc2022 => true,
+            #[cfg(feature = "bbs-2023")]
+            CryptoSuite::Bbs2023 => false,
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Jcs2024 => false,
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Rdfc2024 => true,
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Jcs2024 => false,
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Rdfc2024 => true,
         }
     }
 
@@ -104,6 +168,24 @@ impl CryptoSuite {
             CryptoSuite::Bbs2023 => Err(DataIntegrityError::InputDataError(
                 "BBS-2023 verification uses bbs_2023::verify_proof, not CryptoSuite::verify".into(),
             )),
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Jcs2024 | CryptoSuite::MlDsa44Rdfc2024 => {
+                affinidi_crypto::ml_dsa::verify_ml_dsa_44(key, data, signature).map_err(|e| {
+                    DataIntegrityError::VerificationError(format!(
+                        "ML-DSA-44 verification failed: {e}"
+                    ))
+                })
+            }
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Jcs2024 | CryptoSuite::SlhDsa128Rdfc2024 => {
+                affinidi_crypto::slh_dsa::verify_slh_dsa_sha2_128s(key, data, signature).map_err(
+                    |e| {
+                        DataIntegrityError::VerificationError(format!(
+                            "SLH-DSA-SHA2-128s verification failed: {e}"
+                        ))
+                    },
+                )
+            }
         }
     }
 }

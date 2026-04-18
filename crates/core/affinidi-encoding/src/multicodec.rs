@@ -26,6 +26,18 @@ pub const P384_PRIV: u64 = 0x1307;
 pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
 
+// Post-quantum codecs (draft entries in the multicodec table).
+// Public: aligns with W3C `di-quantum-safe` cryptosuite multi-byte prefixes.
+// Private: draft convention (pub code + 0x20).
+pub const ML_DSA_44_PUB: u64 = 0x1210;
+pub const ML_DSA_44_PRIV: u64 = 0x1230;
+pub const ML_DSA_65_PUB: u64 = 0x1211;
+pub const ML_DSA_65_PRIV: u64 = 0x1231;
+pub const ML_DSA_87_PUB: u64 = 0x1212;
+pub const ML_DSA_87_PRIV: u64 = 0x1232;
+pub const SLH_DSA_SHA2_128S_PUB: u64 = 0x1220;
+pub const SLH_DSA_SHA2_128S_PRIV: u64 = 0x1240;
+
 /// Known codec types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Codec {
@@ -41,6 +53,14 @@ pub enum Codec {
     P384Priv,
     P521Pub,
     P521Priv,
+    MlDsa44Pub,
+    MlDsa44Priv,
+    MlDsa65Pub,
+    MlDsa65Priv,
+    MlDsa87Pub,
+    MlDsa87Priv,
+    SlhDsaSha2_128sPub,
+    SlhDsaSha2_128sPriv,
     Unknown(u64),
 }
 
@@ -60,6 +80,14 @@ impl Codec {
             P384_PRIV => Codec::P384Priv,
             P521_PUB => Codec::P521Pub,
             P521_PRIV => Codec::P521Priv,
+            ML_DSA_44_PUB => Codec::MlDsa44Pub,
+            ML_DSA_44_PRIV => Codec::MlDsa44Priv,
+            ML_DSA_65_PUB => Codec::MlDsa65Pub,
+            ML_DSA_65_PRIV => Codec::MlDsa65Priv,
+            ML_DSA_87_PUB => Codec::MlDsa87Pub,
+            ML_DSA_87_PRIV => Codec::MlDsa87Priv,
+            SLH_DSA_SHA2_128S_PUB => Codec::SlhDsaSha2_128sPub,
+            SLH_DSA_SHA2_128S_PRIV => Codec::SlhDsaSha2_128sPriv,
             other => Codec::Unknown(other),
         }
     }
@@ -79,6 +107,14 @@ impl Codec {
             Codec::P384Priv => P384_PRIV,
             Codec::P521Pub => P521_PUB,
             Codec::P521Priv => P521_PRIV,
+            Codec::MlDsa44Pub => ML_DSA_44_PUB,
+            Codec::MlDsa44Priv => ML_DSA_44_PRIV,
+            Codec::MlDsa65Pub => ML_DSA_65_PUB,
+            Codec::MlDsa65Priv => ML_DSA_65_PRIV,
+            Codec::MlDsa87Pub => ML_DSA_87_PUB,
+            Codec::MlDsa87Priv => ML_DSA_87_PRIV,
+            Codec::SlhDsaSha2_128sPub => SLH_DSA_SHA2_128S_PUB,
+            Codec::SlhDsaSha2_128sPriv => SLH_DSA_SHA2_128S_PRIV,
             Codec::Unknown(v) => v,
         }
     }
@@ -93,6 +129,10 @@ impl Codec {
                 | Codec::P256Pub
                 | Codec::P384Pub
                 | Codec::P521Pub
+                | Codec::MlDsa44Pub
+                | Codec::MlDsa65Pub
+                | Codec::MlDsa87Pub
+                | Codec::SlhDsaSha2_128sPub
         )
     }
 
@@ -105,6 +145,15 @@ impl Codec {
             Codec::P256Pub => Some(33),      // compressed
             Codec::P384Pub => Some(49),      // compressed
             Codec::P521Pub => Some(67),      // compressed
+            // ML-DSA public keys: FIPS 204 fixed sizes
+            Codec::MlDsa44Pub => Some(1312),
+            Codec::MlDsa65Pub => Some(1952),
+            Codec::MlDsa87Pub => Some(2592),
+            // ML-DSA private representation: 32-byte seed (xi) per FIPS 204
+            Codec::MlDsa44Priv | Codec::MlDsa65Priv | Codec::MlDsa87Priv => Some(32),
+            // SLH-DSA-SHA2-128s: FIPS 205 sizes (PK = 32, SK = 64)
+            Codec::SlhDsaSha2_128sPub => Some(32),
+            Codec::SlhDsaSha2_128sPriv => Some(64),
             _ => None,
         }
     }
