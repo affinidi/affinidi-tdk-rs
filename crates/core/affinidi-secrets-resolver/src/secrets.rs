@@ -91,6 +91,35 @@ impl TryFrom<SecretShadow> for Secret {
     }
 }
 
+/// Compresses a SEC1 uncompressed EC point (`0x04 || x || y`) to the
+/// multicodec-encoded compressed form (`parity || x`), wrapped with
+/// the given public-key codec. Returns `KeyError` if `public_bytes` is
+/// too short for the claimed curve instead of panicking.
+fn compress_ec_point(
+    public_bytes: &[u8],
+    compressed_len: usize,
+    codec: u64,
+) -> Result<MultiEncodedBuf> {
+    let coord_len = compressed_len - 1;
+    let required = 1 + 2 * coord_len; // 0x04 || x || y
+    if public_bytes.len() < required {
+        return Err(SecretsResolverError::KeyError(format!(
+            "public_bytes too short to compress: expected >= {required} bytes, got {}",
+            public_bytes.len()
+        )));
+    }
+    let last_y_byte = public_bytes[required - 1];
+    let parity: u8 = if last_y_byte.is_multiple_of(2) {
+        0x02
+    } else {
+        0x03
+    };
+    let mut compressed: Vec<u8> = Vec::with_capacity(compressed_len);
+    compressed.push(parity);
+    compressed.extend_from_slice(&public_bytes[1..=coord_len]);
+    Ok(MultiEncodedBuf::encode_bytes(codec, &compressed))
+}
+
 impl Secret {
     /// Helper function to get raw bytes
     fn convert_to_raw(input: &str) -> Result<Vec<u8>> {
@@ -270,50 +299,14 @@ impl Secret {
         let encoded = match self.key_type {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
-            KeyType::P256 => {
-                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 33] = [0; 33];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..33].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
-            }
-            KeyType::P384 => {
-                let parity: u8 = if self.public_bytes[96].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 49] = [0; 49];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..49].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(P384_PUB, &compressed)
-            }
+            KeyType::P256 => compress_ec_point(&self.public_bytes, 33, P256_PUB)?,
+            KeyType::P384 => compress_ec_point(&self.public_bytes, 49, P384_PUB)?,
             KeyType::P521 => {
                 return Err(SecretsResolverError::KeyError(
                     "P-521 is not supported".to_string(),
                 ));
             }
-            KeyType::Secp256k1 => {
-                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 33] = [0; 33];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..33].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &compressed)
-            }
+            KeyType::Secp256k1 => compress_ec_point(&self.public_bytes, 33, SECP256K1_PUB)?,
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => MultiEncodedBuf::encode_bytes(ML_DSA_44_PUB, &self.public_bytes),
             #[cfg(feature = "ml-dsa")]
@@ -841,6 +834,28 @@ mod tests {
         let expected = varint_prefix(SLH_DSA_SHA2_128S_PUB);
         assert_eq!(&raw[..expected.len()], expected.as_slice());
         assert_eq!(raw.len() - expected.len(), 32);
+    }
+
+    #[test]
+    fn get_public_keymultibase_bounds_check_p256() {
+        // Construct a Secret with deliberately too-short EC public_bytes.
+        // The compression path used to panic on index 64; now it must
+        // return a structured error.
+        let mut s = Secret::generate_p256(None, Some(&[1u8; 32])).unwrap();
+        s.public_bytes.clear(); // zero bytes — clearly insufficient
+        let err = s.get_public_keymultibase().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("too short"),
+            "expected bounds-check error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn get_public_keymultibase_bounds_check_p384() {
+        let mut s = Secret::generate_p384(None, Some(&[1u8; 48])).unwrap();
+        s.public_bytes.truncate(10);
+        assert!(s.get_public_keymultibase().is_err());
     }
 
     #[cfg(feature = "slh-dsa")]

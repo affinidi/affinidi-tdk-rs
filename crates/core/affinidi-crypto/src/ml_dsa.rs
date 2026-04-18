@@ -369,6 +369,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sign_rejects_invalid_seed_length() {
+        // sign_ml_dsa_* must surface a KeyError for wrong-length seeds,
+        // not panic. Guards the `seed_to_b32` fail path.
+        let short = [0u8; 31];
+        let long = [0u8; 64];
+        assert!(sign_ml_dsa_44(&short, b"x").is_err());
+        assert!(sign_ml_dsa_44(&long, b"x").is_err());
+        assert!(sign_ml_dsa_65(&short, b"x").is_err());
+        assert!(sign_ml_dsa_87(&short, b"x").is_err());
+    }
+
     /// Param-set routing guard: the same seed must produce *different* public
     /// keys across parameter sets. If dispatch ever routes MlDsa65 to MlDsa44
     /// internals (or similar), this fails.

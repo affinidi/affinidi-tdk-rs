@@ -36,6 +36,7 @@
 //! internal ExpandedSigningKey wipes its matrix on drop. The enum
 //! wrapper this module holds does not add extra copies.
 
+#[cfg(feature = "ml-dsa")]
 use std::sync::OnceLock;
 
 use affinidi_secrets_resolver::secrets::KeyType;

@@ -313,6 +313,53 @@ mod tests {
         assert_eq!(result.passed.len(), 3);
     }
 
+    /// `RequireThreshold(0)` must behave identically to `RequireAll` so
+    /// the degenerate case (caller accidentally passing 0) doesn't
+    /// silently accept every empty-proof set.
+    #[tokio::test]
+    async fn verify_multi_threshold_zero_equals_require_all() {
+        let a = make_signer("ed25519", 1);
+        let signers: Vec<&dyn Signer> = vec![&a];
+        let doc = json!({"t": 0});
+        let proofs = DataIntegrityProof::sign_multi(&doc, &signers, SignOptions::new())
+            .await
+            .unwrap();
+
+        let require_all = verify_multi(
+            &proofs,
+            &doc,
+            &DidKeyResolver,
+            VerifyOptions::new(),
+            VerifyPolicy::RequireAll,
+        )
+        .await;
+        let threshold_zero = verify_multi(
+            &proofs,
+            &doc,
+            &DidKeyResolver,
+            VerifyOptions::new(),
+            VerifyPolicy::RequireThreshold(0),
+        )
+        .await;
+        assert_eq!(
+            require_all.policy_satisfied,
+            threshold_zero.policy_satisfied
+        );
+        assert_eq!(require_all.passed.len(), threshold_zero.passed.len());
+
+        // Also: both must fail on an empty proof set.
+        let empty: Vec<DataIntegrityProof> = vec![];
+        let r = verify_multi(
+            &empty,
+            &doc,
+            &DidKeyResolver,
+            VerifyOptions::new(),
+            VerifyPolicy::RequireThreshold(0),
+        )
+        .await;
+        assert!(!r.policy_satisfied);
+    }
+
     #[tokio::test]
     async fn sign_multi_empty_signer_list_is_error() {
         let doc = json!({});

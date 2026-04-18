@@ -29,6 +29,7 @@ pub struct VerificationProof {
     since = "0.6.0",
     note = "use DataIntegrityProof::verify_with_public_key with VerifyOptions"
 )]
+#[allow(deprecated)]
 pub fn verify_data_with_public_key<S>(
     signed_doc: &S,
     context: Option<Vec<String>>,
@@ -153,6 +154,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use crate::{
         DataIntegrityError, DataIntegrityProof, crypto_suites::CryptoSuite,

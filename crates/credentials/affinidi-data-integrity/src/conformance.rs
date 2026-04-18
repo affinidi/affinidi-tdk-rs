@@ -148,4 +148,35 @@ mod tests {
         let err = verify_conformance(&p, CryptoSuite::EddsaJcs2022).unwrap_err();
         assert!(matches!(err, DataIntegrityError::Conformance(_)));
     }
+
+    #[tokio::test]
+    async fn conformance_rejects_missing_verification_method() {
+        let mut p = sample_proof().await;
+        p.verification_method = String::new();
+        let err = verify_conformance(&p, CryptoSuite::EddsaJcs2022).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("verificationMethod"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn conformance_rejects_malformed_proof_value() {
+        let mut p = sample_proof().await;
+        // Valid base64 but invalid multibase — no base prefix character.
+        p.proof_value = Some("AABB".to_string());
+        let err = verify_conformance(&p, CryptoSuite::EddsaJcs2022).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("multibase"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn conformance_rejects_malformed_created_timestamp() {
+        let mut p = sample_proof().await;
+        p.created = Some("not-a-timestamp".to_string());
+        let err = verify_conformance(&p, CryptoSuite::EddsaJcs2022).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("RFC 3339") || msg.contains("created"),
+            "got: {msg}"
+        );
+    }
 }

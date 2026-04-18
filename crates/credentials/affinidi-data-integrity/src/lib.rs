@@ -63,12 +63,6 @@ will live in sibling crates (`affinidi-data-integrity-jose`,
 [`Signer::cryptosuite`]: crate::signer::Signer::cryptosuite
 */
 
-// TODO(pqc-refactor): remove this once all internal call-sites have been
-// migrated to the structured DataIntegrityError variants. The legacy
-// string-payload variants are kept `#[deprecated]` for one minor version
-// to give downstream consumers time to migrate.
-#![allow(deprecated)]
-
 use chrono::{DateTime, Utc};
 use crypto_suites::CryptoSuite;
 use multibase::Base;
@@ -272,6 +266,7 @@ impl DataIntegrityProof {
         since = "0.6.0",
         note = "use DataIntegrityProof::sign with SignOptions"
     )]
+    #[allow(deprecated)]
     pub async fn sign_jcs_data<S>(
         data_doc: &S,
         context: Option<Vec<String>>,
@@ -299,6 +294,7 @@ impl DataIntegrityProof {
         since = "0.6.0",
         note = "use DataIntegrityProof::sign with SignOptions"
     )]
+    #[allow(deprecated)]
     pub async fn sign_jcs_data_with_suite<S>(
         crypto_suite: CryptoSuite,
         data_doc: &S,
@@ -332,6 +328,7 @@ impl DataIntegrityProof {
         since = "0.6.0",
         note = "use DataIntegrityProof::sign with SignOptions"
     )]
+    #[allow(deprecated)]
     pub async fn sign_rdfc_data(
         data_doc: &serde_json::Value,
         context: Option<Vec<String>>,
@@ -356,6 +353,7 @@ impl DataIntegrityProof {
         since = "0.6.0",
         note = "use DataIntegrityProof::sign with SignOptions"
     )]
+    #[allow(deprecated)]
     pub async fn sign_rdfc_data_with_suite(
         crypto_suite: CryptoSuite,
         data_doc: &serde_json::Value,
@@ -664,6 +662,9 @@ fn parse_created_opt(s: Option<String>) -> Result<Option<DateTime<Utc>>, DataInt
 }
 
 #[cfg(test)]
+// Tests exercise deprecated shims alongside the new API to verify the
+// migration path; silence the deprecation lint inside the module.
+#[allow(deprecated)]
 mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::json;
@@ -774,6 +775,33 @@ mod tests {
             err,
             crate::DataIntegrityError::KeyTypeMismatch { .. }
         ));
+    }
+
+    /// An attacker rewrites the `cryptosuite` field on a proof they
+    /// otherwise can't forge — e.g. swaps `eddsa-jcs-2022` to
+    /// `eddsa-rdfc-2022`. Verification must fail because the
+    /// canonicalization axis changes the hashed bytes.
+    #[tokio::test]
+    async fn verify_rejects_cryptosuite_tampering() {
+        use crate::crypto_suites::CryptoSuite;
+
+        let secret = Secret::generate_ed25519(Some("did:key:k#k"), Some(&[77u8; 32]));
+        let doc = json!({"tamper": "target"});
+        let mut proof = DataIntegrityProof::sign(&doc, &secret, SignOptions::new())
+            .await
+            .expect("sign");
+        assert_eq!(proof.cryptosuite, CryptoSuite::EddsaJcs2022);
+
+        // Attacker flips the suite.
+        proof.cryptosuite = CryptoSuite::EddsaRdfc2022;
+
+        let err = proof
+            .verify_with_public_key(&doc, secret.get_public_bytes(), VerifyOptions::new())
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::DataIntegrityError::InvalidSignature { .. }),
+            "expected InvalidSignature after cryptosuite tampering, got: {err:?}"
+        );
     }
 
     #[tokio::test]

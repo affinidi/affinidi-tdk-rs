@@ -158,17 +158,27 @@ impl Codec {
     }
 }
 
-/// A multicodec-encoded byte slice (borrowed)
+/// A multicodec-encoded byte slice (borrowed).
+///
+/// `#[repr(transparent)]` guarantees the same memory layout as `[u8]`,
+/// which `MultiEncoded::new` relies on when reinterpreting a borrowed
+/// byte slice as this DST.
 #[derive(Zeroize, ZeroizeOnDrop)]
+#[repr(transparent)]
 pub struct MultiEncoded([u8]);
 
 impl MultiEncoded {
-    /// Create a new multiencoded byte slice
-    /// Validates the codec encoding
+    /// Create a new multiencoded byte slice, validating the varint
+    /// prefix.
     pub fn new(bytes: &[u8]) -> Result<&Self, EncodingError> {
         unsigned_varint::decode::u64(bytes)
             .map_err(|e| EncodingError::InvalidMulticodec(format!("varint decode: {e}")))?;
 
+        // SAFETY: `MultiEncoded` is a `#[repr(transparent)]` wrapper
+        // around `[u8]`, so `&[u8]` and `&MultiEncoded` have identical
+        // memory layout (including DST metadata). The varint prefix has
+        // been validated above, so every subsequent call into `parts()`
+        // will see well-formed bytes.
         Ok(unsafe { &*(bytes as *const [u8] as *const MultiEncoded) })
     }
 
@@ -251,8 +261,11 @@ impl MultiEncodedBuf {
         &self.0
     }
 
-    /// Borrow as MultiEncoded slice
+    /// Borrow as MultiEncoded slice.
     pub fn as_multi_encoded(&self) -> &MultiEncoded {
+        // SAFETY: `MultiEncoded` is `#[repr(transparent)]` over `[u8]`.
+        // The varint prefix was validated when this `MultiEncodedBuf`
+        // was constructed (see `MultiEncodedBuf::new` / `encode_raw`).
         unsafe { &*(self.0.as_slice() as *const [u8] as *const MultiEncoded) }
     }
 }
