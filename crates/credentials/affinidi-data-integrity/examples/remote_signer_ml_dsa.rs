@@ -11,8 +11,6 @@
 //! Build with the `post-quantum` feature:
 //! `cargo run --example remote_signer_ml_dsa -p affinidi-data-integrity --features post-quantum`
 
-#![cfg(feature = "ml-dsa")]
-
 use affinidi_data_integrity::{
     DataIntegrityError, DataIntegrityProof, SignOptions, VerifyOptions, signer::Signer,
 };

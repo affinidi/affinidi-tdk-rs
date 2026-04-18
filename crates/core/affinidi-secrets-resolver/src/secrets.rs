@@ -338,7 +338,7 @@ impl Secret {
     }
 
     /// Will convert a string to a base58btc encoded multihash (SHA256) representation
-    /// base58<multihash<multikey>>
+    /// `base58<multihash<multikey>>`
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // Multihash binary format: varint(code) || varint(length) || digest

@@ -1,3 +1,8 @@
+// These integration tests exercise the deprecated 0.5.x sign/verify
+// entry points to pin backward-compat behaviour. They are expected to
+// emit deprecation warnings; suppress them module-wide.
+#![allow(deprecated)]
+
 use affinidi_data_integrity::{
     DataIntegrityProof, verification_proof::verify_data_with_public_key,
 };

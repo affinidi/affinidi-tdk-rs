@@ -502,12 +502,12 @@ where
     }
 
     // Context match (only when caller explicitly supplied one).
-    if let Some(expected) = &options.expected_context {
-        if proof.context.as_ref() != Some(expected) {
-            return Err(DataIntegrityError::Conformance(
-                "Document context does not match proof context".to_string(),
-            ));
-        }
+    if let Some(expected) = &options.expected_context
+        && proof.context.as_ref() != Some(expected)
+    {
+        return Err(DataIntegrityError::Conformance(
+            "Document context does not match proof context".to_string(),
+        ));
     }
 
     // Decode proofValue.

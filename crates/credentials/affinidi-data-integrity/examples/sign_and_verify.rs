@@ -1,6 +1,9 @@
-use affinidi_data_integrity::{
-    DataIntegrityProof, verification_proof::verify_data_with_public_key,
-};
+//! Sign a JSON-LD document with the unified API and verify it locally
+//! using caller-provided public-key bytes.
+//!
+//! Run: `cargo run --example sign_and_verify -p affinidi-data-integrity`
+
+use affinidi_data_integrity::{DataIntegrityProof, SignOptions, VerifyOptions};
 use affinidi_secrets_resolver::secrets::Secret;
 use serde_json::json;
 use tracing_subscriber::filter;
@@ -66,11 +69,12 @@ async fn main() {
     let secret = Secret::from_multibase(pri_key, Some(&format!("did:key:{pub_key}#{pub_key}")))
         .expect("Couldn't create Secret");
 
-    let proof = DataIntegrityProof::sign_jcs_data(&input_doc, None, &secret, None)
+    let proof = DataIntegrityProof::sign(&input_doc, &secret, SignOptions::new())
         .await
         .expect("Couldn't sign Document");
 
-    let _ = verify_data_with_public_key(&input_doc, None, &proof, secret.get_public_bytes())
+    proof
+        .verify_with_public_key(&input_doc, secret.get_public_bytes(), VerifyOptions::new())
         .expect("Couldn't validate doc");
 
     println!(

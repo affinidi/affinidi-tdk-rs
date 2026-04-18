@@ -9,8 +9,6 @@
 //! Run:
 //! `cargo run --example sign_multi_hybrid -p affinidi-data-integrity --features post-quantum`
 
-#![cfg(feature = "ml-dsa")]
-
 use affinidi_data_integrity::{
     DataIntegrityProof, DidKeyResolver, SignOptions, VerifyOptions, VerifyPolicy, signer::Signer,
     verify_multi,

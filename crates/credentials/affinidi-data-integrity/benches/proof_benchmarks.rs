@@ -56,6 +56,7 @@ fn make_signer(suite: CryptoSuite) -> Secret {
 }
 
 fn suites_enabled() -> Vec<(CryptoSuite, &'static str)> {
+    #[allow(unused_mut)] // mutated only when post-quantum features are on
     let mut out: Vec<(CryptoSuite, &'static str)> = vec![
         (CryptoSuite::EddsaJcs2022, "eddsa-jcs-2022"),
         (CryptoSuite::EddsaRdfc2022, "eddsa-rdfc-2022"),

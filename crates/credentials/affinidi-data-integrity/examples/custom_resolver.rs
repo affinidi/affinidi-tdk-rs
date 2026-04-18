@@ -26,6 +26,7 @@ use std::sync::Mutex;
 /// Resolver that looks up DID verification methods in a local map.
 /// A production implementation would instead fetch DID documents via
 /// HTTP (did:web), a cache (did:webvh), or local storage (did:peer).
+#[derive(Default)]
 pub struct MapResolver {
     /// map<verification-method URI, (key_type, public_key_bytes)>
     entries: Mutex<HashMap<String, ResolvedKey>>,
@@ -33,9 +34,7 @@ pub struct MapResolver {
 
 impl MapResolver {
     pub fn new() -> Self {
-        Self {
-            entries: Mutex::new(HashMap::new()),
-        }
+        Self::default()
     }
 
     pub fn insert(&self, vm: String, key: ResolvedKey) {
@@ -68,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // to be told — it'd fetch DID documents on demand.
     let mut secret = Secret::generate_ed25519(None, Some(&[9u8; 32]));
     let pk_mb = secret.get_public_keymultibase()?;
-    let vm = format!("did:web:example.com#key-0");
+    let vm = "did:web:example.com#key-0".to_string();
     secret.id = vm.clone();
 
     let resolver = MapResolver::new();

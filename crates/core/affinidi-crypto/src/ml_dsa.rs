@@ -93,14 +93,18 @@ fn seed_to_b32(seed: &[u8]) -> Result<B32> {
 /// signing thousands of credentials can cache the expanded key once and
 /// reuse it; this enum is the cache-friendly representation.
 ///
-/// Wrap the resulting key in a [`zeroize::Zeroizing`] if you need the
-/// sensitive material cleared on drop — the ml-dsa crate zeroizes its
-/// internals by default, but the `Vec` / enum wrapper does not
-/// automatically.
+/// Each variant is `Box`ed because the ML-DSA-87 `SigningKey` is ~100
+/// kB and inlining it would force every variant (including ML-DSA-44
+/// at ~3 kB) to carry the same stack footprint. Boxing adds one
+/// indirection per sign (negligible) and keeps stack use tight.
+///
+/// The ml-dsa crate's `zeroize` feature (enabled by this workspace)
+/// wipes the expanded matrix on drop. The outer `Box`/enum adds no
+/// extra copies of sensitive material.
 pub enum MlDsaExpandedKey {
-    MlDsa44(ml_dsa::SigningKey<MlDsa44>),
-    MlDsa65(ml_dsa::SigningKey<MlDsa65>),
-    MlDsa87(ml_dsa::SigningKey<MlDsa87>),
+    MlDsa44(Box<ml_dsa::SigningKey<MlDsa44>>),
+    MlDsa65(Box<ml_dsa::SigningKey<MlDsa65>>),
+    MlDsa87(Box<ml_dsa::SigningKey<MlDsa87>>),
 }
 
 impl MlDsaExpandedKey {
@@ -109,9 +113,9 @@ impl MlDsaExpandedKey {
     pub fn from_seed(key_type: KeyType, seed: &[u8]) -> Result<Self> {
         let xi = seed_to_b32(seed)?;
         match key_type {
-            KeyType::MlDsa44 => Ok(Self::MlDsa44(<MlDsa44 as KeyGen>::from_seed(&xi))),
-            KeyType::MlDsa65 => Ok(Self::MlDsa65(<MlDsa65 as KeyGen>::from_seed(&xi))),
-            KeyType::MlDsa87 => Ok(Self::MlDsa87(<MlDsa87 as KeyGen>::from_seed(&xi))),
+            KeyType::MlDsa44 => Ok(Self::MlDsa44(Box::new(<MlDsa44 as KeyGen>::from_seed(&xi)))),
+            KeyType::MlDsa65 => Ok(Self::MlDsa65(Box::new(<MlDsa65 as KeyGen>::from_seed(&xi)))),
+            KeyType::MlDsa87 => Ok(Self::MlDsa87(Box::new(<MlDsa87 as KeyGen>::from_seed(&xi)))),
             other => Err(CryptoError::UnsupportedKeyType(format!(
                 "MlDsaExpandedKey::from_seed called with non-ML-DSA key type {other:?}"
             ))),
