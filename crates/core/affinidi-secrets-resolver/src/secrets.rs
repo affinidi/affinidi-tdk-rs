@@ -3,12 +3,13 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 
+#[cfg(feature = "slh-dsa")]
+use crate::multicodec::SLH_DSA_SHA2_128S_PUB;
 #[cfg(feature = "ml-dsa")]
 use crate::multicodec::{
-    ML_DSA_44_PRIV, ML_DSA_44_PUB, ML_DSA_65_PRIV, ML_DSA_65_PUB, ML_DSA_87_PRIV, ML_DSA_87_PUB,
+    ML_DSA_44_PRIV_SEED, ML_DSA_44_PUB, ML_DSA_65_PRIV_SEED, ML_DSA_65_PUB, ML_DSA_87_PRIV_SEED,
+    ML_DSA_87_PUB,
 };
-#[cfg(feature = "slh-dsa")]
-use crate::multicodec::{SLH_DSA_SHA2_128S_PRIV, SLH_DSA_SHA2_128S_PUB};
 use crate::{
     errors::{Result, SecretsResolverError},
     multicodec::{
@@ -209,7 +210,7 @@ impl Secret {
             P384_PRIV => Secret::generate_p384(kid, Some(private_bytes.data())),
             SECP256K1_PRIV => Secret::generate_secp256k1(kid, Some(private_bytes.data())),
             #[cfg(feature = "ml-dsa")]
-            ML_DSA_44_PRIV => {
+            ML_DSA_44_PRIV_SEED => {
                 if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
                         "Invalid ML-DSA-44 seed length".into(),
@@ -222,7 +223,7 @@ impl Secret {
                 Ok(s)
             }
             #[cfg(feature = "ml-dsa")]
-            ML_DSA_65_PRIV => {
+            ML_DSA_65_PRIV_SEED => {
                 if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
                         "Invalid ML-DSA-65 seed length".into(),
@@ -235,7 +236,7 @@ impl Secret {
                 Ok(s)
             }
             #[cfg(feature = "ml-dsa")]
-            ML_DSA_87_PRIV => {
+            ML_DSA_87_PRIV_SEED => {
                 if private_bytes.data().len() != 32 {
                     return Err(SecretsResolverError::KeyError(
                         "Invalid ML-DSA-87 seed length".into(),
@@ -246,25 +247,6 @@ impl Secret {
                 let s = Secret::generate_ml_dsa_87(kid, Some(&pb));
                 pb.zeroize();
                 Ok(s)
-            }
-            #[cfg(feature = "slh-dsa")]
-            SLH_DSA_SHA2_128S_PRIV => {
-                let kp =
-                    affinidi_crypto::slh_dsa::key_pair_from_private_sha2_128s(private_bytes.data())
-                        .map_err(|e| SecretsResolverError::KeyError(e.to_string()))?;
-                let kid = kid.map(str::to_string).unwrap_or_else(|| {
-                    use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-                    use rand::{TryRng, rngs::SysRng};
-                    BASE64_URL_SAFE_NO_PAD.encode(SysRng.try_next_u64().unwrap().to_ne_bytes())
-                });
-                Ok(Secret {
-                    id: kid,
-                    type_: SecretType::Multikey,
-                    secret_material: SecretMaterial::PrivateKeyMultibase(String::new()),
-                    private_bytes: kp.private_bytes,
-                    public_bytes: kp.public_bytes,
-                    key_type: KeyType::SlhDsaSha2_128s,
-                })
             }
             _ => Err(SecretsResolverError::KeyError(
                 "Unsupported key type in from_multibase".into(),
@@ -391,14 +373,24 @@ impl Secret {
                 MultiEncodedBuf::encode_bytes(SECP256K1_PRIV, &self.private_bytes)
             }
             #[cfg(feature = "ml-dsa")]
-            KeyType::MlDsa44 => MultiEncodedBuf::encode_bytes(ML_DSA_44_PRIV, &self.private_bytes),
+            KeyType::MlDsa44 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_44_PRIV_SEED, &self.private_bytes)
+            }
             #[cfg(feature = "ml-dsa")]
-            KeyType::MlDsa65 => MultiEncodedBuf::encode_bytes(ML_DSA_65_PRIV, &self.private_bytes),
+            KeyType::MlDsa65 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_65_PRIV_SEED, &self.private_bytes)
+            }
             #[cfg(feature = "ml-dsa")]
-            KeyType::MlDsa87 => MultiEncodedBuf::encode_bytes(ML_DSA_87_PRIV, &self.private_bytes),
+            KeyType::MlDsa87 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_87_PRIV_SEED, &self.private_bytes)
+            }
             #[cfg(feature = "slh-dsa")]
             KeyType::SlhDsaSha2_128s => {
-                MultiEncodedBuf::encode_bytes(SLH_DSA_SHA2_128S_PRIV, &self.private_bytes)
+                return Err(SecretsResolverError::KeyError(
+                    "SLH-DSA has no private-key multicodec registered; persist raw private_bytes \
+                     instead of encoding as multikey"
+                        .into(),
+                ));
             }
             _ => {
                 return Err(SecretsResolverError::KeyError(
@@ -764,12 +756,13 @@ mod tests {
 
     #[cfg(feature = "slh-dsa")]
     #[test]
-    fn from_multiencode_slh_dsa_128s() {
+    fn slh_dsa_private_multibase_unsupported() {
+        // SLH-DSA has no registered private-key multicodec; we surface that
+        // as an error rather than inventing a code.
         let secret = Secret::generate_slh_dsa_sha2_128s(Some("k-slh"));
-        let mb = secret.get_private_keymultibase().expect("encode priv");
-        let secret2 = Secret::from_multibase(&mb, Some("k-slh")).expect("decode");
-        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
-        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+        assert!(secret.get_private_keymultibase().is_err());
+        // Public-key encoding still works (slhdsa-sha2-128s-pub = 0x1220).
+        assert!(secret.get_public_keymultibase().is_ok());
     }
 
     #[test]

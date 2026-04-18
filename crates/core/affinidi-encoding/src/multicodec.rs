@@ -26,17 +26,20 @@ pub const P384_PRIV: u64 = 0x1307;
 pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
 
-// Post-quantum codecs (draft entries in the multicodec table).
-// Public: aligns with W3C `di-quantum-safe` cryptosuite multi-byte prefixes.
-// Private: draft convention (pub code + 0x20).
+// Post-quantum codecs — draft entries from the official multicodec table.
+// We store ML-DSA private keys as the 32-byte seed, so we use the
+// `-priv-seed` codes (0x131a–0x131c), not the 2560/4032/4896-byte
+// expanded-private codes (0x1317–0x1319).
+//
+// SLH-DSA has no private-key codec registered; `Secret::from_multibase`
+// and `get_private_keymultibase` return an error for SLH-DSA keys.
 pub const ML_DSA_44_PUB: u64 = 0x1210;
-pub const ML_DSA_44_PRIV: u64 = 0x1230;
+pub const ML_DSA_44_PRIV_SEED: u64 = 0x131a;
 pub const ML_DSA_65_PUB: u64 = 0x1211;
-pub const ML_DSA_65_PRIV: u64 = 0x1231;
+pub const ML_DSA_65_PRIV_SEED: u64 = 0x131b;
 pub const ML_DSA_87_PUB: u64 = 0x1212;
-pub const ML_DSA_87_PRIV: u64 = 0x1232;
+pub const ML_DSA_87_PRIV_SEED: u64 = 0x131c;
 pub const SLH_DSA_SHA2_128S_PUB: u64 = 0x1220;
-pub const SLH_DSA_SHA2_128S_PRIV: u64 = 0x1240;
 
 /// Known codec types
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,13 +57,12 @@ pub enum Codec {
     P521Pub,
     P521Priv,
     MlDsa44Pub,
-    MlDsa44Priv,
+    MlDsa44PrivSeed,
     MlDsa65Pub,
-    MlDsa65Priv,
+    MlDsa65PrivSeed,
     MlDsa87Pub,
-    MlDsa87Priv,
+    MlDsa87PrivSeed,
     SlhDsaSha2_128sPub,
-    SlhDsaSha2_128sPriv,
     Unknown(u64),
 }
 
@@ -81,13 +83,12 @@ impl Codec {
             P521_PUB => Codec::P521Pub,
             P521_PRIV => Codec::P521Priv,
             ML_DSA_44_PUB => Codec::MlDsa44Pub,
-            ML_DSA_44_PRIV => Codec::MlDsa44Priv,
+            ML_DSA_44_PRIV_SEED => Codec::MlDsa44PrivSeed,
             ML_DSA_65_PUB => Codec::MlDsa65Pub,
-            ML_DSA_65_PRIV => Codec::MlDsa65Priv,
+            ML_DSA_65_PRIV_SEED => Codec::MlDsa65PrivSeed,
             ML_DSA_87_PUB => Codec::MlDsa87Pub,
-            ML_DSA_87_PRIV => Codec::MlDsa87Priv,
+            ML_DSA_87_PRIV_SEED => Codec::MlDsa87PrivSeed,
             SLH_DSA_SHA2_128S_PUB => Codec::SlhDsaSha2_128sPub,
-            SLH_DSA_SHA2_128S_PRIV => Codec::SlhDsaSha2_128sPriv,
             other => Codec::Unknown(other),
         }
     }
@@ -108,13 +109,12 @@ impl Codec {
             Codec::P521Pub => P521_PUB,
             Codec::P521Priv => P521_PRIV,
             Codec::MlDsa44Pub => ML_DSA_44_PUB,
-            Codec::MlDsa44Priv => ML_DSA_44_PRIV,
+            Codec::MlDsa44PrivSeed => ML_DSA_44_PRIV_SEED,
             Codec::MlDsa65Pub => ML_DSA_65_PUB,
-            Codec::MlDsa65Priv => ML_DSA_65_PRIV,
+            Codec::MlDsa65PrivSeed => ML_DSA_65_PRIV_SEED,
             Codec::MlDsa87Pub => ML_DSA_87_PUB,
-            Codec::MlDsa87Priv => ML_DSA_87_PRIV,
+            Codec::MlDsa87PrivSeed => ML_DSA_87_PRIV_SEED,
             Codec::SlhDsaSha2_128sPub => SLH_DSA_SHA2_128S_PUB,
-            Codec::SlhDsaSha2_128sPriv => SLH_DSA_SHA2_128S_PRIV,
             Codec::Unknown(v) => v,
         }
     }
@@ -132,7 +132,7 @@ impl Codec {
                 | Codec::MlDsa44Pub
                 | Codec::MlDsa65Pub
                 | Codec::MlDsa87Pub
-                | Codec::SlhDsaSha2_128sPub
+                | Codec::SlhDsaSha2_128sPub // SLH-DSA has no private codec registered
         )
     }
 
@@ -149,11 +149,10 @@ impl Codec {
             Codec::MlDsa44Pub => Some(1312),
             Codec::MlDsa65Pub => Some(1952),
             Codec::MlDsa87Pub => Some(2592),
-            // ML-DSA private representation: 32-byte seed (xi) per FIPS 204
-            Codec::MlDsa44Priv | Codec::MlDsa65Priv | Codec::MlDsa87Priv => Some(32),
-            // SLH-DSA-SHA2-128s: FIPS 205 sizes (PK = 32, SK = 64)
+            // ML-DSA priv-seed codec (0x131a–0x131c): 32-byte seed (xi)
+            Codec::MlDsa44PrivSeed | Codec::MlDsa65PrivSeed | Codec::MlDsa87PrivSeed => Some(32),
+            // SLH-DSA-SHA2-128s public key: FIPS 205 (32 bytes)
             Codec::SlhDsaSha2_128sPub => Some(32),
-            Codec::SlhDsaSha2_128sPriv => Some(64),
             _ => None,
         }
     }

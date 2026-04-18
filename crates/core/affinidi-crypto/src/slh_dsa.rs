@@ -28,18 +28,6 @@ pub fn generate_slh_dsa_sha2_128s() -> KeyPair {
     }
 }
 
-/// Reconstructs an SLH-DSA-SHA2-128s key pair from a raw 64-byte private key.
-pub fn key_pair_from_private_sha2_128s(private_key: &[u8]) -> Result<KeyPair> {
-    let sk = SigningKey::<Sha2_128s>::try_from(private_key)
-        .map_err(|e| CryptoError::KeyError(format!("Invalid SLH-DSA private key: {e}")))?;
-    let vk = sk.as_ref();
-    Ok(KeyPair {
-        key_type: KeyType::SlhDsaSha2_128s,
-        private_bytes: sk.to_bytes().to_vec(),
-        public_bytes: vk.to_bytes().to_vec(),
-    })
-}
-
 /// Signs `data` with SLH-DSA-SHA2-128s given a raw private key.
 pub fn sign_slh_dsa_sha2_128s(private_key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let sk = SigningKey::<Sha2_128s>::try_from(private_key)
