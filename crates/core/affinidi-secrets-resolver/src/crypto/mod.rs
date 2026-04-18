@@ -14,3 +14,9 @@ pub mod secp256k1;
 
 #[cfg(feature = "p384")]
 pub mod p384;
+
+#[cfg(feature = "ml-dsa")]
+pub mod ml_dsa;
+
+#[cfg(feature = "slh-dsa")]
+pub mod slh_dsa;

@@ -3,6 +3,13 @@ Handles Secrets - mainly used for internal representation and for saving to file
 
 */
 
+#[cfg(feature = "slh-dsa")]
+use crate::multicodec::SLH_DSA_SHA2_128S_PUB;
+#[cfg(feature = "ml-dsa")]
+use crate::multicodec::{
+    ML_DSA_44_PRIV_SEED, ML_DSA_44_PUB, ML_DSA_65_PRIV_SEED, ML_DSA_65_PUB, ML_DSA_87_PRIV_SEED,
+    ML_DSA_87_PUB,
+};
 use crate::{
     errors::{Result, SecretsResolverError},
     multicodec::{
@@ -82,6 +89,35 @@ impl TryFrom<SecretShadow> for Secret {
             )),
         }
     }
+}
+
+/// Compresses a SEC1 uncompressed EC point (`0x04 || x || y`) to the
+/// multicodec-encoded compressed form (`parity || x`), wrapped with
+/// the given public-key codec. Returns `KeyError` if `public_bytes` is
+/// too short for the claimed curve instead of panicking.
+fn compress_ec_point(
+    public_bytes: &[u8],
+    compressed_len: usize,
+    codec: u64,
+) -> Result<MultiEncodedBuf> {
+    let coord_len = compressed_len - 1;
+    let required = 1 + 2 * coord_len; // 0x04 || x || y
+    if public_bytes.len() < required {
+        return Err(SecretsResolverError::KeyError(format!(
+            "public_bytes too short to compress: expected >= {required} bytes, got {}",
+            public_bytes.len()
+        )));
+    }
+    let last_y_byte = public_bytes[required - 1];
+    let parity: u8 = if last_y_byte.is_multiple_of(2) {
+        0x02
+    } else {
+        0x03
+    };
+    let mut compressed: Vec<u8> = Vec::with_capacity(compressed_len);
+    compressed.push(parity);
+    compressed.extend_from_slice(&public_bytes[1..=coord_len]);
+    Ok(MultiEncodedBuf::encode_bytes(codec, &compressed))
 }
 
 impl Secret {
@@ -202,6 +238,45 @@ impl Secret {
             }
             P384_PRIV => Secret::generate_p384(kid, Some(private_bytes.data())),
             SECP256K1_PRIV => Secret::generate_secp256k1(kid, Some(private_bytes.data())),
+            #[cfg(feature = "ml-dsa")]
+            ML_DSA_44_PRIV_SEED => {
+                if private_bytes.data().len() != 32 {
+                    return Err(SecretsResolverError::KeyError(
+                        "Invalid ML-DSA-44 seed length".into(),
+                    ));
+                }
+                let mut pb: [u8; 32] = [0; 32];
+                pb.copy_from_slice(private_bytes.data());
+                let s = Secret::generate_ml_dsa_44(kid, Some(&pb));
+                pb.zeroize();
+                Ok(s)
+            }
+            #[cfg(feature = "ml-dsa")]
+            ML_DSA_65_PRIV_SEED => {
+                if private_bytes.data().len() != 32 {
+                    return Err(SecretsResolverError::KeyError(
+                        "Invalid ML-DSA-65 seed length".into(),
+                    ));
+                }
+                let mut pb: [u8; 32] = [0; 32];
+                pb.copy_from_slice(private_bytes.data());
+                let s = Secret::generate_ml_dsa_65(kid, Some(&pb));
+                pb.zeroize();
+                Ok(s)
+            }
+            #[cfg(feature = "ml-dsa")]
+            ML_DSA_87_PRIV_SEED => {
+                if private_bytes.data().len() != 32 {
+                    return Err(SecretsResolverError::KeyError(
+                        "Invalid ML-DSA-87 seed length".into(),
+                    ));
+                }
+                let mut pb: [u8; 32] = [0; 32];
+                pb.copy_from_slice(private_bytes.data());
+                let s = Secret::generate_ml_dsa_87(kid, Some(&pb));
+                pb.zeroize();
+                Ok(s)
+            }
             _ => Err(SecretsResolverError::KeyError(
                 "Unsupported key type in from_multibase".into(),
             )),
@@ -224,49 +299,23 @@ impl Secret {
         let encoded = match self.key_type {
             KeyType::Ed25519 => MultiEncodedBuf::encode_bytes(ED25519_PUB, &self.public_bytes),
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
-            KeyType::P256 => {
-                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 33] = [0; 33];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..33].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(P256_PUB, &compressed)
-            }
-            KeyType::P384 => {
-                let parity: u8 = if self.public_bytes[96].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 49] = [0; 49];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..49].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(P384_PUB, &compressed)
-            }
+            KeyType::P256 => compress_ec_point(&self.public_bytes, 33, P256_PUB)?,
+            KeyType::P384 => compress_ec_point(&self.public_bytes, 49, P384_PUB)?,
             KeyType::P521 => {
                 return Err(SecretsResolverError::KeyError(
                     "P-521 is not supported".to_string(),
                 ));
             }
-            KeyType::Secp256k1 => {
-                let parity: u8 = if self.public_bytes[64].is_multiple_of(2) {
-                    0x02
-                } else {
-                    0x03
-                };
-                let mut compressed: [u8; 33] = [0; 33];
-                compressed[0] = parity;
-                for x in self.public_bytes[1..33].iter().enumerate() {
-                    compressed[x.0 + 1] = *x.1;
-                }
-                MultiEncodedBuf::encode_bytes(SECP256K1_PUB, &compressed)
+            KeyType::Secp256k1 => compress_ec_point(&self.public_bytes, 33, SECP256K1_PUB)?,
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa44 => MultiEncodedBuf::encode_bytes(ML_DSA_44_PUB, &self.public_bytes),
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa65 => MultiEncodedBuf::encode_bytes(ML_DSA_65_PUB, &self.public_bytes),
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa87 => MultiEncodedBuf::encode_bytes(ML_DSA_87_PUB, &self.public_bytes),
+            #[cfg(feature = "slh-dsa")]
+            KeyType::SlhDsaSha2_128s => {
+                MultiEncodedBuf::encode_bytes(SLH_DSA_SHA2_128S_PUB, &self.public_bytes)
             }
             _ => {
                 return Err(SecretsResolverError::KeyError(
@@ -289,7 +338,7 @@ impl Secret {
     }
 
     /// Will convert a string to a base58btc encoded multihash (SHA256) representation
-    /// base58<multihash<multikey>>
+    /// `base58<multihash<multikey>>`
     pub fn base58_hash_string(key: &str) -> Result<String> {
         let hash = Sha256::digest(key.as_bytes());
         // Multihash binary format: varint(code) || varint(length) || digest
@@ -315,6 +364,26 @@ impl Secret {
             KeyType::P521 => MultiEncodedBuf::encode_bytes(P521_PRIV, &self.private_bytes),
             KeyType::Secp256k1 => {
                 MultiEncodedBuf::encode_bytes(SECP256K1_PRIV, &self.private_bytes)
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa44 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_44_PRIV_SEED, &self.private_bytes)
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa65 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_65_PRIV_SEED, &self.private_bytes)
+            }
+            #[cfg(feature = "ml-dsa")]
+            KeyType::MlDsa87 => {
+                MultiEncodedBuf::encode_bytes(ML_DSA_87_PRIV_SEED, &self.private_bytes)
+            }
+            #[cfg(feature = "slh-dsa")]
+            KeyType::SlhDsaSha2_128s => {
+                return Err(SecretsResolverError::KeyError(
+                    "SLH-DSA has no private-key multicodec registered; persist raw private_bytes \
+                     instead of encoding as multikey"
+                        .into(),
+                ));
             }
             _ => {
                 return Err(SecretsResolverError::KeyError(
@@ -657,6 +726,147 @@ mod tests {
             secret2.get_private_keymultibase().unwrap(),
             secret.get_private_keymultibase().unwrap()
         );
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn from_multiencode_ml_dsa_44() {
+        let seed = [7u8; 32];
+        let secret = Secret::generate_ml_dsa_44(Some("k-44"), Some(&seed));
+
+        let mb = secret.get_private_keymultibase().expect("encode priv");
+        let pub_mb = secret.get_public_keymultibase().expect("encode pub");
+
+        let secret2 = Secret::from_multibase(&mb, Some("k-44")).expect("decode");
+        assert_eq!(secret2.get_public_bytes(), secret.get_public_bytes());
+        assert_eq!(secret2.get_private_bytes(), secret.get_private_bytes());
+        assert_eq!(
+            secret2.get_public_keymultibase().unwrap(),
+            pub_mb,
+            "public multikey roundtrip"
+        );
+    }
+
+    /// Varint-encoded multicodec prefix bytes for the given codec.
+    #[cfg(any(feature = "ml-dsa", feature = "slh-dsa"))]
+    fn varint_prefix(codec: u64) -> Vec<u8> {
+        let mut buf = [0u8; 10];
+        use unsigned_varint::encode;
+        let slice = encode::u64(codec, &mut buf);
+        slice.to_vec()
+    }
+
+    /// After multibase-decoding a multikey string, the first N bytes must
+    /// match the registered varint multicodec. This guards against the class
+    /// of bug where we invent our own codec value — tests that only sign and
+    /// verify cannot catch it because encode and decode use the same constant.
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn ml_dsa_multikey_uses_registered_codecs() {
+        use crate::multicodec::{
+            ML_DSA_44_PRIV_SEED, ML_DSA_44_PUB, ML_DSA_65_PRIV_SEED, ML_DSA_65_PUB,
+            ML_DSA_87_PRIV_SEED, ML_DSA_87_PUB,
+        };
+        use affinidi_crypto::KeyType;
+
+        let cases: &[(KeyType, u64, u64, usize, usize)] = &[
+            // (key_type, pub codec, priv-seed codec, pub_len, priv_len)
+            (
+                KeyType::MlDsa44,
+                ML_DSA_44_PUB,
+                ML_DSA_44_PRIV_SEED,
+                1312,
+                32,
+            ),
+            (
+                KeyType::MlDsa65,
+                ML_DSA_65_PUB,
+                ML_DSA_65_PRIV_SEED,
+                1952,
+                32,
+            ),
+            (
+                KeyType::MlDsa87,
+                ML_DSA_87_PUB,
+                ML_DSA_87_PRIV_SEED,
+                2592,
+                32,
+            ),
+        ];
+
+        for (kt, pub_code, priv_code, pub_len, priv_len) in cases {
+            let s = match kt {
+                KeyType::MlDsa44 => Secret::generate_ml_dsa_44(None, Some(&[1u8; 32])),
+                KeyType::MlDsa65 => Secret::generate_ml_dsa_65(None, Some(&[1u8; 32])),
+                KeyType::MlDsa87 => Secret::generate_ml_dsa_87(None, Some(&[1u8; 32])),
+                _ => unreachable!(),
+            };
+
+            let pub_mb = s.get_public_keymultibase().unwrap();
+            let (_, pub_raw) = multibase::decode(&pub_mb).unwrap();
+            let expected = varint_prefix(*pub_code);
+            assert_eq!(
+                &pub_raw[..expected.len()],
+                expected.as_slice(),
+                "{kt:?} pub codec prefix mismatch (expected {pub_code:#06x})"
+            );
+            assert_eq!(pub_raw.len() - expected.len(), *pub_len);
+
+            let priv_mb = s.get_private_keymultibase().unwrap();
+            let (_, priv_raw) = multibase::decode(&priv_mb).unwrap();
+            let expected = varint_prefix(*priv_code);
+            assert_eq!(
+                &priv_raw[..expected.len()],
+                expected.as_slice(),
+                "{kt:?} priv-seed codec prefix mismatch (expected {priv_code:#06x})"
+            );
+            assert_eq!(priv_raw.len() - expected.len(), *priv_len);
+        }
+    }
+
+    #[cfg(feature = "slh-dsa")]
+    #[test]
+    fn slh_dsa_multikey_uses_registered_public_codec() {
+        use crate::multicodec::SLH_DSA_SHA2_128S_PUB;
+        let s = Secret::generate_slh_dsa_sha2_128s(None);
+        let pub_mb = s.get_public_keymultibase().unwrap();
+        let (_, raw) = multibase::decode(&pub_mb).unwrap();
+        let expected = varint_prefix(SLH_DSA_SHA2_128S_PUB);
+        assert_eq!(&raw[..expected.len()], expected.as_slice());
+        assert_eq!(raw.len() - expected.len(), 32);
+    }
+
+    #[test]
+    fn get_public_keymultibase_bounds_check_p256() {
+        // Construct a Secret with deliberately too-short EC public_bytes.
+        // The compression path used to panic on index 64; now it must
+        // return a structured error.
+        let mut s = Secret::generate_p256(None, Some(&[1u8; 32])).unwrap();
+        s.public_bytes.clear(); // zero bytes — clearly insufficient
+        let err = s.get_public_keymultibase().unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("too short"),
+            "expected bounds-check error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn get_public_keymultibase_bounds_check_p384() {
+        let mut s = Secret::generate_p384(None, Some(&[1u8; 48])).unwrap();
+        s.public_bytes.truncate(10);
+        assert!(s.get_public_keymultibase().is_err());
+    }
+
+    #[cfg(feature = "slh-dsa")]
+    #[test]
+    fn slh_dsa_private_multibase_unsupported() {
+        // SLH-DSA has no registered private-key multicodec; we surface that
+        // as an error rather than inventing a code.
+        let secret = Secret::generate_slh_dsa_sha2_128s(Some("k-slh"));
+        assert!(secret.get_private_keymultibase().is_err());
+        // Public-key encoding still works (slhdsa-sha2-128s-pub = 0x1220).
+        assert!(secret.get_public_keymultibase().is_ok());
     }
 
     #[test]
