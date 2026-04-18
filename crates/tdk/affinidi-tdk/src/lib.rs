@@ -6,7 +6,7 @@
 
 #[cfg(feature = "data-integrity")]
 use affinidi_data_integrity::{
-    DataIntegrityError, DataIntegrityProof, verification_proof::VerificationProof,
+    DataIntegrityError, DataIntegrityProof, VerifyOptions, verification_proof::VerificationProof,
 };
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 #[cfg(feature = "messaging")]
@@ -196,17 +196,13 @@ impl TDK {
     where
         S: Serialize,
     {
-        // Create public key bytes from Verification Material
-
-        use affinidi_data_integrity::verification_proof::verify_data_with_public_key;
         use affinidi_did_common::document::DocumentExt;
         use affinidi_tdk_common::errors::TDKError;
+
         let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
             did
         } else {
-            use affinidi_tdk_common::errors::TDKError;
-
-            return Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(
+            return Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(
                 "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
             )));
         };
@@ -216,13 +212,14 @@ impl TDK {
             .doc
             .get_verification_method(&proof.verification_method)
         {
-            vm.get_public_key_bytes().map_err(|e| {
-                DataIntegrityError::InputDataError(format!(
-                    "Failed to get public key bytes from verification method: {e}"
-                ))
-            })?
+            vm.get_public_key_bytes()
+                .map_err(|e| DataIntegrityError::InvalidPublicKey {
+                    codec: None,
+                    len: 0,
+                    reason: format!("Failed to get public key bytes from verification method: {e}"),
+                })?
         } else {
-            return Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(
+            return Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(
                 format!(
                     "Couldn't find key-id ({}) in resolved DID Document",
                     proof.verification_method
@@ -230,8 +227,18 @@ impl TDK {
             )));
         };
 
-        verify_data_with_public_key(signed_doc, context, proof, public_bytes.as_slice())
-            .map_err(TDKError::DataIntegrity)
+        let mut options = VerifyOptions::new();
+        if let Some(ctx) = context {
+            options = options.with_expected_context(ctx);
+        }
+        proof
+            .verify_with_public_key(signed_doc, public_bytes.as_slice(), options)
+            .map_err(TDKError::DataIntegrity)?;
+
+        Ok(VerificationProof {
+            verified: true,
+            verified_document: None,
+        })
     }
 }
 
@@ -270,7 +277,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         match result {
-            Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(txt))) => {
+            Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
                 assert_eq!(
                     txt,
                     "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
@@ -306,7 +313,7 @@ mod tests {
             .await;
         assert!(result.is_err());
         match result {
-            Err(TDKError::DataIntegrity(DataIntegrityError::InputDataError(txt))) => {
+            Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
                 assert_eq!(
                     txt,
                     "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
