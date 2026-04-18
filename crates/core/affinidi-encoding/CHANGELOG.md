@@ -1,6 +1,6 @@
 # Affinidi Encoding Changelog
 
-## 18th April 2026 (0.1.2)
+## 18th April 2026 (0.1.3)
 
 - **FEATURE:** Added post-quantum multicodec constants aligned with the
   official multicodec registry (all currently `draft`):

@@ -1,6 +1,6 @@
 # Affinidi Secrets Manager
 
-## 18th April 2026 (0.5.4)
+## 18th April 2026 (0.5.5)
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
   `ml-dsa` and `slh-dsa` sub-flags. Adds `Secret::generate_ml_dsa_44`,
