@@ -7,8 +7,13 @@ use zeroize::Zeroize;
 
 use crate::CryptoError;
 
-/// Known cryptographic key types
+/// Known cryptographic key types.
+///
+/// This enum is `#[non_exhaustive]`: new algorithms (hybrid schemes, future
+/// NIST standards, vendor-specific key types) will be added in minor
+/// releases without breaking match-all arms.
 #[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Zeroize)]
+#[non_exhaustive]
 pub enum KeyType {
     Ed25519,
     X25519,

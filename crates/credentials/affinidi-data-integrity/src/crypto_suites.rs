@@ -3,12 +3,18 @@
 */
 
 use affinidi_secrets_resolver::secrets::KeyType;
-use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::DataIntegrityError;
+use crate::suite_ops::{self, Canonicalization, CryptoSuiteOps};
 
+/// Supported Data Integrity cryptosuites.
+///
+/// This enum is `#[non_exhaustive]`: new cryptosuites (future W3C specs,
+/// vendor extensions) are added in minor releases without breaking
+/// downstream match-all arms. Always include a wildcard arm when matching.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[non_exhaustive]
 pub enum CryptoSuite {
     /// EDDSA JCS 2022 spec
     /// https://www.w3.org/TR/vc-di-eddsa/
@@ -58,9 +64,9 @@ impl TryFrom<&str> for CryptoSuite {
             "slhdsa128-jcs-2024" => Ok(CryptoSuite::SlhDsa128Jcs2024),
             #[cfg(feature = "slh-dsa")]
             "slhdsa128-rdfc-2024" => Ok(CryptoSuite::SlhDsa128Rdfc2024),
-            _ => Err(DataIntegrityError::InputDataError(format!(
-                "Unsupported crypto suite: {value}",
-            ))),
+            _ => Err(DataIntegrityError::UnsupportedCryptoSuite {
+                name: value.to_string(),
+            }),
         }
     }
 }
@@ -77,116 +83,94 @@ impl TryFrom<CryptoSuite> for String {
     type Error = DataIntegrityError;
 
     fn try_from(value: CryptoSuite) -> Result<Self, Self::Error> {
-        match value {
-            CryptoSuite::EddsaJcs2022 => Ok("eddsa-jcs-2022".to_string()),
-            CryptoSuite::EddsaRdfc2022 => Ok("eddsa-rdfc-2022".to_string()),
-            #[cfg(feature = "bbs-2023")]
-            CryptoSuite::Bbs2023 => Ok("bbs-2023".to_string()),
-            #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Jcs2024 => Ok("mldsa44-jcs-2024".to_string()),
-            #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Rdfc2024 => Ok("mldsa44-rdfc-2024".to_string()),
-            #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Jcs2024 => Ok("slhdsa128-jcs-2024".to_string()),
-            #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Rdfc2024 => Ok("slhdsa128-rdfc-2024".to_string()),
-        }
+        Ok(value.ops().name().to_string())
+    }
+}
+
+impl std::fmt::Display for CryptoSuite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.ops().name())
     }
 }
 
 impl CryptoSuite {
+    /// Returns the `CryptoSuiteOps` implementation for this variant.
+    /// All enum methods delegate through this — adding a new cryptosuite
+    /// is one impl in [`crate::suite_ops`] + one new arm here.
+    pub fn ops(&self) -> &'static dyn CryptoSuiteOps {
+        match self {
+            CryptoSuite::EddsaJcs2022 => &suite_ops::EddsaJcs2022,
+            CryptoSuite::EddsaRdfc2022 => &suite_ops::EddsaRdfc2022,
+            #[cfg(feature = "bbs-2023")]
+            CryptoSuite::Bbs2023 => &suite_ops::Bbs2023,
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Jcs2024 => &suite_ops::MlDsa44Jcs2024,
+            #[cfg(feature = "ml-dsa")]
+            CryptoSuite::MlDsa44Rdfc2024 => &suite_ops::MlDsa44Rdfc2024,
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Jcs2024 => &suite_ops::SlhDsa128Jcs2024,
+            #[cfg(feature = "slh-dsa")]
+            CryptoSuite::SlhDsa128Rdfc2024 => &suite_ops::SlhDsa128Rdfc2024,
+        }
+    }
+
     /// Validates that the given key type is compatible with this cryptosuite.
     pub fn validate_key_type(&self, key_type: KeyType) -> Result<(), DataIntegrityError> {
-        let bad = |expected: &str| {
-            DataIntegrityError::InputDataError(format!(
-                "Unsupported key type {key_type:?} for cryptosuite {} (expected {expected})",
-                String::try_from(*self).unwrap_or_default()
-            ))
-        };
-        match self {
-            CryptoSuite::EddsaJcs2022 | CryptoSuite::EddsaRdfc2022 => match key_type {
-                KeyType::Ed25519 => Ok(()),
-                _ => Err(bad("Ed25519")),
-            },
-            // BBS-2023 uses BLS12-381 keys, not traditional key types
-            #[cfg(feature = "bbs-2023")]
-            CryptoSuite::Bbs2023 => Ok(()),
+        let compatible = self.ops().compatible_key_types();
+        // Empty list = "any key type" (BBS-2023). Otherwise must match.
+        if compatible.is_empty() || compatible.contains(&key_type) {
+            Ok(())
+        } else {
+            Err(DataIntegrityError::KeyTypeMismatch {
+                expected: compatible.first().copied().unwrap_or_default(),
+                actual: key_type,
+                suite: *self,
+            })
+        }
+    }
+
+    /// Returns the set of [`KeyType`] values compatible with this
+    /// cryptosuite. Always non-empty except for BBS-2023, which uses
+    /// BLS12-381 keys not modelled by [`KeyType`].
+    ///
+    /// Downstream code building key-generation flows or verification-method
+    /// compatibility UI should use this instead of re-matching on the
+    /// cryptosuite name.
+    pub fn compatible_key_types(&self) -> &'static [KeyType] {
+        self.ops().compatible_key_types()
+    }
+
+    /// Returns the recommended default cryptosuite for a given key type.
+    ///
+    /// Policy: prefer the **JCS** canonicalization variant where a choice
+    /// exists — JCS produces smaller proofs, has no RDF canonicalization
+    /// dependency, and is the W3C-recommended default for interop.
+    /// Returns `None` if the key type has no compatible suite compiled in.
+    pub fn default_for_key_type(key_type: KeyType) -> Option<Self> {
+        match key_type {
+            KeyType::Ed25519 => Some(CryptoSuite::EddsaJcs2022),
             #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Jcs2024 | CryptoSuite::MlDsa44Rdfc2024 => match key_type {
-                KeyType::MlDsa44 => Ok(()),
-                _ => Err(bad("ML-DSA-44")),
-            },
+            KeyType::MlDsa44 => Some(CryptoSuite::MlDsa44Jcs2024),
             #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Jcs2024 | CryptoSuite::SlhDsa128Rdfc2024 => match key_type {
-                KeyType::SlhDsaSha2_128s => Ok(()),
-                _ => Err(bad("SLH-DSA-SHA2-128s")),
-            },
+            KeyType::SlhDsaSha2_128s => Some(CryptoSuite::SlhDsa128Jcs2024),
+            _ => None,
         }
     }
 
     /// Returns `true` if this cryptosuite uses RDFC canonicalization,
-    /// `false` for JCS.
+    /// `false` for JCS or a custom scheme.
     pub fn is_rdfc(&self) -> bool {
-        match self {
-            CryptoSuite::EddsaJcs2022 => false,
-            CryptoSuite::EddsaRdfc2022 => true,
-            #[cfg(feature = "bbs-2023")]
-            CryptoSuite::Bbs2023 => false,
-            #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Jcs2024 => false,
-            #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Rdfc2024 => true,
-            #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Jcs2024 => false,
-            #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Rdfc2024 => true,
-        }
+        matches!(self.ops().canonicalization(), Canonicalization::Rdfc)
     }
 
+    /// Verifies a signature against the data using this cryptosuite.
     pub fn verify(
         &self,
         key: &[u8],
         data: &[u8],
         signature: &[u8],
     ) -> Result<(), DataIntegrityError> {
-        match self {
-            CryptoSuite::EddsaJcs2022 | CryptoSuite::EddsaRdfc2022 => {
-                let verifying_key = VerifyingKey::try_from(key).map_err(|_| {
-                    DataIntegrityError::CryptoError("Invalid public key bytes".to_string())
-                })?;
-                let signature = Signature::from_slice(signature).map_err(|_| {
-                    DataIntegrityError::VerificationError("Invalid signature format".to_string())
-                })?;
-                Ok(verifying_key.verify_strict(data, &signature).map_err(|_| {
-                    DataIntegrityError::VerificationError(
-                        "Signature verification failed".to_string(),
-                    )
-                })?)
-            }
-            // BBS-2023 verification is handled separately via the bbs_2023 module
-            #[cfg(feature = "bbs-2023")]
-            CryptoSuite::Bbs2023 => Err(DataIntegrityError::InputDataError(
-                "BBS-2023 verification uses bbs_2023::verify_proof, not CryptoSuite::verify".into(),
-            )),
-            #[cfg(feature = "ml-dsa")]
-            CryptoSuite::MlDsa44Jcs2024 | CryptoSuite::MlDsa44Rdfc2024 => {
-                affinidi_crypto::ml_dsa::verify_ml_dsa_44(key, data, signature).map_err(|e| {
-                    DataIntegrityError::VerificationError(format!(
-                        "ML-DSA-44 verification failed: {e}"
-                    ))
-                })
-            }
-            #[cfg(feature = "slh-dsa")]
-            CryptoSuite::SlhDsa128Jcs2024 | CryptoSuite::SlhDsa128Rdfc2024 => {
-                affinidi_crypto::slh_dsa::verify_slh_dsa_sha2_128s(key, data, signature).map_err(
-                    |e| {
-                        DataIntegrityError::VerificationError(format!(
-                            "SLH-DSA-SHA2-128s verification failed: {e}"
-                        ))
-                    },
-                )
-            }
-        }
+        self.ops().verify(key, data, signature)
     }
 }
 
