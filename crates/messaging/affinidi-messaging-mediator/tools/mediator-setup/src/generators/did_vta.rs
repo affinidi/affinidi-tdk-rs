@@ -76,10 +76,20 @@ pub async fn create_vta_mediator_did(
         serde_json::Value::String(mediator_url.to_string()),
     );
 
+    // The VTA requires either `server_id` (a pre-registered webvh host
+    // on the VTA) or `url` (an explicit webvh server URL) to know
+    // where to publish the DID document. In the self-hosted topology
+    // the mediator itself is the webvh host, so the operator-typed
+    // mediator URL is the webvh URL. Passing `url` here skips the
+    // `server_id` dance.
+    //
+    // `template_vars["URL"]` stays populated so templates that render
+    // service endpoints from `{{ URL }}` keep working — server-side
+    // rendering doesn't read `url` at all.
     let req = CreateDidWebvhRequest {
         context_id: context_id.to_string(),
         server_id: None,
-        url: None,
+        url: Some(mediator_url.to_string()),
         path: None,
         label: Some("mediator".into()),
         portable: true,
