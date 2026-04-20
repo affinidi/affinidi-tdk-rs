@@ -99,7 +99,9 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
 
     env_override!(config.database.functions_file, "DATABASE_FUNCTIONS_FILE");
     env_override!(config.database.database_url, "DATABASE_URL");
-    env_override_opt!(config.database.database_pool_size, "DATABASE_POOL_SIZE");
+    // DATABASE_POOL_SIZE removed — the mediator uses a multiplexed
+    // connection, there is no pool to size. Pre-0.14 deployments that
+    // set it can drop the env var with no behaviour change.
     env_override!(config.database.database_timeout, "DATABASE_TIMEOUT");
 
     env_override!(config.security.mediator_acl_mode, "MEDIATOR_ACL_MODE");

@@ -34,13 +34,6 @@ impl DatabaseHandler {
     pub async fn new(config: &DatabaseConfig) -> Result<Self, MediatorError> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        if config.database_pool_size != 0 {
-            warn!(
-                "database_pool_size ({}) is deprecated and ignored; using multiplexed connection",
-                config.database_pool_size
-            );
-        }
-
         let client = redis::Client::open(config.database_url.as_str()).map_err(|err| {
             MediatorError::problem_with_log(
                 1,

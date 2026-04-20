@@ -253,7 +253,6 @@ mod tests {
         assert!(toml.contains("backend ="));
 
         // Verify fields from template that wizard doesn't touch are preserved
-        // database_pool_size was removed from template (deprecated)
         assert!(toml.contains("database_timeout"));
         assert!(toml.contains("[streaming]"));
         assert!(toml.contains("[did_resolver]"));
