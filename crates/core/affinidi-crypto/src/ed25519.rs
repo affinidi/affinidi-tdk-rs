@@ -211,4 +211,71 @@ mod tests {
                 .unwrap()
         );
     }
+
+    // Helper: encode an Ed25519 public key as a multikey string
+    // (multicodec 0xed, base58btc with `z` prefix). Mirrors the encoding
+    // expected by `ed25519_public_to_x25519` without pulling in `did_key`.
+    fn ed25519_multikey(pubkey: &[u8]) -> String {
+        format!(
+            "z{}",
+            MultiEncodedBuf::encode_bytes(ED25519_PUB, pubkey)
+                .into_bytes()
+                .to_base58()
+        )
+    }
+
+    #[test]
+    fn multikey_and_bytes_x25519_agree() {
+        // The multikey-string `ed25519_public_to_x25519` and the bytes
+        // `did_key::ed25519_pub_to_x25519_bytes` helpers must produce the
+        // same X25519 public key for the same Ed25519 input.
+        let kp = generate(None);
+        let pub_bytes: [u8; 32] = kp.public_bytes.as_slice().try_into().unwrap();
+
+        let (_, from_multikey) = ed25519_public_to_x25519(&ed25519_multikey(&pub_bytes)).unwrap();
+        let from_bytes = crate::did_key::ed25519_pub_to_x25519_bytes(&pub_bytes).unwrap();
+
+        assert_eq!(from_multikey.as_slice(), from_bytes.as_slice());
+        assert_eq!(from_bytes.len(), 32);
+    }
+
+    #[test]
+    fn ed25519_public_to_x25519_rejects_missing_z_prefix() {
+        // Valid base58 payload but no multibase `z` prefix.
+        let raw = MultiEncodedBuf::encode_bytes(ED25519_PUB, &[0u8; 32])
+            .into_bytes()
+            .to_base58();
+        let err = ed25519_public_to_x25519(&raw).unwrap_err();
+        assert!(
+            matches!(err, CryptoError::Decoding(ref m) if m.contains('z')),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ed25519_public_to_x25519_rejects_wrong_codec() {
+        // X25519 multicodec (0xec) where Ed25519 (0xed) is expected.
+        let multikey = format!(
+            "z{}",
+            MultiEncodedBuf::encode_bytes(X25519_PUB, &[0u8; 32])
+                .into_bytes()
+                .to_base58()
+        );
+        let err = ed25519_public_to_x25519(&multikey).unwrap_err();
+        assert!(
+            matches!(err, CryptoError::KeyError(ref m) if m.contains("codec")),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn ed25519_public_to_x25519_rejects_wrong_length() {
+        // Ed25519 multicodec with a 16-byte payload.
+        let multikey = ed25519_multikey(&[0u8; 16]);
+        let err = ed25519_public_to_x25519(&multikey).unwrap_err();
+        assert!(
+            matches!(err, CryptoError::KeyError(ref m) if m.contains("length") || m.contains("32")),
+            "got {err:?}"
+        );
+    }
 }

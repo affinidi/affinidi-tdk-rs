@@ -15,6 +15,15 @@
     key without round-tripping through a multikey string.
   The existing multikey-string helpers in `ed25519.rs` are retained
   for multikey-native callers such as `affinidi-secrets-resolver`.
+- **TESTS:** Backfilled `ed25519_public_to_x25519` coverage — parity
+  check vs. the new `did_key::ed25519_pub_to_x25519_bytes`, plus the
+  three error paths (missing `z` multibase prefix, wrong multicodec,
+  wrong payload length).
+- **DOCS:** Crate-level docs and README now advertise the post-quantum
+  features (ML-DSA / SLH-DSA) and the new `did:key` raw-bytes helpers.
+- **HYGIENE:** Dropped the unused direct `rand_core` 0.10 dep —
+  transitively pulled in via `ml-dsa` / `slh-dsa`'s own `rand_core`
+  feature, never imported here.
 
 ## 18th April 2026 (0.1.4)
 
