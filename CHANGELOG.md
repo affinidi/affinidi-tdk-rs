@@ -9,6 +9,18 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+## 2026-04-20 — `did:key` raw-bytes helpers for HPKE / sealed transfer
+
+### Added
+
+- **`affinidi-crypto` 0.1.4 → 0.1.5** — New `did_key` module (gated on the
+  `ed25519` feature) exposes a raw-bytes API for apps doing HPKE, sealed
+  transfer, or other non-DIDComm key agreement:
+  `ed25519_pub_to_did_key`, `did_key_to_ed25519_pub`, and
+  `ed25519_pub_to_x25519_bytes`. The existing multikey-string helpers in
+  `ed25519.rs` remain for multikey-native callers such as
+  `affinidi-secrets-resolver`. Purely additive — no existing APIs changed.
+
 ## 2026-04-17 — TLS/webpki fix, MSRV 1.94, workspace dep hygiene (PR #292)
 
 ### Security
