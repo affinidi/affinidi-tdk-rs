@@ -11,6 +11,7 @@ docs
 **/conf/secrets.json
 **/conf/secrets-admin.json
 **/conf/keys/
+**/bootstrap-request.json
 
 # Superego
 .superego/
