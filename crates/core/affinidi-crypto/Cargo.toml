@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.1.4"
+version = "0.1.5"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -22,8 +22,8 @@ ed25519 = ["dep:ed25519-dalek"]
 # `post-quantum` is the umbrella flag; `ml-dsa` and `slh-dsa` can be enabled
 # individually. Off by default.
 post-quantum = ["ml-dsa", "slh-dsa"]
-ml-dsa = ["dep:ml-dsa", "dep:rand_core_10", "dep:rand_10"]
-slh-dsa = ["dep:slh-dsa", "dep:rand_core_10", "dep:rand_10"]
+ml-dsa = ["dep:ml-dsa", "dep:rand_10"]
+slh-dsa = ["dep:slh-dsa", "dep:rand_10"]
 
 [dependencies]
 affinidi-encoding = "0.1"
@@ -47,9 +47,9 @@ p384 = { version = "0.13", features = [
 ], optional = true }
 ml-dsa = { version = "0.1.0-rc.8", features = ["rand_core", "zeroize"], optional = true }
 slh-dsa = { version = "0.2.0-rc.4", features = ["zeroize"], optional = true }
-# PQC crates (ml-dsa, slh-dsa) require rand_core 0.10 via `signature` v3. A
-# second copy of rand_core coexists with the 0.6 one used by other primitives.
-rand_core_10 = { package = "rand_core", version = "0.10", optional = true }
+# PQC crates (ml-dsa, slh-dsa) pull rand_core 0.10 transitively via
+# `signature` v3. A second copy coexists with the 0.6 one used by other
+# primitives; we never import it directly, so no explicit dep is needed.
 rand_10 = { package = "rand", version = "0.10", default-features = false, features = ["std", "thread_rng"], optional = true }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }

@@ -1,5 +1,30 @@
 # Affinidi Crypto Changelog
 
+## 20th April 2026 (0.1.5)
+
+- **FEATURE:** `did_key` module (behind the `ed25519` feature) adds a
+  raw-bytes API for apps doing HPKE, sealed transfer, or other non-
+  DIDComm key agreement:
+  - `ed25519_pub_to_did_key(&[u8; 32]) -> String` encodes an Ed25519
+    public key as a `did:key:z6Mk…` identifier.
+  - `did_key_to_ed25519_pub(&str) -> Result<[u8; 32], CryptoError>`
+    decodes a `did:key:z6Mk…` string, validating the `did:key:`
+    prefix, multibase `z`, Ed25519-pub multicodec, and 32-byte length.
+  - `ed25519_pub_to_x25519_bytes(&[u8; 32]) -> Result<[u8; 32],
+    CryptoError>` derives the X25519 public key from an Ed25519 public
+    key without round-tripping through a multikey string.
+  The existing multikey-string helpers in `ed25519.rs` are retained
+  for multikey-native callers such as `affinidi-secrets-resolver`.
+- **TESTS:** Backfilled `ed25519_public_to_x25519` coverage — parity
+  check vs. the new `did_key::ed25519_pub_to_x25519_bytes`, plus the
+  three error paths (missing `z` multibase prefix, wrong multicodec,
+  wrong payload length).
+- **DOCS:** Crate-level docs and README now advertise the post-quantum
+  features (ML-DSA / SLH-DSA) and the new `did:key` raw-bytes helpers.
+- **HYGIENE:** Dropped the unused direct `rand_core` 0.10 dep —
+  transitively pulled in via `ml-dsa` / `slh-dsa`'s own `rand_core`
+  feature, never imported here.
+
 ## 18th April 2026 (0.1.4)
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
