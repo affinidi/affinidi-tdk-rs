@@ -77,6 +77,12 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 ## Used to generate the ephemeral setup keypair seed.
 rand = "0.9"
 
+# ── Clipboard ────────────────────────────────────────────────────────────
+## `arboard` copies the bootstrap request JSON onto the system clipboard
+## so operators don't have to fight terminal mouse selection across the
+## wizard's two-panel layout. Same crate + pattern as `openvtc-cli2`.
+arboard = "3"
+
 # ── Crypto / SSL ─────────────────────────────────────────────────────────
 ## ring: JWT secret generation (Ed25519 PKCS8)
 ring = { version = "0.17", features = ["std"] }

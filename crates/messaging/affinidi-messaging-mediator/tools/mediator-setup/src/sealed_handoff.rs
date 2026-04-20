@@ -70,6 +70,12 @@ pub struct SealedHandoffState {
     /// VTA admin. Persisted on state so the renderer can show it
     /// across re-renders without re-serialising.
     pub request_json: String,
+    /// On-disk path the wizard wrote `request_json` to, so the
+    /// operator can copy it from a second terminal — selecting text
+    /// directly in the TUI tends to wrap across the progress panel
+    /// on the left. Best-effort: `None` if the write failed (we
+    /// still display the JSON inline).
+    pub request_path: Option<std::path::PathBuf>,
     /// Parsed armored bundle, populated on transition into
     /// [`SealedPhase::DigestVerify`].
     pub bundle: Option<SealedBundle>,
@@ -85,6 +91,11 @@ pub struct SealedHandoffState {
     /// mismatches, missing payload variants. Cleared on every
     /// successful transition.
     pub last_error: Option<String>,
+    /// Transient status line for the clipboard hotkey on
+    /// `RequestGenerated`. Short message shown in the info box —
+    /// "Copied!" on success, the arboard error on failure. Cleared
+    /// when the phase changes so it doesn't leak into later screens.
+    pub clipboard_status: Option<String>,
 }
 
 impl SealedHandoffState {
@@ -108,16 +119,44 @@ impl SealedHandoffState {
         let request_json = serde_json::to_string_pretty(&request).map_err(|e| {
             SealedHandoffError::Internal(format!("BootstrapRequest serialise failed: {e}"))
         })?;
+        // Best-effort write of the request JSON to the CWD so the
+        // operator can `cat` it from a second terminal and copy it
+        // cleanly — selecting across the TUI's left/right panels with
+        // the mouse tends to span the progress column. A write
+        // failure is not fatal: the operator can still copy from the
+        // rendered info box (less convenient, but works).
+        let request_path = std::path::PathBuf::from("bootstrap-request.json");
+        let persisted = match std::fs::write(&request_path, &request_json) {
+            Ok(()) => Some(request_path),
+            Err(_) => None,
+        };
         Ok(Self {
             phase: SealedPhase::RequestGenerated,
             recipient_secret: sk,
             nonce,
             request_json,
+            request_path: persisted,
             bundle: None,
             computed_digest: None,
             session: None,
             last_error: None,
+            clipboard_status: None,
         })
+    }
+
+    /// Copy `request_json` onto the system clipboard via `arboard`.
+    /// Mirrors the pattern used by openvtc-cli2's `DIDKeysShow`.
+    /// Writes the result into `clipboard_status` so the renderer can
+    /// surface "Copied!" or the specific error on the next frame.
+    pub fn copy_request_to_clipboard(&mut self) {
+        match arboard::Clipboard::new().and_then(|mut c| c.set_text(self.request_json.clone())) {
+            Ok(()) => {
+                self.clipboard_status = Some("Copied to clipboard".into());
+            }
+            Err(e) => {
+                self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));
+            }
+        }
     }
 
     /// Bundle id (16 raw bytes → base64url) used in display text. Stable
@@ -190,6 +229,9 @@ pub fn ingest_armored(
     armored: &str,
 ) -> Result<(), SealedHandoffError> {
     state.last_error = None;
+    // Leaving RequestGenerated — drop the transient clipboard status
+    // so it doesn't confusingly linger on later screens.
+    state.clipboard_status = None;
     let bundles =
         armor::decode(armored).map_err(|e| SealedHandoffError::ArmorDecode(e.to_string()))?;
     if bundles.len() != 1 {

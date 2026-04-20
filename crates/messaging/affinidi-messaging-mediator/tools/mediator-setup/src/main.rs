@@ -394,6 +394,24 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         return;
     }
 
+    // Bare `c` / `C` on the sealed-handoff RequestGenerated screen
+    // copies the bootstrap request JSON to the system clipboard.
+    // Placed ahead of the mode-based dispatch so it fires in both
+    // Selecting and TextInput modes — the RequestGenerated phase
+    // uses Selecting mode today, but keeping the hotkey mode-agnostic
+    // is cheap and future-proofs against UI shuffling.
+    if !modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && app.in_sealed_handoff_subflow()
+    {
+        if let Some(state) = app.sealed_handoff.as_mut() {
+            if state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated {
+                state.copy_request_to_clipboard();
+                return;
+            }
+        }
+    }
+
     match app.mode {
         InputMode::TextInput => match code {
             KeyCode::Enter => app.confirm_text_input(),

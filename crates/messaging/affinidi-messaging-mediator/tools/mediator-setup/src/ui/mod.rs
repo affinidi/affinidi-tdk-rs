@@ -174,16 +174,52 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
         use crate::sealed_handoff::SealedPhase;
         match state.phase {
             SealedPhase::RequestGenerated => {
+                // The whole request lives on disk too (see
+                // `SealedHandoffState::new`) — that's the copy the
+                // operator should use: mouse selection inside the
+                // TUI picks up the left progress panel, but `cat`
+                // + copy from a second terminal Just Works. Pressing
+                // `c` also stuffs it onto the system clipboard via
+                // arboard.
+                let file_hint = match state.request_path.as_ref() {
+                    Some(p) => format!(
+                        "\n\x1b[1mFile:\x1b[0m {}\n\x1b[1mHotkey:\x1b[0m press \x1b[36mc\x1b[0m to copy to clipboard  \x1b[2m(mouse selection inside the TUI wraps across panels)\x1b[0m\n",
+                        p.display()
+                    ),
+                    None => "\n\x1b[33mCould not write bootstrap-request.json — press \x1b[36mc\x1b[33m to copy to clipboard instead.\x1b[0m\n".into(),
+                };
+                let status_line = match state.clipboard_status.as_deref() {
+                    Some(s) if s.starts_with("Copied") => {
+                        format!("\x1b[32m{s}\x1b[0m\n")
+                    }
+                    Some(s) => format!("\x1b[33m{s}\x1b[0m\n"),
+                    None => String::new(),
+                };
                 let body = format!(
-                    "Bootstrap request — ship this to your VTA admin out-of-band:\n\n{}\n\n\
-                     Press Enter to continue once you've sent it. Esc cancels.",
+                    "Ship this bootstrap request to your VTA admin out-of-band:\n\
+                     {file_hint}{status_line}\n{}\n\n\
+                     Press Enter once they've returned an armored bundle. Esc cancels.",
                     state.request_json
                 );
                 info_box::render_info_box(frame, chunks[0], "Sealed handoff — request", &body);
-                let info_text = "The VTA admin runs `pnm sealed-bundle create` (or equivalent) \
-                                 against this request, then returns an ASCII-armored bundle. \
-                                 The next screen will accept it.";
-                info_box::render_info_box(frame, chunks[1], "Info", info_text);
+                // Exact commands the operator (consumer) and the VTA
+                // admin (producer) run. Matches the `sealed-bootstrap`
+                // design doc: producer = `vta bootstrap seal`, with
+                // `pnm-cli bootstrap seal` as the equivalent on
+                // PNM-operated hosts.
+                let cmd_file = state
+                    .request_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "bootstrap-request.json".into());
+                let info_text = format!(
+                    "Producer commands the VTA admin runs, either:\n\n\
+                     vta bootstrap seal \\\n  --request {cmd_file} \\\n  --payload mediator-admin-credential \\\n  --out bundle.armor\n\n\
+                     or from a PNM-operated host:\n\n\
+                     pnm-cli bootstrap seal \\\n  --request {cmd_file} \\\n  --payload mediator-admin-credential \\\n  --out bundle.armor\n\n\
+                     They return `bundle.armor` + the printed digest; paste the bundle on the next screen."
+                );
+                info_box::render_info_box(frame, chunks[1], "Producer commands", &info_text);
                 return;
             }
             SealedPhase::AwaitingBundle => {
