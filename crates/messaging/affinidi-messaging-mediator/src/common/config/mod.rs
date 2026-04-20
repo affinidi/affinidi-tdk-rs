@@ -14,8 +14,10 @@ use affinidi_did_resolver_cache_sdk::{
     config::{DIDCacheConfig, DIDCacheConfigBuilder},
 };
 use affinidi_messaging_mediator_common::{
+    MediatorSecrets,
     database::config::{DatabaseConfig, DatabaseConfigRaw},
     errors::MediatorError,
+    secrets::open_store,
 };
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
@@ -23,6 +25,7 @@ use async_convert::{TryFrom, async_trait};
 #[cfg(feature = "aws")]
 use aws_config::{self, BehaviorVersion, Region};
 use didwebvh_rs::log_entry::{LogEntry, LogEntryMethods};
+use vta_sdk::credentials::CredentialBundle;
 
 /// AWS SDK configuration type — conditionally compiled.
 /// When the `aws` feature is enabled, this is `aws_config::SdkConfig`.
@@ -39,8 +42,8 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use vta_sdk::integration::{self, VtaServiceConfig};
 
 use helpers::{
-    get_hostname, load_forwarding_protection_blocks, load_vta_credential, read_config_file,
-    read_did_config, read_document,
+    get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
+    read_document,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,28 +87,22 @@ impl DIDResolverConfig {
     }
 }
 
-/// VTA (Verifiable Trust Agent) configuration for centralized key management.
-///
-/// When present, enables `vta://` scheme for `mediator_did` and `mediator_secrets`.
-/// On startup, the mediator authenticates to the VTA, fetches fresh secrets,
-/// and caches them locally for offline resilience.
-///
-/// All fields can be overridden via environment variables:
-/// `VTA_CREDENTIAL`, `VTA_CONTEXT`, `VTA_URL`.
+/// `[secrets]` config section — the unified secret-storage backend.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VtaConfigRaw {
-    /// VTA credential string with storage scheme prefix:
-    /// - `string://<base64url>` — inline credential (dev/CI)
-    /// - `aws_secrets://<secret_name>` — AWS Secrets Manager (requires `vta-aws-secrets` feature)
-    /// - `keyring://<service>/<user>` — OS keyring (requires `vta-keyring` feature)
-    pub credential: String,
-    /// VTA context ID that holds this mediator's DID and keys.
-    /// Defaults to `"mediator"` if not set.
-    pub context: Option<String>,
-    /// Override the VTA REST URL from the credential.
-    /// Set this when using `--rest` discovery or for dev/testing.
-    pub url: Option<String>,
+pub struct SecretsConfigRaw {
+    /// Backend URL. Examples: `keyring://affinidi-mediator`,
+    /// `file:///var/lib/mediator/secrets.json`,
+    /// `aws_secrets://us-east-1/prod/mediator/`.
+    pub backend: String,
+    /// Maximum age for the cached VTA bundle (humantime format, e.g.
+    /// `"30d"` or `"12h"`). `None` or `"0"` means no expiry. Defaults to
+    /// 30 days when unset.
+    #[serde(default)]
+    pub cache_ttl: Option<String>,
 }
+
+/// Default VTA cache TTL when `[secrets].cache_ttl` is not set.
+const DEFAULT_CACHE_TTL_SECS: u64 = 30 * 86_400; // 30 days
 
 /// Raw configuration deserialized from the TOML file, converted to [`Config`]
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,7 +117,9 @@ pub(crate) struct ConfigRaw {
     pub did_resolver: DIDResolverConfig,
     pub limits: LimitsConfigRaw,
     pub processors: ProcessorsConfigRaw,
-    pub vta: Option<VtaConfigRaw>,
+    /// Unified secret backend — required whenever the mediator has any
+    /// persistent identity (which is effectively always).
+    pub secrets: SecretsConfigRaw,
 }
 
 #[derive(Clone, Serialize)]
@@ -144,6 +143,25 @@ pub struct Config {
     pub processors: ProcessorsConfig,
     pub limits: LimitsConfig,
     pub tags: HashMap<String, String>,
+    /// URL of the unified secret backend (`[secrets].backend` from
+    /// the config file). Surfaced in `/readyz` so operators can
+    /// confirm the mediator is talking to the backend they expect
+    /// without having to read the on-disk TOML.
+    #[serde(skip_serializing)]
+    pub secrets_backend_url: String,
+    /// Open handle to the unified secret backend. Cloned cheaply (it
+    /// wraps an `Arc<dyn SecretStore>`) so the readiness handler can
+    /// re-probe live without coordinating with the rest of the
+    /// startup code path.
+    #[serde(skip_serializing)]
+    pub secrets_backend: MediatorSecrets,
+    /// `true` when self-hosted operating keys were loaded from the
+    /// backend at startup OR when VTA-managed operating keys came back
+    /// from the VTA. `false` only in the (rare) configuration where
+    /// neither source produced keys — typically a misconfiguration the
+    /// operator wants to see surfaced on /readyz.
+    #[serde(skip_serializing)]
+    pub operating_keys_loaded: bool,
 }
 
 impl fmt::Debug for Config {
@@ -191,6 +209,16 @@ impl Config {
             streaming_uuid: "".into(),
             did_resolver_config,
             api_prefix: "/mediator/v1/".into(),
+            // The default config is only used inside the early-startup
+            // path before we've parsed `[secrets].backend`. Stub with
+            // an empty URL + an in-memory store so the field is always
+            // populated; production code overwrites it from the parsed
+            // raw config below.
+            secrets_backend_url: String::new(),
+            secrets_backend: MediatorSecrets::new(std::sync::Arc::new(
+                affinidi_messaging_mediator_common::secrets::backends::MemoryStore::new("memory"),
+            )),
+            operating_keys_loaded: false,
             security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
                 forwarding: ForwardingConfig::default(),
@@ -247,45 +275,79 @@ impl TryFrom<ConfigRaw> for Config {
             }
         }
 
-        // Set up a common secrets resolver
-        // Do this here and pass into the defaults so that they don't create multiple instances of the same
-        // When you instantiate config, the ..Config::default() will run the full default() function again
-        // If SecretsResolver was instantiated in default(), it would create two copies of it (though only use one)
         let secrets_resolver = Arc::new(ThreadedSecretsResolver::new(None).await.0);
 
-        // Initialize VTA integration if vta:// scheme is used for DID or secrets.
-        // Uses integration::startup() which authenticates, fetches fresh secrets,
-        // caches them locally, and falls back to the cache if VTA is unreachable.
-        let needs_vta = raw.mediator_did.starts_with("vta://")
-            || raw.security.mediator_secrets.starts_with("vta://");
+        // ── Secret backend ──────────────────────────────────────────────
+        // Open the unified secret store and probe end-to-end. Failing here
+        // with a clear error beats discovering the backend is unreachable
+        // on the first request.
+        let store = open_store(&raw.secrets.backend).map_err(|e| {
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!(
+                    "Could not open secret backend '{}': {e}",
+                    raw.secrets.backend
+                ),
+            )
+        })?;
+        let mediator_secrets = MediatorSecrets::new(store);
+        mediator_secrets.probe().await.map_err(|e| {
+            MediatorError::ConfigError(
+                12,
+                "NA".into(),
+                format!("Secret backend '{}' failed probe: {e}", raw.secrets.backend),
+            )
+        })?;
+        if raw.secrets.backend.starts_with("file://") {
+            warn!(
+                "Secret backend is file:// — secrets are plaintext on disk. \
+                 Only use this for local dev/test."
+            );
+        }
 
-        let vta_startup = if needs_vta {
-            let vta_config = raw.vta.as_ref().ok_or_else(|| {
+        // ── VTA integration ────────────────────────────────────────────
+        // If the backend has an admin credential, we're in VTA mode:
+        // authenticate, fetch fresh operating keys, cache them, fall back
+        // to the cached copy if the VTA is unreachable.
+        let admin_cred = mediator_secrets
+            .load_admin_credential()
+            .await
+            .map_err(|e| {
                 MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    "[vta] config section is required when using vta:// scheme for mediator_did or mediator_secrets".into(),
+                    format!("Could not load admin credential: {e}"),
                 )
             })?;
 
-            // Resolve the credential from its storage backend (string://, aws_secrets://, keyring://)
-            let credential_raw = load_vta_credential(&vta_config.credential, &aws_config).await?;
-            let context = vta_config
-                .context
-                .clone()
-                .unwrap_or_else(|| "mediator".into());
-
+        let vta_startup = if let Some(ref admin) = admin_cred {
+            let credential = CredentialBundle {
+                did: admin.did.clone(),
+                private_key_multibase: admin.private_key_multibase.clone(),
+                vta_did: admin.vta_did.clone(),
+                vta_url: admin.vta_url.clone(),
+            };
             let service_config = VtaServiceConfig {
-                credential: credential_raw,
-                context,
-                url_override: vta_config.url.clone().filter(|u| !u.is_empty()),
+                credential,
+                context: admin.context.clone(),
+                url_override: admin.vta_url.clone().filter(|u| !u.is_empty()),
                 timeout: None,
             };
 
-            let cache = vta_cache::MediatorSecretCache::from_credential_config(
-                &vta_config.credential,
-                &aws_config,
-            );
+            // Parse cache TTL — default to 30 days when unset, `0` means
+            // no expiry. Humantime handles `"30d"`, `"12h"`, etc.
+            let ttl_secs = match raw.secrets.cache_ttl.as_deref() {
+                None | Some("") => DEFAULT_CACHE_TTL_SECS,
+                Some("0") => 0,
+                Some(s) => humantime::parse_duration(s)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_else(|e| {
+                        warn!("Could not parse [secrets].cache_ttl '{s}' ({e}); using default");
+                        DEFAULT_CACHE_TTL_SECS
+                    }),
+            };
+            let cache = vta_cache::MediatorSecretCache::new(mediator_secrets.clone(), ttl_secs);
 
             info!("Starting VTA integration...");
             let result = integration::startup(&service_config, &cache)
@@ -294,7 +356,6 @@ impl TryFrom<ConfigRaw> for Config {
                     MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
                 })?;
 
-            // Mediator-specific: probe VTA health to detect circular dependency.
             if let Some(client) = &result.client {
                 match client.health().await {
                     Ok(health) => {
@@ -328,15 +389,12 @@ impl TryFrom<ConfigRaw> for Config {
             None
         };
 
-        // Resolve mediator DID — from VTA startup result or config
+        // Resolve mediator DID — from VTA startup result (if VTA mode)
+        // or the mediator.toml `mediator_did` field (self-hosted mode).
         let mediator_did = if let Some(ref result) = vta_startup {
-            if raw.mediator_did.starts_with("vta://") {
-                result.did.clone()
-            } else {
-                read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
-            }
+            result.did.clone()
         } else {
-            read_did_config(&raw.mediator_did, &aws_config, "mediator_did", None).await?
+            read_did_config(&raw.mediator_did, &aws_config, "mediator_did").await?
         };
 
         let mut config = Config {
@@ -357,8 +415,7 @@ impl TryFrom<ConfigRaw> for Config {
             }),
             listen_address: raw.server.listen_address,
             mediator_did,
-            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did", None)
-                .await?,
+            admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did").await?,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(
@@ -373,7 +430,7 @@ impl TryFrom<ConfigRaw> for Config {
                 .security
                 .convert(
                     secrets_resolver.clone(),
-                    &aws_config,
+                    &mediator_secrets,
                     vta_startup.as_ref().map(|r| &r.bundle),
                 )
                 .await?,
@@ -383,6 +440,25 @@ impl TryFrom<ConfigRaw> for Config {
             },
             limits: raw.limits.try_into()?,
             tags,
+            secrets_backend_url: raw.secrets.backend.clone(),
+            secrets_backend: mediator_secrets.clone(),
+            // Operating keys come either from the VTA (when integration
+            // is active) or from the unified backend's well-known
+            // `mediator/operating/secrets` entry (self-hosted). The
+            // security converter has just done both lookups by the time
+            // we get here, so we can ask the backend directly: if the
+            // entry is present we loaded it; otherwise the VTA bundle
+            // (when present) supplied them.
+            operating_keys_loaded: vta_startup.is_some()
+                || mediator_secrets
+                    .load_entry::<Vec<affinidi_secrets_resolver::secrets::Secret>>(
+                        affinidi_messaging_mediator_common::OPERATING_SECRETS,
+                        "operating-secrets",
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some(),
             ..Config::default(secrets_resolver)
         };
 

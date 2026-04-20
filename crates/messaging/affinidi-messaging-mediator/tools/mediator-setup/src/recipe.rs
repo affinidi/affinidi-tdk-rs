@@ -74,14 +74,17 @@ impl Default for IdentitySection {
 
 #[derive(Debug, Deserialize)]
 pub struct SecretsSection {
-    /// `string://`, `file://`, `keyring://`, `aws_secrets://`,
-    /// `gcp_secrets://`, `azure_keyvault://`, `vault://`, or `vta://`
+    /// One of: `file://`, `keyring://`, `aws_secrets://`,
+    /// `gcp_secrets://`, `azure_keyvault://`, `vault://`. Note:
+    /// `string://` (inline) and `vta://` are no longer accepted —
+    /// `vta://` was never a backend (the VTA is a key *source*) and
+    /// `string://` is unsafe even for CI.
     #[serde(default = "default_storage")]
     pub storage: String,
 }
 
 fn default_storage() -> String {
-    "vta://".into()
+    "keyring://".into()
 }
 
 impl Default for SecretsSection {
@@ -107,6 +110,12 @@ pub struct SecuritySection {
     /// Pre-existing admin DID (when `admin = "import"`)
     #[allow(dead_code)] // will be used when admin DID import is implemented
     pub admin_did: Option<String>,
+    /// JWT signing-secret provisioning mode: `generate` (default) or
+    /// `provide`. With `provide`, the wizard records the choice but does
+    /// not mint or prompt for a key — the mediator reads it from
+    /// `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at startup.
+    #[serde(default = "default_jwt_mode")]
+    pub jwt_mode: String,
 }
 
 fn default_ssl() -> String {
@@ -114,6 +123,10 @@ fn default_ssl() -> String {
 }
 
 fn default_admin() -> String {
+    "generate".into()
+}
+
+fn default_jwt_mode() -> String {
     "generate".into()
 }
 
@@ -125,6 +138,7 @@ impl Default for SecuritySection {
             ssl_key: None,
             admin: default_admin(),
             admin_did: None,
+            jwt_mode: default_jwt_mode(),
         }
     }
 }
@@ -220,10 +234,10 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     config.use_vta = recipe.deployment.use_vta;
     config.vta_mode = recipe.deployment.vta_mode.clone().unwrap_or_default();
 
-    // Auto-detect: if recipe uses VTA storage/DID but use_vta is missing (backward compat)
-    if !config.use_vta
-        && (recipe.secrets.storage == STORAGE_VTA || recipe.identity.did_method == "vta")
-    {
+    // Auto-detect: if recipe uses VTA-managed DID but use_vta is missing
+    // (backward compat). Note: `secrets.storage = "vta://"` is no longer
+    // recognised — VTA is a *source* of keys, not a storage backend.
+    if !config.use_vta && recipe.identity.did_method == "vta" {
         config.use_vta = true;
         if config.vta_mode.is_empty() {
             config.vta_mode = VTA_MODE_ONLINE.into();
@@ -264,21 +278,34 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         config.public_url = url.clone();
     }
 
-    // Secrets
+    // Secrets — `string://` and `vta://` are rejected. `string://` was
+    // dropped (inline secrets in TOML are unsafe even for CI; use `file://`
+    // with `MEDIATOR_SECRETS_BACKEND` env override). `vta://` was never a
+    // store — the VTA is a key *source*; pick a real backend (keyring,
+    // file, AWS, …) for the unified secret store.
     config.secret_storage = match recipe.secrets.storage.as_str() {
-        s @ (STORAGE_STRING | STORAGE_FILE | STORAGE_KEYRING | STORAGE_AWS | STORAGE_GCP
-        | STORAGE_AZURE | STORAGE_VAULT | STORAGE_VTA) => s.to_string(),
-        other => anyhow::bail!(
-            "Invalid secrets.storage '{}': expected a valid scheme ({}, {}, {}, {}, {}, {}, {}, {})",
-            other,
+        s @ (STORAGE_FILE | STORAGE_KEYRING | STORAGE_AWS | STORAGE_GCP | STORAGE_AZURE
+        | STORAGE_VAULT) => s.to_string(),
+        STORAGE_STRING => anyhow::bail!(
+            "secrets.storage '{}' is no longer supported — use '{}' (with optional encryption) instead",
             STORAGE_STRING,
+            STORAGE_FILE
+        ),
+        STORAGE_VTA => anyhow::bail!(
+            "secrets.storage '{}' is no longer supported — VTA is a key source, not a backend; choose a real store ({}, {}, …)",
+            STORAGE_VTA,
+            STORAGE_KEYRING,
+            STORAGE_AWS
+        ),
+        other => anyhow::bail!(
+            "Invalid secrets.storage '{}': expected one of {}, {}, {}, {}, {}, {}",
+            other,
             STORAGE_FILE,
             STORAGE_KEYRING,
             STORAGE_AWS,
             STORAGE_GCP,
             STORAGE_AZURE,
-            STORAGE_VAULT,
-            STORAGE_VTA
+            STORAGE_VAULT
         ),
     };
 
@@ -310,6 +337,15 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         }
         other => anyhow::bail!(
             "Invalid security.admin '{}': expected 'generate', 'skip', or 'import'",
+            other
+        ),
+    };
+
+    config.jwt_mode = match recipe.security.jwt_mode.as_str() {
+        "generate" | "" => JWT_MODE_GENERATE.into(),
+        "provide" => JWT_MODE_PROVIDE.into(),
+        other => anyhow::bail!(
+            "Invalid security.jwt_mode '{}': expected 'generate' or 'provide'",
             other
         ),
     };
@@ -427,7 +463,12 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
         ADMIN_PASTE => "import",
         _ => "generate",
     };
-    out.push_str(&format!("admin = \"{admin}\"\n\n"));
+    out.push_str(&format!("admin = \"{admin}\"\n"));
+    let jwt_mode = match config.jwt_mode.as_str() {
+        JWT_MODE_PROVIDE => "provide",
+        _ => "generate",
+    };
+    out.push_str(&format!("jwt_mode = \"{jwt_mode}\"\n\n"));
 
     // Database — strip any embedded credentials
     out.push_str("[database]\n");
@@ -536,7 +577,8 @@ mod tests {
         assert!(config.didcomm_enabled);
         assert!(!config.tsp_enabled);
         assert_eq!(config.did_method, DID_VTA);
-        assert_eq!(config.secret_storage, STORAGE_VTA);
+        // Default backend is now keyring:// (vta:// rejected as a store).
+        assert_eq!(config.secret_storage, STORAGE_KEYRING);
     }
 
     #[test]
@@ -613,20 +655,37 @@ mod tests {
 
     #[test]
     fn test_all_secret_storage_schemes() {
+        // Accepted schemes only — `string://` and `vta://` are rejected
+        // by the recipe loader (covered separately in
+        // `test_legacy_secret_storage_schemes_rejected`).
         for scheme in [
-            STORAGE_STRING,
             STORAGE_FILE,
             STORAGE_KEYRING,
             STORAGE_AWS,
             STORAGE_GCP,
             STORAGE_AZURE,
             STORAGE_VAULT,
-            STORAGE_VTA,
         ] {
             let mut recipe = minimal_recipe();
             recipe.secrets.storage = scheme.into();
             let config = to_wizard_config(&recipe).unwrap();
             assert_eq!(config.secret_storage, scheme);
+        }
+    }
+
+    #[test]
+    fn test_legacy_secret_storage_schemes_rejected() {
+        for scheme in [STORAGE_STRING, STORAGE_VTA] {
+            let mut recipe = minimal_recipe();
+            recipe.secrets.storage = scheme.into();
+            let err = to_wizard_config(&recipe)
+                .err()
+                .unwrap_or_else(|| panic!("scheme {scheme} should have been rejected"))
+                .to_string();
+            assert!(
+                err.contains("no longer supported"),
+                "expected rejection for {scheme}, got: {err}"
+            );
         }
     }
 
@@ -674,6 +733,7 @@ mod tests {
             database_url: "redis://127.0.0.1/3".into(),
             admin_did_mode: ADMIN_SKIP.into(),
             listen_address: "0.0.0.0:8080".into(),
+            ..WizardConfig::default()
         };
 
         let recipe_toml = from_wizard_config(&original);
@@ -694,11 +754,14 @@ mod tests {
 
     #[test]
     fn test_recipe_round_trip_with_vta() {
+        // VTA-managed DID with a real secret backend (keyring) — vta:// is
+        // no longer a valid storage scheme, so the round-trip exercises
+        // the new shape: VTA for *identity*, unified backend for *keys*.
         let original = WizardConfig {
             use_vta: true,
             vta_mode: VTA_MODE_ONLINE.into(),
             did_method: DID_VTA.into(),
-            secret_storage: STORAGE_VTA.into(),
+            secret_storage: STORAGE_KEYRING.into(),
             admin_did_mode: ADMIN_VTA.into(),
             ..WizardConfig::default()
         };
@@ -713,17 +776,18 @@ mod tests {
         assert!(restored.use_vta);
         assert_eq!(restored.vta_mode, VTA_MODE_ONLINE);
         assert_eq!(restored.did_method, DID_VTA);
-        assert_eq!(restored.secret_storage, STORAGE_VTA);
+        assert_eq!(restored.secret_storage, STORAGE_KEYRING);
     }
 
     #[test]
     fn test_backward_compat_infers_vta() {
-        // Old recipe without use_vta but with VTA storage
+        // Old recipe without use_vta but with VTA-managed DID — the
+        // loader still infers `use_vta = true`. (The old `secrets.storage
+        // = "vta://"` trigger is gone — that scheme is now rejected.)
         let mut recipe = minimal_recipe();
         recipe.identity.did_method = "vta".into();
-        recipe.secrets.storage = STORAGE_VTA.into();
         let config = to_wizard_config(&recipe).unwrap();
-        assert!(config.use_vta, "should auto-detect VTA from storage/DID");
+        assert!(config.use_vta, "should auto-detect VTA from did_method");
         assert_eq!(config.vta_mode, VTA_MODE_ONLINE);
     }
 }

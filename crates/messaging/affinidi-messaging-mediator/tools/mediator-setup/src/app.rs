@@ -1,16 +1,26 @@
 use tui_input::{Input, InputRequest};
 
 use crate::consts::*;
+use crate::sealed_handoff::SealedHandoffState;
 use crate::ui::selection::SelectionOption;
+use crate::vta_connect::{
+    ConnectPhase, EphemeralSetupKey, VtaConnectState, VtaSession, pending_list, run_connection_test,
+};
 
 /// All wizard steps in order.
+///
+/// Ordering note: `KeyStorage` runs before `Vta` deliberately. The secret
+/// backend is the foundation everything else writes to — if it's
+/// unreachable we want to know *before* spending time on VTA provisioning.
+/// The VTA sub-flow also persists the rotated admin credential into this
+/// backend on completion, so it needs to exist first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum WizardStep {
     Deployment,
+    KeyStorage,
     Vta,
     Protocol,
     Did,
-    KeyStorage,
     Security,
     Database,
     Admin,
@@ -21,10 +31,10 @@ impl WizardStep {
     pub fn all() -> Vec<WizardStep> {
         vec![
             Self::Deployment,
+            Self::KeyStorage,
             Self::Vta,
             Self::Protocol,
             Self::Did,
-            Self::KeyStorage,
             Self::Security,
             Self::Database,
             Self::Admin,
@@ -72,6 +82,13 @@ impl WizardStep {
         } else {
             None
         }
+    }
+
+    /// True for steps whose selection list is multi-select (Space toggles,
+    /// Enter advances). Exposed so the key handler and the global help bar
+    /// can reflect the right key cues. Add any new multi-select step here.
+    pub fn is_multi_select(&self) -> bool {
+        matches!(self, Self::Protocol)
     }
 
     pub fn step_data(&self) -> StepData {
@@ -144,6 +161,73 @@ pub enum FocusPanel {
     Progress,
 }
 
+/// Sub-phases of the `KeyStorage` step that gather backend-specific config.
+///
+/// The operator picks a scheme on the selection list (implicit
+/// `SelectScheme` phase, represented as `key_storage_phase: None`), and any
+/// backend that needs extra info then walks through the relevant phases.
+/// The placeholder cloud backends (gcp/azure/vault) have no config to
+/// gather yet and skip straight to `advance()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyStoragePhase {
+    /// `file://` — dev-only hard-gate. The operator must type the
+    /// literal phrase `I understand` (case-insensitive) before the
+    /// wizard advances to [`Self::FilePath`]. Anything else aborts the
+    /// selection and rewinds to the scheme list.
+    FileGate,
+    /// `file://` — prompt for the path to write secrets.json.
+    FilePath,
+    /// `file://` — ask whether to encrypt with a passphrase
+    /// (envelope-encryption via Argon2id + AES-GCM). Selecting "yes"
+    /// advances to [`Self::FilePassphrase`]; "no" finishes the
+    /// sub-flow with a plaintext file.
+    FileEncryptChoice,
+    /// `file://` — collect the passphrase via a masked prompt. The
+    /// passphrase is exported as `MEDIATOR_FILE_BACKEND_PASSPHRASE`
+    /// for the duration of the wizard process so the secret backend
+    /// can derive its key when `MediatorSecrets::from_url` is called
+    /// in `generate_and_write`.
+    FilePassphrase,
+    /// `keyring://` — prompt for the OS-keyring service name.
+    KeyringService,
+    /// `aws_secrets://` — first prompt: AWS region.
+    AwsRegion,
+    /// `aws_secrets://` — second prompt: secret name prefix.
+    AwsPrefix,
+}
+
+/// Literal phrase the operator must type to clear the `file://` hard-gate.
+/// Stored as a constant so tests and the prompt rendering stay in sync.
+pub const FILE_GATE_PHRASE: &str = "I understand";
+
+/// Sub-phases of the `Security` step. The SSL portion (selection list +
+/// optional cert/key text inputs) runs as the implicit `None` phase; once
+/// SSL is settled the wizard pivots to a small JWT-mode selection before
+/// advancing to `Database`. Mirrors the `KeyStoragePhase` shape so that
+/// the renderer can use the same "step has a sub-phase" pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecurityPhase {
+    /// Choose between generating a fresh JWT signing key or providing
+    /// one out-of-band via env var / `--jwt-secret-file` at boot.
+    JwtMode,
+}
+
+impl KeyStoragePhase {
+    /// First config phase for the given scheme. `None` means the scheme
+    /// needs no extra config and can advance immediately.
+    pub fn first_for(scheme: &str) -> Option<Self> {
+        match scheme {
+            // file:// always starts at the hard-gate, never directly at
+            // FilePath. This is intentional: skipping the gate means
+            // skipping the dev-only acknowledgement.
+            STORAGE_FILE => Some(Self::FileGate),
+            STORAGE_KEYRING => Some(Self::KeyringService),
+            STORAGE_AWS => Some(Self::AwsRegion),
+            _ => None,
+        }
+    }
+}
+
 /// Accumulated configuration choices from the wizard.
 #[derive(Debug, Clone)]
 pub struct WizardConfig {
@@ -160,9 +244,22 @@ pub struct WizardConfig {
     pub did_method: String,
     pub public_url: String,
     pub secret_storage: String,
+    // Per-backend config fields. Only the set relevant to `secret_storage`
+    // is meaningful; others stay at defaults. Storing them as flat strings
+    // keeps `WizardConfig` serialisable into the build-recipe TOML.
+    pub secret_file_path: String,
+    pub secret_keyring_service: String,
+    pub secret_aws_region: String,
+    pub secret_aws_prefix: String,
+    /// `true` when the operator chose `file://?encrypt=1`. Influences
+    /// the backend URL written to `mediator.toml` and whether the
+    /// wizard prompts for a passphrase.
+    pub secret_file_encrypted: bool,
     pub ssl_mode: String,
     pub ssl_cert_path: String,
     pub ssl_key_path: String,
+    /// `generate` (default) or `provide`. See [`crate::consts::JWT_MODE_GENERATE`].
+    pub jwt_mode: String,
     pub database_url: String,
     pub admin_did_mode: String,
     pub listen_address: String,
@@ -192,9 +289,15 @@ impl Default for WizardConfig {
             did_method: String::new(),
             public_url: String::new(),
             secret_storage: String::new(),
+            secret_file_path: DEFAULT_SECRET_FILE_PATH.into(),
+            secret_keyring_service: DEFAULT_KEYRING_SERVICE.into(),
+            secret_aws_region: DEFAULT_AWS_REGION.into(),
+            secret_aws_prefix: DEFAULT_AWS_SECRET_PREFIX.into(),
+            secret_file_encrypted: false,
             ssl_mode: String::new(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
+            jwt_mode: JWT_MODE_GENERATE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
@@ -215,6 +318,30 @@ pub struct WizardApp {
     pub should_quit: bool,
     pub write_config: bool,
     completed: Vec<WizardStep>,
+    /// Which field within the chosen secret backend we're currently
+    /// collecting. `None` means we're still on the scheme-selection list
+    /// (the default KeyStorage view). Transient — not persisted.
+    pub key_storage_phase: Option<KeyStoragePhase>,
+    /// Sub-phase tracker for the `Security` step. `None` means the SSL
+    /// portion is still active (selection list or cert/key text inputs);
+    /// `Some(JwtMode)` means the JWT-mode selection is on screen.
+    pub security_phase: Option<SecurityPhase>,
+    /// Ephemeral state for the online-VTA connection sub-flow. Present only
+    /// while the operator is stepping through the sub-phases of the Vta step.
+    pub vta_connect: Option<VtaConnectState>,
+    /// Optional CLI-provided VTA DID that pre-fills the first sub-flow
+    /// text field. Kept on the app (not on `VtaConnectState`) so repeated
+    /// enter/exit cycles within the same wizard session all see the prefill.
+    pub vta_did_prefill: Option<String>,
+    /// Optional CLI-provided context id override for the sub-flow.
+    pub vta_context_prefill: Option<String>,
+    /// Captured VTA session — set when the Connected phase advances, read
+    /// by the config-writing step to provision the mediator's DID.
+    pub vta_session: Option<VtaSession>,
+    /// Ephemeral state for the air-gapped sealed-handoff sub-flow.
+    /// Present only while the operator is on that sub-flow's screens;
+    /// extracted into `vta_session` and dropped on completion.
+    pub sealed_handoff: Option<SealedHandoffState>,
 }
 
 impl WizardApp {
@@ -232,6 +359,338 @@ impl WizardApp {
             should_quit: false,
             write_config: false,
             completed: Vec::new(),
+            key_storage_phase: None,
+            security_phase: None,
+            vta_connect: None,
+            vta_did_prefill: None,
+            vta_context_prefill: None,
+            vta_session: None,
+            sealed_handoff: None,
+        }
+    }
+
+    /// Enter the sealed-handoff sub-flow. Mints the consumer keypair +
+    /// nonce + bootstrap-request JSON immediately so the first
+    /// rendered screen has something to display. Errors here mean the
+    /// system RNG failed — bubble them up rather than silently using a
+    /// degraded value.
+    fn enter_sealed_handoff_subflow(&mut self) {
+        match crate::sealed_handoff::SealedHandoffState::new(Some(format!(
+            "mediator/{}",
+            self.config.config_path
+        ))) {
+            Ok(state) => {
+                self.sealed_handoff = Some(state);
+                self.mode = InputMode::Selecting;
+            }
+            Err(e) => {
+                // Fall back to ordinary "no VTA" mode and surface the
+                // failure inline. The wizard is unusable without
+                // randomness; the operator needs to know.
+                self.sealed_handoff = None;
+                self.config.use_vta = false;
+                self.config.vta_mode = String::new();
+                eprintln!(
+                    "Could not initialise sealed-handoff sub-flow: {e}. Falling back to 'No VTA'."
+                );
+                self.advance();
+            }
+        }
+    }
+
+    /// Predicate used by the renderer/key-handler to keep the sealed
+    /// sub-flow's screens in scope while the operator is mid-flow.
+    pub fn in_sealed_handoff_subflow(&self) -> bool {
+        self.current_step == WizardStep::Vta && self.sealed_handoff.is_some()
+    }
+
+    /// Drive the sealed sub-flow forward. The phases are linear and
+    /// each "select" advances by one — the actual ingest/open work
+    /// happens on the text-input confirmation path.
+    fn sealed_handoff_select(&mut self) {
+        use crate::sealed_handoff::SealedPhase;
+        let Some(state) = self.sealed_handoff.as_mut() else {
+            return;
+        };
+        match state.phase {
+            SealedPhase::RequestGenerated => {
+                // Enter the paste prompt for the armored bundle.
+                state.phase = SealedPhase::AwaitingBundle;
+                self.text_input = Input::default();
+                self.mode = InputMode::TextInput;
+            }
+            SealedPhase::AwaitingBundle | SealedPhase::DigestVerify => {
+                // While in TextInput mode the renderer routes Enter
+                // through `confirm_text_input`; this branch only
+                // matters if the user is somehow in Selecting mode at
+                // this phase (e.g. after an error). Stay put.
+            }
+            SealedPhase::Complete => {
+                // Project the captured session onto the wizard and
+                // exit the sub-flow. From here the wizard advances to
+                // Protocol like the Online VTA path.
+                self.vta_session = state.session.take();
+                self.sealed_handoff = None;
+                self.mode = InputMode::Selecting;
+                self.advance();
+            }
+        }
+    }
+
+    /// Handle Enter on a text-input prompt belonging to the sealed
+    /// sub-flow. Returns `true` if the input was consumed so the
+    /// outer dispatcher knows not to fall through.
+    fn sealed_handoff_confirm_text(&mut self) -> bool {
+        use crate::sealed_handoff::{SealedPhase, ingest_armored, open_with_digest};
+        let Some(state) = self.sealed_handoff.as_mut() else {
+            return false;
+        };
+        let value = self.text_input.value().to_string();
+        match state.phase {
+            SealedPhase::AwaitingBundle => {
+                if let Err(e) = ingest_armored(state, &value) {
+                    state.last_error = Some(e.to_string());
+                } else {
+                    self.text_input = Input::default();
+                }
+                true
+            }
+            SealedPhase::DigestVerify => {
+                if let Err(e) = open_with_digest(state, value.trim()) {
+                    state.last_error = Some(e.to_string());
+                } else {
+                    self.text_input = Input::default();
+                    self.mode = InputMode::Selecting;
+                }
+                true
+            }
+            SealedPhase::RequestGenerated | SealedPhase::Complete => false,
+        }
+    }
+
+    /// Esc/back from inside the sealed sub-flow. Drops the ephemeral
+    /// keypair (zeroed on Drop by `Zeroizing` upstream — but we copied
+    /// the secret out, so explicit `take()` clears the visible copy)
+    /// and returns to the Vta scheme list.
+    fn sealed_handoff_back(&mut self) {
+        if let Some(mut state) = self.sealed_handoff.take() {
+            state.recipient_secret.fill(0);
+        }
+        self.config.use_vta = false;
+        self.config.vta_mode = String::new();
+        self.mode = InputMode::Selecting;
+        self.text_input = Input::default();
+    }
+
+    /// True while the operator is inside the online-VTA connection sub-flow.
+    pub fn in_vta_subflow(&self) -> bool {
+        self.current_step == WizardStep::Vta && self.vta_connect.is_some()
+    }
+
+    pub fn vta_phase(&self) -> Option<&ConnectPhase> {
+        self.vta_connect.as_ref().map(|s| &s.phase)
+    }
+
+    /// Begin the online-VTA sub-flow: initialise ephemeral state and prompt
+    /// for the VTA DID.
+    fn enter_vta_subflow(&mut self) {
+        let mut st = VtaConnectState::new();
+        if let Some(did) = self.vta_did_prefill.as_ref() {
+            st.vta_did = did.clone();
+        }
+        if let Some(ctx) = self.vta_context_prefill.as_ref() {
+            st.context_id = ctx.clone();
+        }
+        self.text_input = Input::new(st.vta_did.clone());
+        self.mode = InputMode::TextInput;
+        self.vta_connect = Some(st);
+    }
+
+    /// Exit the sub-flow, discarding ephemeral state. Used when the operator
+    /// backs out of the Vta step entirely.
+    fn exit_vta_subflow(&mut self) {
+        self.vta_connect = None;
+        self.mode = InputMode::Selecting;
+        self.text_input = Input::default();
+    }
+
+    /// Handle Enter for non-text-input sub-phases.
+    fn vta_subflow_select(&mut self) {
+        let Some(st) = self.vta_connect.as_ref() else {
+            return;
+        };
+        match st.phase {
+            ConnectPhase::AwaitingAcl => {
+                self.start_vta_test();
+            }
+            ConnectPhase::Testing => {
+                // Only meaningful after the runner has finished with a
+                // failure — let the operator retry. If the runner is still
+                // in flight `event_rx` is still `Some` and we ignore Enter.
+                let st = self.vta_connect.as_ref().expect("subflow");
+                if st.event_rx.is_none() && st.last_error.is_some() {
+                    self.start_vta_test();
+                }
+            }
+            ConnectPhase::Connected => {
+                // Persist the authenticated session so later steps can
+                // provision the mediator's DID inside the VTA.
+                if let Some(state) = self.vta_connect.as_ref() {
+                    if let Some(conn) = state.connection.as_ref() {
+                        self.vta_session = Some(VtaSession {
+                            rest_url: conn.rest_url.clone(),
+                            access_token: conn.access_token.clone(),
+                            context_id: state.context_id.clone(),
+                            vta_did: state.vta_did.clone(),
+                            admin_did: conn.admin_did.clone(),
+                            admin_private_key_mb: conn.admin_private_key_mb.clone(),
+                        });
+                    }
+                }
+                self.vta_connect = None;
+                self.mode = InputMode::Selecting;
+                self.advance();
+            }
+            _ => {}
+        }
+    }
+
+    /// Kick off (or re-kick) the diagnostic + auth run. Resets the checklist,
+    /// creates a fresh channel, and spawns the runner.
+    fn start_vta_test(&mut self) {
+        let Some(st) = self.vta_connect.as_mut() else {
+            return;
+        };
+        let Some(key) = st.setup_key.as_ref() else {
+            st.last_error = Some("setup key missing — regenerate via Esc".into());
+            return;
+        };
+        let vta_did = st.vta_did.clone();
+        let setup_did = key.did.clone();
+        let setup_privkey_mb = key.private_key_multibase().to_string();
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        st.diagnostics = pending_list();
+        st.event_rx = Some(rx);
+        st.last_error = None;
+        st.phase = ConnectPhase::Testing;
+        self.selection_index = 0;
+
+        tokio::spawn(async move {
+            run_connection_test(vta_did, setup_did, setup_privkey_mb, tx).await;
+        });
+    }
+
+    /// Drain any pending events from the runner and apply them to the
+    /// sub-flow state. Called from the main event loop on every tick.
+    pub fn drain_vta_events(&mut self) {
+        let Some(st) = self.vta_connect.as_mut() else {
+            return;
+        };
+        if st.event_rx.is_none() {
+            return;
+        }
+        // Collect events first to release the mutable borrow on `event_rx`
+        // before calling `apply_event` (which also borrows `st` mutably).
+        let mut batch = Vec::new();
+        let mut disconnected = false;
+        {
+            let rx = st.event_rx.as_mut().unwrap();
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => batch.push(event),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for event in batch {
+            st.apply_event(event);
+        }
+        if disconnected {
+            st.event_rx = None;
+        }
+    }
+
+    /// Advance the sub-flow from a text-input phase into the next phase.
+    fn vta_subflow_confirm_text(&mut self) -> anyhow::Result<()> {
+        let Some(st) = self.vta_connect.as_mut() else {
+            return Ok(());
+        };
+        match st.phase {
+            ConnectPhase::EnterDid => {
+                let val = self.text_input.value().trim().to_string();
+                if val.is_empty() {
+                    return Ok(());
+                }
+                st.vta_did = val;
+                st.phase = ConnectPhase::EnterContext;
+                let ctx = st.context_id.clone();
+                self.text_input = Input::new(ctx);
+                // Stay in TextInput mode for the next field.
+            }
+            ConnectPhase::EnterContext => {
+                let val = self.text_input.value().trim().to_string();
+                if !val.is_empty() {
+                    st.context_id = val;
+                }
+                st.setup_key = Some(EphemeralSetupKey::generate()?);
+                st.phase = ConnectPhase::AwaitingAcl;
+                self.mode = InputMode::Selecting;
+                self.selection_index = 0;
+                self.text_input = Input::default();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Handle Esc within the sub-flow — step back one phase, or exit to the
+    /// outer Vta selection list.
+    fn vta_subflow_back(&mut self) {
+        let Some(st) = self.vta_connect.as_mut() else {
+            return;
+        };
+        match st.phase {
+            ConnectPhase::EnterDid => {
+                self.exit_vta_subflow();
+            }
+            ConnectPhase::EnterContext => {
+                st.phase = ConnectPhase::EnterDid;
+                let did = st.vta_did.clone();
+                self.text_input = Input::new(did);
+                self.mode = InputMode::TextInput;
+            }
+            ConnectPhase::AwaitingAcl => {
+                st.setup_key = None;
+                st.phase = ConnectPhase::EnterContext;
+                let ctx = st.context_id.clone();
+                self.text_input = Input::new(ctx);
+                self.mode = InputMode::TextInput;
+            }
+            ConnectPhase::Testing | ConnectPhase::Connected => {
+                // Abort the runner (receiver drop closes the channel on its
+                // side) and return to the instructions screen so the
+                // operator can re-check the ACL and try again.
+                st.event_rx = None;
+                st.diagnostics.clear();
+                st.last_error = None;
+                st.connection = None;
+                st.phase = ConnectPhase::AwaitingAcl;
+                self.mode = InputMode::Selecting;
+                self.selection_index = 0;
+            }
+            #[allow(unreachable_patterns)]
+            _ => {
+                // No other transient phases currently exist; guard for
+                // future additions.
+                st.phase = ConnectPhase::AwaitingAcl;
+                self.mode = InputMode::Selecting;
+                self.selection_index = 0;
+            }
         }
     }
 
@@ -289,6 +748,44 @@ impl WizardApp {
         self.completed.clone()
     }
 
+    /// Step title/description to display in the right-panel header.
+    /// Overrides the static `WizardStep::step_data` when the wizard is inside
+    /// a sub-flow that has its own narrative (e.g. online-VTA).
+    pub fn current_step_data(&self) -> StepData {
+        let default = self.current_step.step_data();
+        if let Some(phase) = self.vta_phase() {
+            let num = self.current_step.step_number();
+            let total = WizardStep::total();
+            let (suffix, desc): (&str, &str) = match phase {
+                ConnectPhase::EnterDid => (
+                    "Enter VTA DID",
+                    "Type the VTA's DID; the wizard resolves its endpoints.",
+                ),
+                ConnectPhase::EnterContext => (
+                    "Enter context id",
+                    "VTA context name the mediator will live in (default: mediator).",
+                ),
+                ConnectPhase::AwaitingAcl => (
+                    "Register ACL",
+                    "Run the displayed command on the VTA host, then press Enter to test.",
+                ),
+                ConnectPhase::Testing => (
+                    "Testing connection",
+                    "Running diagnostic checks against the VTA…",
+                ),
+                ConnectPhase::Connected => (
+                    "Connected",
+                    "VTA connection established — advancing to the next step.",
+                ),
+            };
+            return StepData {
+                title: format!("Step {num}/{total}: VTA Integration — {suffix}"),
+                description: desc.into(),
+            };
+        }
+        default
+    }
+
     /// Get the options for the current step.
     pub fn current_options(&self) -> Vec<SelectionOption> {
         match self.current_step {
@@ -304,14 +801,42 @@ impl WizardApp {
                 SelectionOption::new("Container", "Docker image for container orchestration"),
             ],
             WizardStep::Vta => {
+                if let Some(phase) = self.vta_phase() {
+                    let st = self.vta_connect.as_ref().expect("phase implies state");
+                    return match phase {
+                        ConnectPhase::AwaitingAcl => vec![SelectionOption::new(
+                            "Test VTA connection",
+                            "Run the `pnm acl create` command above, then press Enter to verify",
+                        )],
+                        ConnectPhase::Testing => {
+                            if st.event_rx.is_some() {
+                                // Runner still in flight — no actionable
+                                // option yet; the UI renders a spinner.
+                                vec![]
+                            } else if st.last_error.is_some() {
+                                vec![SelectionOption::new(
+                                    "Retry",
+                                    "Re-run the diagnostic + auth sequence",
+                                )]
+                            } else {
+                                vec![]
+                            }
+                        }
+                        ConnectPhase::Connected => vec![SelectionOption::new(
+                            "Continue",
+                            "Advance to the next wizard step",
+                        )],
+                        _ => vec![],
+                    };
+                }
                 vec![
                     SelectionOption::new(
                         "VTA Online",
                         "VTA is accessible — connection mode auto-detected from credential",
                     ),
                     SelectionOption::new(
-                        "VTA Cold-start",
-                        "VTA not accessible — use pre-provisioned or cached credentials",
+                        "VTA Sealed handoff (air-gapped)",
+                        "Generate a bootstrap request, ship it to the VTA admin out-of-band, paste back the HPKE-armored bundle. No network from this host.",
                     ),
                     SelectionOption::new(
                         "No VTA",
@@ -339,7 +864,6 @@ impl WizardApp {
                         format!("{tsp_check} TSP (Trust Spanning Protocol) [experimental]"),
                         "Lightweight trust protocol — experimental support",
                     ),
-                    SelectionOption::new("Continue >", "Proceed to the next step"),
                 ]
             }
             WizardStep::Did => {
@@ -365,57 +889,83 @@ impl WizardApp {
                 opts
             }
             WizardStep::KeyStorage => {
-                let mut opts = vec![];
-                if self.config.use_vta {
-                    opts.push(SelectionOption::new(
-                        "VTA managed (vta://) [recommended]",
-                        "Centralized key management via Verifiable Trust Agent",
-                    ));
+                // The file:// encrypt/no-encrypt choice rides on top
+                // of the same selection-list UI as the scheme picker.
+                // Branch *before* we render the scheme list so the
+                // operator sees the right question.
+                if self.key_storage_phase == Some(KeyStoragePhase::FileEncryptChoice) {
+                    return vec![
+                        SelectionOption::new(
+                            "Encrypt with a passphrase (recommended)",
+                            "Argon2id-derived AES-256-GCM. The wizard prompts for a passphrase you must also provide to the mediator at boot.",
+                        ),
+                        SelectionOption::new(
+                            "No encryption (plaintext on disk)",
+                            "Same secrets.json shape as before. Anyone with read access to the file gets the keys.",
+                        ),
+                    ];
                 }
-                opts.push(SelectionOption::new(
-                    "OS Keyring (keyring://)",
-                    "macOS Keychain, Linux Secret Service, Windows Credential Manager",
-                ));
-                opts.push(SelectionOption::new(
-                    "AWS Secrets Manager (aws_secrets://)",
-                    "AWS cloud production",
-                ));
-                opts.push(SelectionOption::new(
-                    "Google Cloud Secret Manager (gcp_secrets://)",
-                    "GCP cloud production — coming soon",
-                ));
-                opts.push(SelectionOption::new(
-                    "Azure Key Vault (azure_keyvault://)",
-                    "Azure cloud production — coming soon",
-                ));
-                opts.push(SelectionOption::new(
-                    "HashiCorp Vault (vault://)",
-                    "Enterprise / multi-cloud — coming soon",
-                ));
-                opts.push(SelectionOption::new(
-                    "Local file (file://)",
-                    "Stored in secrets.json — NOT secure for production",
-                ));
-                opts.push(SelectionOption::new(
-                    "Inline in config (string://)",
-                    "Embedded in mediator.toml — dev/CI only, NOT secure",
-                ));
-                opts
+                // Unified secret-storage backends. `vta://` is no longer a
+                // backend (the VTA is a *source* of keys, not a store) and
+                // `string://` has been removed (inline secrets in TOML are
+                // unsafe even for CI — use `file://` with env-var overrides
+                // instead).
+                vec![
+                    SelectionOption::new(
+                        "OS Keyring (keyring://) [recommended for desktop]",
+                        "macOS Keychain, Linux Secret Service, Windows Credential Manager",
+                    ),
+                    SelectionOption::new(
+                        "AWS Secrets Manager (aws_secrets://)",
+                        "AWS cloud production",
+                    ),
+                    SelectionOption::new(
+                        "Google Cloud Secret Manager (gcp_secrets://)",
+                        "GCP cloud production — coming soon",
+                    ),
+                    SelectionOption::new(
+                        "Azure Key Vault (azure_keyvault://)",
+                        "Azure cloud production — coming soon",
+                    ),
+                    SelectionOption::new(
+                        "HashiCorp Vault (vault://)",
+                        "Enterprise / multi-cloud — coming soon",
+                    ),
+                    SelectionOption::new(
+                        "Local file (file://)",
+                        "Stored in secrets.json — DEV ONLY, requires explicit confirmation",
+                    ),
+                ]
             }
-            WizardStep::Security => vec![
-                SelectionOption::new(
-                    "No SSL (use TLS-terminating proxy)",
-                    "Recommended: nginx, Caddy, AWS ALB handle TLS",
-                ),
-                SelectionOption::new(
-                    "Provide existing certificates",
-                    "Use your own SSL certificate and key files",
-                ),
-                SelectionOption::new(
-                    "Generate self-signed certificates",
-                    "Local development only — not for production",
-                ),
-            ],
+            WizardStep::Security => {
+                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                    vec![
+                        SelectionOption::new(
+                            "Generate a fresh JWT signing key (recommended)",
+                            "Wizard creates an Ed25519 PKCS8 key and stores it under the well-known secret name.",
+                        ),
+                        SelectionOption::new(
+                            "Provide my own JWT secret",
+                            "Mediator reads MEDIATOR_JWT_SECRET / --jwt-secret-file at boot. Wizard does not prompt for the key.",
+                        ),
+                    ]
+                } else {
+                    vec![
+                        SelectionOption::new(
+                            "No SSL (use TLS-terminating proxy)",
+                            "Recommended: nginx, Caddy, AWS ALB handle TLS",
+                        ),
+                        SelectionOption::new(
+                            "Provide existing certificates",
+                            "Use your own SSL certificate and key files",
+                        ),
+                        SelectionOption::new(
+                            "Generate self-signed certificates",
+                            "Local development only — not for production",
+                        ),
+                    ]
+                }
+            }
             WizardStep::Database => {
                 // Database uses text input, but we return empty for the selection fallback
                 vec![]
@@ -453,68 +1003,81 @@ impl WizardApp {
                 2 => "Same as server, plus generates a Dockerfile and docker-compose.yml with correct feature flags.".into(),
                 _ => String::new(),
             },
-            WizardStep::Vta => match self.selection_index {
-                0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode is auto-detected from the credential. Recommended for production.".into(),
-                1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during initial bootstrap.".into(),
-                2 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
-                _ => String::new(),
-            },
+            WizardStep::Vta => {
+                if let Some(phase) = self.vta_phase() {
+                    return match phase {
+                        ConnectPhase::EnterDid => {
+                            "Enter the VTA's DID (e.g. did:webvh:vta.example.com). The wizard resolves the DID document to discover its REST and DIDComm service endpoints — you do not need to supply URLs separately.".into()
+                        }
+                        ConnectPhase::EnterContext => {
+                            "The VTA context this mediator will live in. Defaults to 'mediator'; override if you use a different naming convention or run multiple mediators against the same VTA.".into()
+                        }
+                        ConnectPhase::AwaitingAcl => {
+                            "The wizard has generated an ephemeral did:key to authenticate to the VTA. Run the displayed `pnm acl create` command on your VTA admin host, then press Enter to test the connection.".into()
+                        }
+                        ConnectPhase::Testing => {
+                            "Running diagnostics — resolving transport, pinging the mediator service, attempting authentication…".into()
+                        }
+                        ConnectPhase::Connected => {
+                            "Connection established. Advancing to the next step.".into()
+                        }
+                    };
+                }
+                match self.selection_index {
+                    0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode is auto-detected from the credential. Recommended for production.".into(),
+                    1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during initial bootstrap.".into(),
+                    2 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
+                    _ => String::new(),
+                }
+            }
             WizardStep::Protocol => match self.selection_index {
-                0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments.".into(),
-                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm.".into(),
-                2 => "Proceed to the next step with selected protocols.".into(),
+                0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments. Space toggles; Enter continues.".into(),
+                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm. Space toggles; Enter continues.".into(),
                 _ => String::new(),
             },
             WizardStep::Did => {
                 if self.config.use_vta {
                     match self.selection_index {
-                        0 => "VTA creates and manages the mediator's DID and keys centrally. Supports did:peer and did:webvh (configurable in VTA). Recommended for production.".into(),
-                        1 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
+                        0 => "VTA creates and manages the mediator's DID and keys centrally. Uses the built-in `didcomm-mediator` template. To customise: `pnm did-templates init didcomm-mediator > custom.json`, edit, then upload under the same name — context/global scope shadows the built-in automatically.".into(),
+                        1 => "did:webvh requires a webvh server to host the DID document. Uses the same `didcomm-mediator` template shape as the VTA-managed path, rendered locally — you back up and manage the keys yourself.".into(),
                         2 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
                         3 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
                         _ => String::new(),
                     }
                 } else {
                     match self.selection_index {
-                        0 => "did:webvh requires a webvh server to host the DID document. Generates random keys that you must back up and manage yourself.".into(),
+                        0 => "did:webvh requires a webvh server to host the DID document. Uses the `didcomm-mediator` template shape, rendered locally — you back up and manage the keys yourself.".into(),
                         1 => "did:peer is self-contained — no hosting required. Generates random keys that you must back up and manage yourself. Best for local dev and testing.".into(),
                         2 => "Import a DID you've already created. You'll need to provide the DID string and private key secrets.".into(),
                         _ => String::new(),
                     }
                 }
             }
-            WizardStep::KeyStorage => {
-                if self.config.use_vta {
+            WizardStep::KeyStorage => match self.selection_index {
+                0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
+                1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                2 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
+                3 => "Store secrets in Azure Key Vault. Coming soon.".into(),
+                4 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
+                5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
+                _ => String::new(),
+            },
+            WizardStep::Security => {
+                if self.security_phase == Some(SecurityPhase::JwtMode) {
                     match self.selection_index {
-                        0 => "Keys managed by VTA with local caching for offline cold-start. Most secure — keys never leave the VTA boundary.".into(),
-                        1 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
-                        2 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                        3 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
-                        4 => "Store secrets in Azure Key Vault. Coming soon.".into(),
-                        5 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
-                        6 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
-                        7 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
+                        0 => "The wizard generates a 32-byte Ed25519 PKCS8 keypair and writes it into the unified secret backend at the well-known key `mediator/jwt/secret`. The mediator picks it up at startup with no further config.".into(),
+                        1 => "The wizard records your choice but does NOT generate or prompt for a key. Before starting the mediator, set MEDIATOR_JWT_SECRET (raw PKCS8 bytes, base64-encoded) or pass --jwt-secret-file <path>. Choose this when CI/CD already issues JWT keys or when an HSM holds them.".into(),
                         _ => String::new(),
                     }
                 } else {
                     match self.selection_index {
-                        0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development.".into(),
-                        1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                        2 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
-                        3 => "Store secrets in Azure Key Vault. Coming soon.".into(),
-                        4 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
-                        5 => "Secrets written to conf/secrets.json as plaintext. NOT secure — anyone with file access can read the private keys.".into(),
-                        6 => "Secrets embedded directly in mediator.toml as plaintext. NOT secure — only use for dev/CI environments.".into(),
+                        0 => "Run the mediator behind a reverse proxy (nginx, Caddy, AWS ALB) that terminates TLS. The mediator runs plain HTTP. This is the recommended approach.".into(),
+                        1 => "Provide paths to existing SSL certificate and key files.".into(),
+                        2 => "Generate self-signed certificates for local development. Browsers will show security warnings.".into(),
                         _ => String::new(),
                     }
                 }
             }
-            WizardStep::Security => match self.selection_index {
-                0 => "Run the mediator behind a reverse proxy (nginx, Caddy, AWS ALB) that terminates TLS. The mediator runs plain HTTP. This is the recommended approach.".into(),
-                1 => "Provide paths to existing SSL certificate and key files.".into(),
-                2 => "Generate self-signed certificates for local development. Browsers will show security warnings.".into(),
-                _ => String::new(),
-            },
             WizardStep::Database => {
                 "Redis is used for message queues, session storage, and forwarding. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
             }
@@ -554,16 +1117,39 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Vta => {
+                if self.in_vta_subflow() {
+                    self.vta_subflow_select();
+                    return;
+                }
+                if self.in_sealed_handoff_subflow() {
+                    self.sealed_handoff_select();
+                    return;
+                }
                 match self.selection_index {
                     0 => {
-                        // VTA Online
+                        // VTA Online — enter the connection sub-flow rather
+                        // than advancing. The sub-flow collects the VTA DID,
+                        // context id, and an ephemeral setup DID for ACL
+                        // registration, then (in later iterations) runs the
+                        // diagnostic/auth checklist before advancing.
                         self.config.use_vta = true;
                         self.config.vta_mode = VTA_MODE_ONLINE.into();
+                        self.apply_vta_defaults();
+                        self.enter_vta_subflow();
+                        return;
                     }
                     1 => {
-                        // VTA Cold-start
+                        // VTA Sealed handoff. The actual paste/parse
+                        // sub-flow lives in `sealed_handoff` and is
+                        // launched lazily — selection here just records
+                        // the mode + flips `use_vta` so the
+                        // KeyStorage/Did defaults align before the
+                        // sub-flow runs.
                         self.config.use_vta = true;
-                        self.config.vta_mode = VTA_MODE_COLD_START.into();
+                        self.config.vta_mode = VTA_MODE_SEALED.into();
+                        self.apply_vta_defaults();
+                        self.enter_sealed_handoff_subflow();
+                        return;
                     }
                     2 => {
                         // No VTA
@@ -576,28 +1162,12 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Protocol => {
-                match self.selection_index {
-                    0 => self.config.didcomm_enabled = !self.config.didcomm_enabled,
-                    1 => self.config.tsp_enabled = !self.config.tsp_enabled,
-                    2 => {
-                        // "Continue" option — advance if at least one protocol selected
-                        if !self.config.didcomm_enabled && !self.config.tsp_enabled {
-                            return; // Can't continue with no protocol
-                        }
-                        self.advance();
-                        return;
-                    }
-                    _ => return,
-                }
-                // Don't allow deselecting both
+                // Enter always advances on a multi-select step. Toggling is
+                // handled by `toggle_current_multi_select` (Space key).
                 if !self.config.didcomm_enabled && !self.config.tsp_enabled {
-                    // Re-enable the one they just toggled off
-                    match self.selection_index {
-                        0 => self.config.didcomm_enabled = true,
-                        1 => self.config.tsp_enabled = true,
-                        _ => {}
-                    }
+                    return; // Can't continue with no protocol
                 }
+                self.advance();
             }
             WizardStep::Did => {
                 if self.config.use_vta {
@@ -608,8 +1178,10 @@ impl WizardApp {
                         3 => DID_IMPORT.into(),
                         _ => return,
                     };
-                    // For did:webvh, collect the public URL
-                    if self.selection_index == 1 {
+                    // DID_VTA and DID_WEBVH both need the mediator URL so
+                    // the resulting DID document can publish correct
+                    // service endpoints.
+                    if self.selection_index == 0 || self.selection_index == 1 {
                         self.mode = InputMode::TextInput;
                         self.text_input = Input::new(self.config.public_url.clone());
                         return;
@@ -631,46 +1203,71 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::KeyStorage => {
-                if self.config.use_vta {
-                    self.config.secret_storage = match self.selection_index {
-                        0 => STORAGE_VTA.into(),
-                        1 => STORAGE_KEYRING.into(),
-                        2 => STORAGE_AWS.into(),
-                        3 => STORAGE_GCP.into(),
-                        4 => STORAGE_AZURE.into(),
-                        5 => STORAGE_VAULT.into(),
-                        6 => STORAGE_FILE.into(),
-                        7 => STORAGE_STRING.into(),
-                        _ => return,
-                    };
-                } else {
-                    self.config.secret_storage = match self.selection_index {
-                        0 => STORAGE_KEYRING.into(),
-                        1 => STORAGE_AWS.into(),
-                        2 => STORAGE_GCP.into(),
-                        3 => STORAGE_AZURE.into(),
-                        4 => STORAGE_VAULT.into(),
-                        5 => STORAGE_FILE.into(),
-                        6 => STORAGE_STRING.into(),
-                        _ => return,
-                    };
+                // FileEncryptChoice is the only phase that uses
+                // selection mode (rather than text input) — handle it
+                // here so Enter advances the encrypt/no-encrypt pick.
+                if self.key_storage_phase == Some(KeyStoragePhase::FileEncryptChoice) {
+                    if self.selection_index == 0 {
+                        // Yes, encrypt — collect the passphrase.
+                        self.enter_key_storage_phase(KeyStoragePhase::FilePassphrase);
+                    } else {
+                        // No, plaintext — finish the file:// sub-flow.
+                        self.config.secret_file_encrypted = false;
+                        self.exit_key_storage_subflow();
+                        self.advance();
+                    }
+                    return;
                 }
-                self.advance();
+                // Ignore a stray Enter while a text-input sub-phase is
+                // active — `confirm_text_input` drives those.
+                if self.key_storage_phase.is_some() {
+                    return;
+                }
+                self.config.secret_storage = match self.selection_index {
+                    0 => STORAGE_KEYRING.into(),
+                    1 => STORAGE_AWS.into(),
+                    2 => STORAGE_GCP.into(),
+                    3 => STORAGE_AZURE.into(),
+                    4 => STORAGE_VAULT.into(),
+                    5 => STORAGE_FILE.into(),
+                    _ => return,
+                };
+                // Backend with extra config → enter sub-flow. No extra
+                // config → advance straight away.
+                if let Some(phase) = KeyStoragePhase::first_for(&self.config.secret_storage) {
+                    self.enter_key_storage_phase(phase);
+                } else {
+                    self.advance();
+                }
             }
             WizardStep::Security => {
+                // Two-phase step: SSL first, then JWT mode. The JWT
+                // sub-phase reuses `selection_index` for its own
+                // 2-option pick.
+                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                    self.config.jwt_mode = match self.selection_index {
+                        0 => JWT_MODE_GENERATE.into(),
+                        1 => JWT_MODE_PROVIDE.into(),
+                        _ => return,
+                    };
+                    self.security_phase = None;
+                    self.advance();
+                    return;
+                }
                 self.config.ssl_mode = match self.selection_index {
                     0 => SSL_NONE.into(),
                     1 => SSL_EXISTING.into(),
                     2 => SSL_SELF_SIGNED.into(),
                     _ => return,
                 };
-                // For existing certs, collect file paths
+                // For existing certs, collect file paths first; the JWT
+                // phase then runs once both paths are saved.
                 if self.selection_index == 1 {
                     self.mode = InputMode::TextInput;
                     self.text_input = Input::new(self.config.ssl_cert_path.clone());
                     return;
                 }
-                self.advance();
+                self.enter_jwt_mode_phase();
             }
             WizardStep::Database => {
                 // Database step: confirm text input
@@ -707,8 +1304,186 @@ impl WizardApp {
         }
     }
 
+    /// Enter a specific KeyStorage config sub-phase with the input
+    /// pre-filled from the field's current value.
+    fn enter_key_storage_phase(&mut self, phase: KeyStoragePhase) {
+        let value = match phase {
+            // FileGate / FilePassphrase / FileEncryptChoice all start
+            // with an empty input — the operator must type the
+            // dev-only acknowledgement / passphrase from scratch every
+            // time, and the encrypt-choice screen uses a selection
+            // list rather than text input.
+            KeyStoragePhase::FileGate => String::new(),
+            KeyStoragePhase::FilePassphrase => String::new(),
+            KeyStoragePhase::FilePath => self.config.secret_file_path.clone(),
+            KeyStoragePhase::KeyringService => self.config.secret_keyring_service.clone(),
+            KeyStoragePhase::AwsRegion => self.config.secret_aws_region.clone(),
+            KeyStoragePhase::AwsPrefix => self.config.secret_aws_prefix.clone(),
+            // Encrypt choice doesn't take text input — render uses
+            // selection mode. Short-circuit before touching the input
+            // widget so we don't flip mode unexpectedly.
+            KeyStoragePhase::FileEncryptChoice => {
+                self.key_storage_phase = Some(phase);
+                self.mode = InputMode::Selecting;
+                self.selection_index = if self.config.secret_file_encrypted {
+                    0
+                } else {
+                    1
+                };
+                return;
+            }
+        };
+        self.key_storage_phase = Some(phase);
+        self.text_input = Input::new(value);
+        self.mode = InputMode::TextInput;
+    }
+
+    /// Confirm the current KeyStorage text-input phase: save the value,
+    /// transition to the next phase for this backend, or advance out of
+    /// the step if we're on the last field.
+    fn confirm_key_storage_phase(&mut self) {
+        let Some(phase) = self.key_storage_phase else {
+            return;
+        };
+        let value = self.text_input.value().trim().to_string();
+        match phase {
+            KeyStoragePhase::FileGate => {
+                // Case-insensitive match on the literal phrase. Anything
+                // else aborts the file:// selection: clear the choice,
+                // exit the sub-flow back to the scheme list so the
+                // operator can pick a real backend.
+                if value.eq_ignore_ascii_case(FILE_GATE_PHRASE) {
+                    self.enter_key_storage_phase(KeyStoragePhase::FilePath);
+                } else {
+                    self.config.secret_storage = String::new();
+                    self.exit_key_storage_subflow();
+                }
+            }
+            KeyStoragePhase::FilePath => {
+                if !value.is_empty() {
+                    self.config.secret_file_path = value;
+                }
+                // After the file path lands the encrypt/no-encrypt
+                // question. file:// is dev-only; we want the operator
+                // to make the security trade-off explicitly rather
+                // than silently shipping plaintext.
+                self.enter_key_storage_phase(KeyStoragePhase::FileEncryptChoice);
+            }
+            KeyStoragePhase::FileEncryptChoice => {
+                // Driven via select_current; the text-input branch
+                // shouldn't be reached. If it is (stray Enter while
+                // mode briefly mismatched), treat as no-op.
+            }
+            KeyStoragePhase::FilePassphrase => {
+                if value.is_empty() {
+                    // Reject empty — Argon2id with an empty passphrase
+                    // is trivially brute-forceable.
+                    return;
+                }
+                // Export to the env var the encrypted backend reads.
+                // The wizard process is short-lived; the env var dies
+                // with it. Operators who want persistence beyond the
+                // wizard run set the var themselves before starting
+                // the mediator.
+                unsafe {
+                    std::env::set_var(affinidi_messaging_mediator_common::PASSPHRASE_ENV, &value);
+                }
+                self.config.secret_file_encrypted = true;
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+            KeyStoragePhase::KeyringService => {
+                if !value.is_empty() {
+                    self.config.secret_keyring_service = value;
+                }
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+            KeyStoragePhase::AwsRegion => {
+                if !value.is_empty() {
+                    self.config.secret_aws_region = value;
+                }
+                self.enter_key_storage_phase(KeyStoragePhase::AwsPrefix);
+            }
+            KeyStoragePhase::AwsPrefix => {
+                if !value.is_empty() {
+                    self.config.secret_aws_prefix = value;
+                }
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+        }
+    }
+
+    /// Back-nav within the KeyStorage sub-flow. AWS has two phases; the
+    /// simpler backends have one, so "back" from their prompt returns to
+    /// the scheme selection list.
+    fn key_storage_back(&mut self) {
+        let Some(phase) = self.key_storage_phase else {
+            return;
+        };
+        match phase {
+            KeyStoragePhase::AwsPrefix => {
+                self.enter_key_storage_phase(KeyStoragePhase::AwsRegion);
+            }
+            _ => {
+                self.exit_key_storage_subflow();
+            }
+        }
+    }
+
+    fn exit_key_storage_subflow(&mut self) {
+        self.key_storage_phase = None;
+        self.mode = InputMode::Selecting;
+        self.text_input = Input::default();
+    }
+
+    /// Enter the JWT-mode sub-phase of the Security step. Called once SSL
+    /// has been settled (either selection-only path or after the cert/key
+    /// inputs). Pre-selects the operator's last choice so re-entry is
+    /// idempotent; defaults to "generate" on a fresh run.
+    fn enter_jwt_mode_phase(&mut self) {
+        self.security_phase = Some(SecurityPhase::JwtMode);
+        self.mode = InputMode::Selecting;
+        self.selection_index = if self.config.jwt_mode == JWT_MODE_PROVIDE {
+            1
+        } else {
+            0
+        };
+    }
+
+    /// Defensive helper kept symmetric with [`Self::in_key_storage_subflow`].
+    /// Currently unused at call sites — the renderer reads
+    /// `security_phase` directly — but exposed so future help-bar /
+    /// back-nav code can branch on the same predicate.
+    #[allow(dead_code)]
+    pub fn in_security_subflow(&self) -> bool {
+        self.current_step == WizardStep::Security && self.security_phase.is_some()
+    }
+
+    pub fn in_key_storage_subflow(&self) -> bool {
+        self.current_step == WizardStep::KeyStorage && self.key_storage_phase.is_some()
+    }
+
     /// Handle text input confirmation (Enter in TextInput mode).
     pub fn confirm_text_input(&mut self) {
+        if self.in_key_storage_subflow() {
+            self.confirm_key_storage_phase();
+            return;
+        }
+        if self.in_vta_subflow() {
+            // Errors here mean the ephemeral key generator failed — surface
+            // as a transient error on the sub-flow state, not a panic.
+            if let Err(e) = self.vta_subflow_confirm_text() {
+                if let Some(st) = self.vta_connect.as_mut() {
+                    st.last_error = Some(e.to_string());
+                }
+            }
+            return;
+        }
+        if self.in_sealed_handoff_subflow() && self.sealed_handoff_confirm_text() {
+            return;
+        }
         match self.current_step {
             WizardStep::Did => {
                 self.config.public_url = self.text_input.value().to_string();
@@ -716,7 +1491,9 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Security => {
-                // First text input: cert path, then key path
+                // First text input: cert path, then key path. After the
+                // key path is saved, drop into the JWT-mode selection
+                // rather than advancing straight to Database.
                 if self.config.ssl_cert_path.is_empty()
                     || self.config.ssl_cert_path == self.text_input.value()
                 {
@@ -725,7 +1502,7 @@ impl WizardApp {
                 } else {
                     self.config.ssl_key_path = self.text_input.value().to_string();
                     self.mode = InputMode::Selecting;
-                    self.advance();
+                    self.enter_jwt_mode_phase();
                 }
             }
             WizardStep::Database => {
@@ -749,7 +1526,10 @@ impl WizardApp {
                 self.config.didcomm_enabled = true;
                 self.config.tsp_enabled = false;
                 self.config.did_method = DID_VTA.into();
-                self.config.secret_storage = STORAGE_VTA.into();
+                // The unified secret backend is independent of VTA mode —
+                // pick a sensible default per platform; the operator
+                // refines it on the KeyStorage step.
+                self.config.secret_storage = STORAGE_KEYRING.into();
                 self.config.ssl_mode = SSL_NONE.into();
                 self.config.database_url = DEFAULT_REDIS_URL.into();
                 self.config.admin_did_mode = ADMIN_GENERATE.into();
@@ -759,17 +1539,18 @@ impl WizardApp {
     }
 
     /// Apply or clear VTA-dependent defaults when toggling VTA integration.
+    ///
+    /// `secret_storage` is deliberately *not* overridden here — the operator
+    /// configures it in the earlier `KeyStorage` step and the VTA step
+    /// should respect that choice. The Did + Admin defaults still shift
+    /// because those steps come after Vta.
     fn apply_vta_defaults(&mut self) {
         if self.config.use_vta {
             self.config.did_method = DID_VTA.into();
-            self.config.secret_storage = STORAGE_VTA.into();
             self.config.admin_did_mode = ADMIN_VTA.into();
         } else {
             if self.config.did_method == DID_VTA {
                 self.config.did_method = DID_PEER.into();
-            }
-            if self.config.secret_storage == STORAGE_VTA {
-                self.config.secret_storage = STORAGE_STRING.into();
             }
             if self.config.admin_did_mode == ADMIN_VTA {
                 self.config.admin_did_mode = ADMIN_GENERATE.into();
@@ -796,6 +1577,18 @@ impl WizardApp {
     }
 
     pub fn go_back(&mut self) {
+        if self.in_key_storage_subflow() {
+            self.key_storage_back();
+            return;
+        }
+        if self.in_vta_subflow() {
+            self.vta_subflow_back();
+            return;
+        }
+        if self.in_sealed_handoff_subflow() {
+            self.sealed_handoff_back();
+            return;
+        }
         match self.mode {
             InputMode::TextInput => {
                 self.mode = InputMode::Selecting;
@@ -851,12 +1644,73 @@ impl WizardApp {
         self.text_input.handle(req);
     }
 
+    /// Toggle the currently highlighted option on a multi-select step.
+    /// No-op on single-select steps. Enforces "at least one selection"
+    /// invariants where the step has them (e.g. Protocol needs at least one
+    /// protocol enabled).
+    pub fn toggle_current_multi_select(&mut self) {
+        if !self.current_step.is_multi_select() {
+            return;
+        }
+        match self.current_step {
+            WizardStep::Protocol => {
+                let was_didcomm = self.config.didcomm_enabled;
+                let was_tsp = self.config.tsp_enabled;
+                match self.selection_index {
+                    0 => self.config.didcomm_enabled = !self.config.didcomm_enabled,
+                    1 => self.config.tsp_enabled = !self.config.tsp_enabled,
+                    _ => {}
+                }
+                // Never let the operator deselect everything — revert the
+                // toggle if the result would leave zero protocols enabled.
+                if !self.config.didcomm_enabled && !self.config.tsp_enabled {
+                    self.config.didcomm_enabled = was_didcomm;
+                    self.config.tsp_enabled = was_tsp;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Splice a pasted string into the current text input at the cursor
+    /// position. No-op outside of `InputMode::TextInput`. Newlines and other
+    /// control characters are dropped so a multi-line paste collapses to a
+    /// single line (our fields — DID, context id, URLs — are single-line by
+    /// design).
+    pub fn paste_text(&mut self, raw: &str) {
+        if self.mode != InputMode::TextInput {
+            return;
+        }
+        let cleaned: String = raw
+            .chars()
+            .filter(|c| !c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+            .collect();
+        if cleaned.is_empty() {
+            return;
+        }
+        let current = self.text_input.value();
+        let cursor = self.text_input.cursor();
+        let mut chars = current.chars();
+        let mut new_value = String::with_capacity(current.len() + cleaned.len());
+        for _ in 0..cursor {
+            if let Some(c) = chars.next() {
+                new_value.push(c);
+            }
+        }
+        new_value.push_str(&cleaned);
+        for c in chars {
+            new_value.push(c);
+        }
+        let new_cursor = cursor + cleaned.chars().count();
+        self.text_input = Input::new(new_value).with_cursor(new_cursor);
+    }
+
     /// Get the default selection index based on deployment defaults.
     fn default_selection_index(&self) -> usize {
         match self.current_step {
             WizardStep::Vta => match self.config.vta_mode.as_str() {
                 VTA_MODE_ONLINE => 0,
-                VTA_MODE_COLD_START => 1,
+                VTA_MODE_SEALED => 1,
                 _ if self.config.use_vta => 0, // VTA enabled but no mode yet
                 _ => 2,                        // No VTA
             },
@@ -879,32 +1733,15 @@ impl WizardApp {
                     }
                 }
             }
-            WizardStep::KeyStorage => {
-                if self.config.use_vta {
-                    match self.config.secret_storage.as_str() {
-                        STORAGE_VTA => 0,
-                        STORAGE_KEYRING => 1,
-                        STORAGE_AWS => 2,
-                        STORAGE_GCP => 3,
-                        STORAGE_AZURE => 4,
-                        STORAGE_VAULT => 5,
-                        STORAGE_FILE => 6,
-                        STORAGE_STRING => 7,
-                        _ => 0,
-                    }
-                } else {
-                    match self.config.secret_storage.as_str() {
-                        STORAGE_KEYRING => 0,
-                        STORAGE_AWS => 1,
-                        STORAGE_GCP => 2,
-                        STORAGE_AZURE => 3,
-                        STORAGE_VAULT => 4,
-                        STORAGE_FILE => 5,
-                        STORAGE_STRING => 6,
-                        _ => 0,
-                    }
-                }
-            }
+            WizardStep::KeyStorage => match self.config.secret_storage.as_str() {
+                STORAGE_KEYRING => 0,
+                STORAGE_AWS => 1,
+                STORAGE_GCP => 2,
+                STORAGE_AZURE => 3,
+                STORAGE_VAULT => 4,
+                STORAGE_FILE => 5,
+                _ => 0,
+            },
             WizardStep::Security => match self.config.ssl_mode.as_str() {
                 SSL_EXISTING => 1,
                 SSL_SELF_SIGNED => 2,
@@ -942,7 +1779,8 @@ mod tests {
         let steps = WizardStep::all();
         assert_eq!(steps.len(), 9);
         assert_eq!(steps[0], WizardStep::Deployment);
-        assert_eq!(steps[1], WizardStep::Vta);
+        assert_eq!(steps[1], WizardStep::KeyStorage);
+        assert_eq!(steps[2], WizardStep::Vta);
         assert_eq!(steps[8], WizardStep::Summary);
     }
 
@@ -1025,7 +1863,7 @@ mod tests {
         let mut app = WizardApp::new("test.toml".into());
         assert_eq!(app.current_step, WizardStep::Deployment);
         app.advance();
-        assert_eq!(app.current_step, WizardStep::Vta);
+        assert_eq!(app.current_step, WizardStep::KeyStorage);
         assert!(app.completed_steps().contains(&WizardStep::Deployment));
     }
 
@@ -1052,12 +1890,12 @@ mod tests {
     #[test]
     fn go_back_returns_to_previous_step() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // Deployment → Vta
+        app.advance(); // Deployment → KeyStorage
+        app.advance(); // KeyStorage → Vta
         app.advance(); // Vta → Protocol
-        app.advance(); // Protocol → Did
-        assert_eq!(app.current_step, WizardStep::Did);
-        app.go_back();
         assert_eq!(app.current_step, WizardStep::Protocol);
+        app.go_back();
+        assert_eq!(app.current_step, WizardStep::Vta);
     }
 
     #[test]
@@ -1070,6 +1908,39 @@ mod tests {
         assert_eq!(app.mode, InputMode::Confirming);
         app.go_back();
         assert_eq!(app.current_step, WizardStep::Admin);
+    }
+
+    #[test]
+    fn paste_text_inserts_at_cursor_in_text_input_mode() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::TextInput;
+        app.text_input = tui_input::Input::new("did:webvh:".into());
+        // Place cursor at end.
+        app.text_input = tui_input::Input::new("did:webvh:".into()).with_cursor(10);
+        app.paste_text("vta.example.com");
+        assert_eq!(app.text_input.value(), "did:webvh:vta.example.com");
+        assert_eq!(app.text_input.cursor(), 25);
+    }
+
+    #[test]
+    fn paste_text_strips_newlines_and_tabs() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::TextInput;
+        app.text_input = tui_input::Input::new(String::new());
+        app.paste_text("did:webvh:vta.example.com\n");
+        assert_eq!(app.text_input.value(), "did:webvh:vta.example.com");
+
+        app.text_input = tui_input::Input::new(String::new());
+        app.paste_text("did:web\tvh:\r\nexample.com");
+        assert_eq!(app.text_input.value(), "did:webvh:example.com");
+    }
+
+    #[test]
+    fn paste_text_ignored_outside_text_input_mode() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::Selecting;
+        app.paste_text("did:webvh:vta.example.com");
+        assert_eq!(app.text_input.value(), "");
     }
 
     #[test]
@@ -1089,18 +1960,51 @@ mod tests {
     fn protocol_toggle_prevents_deselecting_both() {
         let mut app = WizardApp::new("test.toml".into());
         app.config.deployment_type = DEPLOYMENT_LOCAL.into();
-        app.advance(); // → Vta
-        app.advance(); // → Protocol
+        advance_to(&mut app, WizardStep::Protocol);
+        assert!(app.current_step.is_multi_select());
 
         // DIDComm is selected by default
         assert!(app.config.didcomm_enabled);
         assert!(!app.config.tsp_enabled);
 
-        // Toggle DIDComm off — should re-enable since it's the only one
-        app.selection_index = 0; // DIDComm toggle
+        // Space toggles the highlighted option — try to turn DIDComm off when
+        // it's the only one enabled. The state machine must revert so at
+        // least one protocol stays selected.
+        app.selection_index = 0;
+        app.toggle_current_multi_select();
+        assert!(
+            app.config.didcomm_enabled,
+            "DIDComm must stay on when it's the only protocol enabled"
+        );
+    }
+
+    #[test]
+    fn protocol_multi_select_space_toggle_plus_enter_advance() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.deployment_type = DEPLOYMENT_LOCAL.into();
+        advance_to(&mut app, WizardStep::Protocol);
+
+        // Turn on TSP alongside DIDComm via Space.
+        app.selection_index = 1;
+        app.toggle_current_multi_select();
+        assert!(app.config.didcomm_enabled);
+        assert!(app.config.tsp_enabled);
+
+        // Enter advances — no more "Continue >" pseudo-row.
         app.select_current();
-        // At least one must remain enabled
-        assert!(app.config.didcomm_enabled || app.config.tsp_enabled);
+        assert_eq!(app.current_step, WizardStep::Did);
+    }
+
+    #[test]
+    fn protocol_options_are_two_checkboxes_no_continue_row() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Protocol;
+        let opts = app.current_options();
+        assert_eq!(
+            opts.len(),
+            2,
+            "Protocol step should only list the two protocol toggles"
+        );
     }
 
     #[test]
@@ -1133,6 +2037,7 @@ mod tests {
     #[test]
     fn focus_progress_syncs_index() {
         let mut app = WizardApp::new("test.toml".into());
+        app.advance(); // → KeyStorage
         app.advance(); // → Vta
         app.advance(); // → Protocol
         app.advance(); // → Did
@@ -1152,9 +2057,10 @@ mod tests {
     #[test]
     fn jump_to_completed_step() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // → Vta (Deployment completed)
-        app.advance(); // → Protocol (Vta completed)
-        app.advance(); // → Did (Protocol completed)
+        app.advance(); // → KeyStorage
+        app.advance(); // → Vta
+        app.advance(); // → Protocol
+        app.advance(); // → Did
         app.focus_progress();
         app.progress_index = 0; // Deployment
         app.jump_to_progress_step();
@@ -1164,56 +2070,472 @@ mod tests {
     #[test]
     fn jump_to_incomplete_step_does_nothing() {
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // → Vta
+        app.advance(); // → KeyStorage
         app.focus_progress();
-        app.progress_index = 6; // Database (not completed)
+        app.progress_index = WizardStep::Database.index();
         let before = app.current_step;
         app.jump_to_progress_step();
         assert_eq!(app.current_step, before); // unchanged
     }
 
-    // ── VTA integration tests ─────────────────────────────────────────
+    // ── KeyStorage sub-flow tests ─────────────────────────────────────
 
     #[test]
-    fn vta_yes_then_online_advances() {
+    fn keystorage_file_backend_walks_gate_then_path_then_encrypt_choice() {
+        // Phase H added an encrypt/no-encrypt step after the path
+        // prompt. The wizard no longer auto-advances to Vta after
+        // confirming the path — the operator must answer the
+        // encryption question first.
         let mut app = WizardApp::new("test.toml".into());
-        app.advance(); // Deployment → Vta
+        app.current_step = WizardStep::KeyStorage;
+        // "Local file (file://)" lives at index 5 after vta:// and
+        // string:// were dropped from the selection list.
+        app.selection_index = 5;
+        app.select_current();
+        assert_eq!(app.config.secret_storage, STORAGE_FILE);
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
+        assert_eq!(app.mode, InputMode::TextInput);
+
+        // Type the gate phrase (case-insensitive) — advances to FilePath.
+        app.text_input = Input::new(FILE_GATE_PHRASE.to_lowercase());
+        app.confirm_text_input();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FilePath));
+
+        // Accept the default path — moves into the encrypt choice.
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_file_path, DEFAULT_SECRET_FILE_PATH);
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FileEncryptChoice)
+        );
+        assert_eq!(app.mode, InputMode::Selecting);
+
+        // Pick "no encryption" (index 1) — finishes the sub-flow.
+        app.selection_index = 1;
+        app.select_current();
+        assert!(!app.in_key_storage_subflow());
+        assert!(!app.config.secret_file_encrypted);
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_file_backend_encrypt_yes_collects_passphrase() {
+        // Picking "encrypt" advances to the passphrase prompt, which
+        // rejects empty input and exports the value via env on confirm.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // file://
+        app.select_current();
+        // Walk through the gate + path with defaults.
+        app.text_input = Input::new(FILE_GATE_PHRASE.into());
+        app.confirm_text_input();
+        app.confirm_text_input(); // accept default path
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FileEncryptChoice)
+        );
+
+        // Encrypt = yes (index 0).
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FilePassphrase));
+        assert_eq!(app.mode, InputMode::TextInput);
+
+        // Empty passphrase is rejected — phase doesn't change.
+        app.text_input = Input::new(String::new());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphrase),
+            "empty passphrase must be rejected (Argon2id with no input is trivial)"
+        );
+
+        // Real passphrase exits the sub-flow + flips secret_file_encrypted.
+        app.text_input = Input::new("correct horse battery staple".into());
+        app.confirm_text_input();
+        assert!(!app.in_key_storage_subflow());
+        assert!(app.config.secret_file_encrypted);
+        assert_eq!(app.current_step, WizardStep::Vta);
+
+        // The wizard exports the env var so generate_and_write can open
+        // the encrypted backend on first put. Read it back to confirm,
+        // then clean up so we don't pollute neighbour tests.
+        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
+        assert_eq!(
+            std::env::var(key).ok().as_deref(),
+            Some("correct horse battery staple"),
+        );
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn keystorage_file_backend_gate_rejection_clears_choice() {
+        // Anything other than the gate phrase aborts the file:// choice
+        // entirely — the operator is dropped back on the scheme list
+        // with `secret_storage` cleared so they have to re-pick.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // file://
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
+
+        app.text_input = Input::new("yes".into());
+        app.confirm_text_input();
+
+        assert!(app.config.secret_storage.is_empty());
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::KeyStorage);
+    }
+
+    #[test]
+    fn keystorage_file_backend_gate_back_returns_to_scheme_list() {
+        // Esc on the gate must rewind to the scheme list rather than
+        // the (skipped) FilePath phase, otherwise the operator can't
+        // back out without typing the phrase.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // file://
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FileGate));
+
+        app.go_back();
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::KeyStorage);
+    }
+
+    #[test]
+    fn keystorage_keyring_backend_prompts_for_service() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 0; // Keyring (now first in the list)
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::KeyringService));
+
+        app.text_input = Input::new("affinidi-prod-mediator".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_keyring_service, "affinidi-prod-mediator");
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_aws_backend_walks_region_then_prefix() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 1; // AWS (renumbered: vta:// removed)
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsRegion));
+
+        app.text_input = Input::new("eu-west-2".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_aws_region, "eu-west-2");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsPrefix));
+
+        app.text_input = Input::new("prod/mediator/".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_aws_prefix, "prod/mediator/");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_placeholder_cloud_backend_skips_sub_flow() {
+        // GCP/Azure/Vault are placeholder backends — no config to gather
+        // yet. They fall through to `advance()` immediately. (Previously
+        // this test covered string://, which is no longer a valid choice.)
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 2; // GCP
+        app.select_current();
+        assert_eq!(app.config.secret_storage, STORAGE_GCP);
+        assert!(app.key_storage_phase.is_none());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    // ── Security JWT sub-phase tests ─────────────────────────────────
+
+    #[test]
+    fn security_ssl_none_then_jwt_generate_advances() {
+        // SSL "None" + JWT "generate" — the common dev path. Should
+        // walk through both phases and land on Database.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 0; // No SSL
+        app.select_current();
+        // SSL is now settled; we're in the JWT sub-phase.
+        assert_eq!(app.security_phase, Some(SecurityPhase::JwtMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Default selection is "generate" (index 0).
+        app.select_current();
+        assert_eq!(app.config.jwt_mode, JWT_MODE_GENERATE);
+        assert!(app.security_phase.is_none());
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn security_ssl_none_then_jwt_provide_records_choice() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 0; // No SSL
+        app.select_current();
+        assert_eq!(app.security_phase, Some(SecurityPhase::JwtMode));
+
+        app.selection_index = 1; // Provide
+        app.select_current();
+        assert_eq!(app.config.jwt_mode, JWT_MODE_PROVIDE);
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn security_ssl_existing_collects_paths_then_jwt_phase() {
+        // Existing-cert path runs two text-input prompts before the JWT
+        // selection appears.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 1; // Existing certs
+        app.select_current();
+        // Now in TextInput mode collecting the cert path.
+        assert_eq!(app.mode, InputMode::TextInput);
+        app.text_input = Input::new("/etc/ssl/cert.pem".into());
+        app.confirm_text_input();
+        // Still TextInput, now collecting key path.
+        assert_eq!(app.mode, InputMode::TextInput);
+        app.text_input = Input::new("/etc/ssl/key.pem".into());
+        app.confirm_text_input();
+        // Both paths saved; JWT phase active.
+        assert_eq!(app.config.ssl_cert_path, "/etc/ssl/cert.pem");
+        assert_eq!(app.config.ssl_key_path, "/etc/ssl/key.pem");
+        assert_eq!(app.security_phase, Some(SecurityPhase::JwtMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+    }
+
+    #[test]
+    fn keystorage_back_rewinds_aws_second_phase() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 1; // AWS
+        app.select_current();
+        app.confirm_text_input(); // AwsRegion → AwsPrefix
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsPrefix));
+
+        app.go_back();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsRegion));
+
+        app.go_back();
+        assert!(!app.in_key_storage_subflow());
+    }
+
+    // ── VTA integration tests ─────────────────────────────────────────
+
+    /// Advance the wizard to a specific step. Used by the VTA tests so the
+    /// intermediate step ordering (KeyStorage now sits between Deployment
+    /// and Vta) doesn't require every test to hardcode a fresh count.
+    fn advance_to(app: &mut WizardApp, target: WizardStep) {
+        let mut guard = 0;
+        while app.current_step != target {
+            assert!(guard < 20, "advance_to did not reach {target:?}");
+            app.advance();
+            guard += 1;
+        }
+    }
+
+    #[test]
+    fn vta_yes_then_online_enters_subflow() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
         assert_eq!(app.current_step, WizardStep::Vta);
 
         // Select "VTA Online" (index 0)
         app.selection_index = 0;
         app.select_current();
-        // Should advance directly to Protocol
-        assert_eq!(app.current_step, WizardStep::Protocol);
+
+        // Online picks the DID/context-entry sub-flow — the wizard stays on
+        // the Vta step until the connection is tested in a later phase.
+        assert_eq!(app.current_step, WizardStep::Vta);
+        assert!(app.in_vta_subflow(), "should have entered VTA sub-flow");
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterDid));
+        assert_eq!(app.mode, InputMode::TextInput);
         assert!(app.config.use_vta);
         assert_eq!(app.config.vta_mode, VTA_MODE_ONLINE);
         assert_eq!(app.config.did_method, DID_VTA);
-        assert_eq!(app.config.secret_storage, STORAGE_VTA);
+        // `secret_storage` is owned by the earlier KeyStorage step — the Vta
+        // step deliberately doesn't override whatever was chosen there.
         assert_eq!(app.config.admin_did_mode, ADMIN_VTA);
     }
 
     #[test]
-    fn vta_cold_start_sets_defaults() {
+    fn vta_subflow_collects_did_then_context_then_instructions() {
         let mut app = WizardApp::new("test.toml".into());
-        // Select deployment to set VTA defaults
+        advance_to(&mut app, WizardStep::Vta);
         app.selection_index = 0;
-        app.select_current(); // Deployment → Vta
+        app.select_current(); // enter sub-flow at EnterDid
 
-        // Select "VTA Cold-start" (index 1)
-        app.selection_index = 1;
+        // Enter the VTA DID.
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterContext));
+        assert_eq!(
+            app.vta_connect.as_ref().unwrap().vta_did,
+            "did:webvh:vta.example.com"
+        );
+
+        // Accept the default context id ("mediator" is pre-filled).
+        app.confirm_text_input();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
+        assert_eq!(app.mode, InputMode::Selecting);
+        let st = app.vta_connect.as_ref().unwrap();
+        assert!(st.setup_key.is_some(), "ephemeral setup key generated");
+        let acl = st.acl_command().unwrap();
+        assert!(acl.starts_with("pnm contexts create"));
+        assert!(acl.contains("--id mediator"));
+        assert!(acl.contains("--admin-did did:key:z6Mk"));
+        assert!(acl.contains("--admin-expires 1h"));
+    }
+
+    #[test]
+    fn vta_subflow_back_rewinds_phases() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current(); // EnterDid
+
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input(); // → EnterContext
+        app.confirm_text_input(); // → AwaitingAcl
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
+
+        app.go_back(); // → EnterContext
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterContext));
+
+        app.go_back(); // → EnterDid
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterDid));
+
+        app.go_back(); // → exits sub-flow back to selection
+        assert!(!app.in_vta_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[tokio::test]
+    async fn vta_subflow_awaiting_acl_enter_starts_testing() {
+        // Pressing Enter on the AwaitingAcl instructions kicks off the
+        // diagnostic + auth runner. The test exits before the runner
+        // actually contacts any network — we only verify the phase
+        // transition and that the channel + diagnostics list are seeded.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.confirm_text_input();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
+
+        app.select_current();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::Testing));
+        let st = app.vta_connect.as_ref().unwrap();
+        assert!(st.event_rx.is_some(), "runner channel should be open");
+        assert_eq!(
+            st.diagnostics.len(),
+            crate::vta_connect::DiagCheck::all().len()
+        );
+    }
+
+    #[tokio::test]
+    async fn vta_subflow_connected_enter_advances_past_vta_step() {
+        use crate::vta_connect::{DiagStatus, VtaEvent, diagnostics::Protocol};
+
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.confirm_text_input();
+        app.select_current(); // → Testing
+
+        // Inject a synthetic success event (bypass the real network runner).
+        let st = app.vta_connect.as_mut().unwrap();
+        st.event_rx = None; // pretend the runner completed
+        st.apply_event(VtaEvent::CheckDone(
+            crate::vta_connect::DiagCheck::Authenticate,
+            DiagStatus::Ok("ok".into()),
+        ));
+        st.apply_event(VtaEvent::Connected {
+            protocol: Protocol::Rest,
+            access_token: "tok".into(),
+            rest_url: "https://vta.example.com".into(),
+            admin_did: "did:key:z6MkRotated".into(),
+            admin_private_key_mb: "zROTATED".into(),
+        });
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::Connected));
+
         app.select_current();
         assert_eq!(app.current_step, WizardStep::Protocol);
+        assert!(!app.in_vta_subflow());
+    }
+
+    #[tokio::test]
+    async fn vta_subflow_testing_failure_allows_retry() {
+        use crate::vta_connect::VtaEvent;
+
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.confirm_text_input();
+        app.select_current(); // → Testing
+
+        // Simulate runner failure.
+        let st = app.vta_connect.as_mut().unwrap();
+        st.event_rx = None;
+        st.apply_event(VtaEvent::Failed("ACL not found".into()));
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::Testing));
+        assert!(app.vta_connect.as_ref().unwrap().last_error.is_some());
+
+        // The Retry option should now be offered.
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 1);
+        assert_eq!(opts[0].label, "Retry");
+
+        // Enter re-kicks the runner.
+        app.select_current();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::Testing);
+        assert!(st.event_rx.is_some());
+        assert!(st.last_error.is_none());
+    }
+
+    #[test]
+    fn vta_sealed_handoff_sets_defaults_and_enters_subflow() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.selection_index = 0;
+        app.select_current(); // Deployment → KeyStorage
+        advance_to(&mut app, WizardStep::Vta);
+
+        // Select "VTA Sealed handoff" (index 1) — the legacy Cold-start
+        // slot. Selection captures the mode + enters the dedicated
+        // sealed sub-flow rather than advancing the wizard. The
+        // sub-flow exits independently when the operator either
+        // completes the bundle exchange or backs out.
+        app.selection_index = 1;
+        app.select_current();
+        assert_eq!(app.current_step, WizardStep::Vta);
         assert!(app.config.use_vta);
-        assert_eq!(app.config.vta_mode, VTA_MODE_COLD_START);
+        assert_eq!(app.config.vta_mode, VTA_MODE_SEALED);
         assert_eq!(app.config.did_method, DID_VTA);
+        assert!(app.in_sealed_handoff_subflow());
     }
 
     #[test]
     fn vta_no_clears_vta_options() {
         let mut app = WizardApp::new("test.toml".into());
-        // Select deployment to set VTA defaults (did_method=DID_VTA, etc.)
         app.selection_index = 0;
-        app.select_current(); // Deployment → Vta
+        app.select_current(); // Deployment → KeyStorage (sets VTA defaults)
+        advance_to(&mut app, WizardStep::Vta);
         assert_eq!(app.config.did_method, DID_VTA);
 
         // Select "No VTA" (index 2)
@@ -1221,9 +2543,10 @@ mod tests {
         app.select_current();
         assert_eq!(app.current_step, WizardStep::Protocol);
         assert!(!app.config.use_vta);
-        // apply_vta_defaults should have switched VTA values to non-VTA
+        // apply_vta_defaults should have switched the DID method + admin
+        // mode to non-VTA; `secret_storage` is now chosen in the earlier
+        // KeyStorage step and intentionally not touched by Vta.
         assert_eq!(app.config.did_method, DID_PEER);
-        assert_eq!(app.config.secret_storage, STORAGE_STRING);
         assert!(app.config.vta_mode.is_empty());
     }
 

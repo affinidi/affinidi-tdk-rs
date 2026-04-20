@@ -12,10 +12,49 @@ readme = "README.md"
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+# Each backend is opt-in so downstream consumers compile without pulling
+# the whole cloud-SDK world. The mediator binary enables whichever backends
+# its deployment target needs; the mediator-setup wizard enables the
+# superset so operators can pick any.
+default = []
+secrets-keyring = ["dep:keyring"]
+secrets-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
+secrets-gcp = []
+secrets-azure = []
+secrets-vault = []
+
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK message types, problem reports, and protocol definitions
 affinidi-messaging-sdk = { path = "../../affinidi-messaging-sdk", version = "0.16" }
+
+# ── Secrets module: core ─────────────────────────────────────────────────
+async-trait = "0.1"
+base64 = "0.22"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+# ── Secrets module: cache integrity (HMAC-SHA256 keyed via HKDF from the
+## admin credential's private key) + freshness ──────────────────────────
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+humantime = "2"
+
+# ── Secrets module: file:// envelope encryption (`?encrypt=1`) ──────────
+## AES-256-GCM with 12-byte nonces per write; passphrase-derived key via
+## Argon2id. Always built — file backend is in `default = []`-friendly
+## territory and these crates are tiny + zero-dep beyond `aes` / `cipher`.
+aes-gcm = "0.10"
+argon2 = "0.5"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# ── Secrets module: optional backends ────────────────────────────────────
+keyring = { version = "3", features = ["apple-native", "linux-native"], optional = true }
+aws-config = { version = "1", optional = true }
+aws-sdk-secretsmanager = { version = "1", optional = true }
 
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
@@ -44,6 +83,12 @@ rand = "0.10"
 semver = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["valuable"] }
+
+[dev-dependencies]
+tempfile = "3"
+## `test-util` enables `start_paused`, used by the secrets/retry tests
+## to skip the exponential-backoff delays without sleeping for real.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true

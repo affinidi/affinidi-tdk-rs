@@ -1,206 +1,181 @@
+//! Generate a self-hosted `did:webvh` DID for the mediator.
+//!
+//! Renders the canonical `didcomm-mediator` template (shipped in the
+//! `vta_sdk::did_templates` built-ins) with the mediator's keys + URL,
+//! then hands the resulting document to `didwebvh_rs::create::create_did`.
+//! The template is the same one the VTA renders server-side, so the DID
+//! document shape is identical whether the mediator is self-hosted or
+//! VTA-managed.
+//!
+//! Operators who want a different shape can fork the built-in via
+//! `pnm did-templates init didcomm-mediator > custom.json`, edit, and
+//! upload under the same name — the VTA's resolution order (context →
+//! global → built-in) picks the override up automatically. This local
+//! generator is the self-hosted sibling: it always uses the built-in, but
+//! the produced shape matches what a VTA with the built-in would produce.
+
 use std::sync::Arc;
 
 use affinidi_secrets_resolver::secrets::Secret;
 use didwebvh_rs::{
-    DIDWebVHState, log_entry::LogEntryMethods, parameters::Parameters, url::WebVHURL,
+    create::{CreateDIDConfig, create_did},
+    parameters::Parameters,
 };
-use serde_json::{Value, json};
-use url::Url;
+use vta_sdk::did_templates::{TemplateVars, load_embedded};
 
-/// Keys generated for a did:webvh DID.
-struct Keys {
-    signing_ed25519: Secret,
-    signing_p256: Secret,
-    key_agreement_ed25519: Secret,
-    key_agreement_p256: Secret,
-    key_agreement_secp256k1: Secret,
-}
-
-fn create_keys() -> anyhow::Result<Keys> {
-    let signing_ed25519 = Secret::generate_ed25519(None, None);
-    let signing_p256 = Secret::generate_p256(None, None)
-        .map_err(|e| anyhow::anyhow!("Failed to generate P-256 key: {e}"))?;
-    let key_agreement_ed25519 = signing_ed25519
-        .to_x25519()
-        .map_err(|e| anyhow::anyhow!("Failed to convert Ed25519 to X25519: {e}"))?;
-    let key_agreement_p256 = Secret::generate_p256(None, None)
-        .map_err(|e| anyhow::anyhow!("Failed to generate P-256 key agreement key: {e}"))?;
-    let key_agreement_secp256k1 = Secret::generate_secp256k1(None, None)
-        .map_err(|e| anyhow::anyhow!("Failed to generate secp256k1 key: {e}"))?;
-
-    Ok(Keys {
-        signing_ed25519,
-        signing_p256,
-        key_agreement_ed25519,
-        key_agreement_p256,
-        key_agreement_secp256k1,
-    })
-}
-
-fn create_service_endpoints(did: &str, url: &str, secure: bool) -> anyhow::Result<Vec<Value>> {
-    let http_scheme = if secure { "https" } else { "http" };
-    let ws_scheme = if secure { "wss" } else { "ws" };
-
-    let base_domain = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .or_else(|| url.strip_prefix("wss://"))
-        .or_else(|| url.strip_prefix("ws://"))
-        .unwrap_or(url)
-        .replace("%3A", ":");
-
-    let base_http_url = format!("{http_scheme}://{base_domain}");
-    let base_ws_url = format!("{ws_scheme}://{base_domain}/ws");
-    let auth_url = format!("{http_scheme}://{base_domain}/authenticate");
-
-    Ok(vec![
-        json!({
-            "id": format!("{did}#service"),
-            "type": "DIDCommMessaging",
-            "serviceEndpoint": [
-                { "uri": base_http_url, "accept": ["didcomm/v2"] },
-                { "uri": base_ws_url, "accept": ["didcomm/v2"] }
-            ]
-        }),
-        json!({
-            "id": format!("{did}#auth"),
-            "type": "Authentication",
-            "serviceEndpoint": auth_url
-        }),
-    ])
-}
-
-/// Result of did:webvh generation.
 pub struct DidWebvhResult {
-    /// The DID string
+    /// The final DID string (resolved from the WebVH log entry).
     pub did: String,
-    /// All secrets for the DID
+    /// Private keys the mediator needs at runtime — Ed25519 signing, X25519
+    /// key-agreement.
     pub secrets: Vec<Secret>,
-    /// The DID document log entry (JSONL format for hosting)
+    /// The DID document log entry in JSONL form, ready for the operator to
+    /// host at the webvh URL.
     pub did_doc: String,
 }
 
-/// Generate a did:webvh DID with full key set and service endpoints.
+/// Generate a did:webvh DID for the mediator.
 ///
-/// `host` is the domain (e.g., "example.com" or "localhost:7037/mediator/v1")
-/// `secure` controls whether https/wss or http/ws schemes are used.
-pub async fn generate_did_webvh(host: &str, secure: bool) -> anyhow::Result<DidWebvhResult> {
-    let full_url = if host.starts_with("http://") || host.starts_with("https://") {
+/// `host` is the mediator's public URL (e.g.
+/// `https://mediator.example.com/mediator/v1`). The URL is passed verbatim
+/// to the template's `URL` variable — the shape of the service endpoint,
+/// `accept` list, and routing keys are the template's responsibility.
+pub async fn generate_did_webvh(host: &str) -> anyhow::Result<DidWebvhResult> {
+    let address = if host.starts_with("http://") || host.starts_with("https://") {
         host.to_string()
     } else {
         format!("https://{host}")
     };
-    let parsed_url = Url::parse(&full_url)?;
-    let webvh_url =
-        WebVHURL::parse_url(&parsed_url).map_err(|e| anyhow::anyhow!("Invalid webvh URL: {e}"))?;
-    let did_id = webvh_url.to_string();
 
-    let Keys {
-        mut signing_ed25519,
-        mut signing_p256,
-        mut key_agreement_ed25519,
-        mut key_agreement_p256,
-        mut key_agreement_secp256k1,
-    } = create_keys()?;
+    // ── Mediator keys ──────────────────────────────────────────────
+    // Ed25519 signing (maps to the template's `#key-1`), X25519 derived
+    // from the same seed for key agreement (maps to `#key-2`).
+    let mut signing = Secret::generate_ed25519(None, None);
+    let mut key_agreement = signing
+        .to_x25519()
+        .map_err(|e| anyhow::anyhow!("Failed to derive X25519 from Ed25519: {e}"))?;
+    let signing_mb = signing
+        .get_public_keymultibase()
+        .map_err(|e| anyhow::anyhow!("Failed to get Ed25519 public key: {e}"))?;
+    let ka_mb = key_agreement
+        .get_public_keymultibase()
+        .map_err(|e| anyhow::anyhow!("Failed to get X25519 public key: {e}"))?;
 
-    let pub_key_0 = signing_ed25519
-        .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get public key: {e}"))?;
-    let pub_key_1 = signing_p256
-        .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get public key: {e}"))?;
-    let pub_key_2 = key_agreement_ed25519
-        .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get public key: {e}"))?;
-    let pub_key_3 = key_agreement_p256
-        .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get public key: {e}"))?;
-    let pub_key_4 = key_agreement_secp256k1
-        .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get public key: {e}"))?;
+    // ── Render template ─────────────────────────────────────────────
+    let template = load_embedded("didcomm-mediator")
+        .map_err(|e| anyhow::anyhow!("Failed to load mediator template: {e}"))?;
+    let mut vars = TemplateVars::new();
+    vars.insert_string("URL", &address);
+    vars.insert_string("SIGNING_KEY_MB", &signing_mb);
+    vars.insert_string("KA_KEY_MB", &ka_mb);
+    // `{DID}` is a sentinel — we declare it as "provided" so the renderer
+    // doesn't flag it as unresolved; `didwebvh-rs` substitutes the actual
+    // DID string after SCID computation.
+    vars.insert_string("DID", "{DID}");
+    let did_document = template
+        .render(&vars)
+        .map_err(|e| anyhow::anyhow!("Failed to render mediator template: {e}"))?;
 
-    let mut did_document = json!({
-        "@context": [
-            "https://www.w3.org/ns/did/v1",
-            "https://www.w3.org/ns/cid/v1"
-        ],
-        "id": &did_id,
-        "verificationMethod": [
-            { "id": format!("{did_id}#key-0"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_0 },
-            { "id": format!("{did_id}#key-1"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_1 },
-            { "id": format!("{did_id}#key-2"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_2 },
-            { "id": format!("{did_id}#key-3"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_3 },
-            { "id": format!("{did_id}#key-4"), "type": "Multikey", "controller": &did_id, "publicKeyMultibase": pub_key_4 }
-        ],
-        "authentication":  [format!("{did_id}#key-0"), format!("{did_id}#key-1")],
-        "assertionMethod": [format!("{did_id}#key-0"), format!("{did_id}#key-1")],
-        "keyAgreement":    [format!("{did_id}#key-2"), format!("{did_id}#key-3"), format!("{did_id}#key-4")],
-    });
-
-    did_document["service"] =
-        serde_json::to_value(create_service_endpoints(&did_id, host, secure)?)?;
-
-    // Generate update keys for WebVH log
-    let mut update_secret = Secret::generate_ed25519(None, None);
-    let update_pubkey = update_secret
+    // ── Authorization + pre-rotation ───────────────────────────────
+    let mut auth_key = Secret::generate_ed25519(None, None);
+    let auth_pubkey = auth_key
         .get_public_keymultibase()
-        .map_err(|e| anyhow::anyhow!("Failed to get update public key: {e}"))?;
-    update_secret.id = format!("did:key:{0}#{0}", update_pubkey);
+        .map_err(|e| anyhow::anyhow!("Failed to get authorization public key: {e}"))?;
+    auth_key.id = format!("did:key:{auth_pubkey}#{auth_pubkey}");
 
-    let next_update_secret = Secret::generate_ed25519(None, None);
+    let next_auth_key = Secret::generate_ed25519(None, None);
+    let next_auth_pubkey = next_auth_key
+        .get_public_keymultibase()
+        .map_err(|e| anyhow::anyhow!("Failed to get next authorization public key: {e}"))?;
 
     let parameters = Parameters {
-        update_keys: Some(Arc::new(vec![update_pubkey.into()])),
+        update_keys: Some(Arc::new(vec![auth_pubkey.into()])),
         portable: Some(true),
-        next_key_hashes: Some(Arc::new(vec![
-            next_update_secret
-                .get_public_keymultibase()
-                .map_err(|e| anyhow::anyhow!("Failed to get next update key: {e}"))?
-                .into(),
-        ])),
+        next_key_hashes: Some(Arc::new(vec![next_auth_pubkey.into()])),
         ..Default::default()
     };
 
-    let mut did_state = DIDWebVHState::default();
-    did_state
-        .create_log_entry(None, &did_document, &parameters, &update_secret)
+    let config = CreateDIDConfig::builder()
+        .address(address)
+        .authorization_key(auth_key)
+        .did_document(did_document)
+        .parameters(parameters)
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build webvh config: {e}"))?;
+
+    let result = create_did(config)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create DID log entry: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create did:webvh: {e}"))?;
 
-    let scid = did_state.scid().to_string();
-    let log_entry_state = did_state
-        .log_entries()
-        .last()
-        .ok_or_else(|| anyhow::anyhow!("No log entries were created"))?;
+    let final_did = result.did().to_string();
 
-    let fallback_did = format!("did:webvh:{scid}:{}", webvh_url.domain);
-    let final_did = match log_entry_state.log_entry.get_did_document() {
-        Ok(doc) => doc
-            .get("id")
-            .and_then(|id: &Value| id.as_str())
-            .map(String::from)
-            .unwrap_or(fallback_did),
-        Err(_) => fallback_did,
-    };
+    // Align runtime secret IDs with the resolved DID. `#key-1` is the
+    // signing slot, `#key-2` is the key-agreement slot — matches the
+    // built-in template.
+    signing.id = format!("{final_did}#key-1");
+    key_agreement.id = format!("{final_did}#key-2");
 
-    let diddoc_string = serde_json::to_string(&log_entry_state.log_entry)?;
-
-    // Update secret IDs to match the final DID
-    signing_ed25519.id = format!("{final_did}#key-0");
-    signing_p256.id = format!("{final_did}#key-1");
-    key_agreement_ed25519.id = format!("{final_did}#key-2");
-    key_agreement_p256.id = format!("{final_did}#key-3");
-    key_agreement_secp256k1.id = format!("{final_did}#key-4");
+    let did_doc = serde_json::to_string(result.log_entry())?;
 
     Ok(DidWebvhResult {
         did: final_did,
-        secrets: vec![
-            signing_ed25519,
-            signing_p256,
-            key_agreement_ed25519,
-            key_agreement_p256,
-            key_agreement_secp256k1,
-        ],
-        did_doc: diddoc_string,
+        secrets: vec![signing, key_agreement],
+        did_doc,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn webvh_matches_canonical_mediator_template() {
+        let result = generate_did_webvh("https://mediator.example.com/mediator/v1")
+            .await
+            .unwrap();
+        // Two runtime secrets: signing + key agreement.
+        assert_eq!(result.secrets.len(), 2);
+
+        let entry: Value = serde_json::from_str(&result.did_doc).unwrap();
+        let doc = &entry["state"];
+
+        // Canonical shape from the `didcomm-mediator` template:
+        // - 2 verification methods (`#key-1`, `#key-2`), both `Multikey`
+        // - assertionMethod + authentication -> `#key-1`
+        // - keyAgreement -> `#key-2`
+        // - one DIDCommMessaging service with a single serviceEndpoint
+        //   object carrying `uri`, `accept`, `routingKeys`
+        let vms = doc["verificationMethod"].as_array().unwrap();
+        assert_eq!(vms.len(), 2);
+        assert!(vms.iter().all(|vm| vm["type"] == "Multikey"));
+        assert!(vms[0]["id"].as_str().unwrap().ends_with("#key-1"));
+        assert!(vms[1]["id"].as_str().unwrap().ends_with("#key-2"));
+
+        assert_eq!(doc["assertionMethod"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["authentication"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
+
+        let services = doc["service"].as_array().unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0]["type"], "DIDCommMessaging");
+        let endpoint = &services[0]["serviceEndpoint"];
+        assert_eq!(
+            endpoint["uri"].as_str().unwrap(),
+            "https://mediator.example.com/mediator/v1"
+        );
+        let accept = endpoint["accept"].as_array().unwrap();
+        assert_eq!(accept.len(), 1);
+        assert_eq!(accept[0], "didcomm/v2");
+    }
+
+    #[tokio::test]
+    async fn webvh_key_ids_match_final_did() {
+        let result = generate_did_webvh("mediator.example.com").await.unwrap();
+        for secret in &result.secrets {
+            assert!(secret.id.starts_with(&result.did));
+        }
+        assert!(result.secrets[0].id.ends_with("#key-1"));
+        assert!(result.secrets[1].id.ends_with("#key-2"));
+    }
 }

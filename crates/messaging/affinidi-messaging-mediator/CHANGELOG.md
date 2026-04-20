@@ -2,6 +2,52 @@
 
 ## Changelog history
 
+## 20th April 2026
+
+### Unreleased — Unified Secret Backend (Phases A–L)
+
+- **BREAKING:** Hard-cut from `[vta].credential` / `[security].mediator_secrets` /
+  `[security].jwt_authorization_secret` to a single `[secrets].backend = "<url>"`
+  unified secret store. There is no compatibility shim. See
+  [docs/secrets-backend.md](docs/secrets-backend.md) for the migration path
+  (Path A: re-run the wizard; Path B: hand-provision well-known keys then
+  `mediator-setup --force-reprovision`).
+- **BREAKING:** Removed `string://` (inline TOML secrets) and `vta://` as
+  storage backends. Use `file://?encrypt=1` (Argon2id + AES-256-GCM) for
+  dev-only, `keyring://` / `aws_secrets://` for production. `vta://` was
+  never a *store*; the VTA is a key *source*.
+- **FEAT:** Wizard `--force-reprovision` and `--uninstall` flags. Wizard
+  refuses to overwrite a provisioned setup unless `--force-reprovision` is
+  passed; `--uninstall` lists every well-known key, prompts for typed
+  `DELETE`, and removes both backend entries and local config files.
+- **FEAT:** Air-gapped sealed-handoff bootstrap mode replaces the legacy
+  Cold-start. Wizard generates a `BootstrapRequest` JSON, accepts the VTA
+  admin's HPKE-armored reply via paste/file, optionally verifies the
+  out-of-band SHA-256 digest, then projects the admin credential onto a
+  `VtaSession`.
+- **FEAT:** `mediator rotate-admin [--dry-run]` subcommand. Mints a fresh
+  did:key, mirrors the existing ACL scope, writes the new credential into
+  the unified backend, revokes the old ACL entry. Old + new DIDs logged
+  for audit.
+- **FEAT:** AWS Secrets Manager calls now go through a 3-attempt
+  exponential-backoff retry (100ms → 400ms) keyed off a per-backend
+  `RetryPolicy`. Throttling / internal / network errors retry; not-found
+  / access-denied / validation errors short-circuit.
+- **FEAT:** `/readyz` JSON adds `secrets_backend_reachable: bool`,
+  `secrets_backend_url: String`, `vta_cache_age_secs: Option<u64>`, and
+  `operating_keys_loaded: bool`. Boot-time backend probe fails fast on
+  unreachable backends instead of waiting for the first secret read.
+- **FEAT:** JWT secret can be operator-provided. Wizard's Security step
+  asks "generate or provide" — provide mode reads the key from
+  `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at boot.
+- **FEAT:** `file://` is gated behind a typed-acknowledgement screen in
+  the wizard ("type `I understand` to continue"). Plaintext-on-disk is
+  acceptable for dev only; production deployments are routed to keyring
+  / cloud backends.
+- **DOCS:** New [docs/secrets-backend.md](docs/secrets-backend.md) with
+  well-known key JSON schemas, HA topology guidance, and the legacy →
+  unified-backend migration matrix.
+
 ## 16th April 2026
 
 ### 0.14.0 — Setup Wizard, Monitoring, Redis Optimization

@@ -31,21 +31,19 @@ didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding"]
 ## Mutually exclusive with `didcomm` at runtime.
 tsp = ["dep:affinidi-tsp"]
 
-## VTA credential storage via OS keyring (macOS Keychain, Windows Credential
-## Manager, Linux Secret Service). Required when mediator.toml uses
-## `keyring://` scheme for VTA credentials.
-vta-keyring = ["dep:keyring"]
+## Secret storage backends — forwarded to `mediator-common`'s `secrets-*`
+## features. Enabled per-deployment so operators only compile the backends
+## their deployment target needs.
+secrets-keyring = ["affinidi-messaging-mediator-common/secrets-keyring"]
+secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws", "aws"]
+secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
+secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
+secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
 
-## AWS integration — Secrets Manager, Systems Manager Parameter Store.
-## Required when mediator.toml uses `aws_secrets://` or `aws_parameter_store://`
-## schemes. Included in default features for backward compatibility.
-## To build without AWS: --no-default-features --features didcomm
-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager", "dep:aws-sdk-ssm"]
-
-## VTA credential storage via AWS Secrets Manager. Required when mediator.toml
-## uses `aws_secrets://` scheme for VTA credentials. Requires AWS credentials
-## configured (env vars, instance profile, or ~/.aws/credentials).
-vta-aws-secrets = ["aws"]
+## AWS integration used by `did_web_self_hosted = "aws_parameter_store://..."`
+## (still loaded directly by the mediator, not via the secret store). Enabled
+## automatically by `secrets-aws`.
+aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
@@ -58,14 +56,22 @@ affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 affinidi-encoding = { version = "0.1", optional = true }
 ## Background processors: message expiry cleanup, forwarding
 affinidi-messaging-mediator-processors = { version = "0.13", path = "affinidi-messaging-mediator-processors" }
-## Shared types: DatabaseHandler, errors, config structs
+## Shared types: DatabaseHandler, errors, config structs, secret storage.
+## Backend features are enabled below via the mediator's own cargo features
+## so operators only compile the backends their deployment needs.
 affinidi-messaging-mediator-common = { version = "0.13", path = "affinidi-messaging-mediator-common" }
+## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
+humantime = "2"
+## CLI parsing for the mediator binary's subcommands (`mediator`,
+## `mediator rotate-admin`, …). Added in Phase I — pre-Phase-I builds
+## had no subcommand surface so `main.rs` skipped clap.
+clap = { version = "4", features = ["derive"] }
 ## DID resolution with in-memory cache (capacity: 1000 DIDs, TTL: 300s)
 affinidi-did-resolver-cache-sdk = { version = "0.8", features = ["network"] }
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
 ## VTA SDK for centralized DID/key management via Verifiable Trust Agent
-vta-sdk = { version = "0.3", features = ["integration"] }
+vta-sdk = { version = "0.5", features = ["integration"] }
 
 # ── Web Framework ────────────────────────────────────────────────────────
 axum = { version = "0.8", features = ["ws"] }
@@ -93,15 +99,12 @@ didwebvh-rs = "0.5"
 ## Used for Secrets Manager (aws_secrets://), Parameter Store (aws_parameter_store://)
 ## To build without: --no-default-features --features didcomm
 aws-config = { version = "1", optional = true }
-aws-sdk-secretsmanager = { version = "1", optional = true }
 aws-sdk-ssm = { version = "1", optional = true }
 
 # ── Cryptography & Security ─────────────────────────────────────────────
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 ring = { version = "0.17", features = ["std"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }
-## OS keyring for VTA credential storage (activated by `vta-keyring` feature)
-keyring = { version = "3", optional = true }
 ## Constant-time comparison for DID authorization checks
 subtle = "2"
 

@@ -193,75 +193,60 @@ When sharing a Redis instance across applications, use database partitions:
 database_url = "redis://127.0.0.1/1"  # Uses database 1 (0-15 available)
 ```
 
-## VTA Integration (Centralized Key Management)
+## Secret Storage
 
-The mediator can use a [Verifiable Trust Agent (VTA)](https://github.com/OpenVTC/verifiable-trust-infrastructure)
-for centralized DID and key management instead of local file-based secrets.
-
-See [docs/vta-setup-guide.md](docs/vta-setup-guide.md) for the full step-by-step guide.
-
-### Using the Setup Wizard with VTA
-
-When running `cargo run --bin mediator-setup`, select:
-- **DID Configuration** > "Configure via VTA"
-- **Key Storage** > "VTA managed (vta://)"
-
-The wizard will prompt for your VTA credential (Context Provision Bundle or
-Credential Bundle) and configure the mediator accordingly.
-
-### Quick Start without a Secure Credential Store
-
-If you don't have access to AWS Secrets Manager or an OS keyring (e.g. in CI/CD,
-Docker containers, or quick local testing), you can pass the VTA credential
-directly as a `string://` value. No extra feature flags are required.
-
-**Option A: In `mediator.toml`**
+The mediator stores its admin credential, JWT signing key, operating
+keys, and the VTA cache in a single **unified backend** identified by a
+URL in `mediator.toml`:
 
 ```toml
-mediator_did = "vta://mediator"
-
-[security]
-mediator_secrets = "vta://mediator"
-
-[vta]
-credential = "string://<paste-your-base64url-credential-here>"
-context = "mediator"
+[secrets]
+backend = "keyring://affinidi-mediator"   # or aws_secrets://, file://, …
+cache_ttl = "30d"                          # optional, humantime
 ```
 
-**Option B: Via environment variables**
+Pre-`0.14.0` deployments used `[vta].credential`,
+`[security].mediator_secrets`, and `[security].jwt_authorization_secret`
+fields directly in `mediator.toml`. Those are gone — see the migration
+section in [docs/secrets-backend.md](docs/secrets-backend.md) for the
+upgrade path.
 
-```bash
-export VTA_CREDENTIAL="string://eyJkaWQ..."
-export VTA_CONTEXT="mediator"
-export MEDIATOR_DID="vta://mediator"
-export MEDIATOR_SECRETS="vta://mediator"
-cargo run -p affinidi-messaging-mediator
+### Picking a backend in the wizard
+
+```sh
+cargo run --bin mediator-setup
 ```
 
-> **Note:** With `string://`, VTA secrets are **not cached** between restarts.
-> Every restart will re-fetch secrets from the VTA. For production deployments,
-> use `aws_secrets://` or `keyring://` which enable local secret caching for
-> offline resilience.
+At the **Key Storage** step the wizard offers `keyring://`,
+`aws_secrets://`, `file://` (with an opt-in `?encrypt=1` envelope
+encryption flag), and reserved-but-unimplemented slots for GCP / Azure
+/ Vault. `vta://` is no longer a backend option — the VTA is a key
+*source*, not a store.
 
-### Manual Configuration
+### VTA Integration (Centralized Key Management)
 
-Set `mediator_did` and `mediator_secrets` to use the `vta://` scheme, and add a
-`[vta]` section:
+When VTA integration is enabled, the mediator uses a
+[Verifiable Trust Agent](https://github.com/OpenVTC/verifiable-trust-infrastructure)
+for DID and operating-key management. The wizard's **VTA Online** flow
+(or **VTA Sealed handoff** for air-gapped bootstraps) provisions the
+admin credential into whichever real backend you chose at the Key
+Storage step.
 
-```toml
-mediator_did = "vta://mediator"
+See:
 
-[security]
-mediator_secrets = "vta://mediator"
+- [docs/secrets-backend.md](docs/secrets-backend.md) — well-known key
+  schemas, HA topology, and the migration path from the legacy schema.
+- [docs/vta-setup-guide.md](docs/vta-setup-guide.md) — VTA-specific
+  setup walkthrough.
 
-[vta]
-credential = "string://eyJkaWQ..."
-context = "mediator"
+### Re-running the wizard / tearing down
+
+```sh
+mediator-setup --force-reprovision   # rotate every well-known key
+mediator-setup --uninstall           # delete keys + local config files
+mediator rotate-admin --dry-run      # preview an admin rotation
+mediator rotate-admin                # actually rotate
 ```
-
-See the [VTA setup guide](docs/vta-setup-guide.md) for all credential storage
-backends, environment variable configuration, and production deployment
-guidance.
 
 ## Access Control Lists (ACLs)
 

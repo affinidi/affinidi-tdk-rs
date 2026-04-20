@@ -7,14 +7,28 @@ use crate::app::WizardConfig;
 use crate::consts::*;
 
 /// Generated cryptographic material from the wizard generators.
+///
+/// The TOML writer only consumes the fields that affect `mediator.toml`
+/// itself (DID, admin DID, SSL paths). Operating keys, the JWT secret,
+/// and the admin credential are pushed into the unified secret backend
+/// by `main.rs::generate_and_write` and intentionally aren't surfaced
+/// through `mediator.toml` at all.
 pub struct GeneratedValues {
-    /// The mediator's DID string (did:peer:..., vta://..., etc.)
+    /// The mediator's DID string (did:peer:..., did:webvh:..., or vta-minted)
     pub mediator_did: String,
-    /// Secrets for the mediator DID
+    /// Secrets for the mediator DID — pushed into the unified backend
+    /// under `mediator/operating/secrets`. Kept on this struct because
+    /// the wizard's banner/finish summary reports the count.
+    #[allow(dead_code)] // surfaced by main.rs, not config_writer
     pub mediator_secrets: Vec<Secret>,
-    /// JWT signing secret (base64url-encoded)
-    pub jwt_secret: String,
-    /// Admin DID (if generated)
+    /// Raw PKCS8 bytes of the JWT signing key. `None` when the operator
+    /// chose `provide` mode — the mediator then loads the key from
+    /// `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at boot. Pushed into
+    /// the unified backend by main.rs when present; never written to
+    /// the config file.
+    #[allow(dead_code)] // surfaced by main.rs, not config_writer
+    pub jwt_secret: Option<Vec<u8>>,
+    /// Admin DID (if generated). Written to `[server].admin_did`.
     pub admin_did: Option<String>,
     /// Admin secret (if generated — displayed to user, not stored in config)
     #[allow(dead_code)] // read in main.rs, not by config_writer
@@ -77,16 +91,13 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     // ── Top-level fields ───────────────────────────────────────────────
     doc["mediator_did"] = toml_edit::value(format!("did://{}", generated.mediator_did));
 
-    // VTA section — update or remove based on config
-    if config.use_vta || config.did_method == DID_VTA || config.secret_storage == STORAGE_VTA {
-        // Keep [vta] section, update context
-        if let Some(vta) = doc.get_mut("vta") {
-            vta["credential"] = toml_edit::value("keyring://affinidi-mediator/vta-credential");
-            vta["context"] = toml_edit::value("mediator");
-        }
-    } else {
-        // Remove [vta] section entirely
-        doc.remove("vta");
+    // ── [secrets] ──────────────────────────────────────────────────────
+    // Write the unified backend URL. The VTA session (if any) landed keys
+    // under well-known names inside this backend via `generate_and_write`;
+    // the mediator reads them at startup via `MediatorSecrets`.
+    let backend_url = build_backend_url(config);
+    if let Some(secrets_section) = doc.get_mut("secrets") {
+        secrets_section["backend"] = toml_edit::value(&backend_url);
     }
 
     // ── [server] ───────────────────────────────────────────────────────
@@ -117,24 +128,6 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
 
     // ── [security] ─────────────────────────────────────────────────────
     if let Some(sec) = doc.get_mut("security") {
-        // Mediator secrets reference
-        let secrets_ref = match config.secret_storage.as_str() {
-            STORAGE_STRING => {
-                let b64 =
-                    crate::generators::secrets::secrets_to_base64(&generated.mediator_secrets)?;
-                format!("{STORAGE_STRING}{b64}")
-            }
-            STORAGE_FILE => format!("{STORAGE_FILE}./conf/secrets.json"),
-            STORAGE_KEYRING => format!("{STORAGE_KEYRING}affinidi-mediator/secrets"),
-            STORAGE_AWS => format!("{STORAGE_AWS}mediator/secrets"),
-            STORAGE_GCP => format!("{STORAGE_GCP}mediator/secrets"),
-            STORAGE_AZURE => format!("{STORAGE_AZURE}mediator-secrets"),
-            STORAGE_VAULT => format!("{STORAGE_VAULT}secret/mediator/secrets"),
-            STORAGE_VTA => format!("{STORAGE_VTA}mediator"),
-            other => other.to_string(),
-        };
-        sec["mediator_secrets"] = toml_edit::value(&secrets_ref);
-
         // SSL
         match config.ssl_mode.as_str() {
             SSL_NONE => {
@@ -163,12 +156,50 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
             }
         }
 
-        // JWT
-        sec["jwt_authorization_secret"] =
-            toml_edit::value(format!("string://{}", generated.jwt_secret));
+        // JWT signing secret is no longer a config field — it lives in the
+        // unified `[secrets]` backend under `mediator/jwt/secret`.
     }
 
     Ok(doc.to_string())
+}
+
+/// Construct the `[secrets].backend` URL from the wizard's per-backend
+/// config choices. Mirrors the URL shape the mediator's `SecretStore`
+/// parser accepts. `vta://` is no longer supported as a storage scheme —
+/// when the operator has a VTA session, the admin credential goes into
+/// whichever real backend they chose, not into the VTA itself.
+///
+/// Public so `generate_and_write` (in `main.rs`) can open the *same*
+/// backend the mediator will read at startup before writing the config
+/// file — that way provisioning failures surface to the operator rather
+/// than only being discovered when the mediator next boots.
+pub fn build_backend_url(config: &WizardConfig) -> String {
+    match config.secret_storage.as_str() {
+        STORAGE_FILE => {
+            // Template default is `conf/secrets.json`; callers in
+            // `generate_and_write` may extend this later via absolute
+            // paths. Append `?encrypt=1` when the operator opted into
+            // envelope encryption — the mediator's `open_store` parser
+            // routes that flag to the AEAD-backed file store.
+            if config.secret_file_encrypted {
+                format!("file://{}?encrypt=1", config.secret_file_path)
+            } else {
+                format!("file://{}", config.secret_file_path)
+            }
+        }
+        STORAGE_KEYRING => format!("keyring://{}", config.secret_keyring_service),
+        STORAGE_AWS => format!(
+            "aws_secrets://{}/{}",
+            config.secret_aws_region, config.secret_aws_prefix
+        ),
+        STORAGE_GCP => "gcp_secrets://PROJECT/PREFIX".into(),
+        STORAGE_AZURE => "azure_keyvault://VAULT".into(),
+        STORAGE_VAULT => "vault://HOST/PATH".into(),
+        // string:// is no longer supported by the mediator's SecretStore
+        // URL parser; fall back to a keyring default and warn in stdout
+        // during `generate_and_write`.
+        STORAGE_STRING | STORAGE_VTA | _ => "keyring://affinidi-mediator".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -179,7 +210,7 @@ mod tests {
         GeneratedValues {
             mediator_did: "did:peer:2.Vtest.Etest".into(),
             mediator_secrets: vec![],
-            jwt_secret: "test_jwt_secret_base64url".into(),
+            jwt_secret: Some(b"test_jwt_secret_pkcs8".to_vec()),
             admin_did: Some("did:key:z6MkTest".into()),
             admin_secret: None,
             ssl_cert_path: None,
@@ -205,6 +236,7 @@ mod tests {
             database_url: DEFAULT_REDIS_URL.into(),
             admin_did_mode: ADMIN_GENERATE.into(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
+            ..WizardConfig::default()
         };
 
         let toml = generate_toml(&config, &test_generated()).unwrap();
@@ -214,7 +246,11 @@ mod tests {
         assert!(toml.contains("use_ssl = \"false\""));
         assert!(toml.contains("database_url = \"redis://127.0.0.1/\""));
         assert!(toml.contains("admin_did = \"did://did:key:z6MkTest\""));
-        assert!(toml.contains("jwt_authorization_secret = \"string://test_jwt_secret_base64url\""));
+        // JWT signing secret is now a well-known key in the backend, not a
+        // config field.
+        assert!(!toml.contains("jwt_authorization_secret"));
+        assert!(toml.contains("[secrets]"));
+        assert!(toml.contains("backend ="));
 
         // Verify fields from template that wizard doesn't touch are preserved
         // database_pool_size was removed from template (deprecated)
@@ -251,12 +287,13 @@ mod tests {
             database_url: "redis://redis.example.com/".into(),
             admin_did_mode: ADMIN_GENERATE.into(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
+            ..WizardConfig::default()
         };
 
         let generated = GeneratedValues {
             mediator_did: "vta://mediator".into(),
             mediator_secrets: vec![],
-            jwt_secret: "test_jwt".into(),
+            jwt_secret: Some(b"test_jwt".to_vec()),
             admin_did: Some("did:key:z6MkTest".into()),
             admin_secret: None,
             ssl_cert_path: None,
@@ -264,8 +301,11 @@ mod tests {
         };
 
         let toml = generate_toml(&config, &generated).unwrap();
-        assert!(toml.contains("[vta]"));
-        assert!(toml.contains("mediator_secrets = \"vta://mediator\""));
+        // `[secrets]` replaces the old `[vta]` + `mediator_secrets`
+        // plumbing — the VTA session is recorded in the unified secret
+        // backend via the admin credential, not as a config-file section.
+        assert!(toml.contains("[secrets]"));
+        assert!(toml.contains("backend ="));
         assert!(toml.contains("database_url = \"redis://redis.example.com/\""));
     }
 
@@ -347,16 +387,16 @@ mod tests {
 
     #[test]
     fn test_all_secret_storage_refs() {
+        // Unified model: every backend choice becomes a single
+        // `[secrets].backend = "<url>"` in mediator.toml. `string://` and
+        // `vta://` are no longer storage backends (string:// dropped;
+        // vta:// is a key *source*, not a store).
         let cases = [
-            (STORAGE_FILE, "file://./conf/secrets.json"),
-            (STORAGE_KEYRING, "keyring://affinidi-mediator/secrets"),
-            (STORAGE_AWS, "aws_secrets://mediator/secrets"),
-            (STORAGE_GCP, "gcp_secrets://mediator/secrets"),
-            (STORAGE_AZURE, "azure_keyvault://mediator-secrets"),
-            (STORAGE_VAULT, "vault://secret/mediator/secrets"),
-            (STORAGE_VTA, "vta://mediator"),
+            (STORAGE_FILE, "file://conf/secrets.json"),
+            (STORAGE_KEYRING, "keyring://affinidi-mediator"),
+            (STORAGE_AWS, "aws_secrets://us-east-1/mediator/"),
         ];
-        for (storage, expected_ref) in cases {
+        for (storage, expected_backend) in cases {
             let config = WizardConfig {
                 did_method: DID_PEER.into(),
                 secret_storage: storage.into(),
@@ -364,8 +404,8 @@ mod tests {
             };
             let toml = generate_toml(&config, &test_generated()).unwrap();
             assert!(
-                toml.contains(&format!("mediator_secrets = \"{expected_ref}\"")),
-                "storage={storage}: expected {expected_ref} in output"
+                toml.contains(&format!("backend = \"{expected_backend}\"")),
+                "storage={storage}: expected backend=\"{expected_backend}\" in output"
             );
         }
     }

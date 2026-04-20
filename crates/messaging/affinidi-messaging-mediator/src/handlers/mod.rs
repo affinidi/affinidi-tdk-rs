@@ -191,6 +191,62 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }
     }
 
+    // ── Unified secret backend: live probe + cache freshness ─────────
+    //
+    // Boot-time probe already happened in `Config::TryFrom<ConfigRaw>`
+    // (Phase E), so a backend that was reachable at boot is highly
+    // likely still reachable here. Re-probing on every /readyz catches
+    // mid-flight credential expiries / network blips that the boot-
+    // time probe couldn't.
+    let backend_reachable = match state.config.secrets_backend.probe().await {
+        Ok(()) => {
+            checks.push(serde_json::json!({
+                "name": "secrets_backend",
+                "status": "pass",
+                "url": state.config.secrets_backend_url,
+            }));
+            true
+        }
+        Err(e) => {
+            all_ok = false;
+            checks.push(serde_json::json!({
+                "name": "secrets_backend",
+                "status": "fail",
+                "url": state.config.secrets_backend_url,
+                "message": format!("Secret backend probe failed: {e}"),
+            }));
+            false
+        }
+    };
+
+    // VTA cache age — `None` means "no cache present", which is fine
+    // when self-hosting; only flag it as a problem when the cache is
+    // expected but stale beyond its TTL (load_vta_cached_bundle
+    // already enforces TTL by returning None on expiry, so a present
+    // cache here is by definition still valid).
+    let vta_cache_age_secs = match state.config.secrets_backend.load_vta_cached_bundle().await {
+        Ok(Some(cached)) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(cached.fetched_at);
+            Some(now.saturating_sub(cached.fetched_at))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            // Failing to read the cache isn't fatal — the mediator can
+            // still serve traffic from in-memory keys — but it's worth
+            // surfacing because it usually indicates an HMAC mismatch
+            // (admin key was rotated externally) or a corrupt entry.
+            checks.push(serde_json::json!({
+                "name": "vta_cache",
+                "status": "warn",
+                "message": format!("Could not read VTA cache: {e}"),
+            }));
+            None
+        }
+    };
+
     let status_code = if all_ok {
         StatusCode::OK
     } else {
@@ -202,6 +258,12 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": (chrono::Utc::now() - state.service_start_timestamp).num_seconds(),
         "checks": checks,
+        // Top-level fields (alongside `checks`) so ops dashboards can
+        // pluck them without parsing the variable-length checks list.
+        "secrets_backend_reachable": backend_reachable,
+        "secrets_backend_url": state.config.secrets_backend_url,
+        "vta_cache_age_secs": vta_cache_age_secs,
+        "operating_keys_loaded": state.config.operating_keys_loaded,
     });
 
     (status_code, Json(response))

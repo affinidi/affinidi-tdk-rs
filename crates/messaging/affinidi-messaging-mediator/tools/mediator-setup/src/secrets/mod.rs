@@ -9,8 +9,9 @@ pub fn provision_secrets(
     mediator_did: &str,
 ) -> anyhow::Result<()> {
     match storage {
-        "string://" | "file://" => {
-            // Handled by config_writer (inline or file write)
+        "file://" => {
+            // Handled by config_writer's secrets.json write — nothing to
+            // do here. (`string://` is no longer supported.)
             Ok(())
         }
         "keyring://" => keyring_backend::store_secrets(mediator_did, secrets),
@@ -35,10 +36,12 @@ pub fn provision_secrets(
             println!("  Secrets will be referenced as vault://secret/mediator/secrets");
             Ok(())
         }
-        "vta://" => {
-            // VTA-managed secrets don't need local provisioning
-            Ok(())
-        }
+        "string://" => Err(anyhow::anyhow!(
+            "string:// is no longer supported — use file:// (with optional encryption) instead"
+        )),
+        "vta://" => Err(anyhow::anyhow!(
+            "vta:// is not a storage backend — VTA is a key source; choose a real store (keyring://, file://, aws_secrets://, …)"
+        )),
         _ => Err(anyhow::anyhow!("Unknown storage backend: {storage}")),
     }
 }

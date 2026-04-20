@@ -39,16 +39,43 @@ url = "2"
 affinidi-tdk = { path = "../../../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 affinidi-secrets-resolver = { path = "../../../../core/affinidi-secrets-resolver" }
 
+# ── Mediator unified secret backend ─────────────────────────────────────
+## Shared secrets module (open_store, MediatorSecrets, well-known keys)
+## lives in mediator-common. The wizard provisions admin credential, JWT
+## secret, and operating keys directly into the chosen backend so the
+## mediator finds them at startup without any inline config plumbing.
+## `secrets-keyring` matches the wizard's pre-existing keyring usage so
+## the linker doesn't pull two different keyring versions.
+affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", features = ["secrets-keyring", "secrets-aws"] }
+
 # ── DID:webvh ────────────────────────────────────────────────────────────
-didwebvh-rs = "0.4"
+didwebvh-rs = "0.5"
 
 # ── Secret Storage Backends ──────────────────────────────────────────────
 ## OS keyring: macOS Keychain, Linux Secret Service, Windows Credential Manager
 keyring = { version = "3", features = ["apple-native", "linux-native"] }
 
 # ── VTA Integration ──────────────────────────────────────────────────────
-## For VTA credential parsing, authentication, and context management
-vta-sdk = { version = "0.3", features = ["integration"] }
+## client:          auth_light (REST challenge-response)
+## session:         full DIDComm challenge-response (primary auth path)
+## sealed-transfer: HPKE-encrypted bundle handoff for the air-gapped
+##                  bootstrap flow (SealedHandoff / `vta::sealed_transfer`).
+vta-sdk = { version = "0.5", features = ["client", "session", "sealed-transfer"] }
+
+# ── DID Resolution ───────────────────────────────────────────────────────
+## Used to resolve the VTA's DID document and extract VTARest /
+## DIDCommMessaging service endpoints without the operator having to paste
+## URLs.
+affinidi-did-resolver-cache-sdk = { path = "../../../../identity/affinidi-did-resolver-cache-sdk" }
+
+# ── HTTP ─────────────────────────────────────────────────────────────────
+## Used for REST fallback + future trust-ping of service endpoints.
+## Must match vta-sdk's reqwest major so &Client types line up in auth_light.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+
+# ── Random ───────────────────────────────────────────────────────────────
+## Used to generate the ephemeral setup keypair seed.
+rand = "0.9"
 
 # ── Crypto / SSL ─────────────────────────────────────────────────────────
 ## ring: JWT secret generation (Ed25519 PKCS8)
@@ -62,6 +89,10 @@ anyhow = "1"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 tracing = "0.1"
+
+[dev-dependencies]
+## Used by setup_key persistence tests to create scoped temporary paths.
+tempfile = "3"
 
 [lints]
 workspace = true

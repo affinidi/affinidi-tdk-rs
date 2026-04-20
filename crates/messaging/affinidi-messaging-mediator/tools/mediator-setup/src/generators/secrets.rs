@@ -15,31 +15,10 @@ pub fn write_secrets_file(secrets: &[Secret], path: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Encode secrets as a base64url string for inline storage (string:// scheme).
-pub fn secrets_to_base64(secrets: &[Secret]) -> anyhow::Result<String> {
-    use base64::prelude::*;
-    let json = serde_json::to_string(secrets)?;
-    Ok(BASE64_URL_SAFE_NO_PAD.encode(json.as_bytes()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use affinidi_secrets_resolver::secrets::Secret;
-
-    #[test]
-    fn test_secrets_to_base64() {
-        let secret = Secret::generate_ed25519(Some("test#key-1"), None);
-        let b64 = secrets_to_base64(&[secret]).unwrap();
-        assert!(!b64.is_empty());
-
-        // Verify round-trip
-        use base64::prelude::*;
-        let decoded = BASE64_URL_SAFE_NO_PAD.decode(&b64).unwrap();
-        let secrets: Vec<Secret> = serde_json::from_slice(&decoded).unwrap();
-        assert_eq!(secrets.len(), 1);
-        assert_eq!(secrets[0].id, "test#key-1");
-    }
 
     #[test]
     fn test_write_secrets_file() {

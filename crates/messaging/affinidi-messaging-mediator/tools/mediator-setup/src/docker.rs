@@ -78,11 +78,11 @@ fn build_features(config: &WizardConfig) -> Vec<&'static str> {
     }
 
     match config.secret_storage.as_str() {
-        "keyring://" => features.push("vta-keyring"),
-        "aws_secrets://" => features.push("vta-aws-secrets"),
-        "gcp_secrets://" => features.push("vta-gcp-secrets"),
-        "azure_keyvault://" => features.push("vta-azure-keyvault"),
-        "vault://" => features.push("vta-hashicorp-vault"),
+        "keyring://" => features.push("secrets-keyring"),
+        "aws_secrets://" => features.push("secrets-aws"),
+        "gcp_secrets://" => features.push("secrets-gcp"),
+        "azure_keyvault://" => features.push("secrets-azure"),
+        "vault://" => features.push("secrets-vault"),
         _ => {}
     }
 

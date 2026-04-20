@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser)]
@@ -53,6 +55,49 @@ pub struct Args {
     /// Load a build recipe TOML file (non-interactive, fully declarative)
     #[arg(long, value_name = "FILE")]
     pub from: Option<String>,
+
+    // ── Online-VTA connection flags ────────────────────────────────────
+    /// VTA DID (e.g. did:webvh:vta.example.com). Pre-fills the TUI; required
+    /// for non-interactive / --setup-key-{out,file} flows.
+    #[arg(long, value_name = "DID")]
+    pub vta_did: Option<String>,
+
+    /// VTA context id the mediator will live in (default: `mediator`).
+    #[arg(long, value_name = "ID")]
+    pub vta_context: Option<String>,
+
+    /// Phase 1: generate an ephemeral did:key, write it to the given file,
+    /// print the `pnm acl create` command, and exit. The operator registers
+    /// the ACL, then re-runs with `--setup-key-file` to finalise.
+    #[arg(long, value_name = "PATH")]
+    pub setup_key_out: Option<PathBuf>,
+
+    /// Phase 2: read an ephemeral did:key from the given file and use it to
+    /// authenticate against the VTA. Requires `--vta-did`.
+    #[arg(long, value_name = "PATH")]
+    pub setup_key_file: Option<PathBuf>,
+
+    /// Phase 2 only: retry the authentication loop for up to this many
+    /// seconds while waiting for the ACL entry to appear on the VTA. Useful
+    /// when ACL provisioning is orchestrated in parallel.
+    #[arg(long, value_name = "SECS")]
+    pub wait_for_acl: Option<u64>,
+
+    // ── Re-run safety ─────────────────────────────────────────────────
+    /// Allow the wizard to run when an existing `mediator.toml` and a
+    /// provisioned backend are detected. Without this flag the wizard
+    /// refuses to overwrite secrets that are already in production —
+    /// rotating them silently can lock the mediator out of the VTA, and
+    /// previously-issued JWTs would stop verifying.
+    #[arg(long)]
+    pub force_reprovision: bool,
+
+    /// Tear down a previous setup: load the configured backend, list the
+    /// well-known mediator keys it holds, prompt for confirmation, then
+    /// delete each entry and remove the local config + secrets files.
+    /// Combine with `--yes` (planned) to skip the prompt in CI.
+    #[arg(long)]
+    pub uninstall: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -112,28 +157,27 @@ impl std::fmt::Display for DidMethod {
     }
 }
 
+/// Secret-store backends accepted on the CLI. `string://` (inline) was
+/// removed in the unified-secrets refactor — inline private keys in TOML
+/// are unsafe even for CI. `vta://` was never a backend (the VTA is a
+/// *source* of keys); pick whichever real store will hold them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SecretStorage {
-    /// Inline in config (string://)
-    Inline,
-    /// Local file (file://)
+    /// Local file (file://) — dev only, requires explicit confirmation
+    /// in interactive mode.
     File,
     /// OS Keyring (keyring://)
     Keyring,
     /// AWS Secrets Manager (aws_secrets://)
     Aws,
-    /// VTA managed (vta://)
-    Vta,
 }
 
 impl std::fmt::Display for SecretStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Inline => write!(f, "string://"),
             Self::File => write!(f, "file://"),
             Self::Keyring => write!(f, "keyring://"),
             Self::Aws => write!(f, "aws_secrets://"),
-            Self::Vta => write!(f, "vta://"),
         }
     }
 }
