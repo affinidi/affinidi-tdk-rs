@@ -37,6 +37,12 @@ pub enum VtaEvent {
         /// setup DID the operator registered is already gone from the ACL.
         admin_did: String,
         admin_private_key_mb: String,
+        /// webvh hosting services registered on the VTA. Fetched eagerly
+        /// on successful auth so the Did step can offer them without
+        /// blocking on a second round-trip. Empty when the VTA has no
+        /// servers registered or the list call fails (the Did step
+        /// falls back to self-hosted in both cases).
+        webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
     },
     Failed(String),
 }
@@ -227,11 +233,28 @@ pub async fn run_connection_test(
         DiagCheck::RotateAdminDid,
         DiagStatus::Ok(format!("admin DID: {}", rotated.client_did)),
     ));
+
+    // ── 5. Discover webvh hosting services ─────────────────────────────
+    // Best-effort: the Did step falls back to self-hosting when the
+    // list is empty or the call errors, so a failure here shouldn't
+    // block the wizard. Logging is the only surface.
+    let webvh_servers =
+        match crate::generators::did_vta::list_webvh_servers(&rest_url, &token).await {
+            Ok(servers) => servers,
+            Err(e) => {
+                tracing::warn!(
+                    "Could not list VTA webvh servers: {e}. Did step will offer self-hosted only."
+                );
+                Vec::new()
+            }
+        };
+
     let _ = tx.send(VtaEvent::Connected {
         protocol: Protocol::Rest,
         access_token: token,
         rest_url,
         admin_did: rotated.client_did,
         admin_private_key_mb: rotated.private_key_multibase,
+        webvh_servers,
     });
 }

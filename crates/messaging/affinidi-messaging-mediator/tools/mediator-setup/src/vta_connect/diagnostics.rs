@@ -81,6 +81,10 @@ pub struct ConnectedInfo {
     /// Private key (multibase) matching `admin_did`. Stored locally and
     /// eventually persisted to the chosen secret backend.
     pub admin_private_key_mb: String,
+    /// webvh hosting services registered on the VTA. Retained so the
+    /// Did step can offer them as DID-publish targets without a second
+    /// round-trip.
+    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
 }
 
 /// Seed a fresh diagnostics list with every check in `Pending`.

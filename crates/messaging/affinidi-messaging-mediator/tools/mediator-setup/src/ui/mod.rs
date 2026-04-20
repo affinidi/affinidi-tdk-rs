@@ -425,6 +425,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
             // the same URL so the VTA can publish correct service
             // endpoints. Route both through the compact prompt widget.
             if app.current_step == crate::app::WizardStep::Did
+                && app.did_phase.is_none()
                 && (app.config.did_method == crate::consts::DID_WEBVH
                     || app.config.did_method == crate::consts::DID_VTA)
             {
@@ -442,6 +443,45 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     "Include the full path — the wizard derives DIDCommMessaging, \
                      WebSocket (`/ws`), and Authentication (`/authenticate`) \
                      endpoints from this URL.",
+                );
+                return;
+            }
+            // DidPhase::EnterCustomUrl / EnterMnemonic render as their
+            // own compact prompts. SelectWebvhHost is a Selecting-mode
+            // phase, not TextInput — handled by the selection branch
+            // further below.
+            if let Some(phase) = app.did_phase {
+                use crate::app::DidPhase;
+                let (title, desc, placeholder, hint) = match phase {
+                    DidPhase::EnterCustomUrl => (
+                        "Self-host base URL",
+                        "Where the VTA should publish the DID document.",
+                        "https://did.example.com",
+                        "Path is stripped automatically — webvh resolves to \
+                         `<url>/.well-known/did.jsonl`, so only scheme+host \
+                         (plus optional port) matter.",
+                    ),
+                    DidPhase::EnterMnemonic => (
+                        "Mnemonic",
+                        "URL path segment for this DID on the chosen webvh server.",
+                        "(blank — VTA auto-assigns)",
+                        "Optional. Leave blank to let the VTA generate a \
+                         unique path; type a value for a memorable / stable \
+                         URL like `/mediator`.",
+                    ),
+                    DidPhase::SelectWebvhHost => {
+                        unreachable!("SelectWebvhHost runs in Selecting mode, not TextInput")
+                    }
+                };
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    title,
+                    desc,
+                    None,
+                    &app.text_input,
+                    placeholder,
+                    hint,
                 );
                 return;
             }

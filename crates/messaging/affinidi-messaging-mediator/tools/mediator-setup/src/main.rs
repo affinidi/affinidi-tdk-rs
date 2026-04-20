@@ -473,6 +473,12 @@ fn strip_path_from_url(raw: &str) -> String {
     }
 }
 
+/// Unused — the TUI's `DidPhase::SelectWebvhHost` now collects this
+/// choice inside the ratatui flow. Kept as a reference implementation
+/// (and a lightweight safety net for any future recipe-driven path
+/// that skips the TUI) — callers should prefer the stored
+/// `WizardConfig::vta_webvh_*` fields populated in the TUI.
+#[allow(dead_code)]
 /// Interactive "where should the VTA publish this DID" prompt. Called
 /// after the TUI exits so we can use plain stdin — the ratatui layer
 /// is already torn down by `generate_and_write`'s time.
@@ -654,29 +660,29 @@ async fn generate_and_write(
                          and enter a URL at the DID step."
                     );
                 }
-                // Query the VTA for registered webvh hosting services.
-                // Two possible paths for where the DID document lives:
-                //   1. VTA-hosted — operator picks a registered server;
-                //      the VTA publishes the DID document for them.
-                //   2. Self-hosted — operator is standing up their own
-                //      webvh server at the mediator URL.
-                let servers = match generators::did_vta::list_webvh_servers(
-                    &session.rest_url,
-                    &session.access_token,
-                )
-                .await
-                {
-                    Ok(list) => list,
-                    Err(e) => {
-                        eprintln!(
-                            "  \x1b[33mWarning:\x1b[0m could not list VTA webvh servers \
-                             ({e}). Falling back to self-hosted mode at {}.",
-                            config.public_url
-                        );
-                        Vec::new()
+                // Resolve the webvh host choice made inside the TUI
+                // (Did step's SelectWebvhHost phase). `server_id` is
+                // `Some(_)` for VTA-hosted, `None` for self-host.
+                // Sealed-handoff sessions and older recipe runs where
+                // the TUI wasn't walked will have `server_id = None`
+                // and `vta_webvh_self_host_url` possibly empty — fall
+                // back to the stripped mediator URL in that case.
+                let host = if let Some(ref id) = config.vta_webvh_server_id {
+                    generators::did_vta::WebvhHost::Hosted {
+                        server_id: id.clone(),
+                        mnemonic: config.vta_webvh_mnemonic.clone(),
                     }
+                } else {
+                    let fallback = if config.vta_webvh_self_host_url.is_empty() {
+                        // Strip the path the same way the TUI
+                        // default-case does so recipe-driven runs
+                        // behave identically to interactive ones.
+                        strip_path_from_url(&config.public_url)
+                    } else {
+                        config.vta_webvh_self_host_url.clone()
+                    };
+                    generators::did_vta::WebvhHost::SelfHosted { url: fallback }
                 };
-                let host = choose_webvh_host(&servers, &config.public_url);
                 println!(
                     "  Creating mediator DID in VTA context '{}'…",
                     session.context_id

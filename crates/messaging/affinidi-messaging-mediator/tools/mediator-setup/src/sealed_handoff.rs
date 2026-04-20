@@ -270,6 +270,12 @@ pub fn open_with_digest(
         vta_did: credential.vta_did.clone(),
         admin_did: credential.did.clone(),
         admin_private_key_mb: credential.private_key_multibase.clone(),
+        // Sealed-handoff does not query the VTA for webvh servers —
+        // the bundle already carries a fully-provisioned mediator
+        // DID (minted by the VTA admin before sealing). The Did step
+        // won't offer host choices in this mode; this empty list
+        // short-circuits that UI.
+        webvh_servers: Vec::new(),
     });
     state.phase = SealedPhase::Complete;
     info!(

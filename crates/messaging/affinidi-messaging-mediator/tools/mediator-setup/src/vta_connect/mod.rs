@@ -35,6 +35,10 @@ pub struct VtaSession {
     pub admin_did: String,
     /// Private key (multibase) matching `admin_did`.
     pub admin_private_key_mb: String,
+    /// webvh hosting services registered on the VTA, captured once
+    /// at connect time. The Did step shows these as DID-publish
+    /// options; empty list means "self-host only".
+    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
 }
 // `Protocol` is only used by `diagnostics.rs` and the runner internally; the
 // `ConnectedInfo` export above is enough for callers to read the active
@@ -114,6 +118,7 @@ impl VtaConnectState {
                 rest_url,
                 admin_did,
                 admin_private_key_mb,
+                webvh_servers,
             } => {
                 self.connection = Some(ConnectedInfo {
                     protocol,
@@ -121,6 +126,7 @@ impl VtaConnectState {
                     rest_url,
                     admin_did,
                     admin_private_key_mb,
+                    webvh_servers,
                 });
                 self.phase = ConnectPhase::Connected;
                 self.event_rx = None;

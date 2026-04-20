@@ -212,6 +212,27 @@ pub enum KeyStoragePhase {
 /// Stored as a constant so tests and the prompt rendering stay in sync.
 pub const FILE_GATE_PHRASE: &str = "I understand";
 
+/// Sub-phases of the `Did` step when `DID_VTA` is selected. After the
+/// mediator URL is captured, the wizard asks the operator where the
+/// VTA should publish the DID — pick a registered webvh hosting
+/// service, self-host at the mediator URL, or self-host at a
+/// different URL. Mirrors the `KeyStoragePhase` shape.
+///
+/// Skipped entirely for did:peer / did:webvh / import paths and for
+/// sealed-handoff VTA sessions (those bring a fully-provisioned DID
+/// already, no hosting choice to make).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DidPhase {
+    /// Selection list: self-host-at-mediator / each VTA-hosted server
+    /// / self-host-elsewhere.
+    SelectWebvhHost,
+    /// Text input for a different self-host base URL.
+    EnterCustomUrl,
+    /// Text input for the optional mnemonic (URL path segment) when
+    /// a VTA-hosted server was picked. Empty = server auto-assigns.
+    EnterMnemonic,
+}
+
 /// Sub-phases of the `Security` step. The SSL portion (selection list +
 /// optional cert/key text inputs) runs as the implicit `None` phase; once
 /// SSL is settled the wizard pivots to a small JWT-mode selection before
@@ -270,6 +291,17 @@ pub struct WizardConfig {
     pub ssl_mode: String,
     pub ssl_cert_path: String,
     pub ssl_key_path: String,
+    /// When VTA-managed and a hosted server was picked, the server id.
+    /// `None` means self-host. Set on the Did step's SelectWebvhHost
+    /// phase; read by `generate_and_write` when it calls the VTA's
+    /// `create_did_webvh`.
+    pub vta_webvh_server_id: Option<String>,
+    /// Optional mnemonic (URL path segment) when using a hosted
+    /// server. `None` = VTA auto-assigns.
+    pub vta_webvh_mnemonic: Option<String>,
+    /// Self-host base URL — defaults to the stripped mediator URL.
+    /// Only meaningful when `vta_webvh_server_id` is `None`.
+    pub vta_webvh_self_host_url: String,
     /// `generate` (default) or `provide`. See [`crate::consts::JWT_MODE_GENERATE`].
     pub jwt_mode: String,
     pub database_url: String,
@@ -309,6 +341,9 @@ impl Default for WizardConfig {
             ssl_mode: String::new(),
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
+            vta_webvh_server_id: None,
+            vta_webvh_mnemonic: None,
+            vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
             admin_did_mode: String::new(),
@@ -338,6 +373,11 @@ pub struct WizardApp {
     /// portion is still active (selection list or cert/key text inputs);
     /// `Some(JwtMode)` means the JWT-mode selection is on screen.
     pub security_phase: Option<SecurityPhase>,
+    /// Sub-phase tracker for the `Did` step. Only ever populated when
+    /// the operator picked `DID_VTA` and we have an online VTA
+    /// session — the wizard then walks the webvh-host selection
+    /// screens before advancing to Security.
+    pub did_phase: Option<DidPhase>,
     /// Ephemeral state for the online-VTA connection sub-flow. Present only
     /// while the operator is stepping through the sub-phases of the Vta step.
     pub vta_connect: Option<VtaConnectState>,
@@ -373,6 +413,7 @@ impl WizardApp {
             completed: Vec::new(),
             key_storage_phase: None,
             security_phase: None,
+            did_phase: None,
             vta_connect: None,
             vta_did_prefill: None,
             vta_context_prefill: None,
@@ -556,6 +597,7 @@ impl WizardApp {
                             vta_did: state.vta_did.clone(),
                             admin_did: conn.admin_did.clone(),
                             admin_private_key_mb: conn.admin_private_key_mb.clone(),
+                            webvh_servers: conn.webvh_servers.clone(),
                         });
                     }
                 }
@@ -879,6 +921,35 @@ impl WizardApp {
                 ]
             }
             WizardStep::Did => {
+                // When the webvh-host sub-flow is active, render its
+                // options (self-host / each server / self-host
+                // elsewhere) instead of the DID-method picker.
+                if self.did_phase == Some(DidPhase::SelectWebvhHost) {
+                    let mut opts = Vec::new();
+                    let stripped = if self.config.vta_webvh_self_host_url.is_empty() {
+                        Self::strip_url_path(&self.config.public_url)
+                    } else {
+                        self.config.vta_webvh_self_host_url.clone()
+                    };
+                    opts.push(SelectionOption::new(
+                        format!("Self-host at {stripped}"),
+                        "Derived from the mediator URL (path stripped — webvh publishes at /.well-known/did.jsonl).",
+                    ));
+                    if let Some(session) = self.vta_session.as_ref() {
+                        for s in &session.webvh_servers {
+                            let label = s.label.as_deref().unwrap_or("(no label)");
+                            opts.push(SelectionOption::new(
+                                format!("VTA-hosted {} — {}", s.id, label),
+                                format!("webvh server DID: {}", s.did),
+                            ));
+                        }
+                    }
+                    opts.push(SelectionOption::new(
+                        "Self-host elsewhere",
+                        "Type a different base URL (e.g. a webvh server you operate separately).",
+                    ));
+                    return opts;
+                }
                 let mut opts = vec![];
                 if self.config.use_vta {
                     opts.push(SelectionOption::new(
@@ -1052,6 +1123,13 @@ impl WizardApp {
                 _ => String::new(),
             },
             WizardStep::Did => {
+                if self.did_phase == Some(DidPhase::SelectWebvhHost) {
+                    return "Pick where the VTA should publish this DID's did.jsonl log. \
+                            Self-host = the mediator (or another server you operate) serves \
+                            the document at `/.well-known/did.jsonl`. VTA-hosted = the VTA \
+                            manages publication for you on a registered webvh server."
+                        .into();
+                }
                 if self.config.use_vta {
                     match self.selection_index {
                         0 => "VTA creates and manages the mediator's DID and keys centrally. Uses the built-in `didcomm-mediator` template. To customise: `pnm did-templates init didcomm-mediator > custom.json`, edit, then upload under the same name — context/global scope shadows the built-in automatically.".into(),
@@ -1192,6 +1270,13 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Did => {
+                // The webvh-host selection rides on top of the Did
+                // step's selection list UI. Route Enter to the
+                // sub-flow handler when that phase is active.
+                if self.did_phase == Some(DidPhase::SelectWebvhHost) {
+                    self.confirm_webvh_host_choice();
+                    return;
+                }
                 if self.config.use_vta {
                     self.config.did_method = match self.selection_index {
                         0 => DID_VTA.into(),
@@ -1479,6 +1564,90 @@ impl WizardApp {
         };
     }
 
+    /// Strip any URL path so the stripped `<scheme>://<host>[:port]`
+    /// lands on the VTA's `CreateDidWebvhRequest.url`. webvh resolves
+    /// to `<url>/.well-known/did.jsonl`, so a trailing `/mediator/v1`
+    /// on the operator-typed URL would point the resolver somewhere
+    /// that doesn't serve the DID document.
+    fn strip_url_path(raw: &str) -> String {
+        match url::Url::parse(raw) {
+            Ok(mut u) => {
+                u.set_path("");
+                u.to_string().trim_end_matches('/').to_string()
+            }
+            Err(_) => raw.to_string(),
+        }
+    }
+
+    /// Enter the webvh-host selection phase. Called after the Did
+    /// step's DID_VTA path collects the mediator URL — before
+    /// advancing to Security.
+    fn enter_webvh_host_phase(&mut self) {
+        self.did_phase = Some(DidPhase::SelectWebvhHost);
+        self.mode = InputMode::Selecting;
+        // Default self-host URL is the mediator URL with the path
+        // stripped. Operator can still pick "self-host elsewhere"
+        // and type a different one.
+        if self.config.vta_webvh_self_host_url.is_empty() {
+            self.config.vta_webvh_self_host_url = Self::strip_url_path(&self.config.public_url);
+        }
+        self.selection_index = 0;
+    }
+
+    /// Number of entries in the webvh-host selection list — kept as
+    /// a helper for future navigation code (e.g. up/down clamping)
+    /// though the renderer derives the count from `current_options()`
+    /// today.
+    #[allow(dead_code)]
+    fn webvh_host_option_count(&self) -> usize {
+        let servers = self
+            .vta_session
+            .as_ref()
+            .map(|s| s.webvh_servers.len())
+            .unwrap_or(0);
+        servers + 2
+    }
+
+    pub fn in_did_subflow(&self) -> bool {
+        self.current_step == WizardStep::Did && self.did_phase.is_some()
+    }
+
+    /// Confirm the SelectWebvhHost selection. `selection_index` maps
+    /// to 0 = self-host at mediator URL, 1..=servers.len() = VTA-hosted
+    /// server, servers.len()+1 = self-host elsewhere.
+    fn confirm_webvh_host_choice(&mut self) {
+        let servers_len = self
+            .vta_session
+            .as_ref()
+            .map(|s| s.webvh_servers.len())
+            .unwrap_or(0);
+        let elsewhere_idx = servers_len + 1;
+        let idx = self.selection_index;
+        if idx == 0 {
+            // Self-host at mediator URL (already populated by enter).
+            self.config.vta_webvh_server_id = None;
+            self.config.vta_webvh_mnemonic = None;
+            self.did_phase = None;
+            self.advance();
+        } else if idx == elsewhere_idx {
+            // Self-host elsewhere — ask for the URL.
+            self.did_phase = Some(DidPhase::EnterCustomUrl);
+            self.mode = InputMode::TextInput;
+            self.text_input = Input::new(self.config.vta_webvh_self_host_url.clone());
+        } else if let Some(server) = self
+            .vta_session
+            .as_ref()
+            .and_then(|s| s.webvh_servers.get(idx - 1))
+        {
+            // VTA-hosted — remember the id, optionally collect mnemonic.
+            self.config.vta_webvh_server_id = Some(server.id.clone());
+            self.did_phase = Some(DidPhase::EnterMnemonic);
+            self.mode = InputMode::TextInput;
+            self.text_input =
+                Input::new(self.config.vta_webvh_mnemonic.clone().unwrap_or_default());
+        }
+    }
+
     /// Defensive helper kept symmetric with [`Self::in_key_storage_subflow`].
     /// Currently unused at call sites — the renderer reads
     /// `security_phase` directly — but exposed so future help-bar /
@@ -1513,7 +1682,51 @@ impl WizardApp {
         }
         match self.current_step {
             WizardStep::Did => {
+                // Handle Did sub-phases (VTA webvh host choice) before
+                // the "just saved the mediator URL" fall-through below.
+                match self.did_phase {
+                    Some(DidPhase::EnterCustomUrl) => {
+                        let v = self.text_input.value().trim().to_string();
+                        if !v.is_empty() {
+                            self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
+                        }
+                        self.config.vta_webvh_server_id = None;
+                        self.config.vta_webvh_mnemonic = None;
+                        self.did_phase = None;
+                        self.mode = InputMode::Selecting;
+                        self.advance();
+                        return;
+                    }
+                    Some(DidPhase::EnterMnemonic) => {
+                        let v = self.text_input.value().trim().to_string();
+                        self.config.vta_webvh_mnemonic = if v.is_empty() { None } else { Some(v) };
+                        self.did_phase = None;
+                        self.mode = InputMode::Selecting;
+                        self.advance();
+                        return;
+                    }
+                    // SelectWebvhHost is Selecting mode, not TextInput —
+                    // falls through to the default Did branch below.
+                    _ => {}
+                }
+
                 self.config.public_url = self.text_input.value().to_string();
+                // For the VTA-managed path, after the operator has
+                // entered the mediator URL and we captured an online
+                // session, walk the webvh-host choice sub-flow before
+                // advancing. did:webvh / import / sealed-handoff fall
+                // through to the straight advance below.
+                let vta_session_has_servers = self
+                    .vta_session
+                    .as_ref()
+                    .map(|s| !s.webvh_servers.is_empty())
+                    .unwrap_or(false);
+                let ask_webvh_host = self.config.did_method == DID_VTA
+                    && (self.vta_session.is_some() || vta_session_has_servers);
+                if ask_webvh_host {
+                    self.enter_webvh_host_phase();
+                    return;
+                }
                 self.mode = InputMode::Selecting;
                 self.advance();
             }
@@ -1627,6 +1840,25 @@ impl WizardApp {
         }
         if self.in_sealed_handoff_subflow() {
             self.sealed_handoff_back();
+            return;
+        }
+        if self.in_did_subflow() {
+            // EnterCustomUrl and EnterMnemonic → back to SelectWebvhHost.
+            // SelectWebvhHost → exit the sub-flow entirely and fall
+            // back to the mediator URL prompt.
+            match self.did_phase {
+                Some(DidPhase::EnterCustomUrl) | Some(DidPhase::EnterMnemonic) => {
+                    self.did_phase = Some(DidPhase::SelectWebvhHost);
+                    self.mode = InputMode::Selecting;
+                    self.selection_index = 0;
+                }
+                Some(DidPhase::SelectWebvhHost) => {
+                    self.did_phase = None;
+                    self.mode = InputMode::TextInput;
+                    self.text_input = Input::new(self.config.public_url.clone());
+                }
+                None => {}
+            }
             return;
         }
         match self.mode {
@@ -2528,6 +2760,7 @@ mod tests {
             rest_url: "https://vta.example.com".into(),
             admin_did: "did:key:z6MkRotated".into(),
             admin_private_key_mb: "zROTATED".into(),
+            webvh_servers: Vec::new(),
         });
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::Connected));
 
