@@ -449,6 +449,89 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
     }
 }
 
+/// Interactive "where should the VTA publish this DID" prompt. Called
+/// after the TUI exits so we can use plain stdin — the ratatui layer
+/// is already torn down by `generate_and_write`'s time.
+///
+/// Path 1: if the VTA has webvh servers registered, list them and let
+/// the operator pick one (plus optionally type a mnemonic for the URL
+/// path). Picking "self-host" falls through to Path 2.
+///
+/// Path 2: self-host at the mediator URL the operator already entered
+/// at the Did step. No extra prompt needed — the URL is the answer.
+///
+/// Defensive fallback: empty server list / unreadable stdin / parse
+/// failure all collapse onto self-hosted at `mediator_url`. The goal
+/// is to never block the wizard on an unexpected terminal shape.
+fn choose_webvh_host(
+    servers: &[vta_sdk::webvh::WebvhServerRecord],
+    mediator_url: &str,
+) -> generators::did_vta::WebvhHost {
+    use std::io::Write;
+
+    if servers.is_empty() {
+        println!(
+            "  No webvh hosting services registered on the VTA — self-hosting at {mediator_url}."
+        );
+        return generators::did_vta::WebvhHost::SelfHosted {
+            url: mediator_url.to_string(),
+        };
+    }
+
+    println!();
+    println!("  \x1b[1mWhere should the VTA publish the mediator DID?\x1b[0m");
+    println!("    0) Self-host at \x1b[36m{mediator_url}\x1b[0m");
+    for (i, s) in servers.iter().enumerate() {
+        let label = s.label.as_deref().unwrap_or("(no label)");
+        println!(
+            "    {}) VTA-hosted \x1b[36m{}\x1b[0m  \x1b[2m{label} — {}\x1b[0m",
+            i + 1,
+            s.id,
+            s.did
+        );
+    }
+    print!("  Choice [0]: ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        eprintln!("  Could not read stdin — defaulting to self-hosted.");
+        return generators::did_vta::WebvhHost::SelfHosted {
+            url: mediator_url.to_string(),
+        };
+    }
+    let pick = line.trim().parse::<usize>().unwrap_or(0);
+    if pick == 0 {
+        return generators::did_vta::WebvhHost::SelfHosted {
+            url: mediator_url.to_string(),
+        };
+    }
+    let Some(server) = servers.get(pick - 1) else {
+        eprintln!("  Choice {pick} is out of range — defaulting to self-hosted.");
+        return generators::did_vta::WebvhHost::SelfHosted {
+            url: mediator_url.to_string(),
+        };
+    };
+    // Optional mnemonic — empty input auto-assigns server-side.
+    print!("  Mnemonic (URL path segment) [auto-assign]: ");
+    let _ = std::io::stdout().flush();
+    let mut m = String::new();
+    if std::io::stdin().read_line(&mut m).is_err() {
+        eprintln!("  Could not read stdin — auto-assigning mnemonic.");
+        return generators::did_vta::WebvhHost::Hosted {
+            server_id: server.id.clone(),
+            mnemonic: None,
+        };
+    }
+    let mnemonic = match m.trim() {
+        "" => None,
+        s => Some(s.to_string()),
+    };
+    generators::did_vta::WebvhHost::Hosted {
+        server_id: server.id.clone(),
+        mnemonic,
+    }
+}
+
 /// Run all generators and write configuration files.
 /// When `save_recipe` is true, a `mediator-build.toml` recipe is saved alongside
 /// the config for reproducibility. Set to false when running from `--from` to
@@ -489,18 +572,79 @@ async fn generate_and_write(
                          and enter a URL at the DID step."
                     );
                 }
+                // Query the VTA for registered webvh hosting services.
+                // Two possible paths for where the DID document lives:
+                //   1. VTA-hosted — operator picks a registered server;
+                //      the VTA publishes the DID document for them.
+                //   2. Self-hosted — operator is standing up their own
+                //      webvh server at the mediator URL.
+                let servers = match generators::did_vta::list_webvh_servers(
+                    &session.rest_url,
+                    &session.access_token,
+                )
+                .await
+                {
+                    Ok(list) => list,
+                    Err(e) => {
+                        eprintln!(
+                            "  \x1b[33mWarning:\x1b[0m could not list VTA webvh servers \
+                             ({e}). Falling back to self-hosted mode at {}.",
+                            config.public_url
+                        );
+                        Vec::new()
+                    }
+                };
+                let host = choose_webvh_host(&servers, &config.public_url);
                 println!(
                     "  Creating mediator DID in VTA context '{}'…",
                     session.context_id
                 );
-                let result = generators::did_vta::create_vta_mediator_did(
+                let creation = generators::did_vta::create_vta_mediator_did(
                     &session.rest_url,
                     &session.access_token,
                     &session.context_id,
                     &config.public_url,
+                    host,
                 )
-                .await?;
+                .await;
+                let result = match creation {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // The VTA may reject publish on an unreachable
+                        // host even after minting the keys; there is no
+                        // partial-success hook we can consume, but the
+                        // operator can rerun with a different host
+                        // choice. Surface the error verbatim.
+                        return Err(anyhow::anyhow!(
+                            "{e}\n\nTip: if the VTA couldn't publish to the chosen webvh \
+                             host, re-run the wizard and pick a different server, or \
+                             stand up a webvh server at {}.",
+                            config.public_url
+                        ));
+                    }
+                };
                 println!("  VTA minted DID: {}", result.did);
+                // Always write the did.jsonl log entry next to the
+                // config when the VTA returned one. Gives the operator
+                // a local copy they can republish manually if the
+                // hosted webvh server ever goes away.
+                if let Some(ref log_entry) = result.log_entry {
+                    let did_jsonl_path = std::path::Path::new(&config.config_path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .join("did.jsonl");
+                    if let Err(e) = std::fs::write(&did_jsonl_path, log_entry) {
+                        eprintln!(
+                            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+                            did_jsonl_path.display()
+                        );
+                    } else {
+                        println!(
+                            "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
+                            did_jsonl_path.display()
+                        );
+                    }
+                }
                 let doc_string = result.log_entry.or_else(|| {
                     result
                         .did_document

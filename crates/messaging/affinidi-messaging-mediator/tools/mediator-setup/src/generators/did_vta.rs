@@ -54,6 +54,25 @@ impl From<CreateDidWebvhResultBody> for VtaMediatorDid {
 /// `pnm did-templates create --name didcomm-mediator …`.
 pub const MEDIATOR_TEMPLATE: &str = "didcomm-mediator";
 
+/// How the VTA should publish the mediator's webvh DID.
+///
+/// The VTA's `create_did_webvh` endpoint requires exactly one of
+/// `server_id` (pick a pre-registered webvh hosting service on the
+/// VTA) or `url` (explicit webvh host). We expose both paths so the
+/// operator can choose between a VTA-managed host and self-hosting.
+pub enum WebvhHost {
+    /// VTA-managed: use a webvh server registered on the VTA. `mnemonic`
+    /// is the URL-path segment (optional — leave `None` to let the VTA
+    /// auto-assign one).
+    Hosted {
+        server_id: String,
+        mnemonic: Option<String>,
+    },
+    /// Self-hosted: operator is standing up their own webvh server at
+    /// `url` (typically the mediator's own public URL).
+    SelfHosted { url: String },
+}
+
 /// Ask the VTA to mint a webvh DID for the mediator under `context_id`.
 ///
 /// The document shape is produced by rendering the `didcomm-mediator`
@@ -61,11 +80,16 @@ pub const MEDIATOR_TEMPLATE: &str = "didcomm-mediator";
 /// X25519 key-agreement keys and injects ambient template variables. The
 /// `template_context` is set to the same context id so context-scoped
 /// overrides shadow the built-in cleanly.
+///
+/// `mediator_url` is always populated on `template_vars["URL"]` (the
+/// document's service endpoints need it even on hosted deployments).
+/// `host` decides which of `url` / `server_id` lands on the request.
 pub async fn create_vta_mediator_did(
     rest_url: &str,
     access_token: &str,
     context_id: &str,
     mediator_url: &str,
+    host: WebvhHost,
 ) -> anyhow::Result<VtaMediatorDid> {
     let client = VtaClient::new(rest_url);
     client.set_token_async(access_token.to_string()).await;
@@ -76,21 +100,19 @@ pub async fn create_vta_mediator_did(
         serde_json::Value::String(mediator_url.to_string()),
     );
 
-    // The VTA requires either `server_id` (a pre-registered webvh host
-    // on the VTA) or `url` (an explicit webvh server URL) to know
-    // where to publish the DID document. In the self-hosted topology
-    // the mediator itself is the webvh host, so the operator-typed
-    // mediator URL is the webvh URL. Passing `url` here skips the
-    // `server_id` dance.
-    //
-    // `template_vars["URL"]` stays populated so templates that render
-    // service endpoints from `{{ URL }}` keep working — server-side
-    // rendering doesn't read `url` at all.
+    let (server_id, url, path) = match host {
+        WebvhHost::Hosted {
+            server_id,
+            mnemonic,
+        } => (Some(server_id), None, mnemonic),
+        WebvhHost::SelfHosted { url } => (None, Some(url), None),
+    };
+
     let req = CreateDidWebvhRequest {
         context_id: context_id.to_string(),
-        server_id: None,
-        url: Some(mediator_url.to_string()),
-        path: None,
+        server_id,
+        url,
+        path,
         label: Some("mediator".into()),
         portable: true,
         add_mediator_service: false,
@@ -111,6 +133,22 @@ pub async fn create_vta_mediator_did(
         .await
         .map_err(|e| anyhow::anyhow!("VTA create_did_webvh failed: {e}"))?;
     Ok(result.into())
+}
+
+/// List webvh hosting services registered on the VTA. Returns an empty
+/// list (rather than an error) when no servers are configured — the
+/// caller is expected to fall back to self-hosting in that case.
+pub async fn list_webvh_servers(
+    rest_url: &str,
+    access_token: &str,
+) -> anyhow::Result<Vec<vta_sdk::webvh::WebvhServerRecord>> {
+    let client = VtaClient::new(rest_url);
+    client.set_token_async(access_token.to_string()).await;
+    let response = client
+        .list_webvh_servers()
+        .await
+        .map_err(|e| anyhow::anyhow!("VTA list_webvh_servers failed: {e}"))?;
+    Ok(response.servers)
 }
 
 #[cfg(test)]
