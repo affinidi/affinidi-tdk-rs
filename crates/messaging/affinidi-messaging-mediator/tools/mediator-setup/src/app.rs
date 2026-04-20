@@ -24,6 +24,10 @@ pub enum WizardStep {
     Security,
     Database,
     Admin,
+    /// Where to write `mediator.toml`. Added as its own step so the
+    /// question is asked inside the TUI (consistent nav + validation)
+    /// rather than via a stdin prompt after the TUI exits.
+    Output,
     Summary,
 }
 
@@ -38,6 +42,7 @@ impl WizardStep {
             Self::Security,
             Self::Database,
             Self::Admin,
+            Self::Output,
             Self::Summary,
         ]
     }
@@ -52,6 +57,7 @@ impl WizardStep {
             Self::Security => "SSL/TLS & JWT",
             Self::Database => "Database",
             Self::Admin => "Admin Account",
+            Self::Output => "Output Location",
             Self::Summary => "Summary",
         }
     }
@@ -128,6 +134,12 @@ impl WizardStep {
             Self::Admin => StepData {
                 title: format!("Step {num}/{total}: Admin Account"),
                 description: "Configure the admin DID for mediator management.".into(),
+            },
+            Self::Output => StepData {
+                title: format!("Step {num}/{total}: Output Location"),
+                description: "Where should the wizard write mediator.toml? (secrets.json, \
+                     atm-functions.lua, did.jsonl all land in the same directory.)"
+                    .into(),
             },
             Self::Summary => StepData {
                 title: "Summary".into(),
@@ -990,6 +1002,10 @@ impl WizardApp {
                 ));
                 opts
             }
+            // Output step is text-input (the renderer branches on
+            // `current_step == Output` and draws a compact prompt),
+            // so no selection list is needed here.
+            WizardStep::Output => vec![],
             WizardStep::Summary => vec![],
         }
     }
@@ -1098,6 +1114,12 @@ impl WizardApp {
                         _ => String::new(),
                     }
                 }
+            }
+            WizardStep::Output => {
+                "Defaults to `conf/mediator.toml` (relative to the mediator's working \
+                 directory). Sibling files — `secrets.json` when file:// is the chosen \
+                 backend, `atm-functions.lua`, `did.jsonl` — land in the same folder."
+                    .into()
             }
             WizardStep::Summary => String::new(),
         }
@@ -1292,6 +1314,11 @@ impl WizardApp {
                     };
                 }
                 self.advance();
+            }
+            WizardStep::Output => {
+                // Enter on the Output step is a no-op when the text
+                // input is active — `confirm_text_input` handles the
+                // actual save. Keep the branch exhaustive.
             }
             WizardStep::Summary => {
                 if self.mode == InputMode::Confirming {
@@ -1510,6 +1537,14 @@ impl WizardApp {
                 self.mode = InputMode::Selecting;
                 self.advance();
             }
+            WizardStep::Output => {
+                let value = self.text_input.value().trim().to_string();
+                if !value.is_empty() {
+                    self.config.config_path = value;
+                }
+                self.mode = InputMode::Selecting;
+                self.advance();
+            }
             _ => {
                 self.mode = InputMode::Selecting;
                 self.advance();
@@ -1564,10 +1599,15 @@ impl WizardApp {
         if let Some(next) = self.current_step.next() {
             self.current_step = next;
             self.selection_index = self.default_selection_index();
-            // Database step starts in text input mode
+            // Database + Output both open in text-input mode; Summary
+            // goes straight to the confirmation screen. Everything
+            // else uses the selection-list default.
             if self.current_step == WizardStep::Database {
                 self.mode = InputMode::TextInput;
                 self.text_input = Input::new(self.config.database_url.clone());
+            } else if self.current_step == WizardStep::Output {
+                self.mode = InputMode::TextInput;
+                self.text_input = Input::new(self.config.config_path.clone());
             } else if self.current_step == WizardStep::Summary {
                 self.mode = InputMode::Confirming;
             } else {
@@ -1601,10 +1641,7 @@ impl WizardApp {
                         self.current_step = prev;
                         self.selection_index = self.default_selection_index();
                         self.mode = InputMode::Selecting;
-                        if self.current_step == WizardStep::Database {
-                            self.mode = InputMode::TextInput;
-                            self.text_input = Input::new(self.config.database_url.clone());
-                        }
+                        self.refresh_text_input_mode();
                     }
                 } else {
                     self.mode = InputMode::Selecting;
@@ -1615,15 +1652,29 @@ impl WizardApp {
                     self.completed.retain(|s| *s != prev);
                     self.current_step = prev;
                     self.selection_index = self.default_selection_index();
-                    if self.current_step == WizardStep::Database {
-                        self.mode = InputMode::TextInput;
-                        self.text_input = Input::new(self.config.database_url.clone());
-                    }
+                    self.refresh_text_input_mode();
                 } else {
                     // First step — Esc quits the wizard
                     self.should_quit = true;
                 }
             }
+        }
+    }
+
+    /// Shared helper for `go_back`: when landing on a text-input step
+    /// (Database, Output) re-seed the input widget with the current
+    /// config value so the operator can edit rather than retype.
+    fn refresh_text_input_mode(&mut self) {
+        match self.current_step {
+            WizardStep::Database => {
+                self.mode = InputMode::TextInput;
+                self.text_input = Input::new(self.config.database_url.clone());
+            }
+            WizardStep::Output => {
+                self.mode = InputMode::TextInput;
+                self.text_input = Input::new(self.config.config_path.clone());
+            }
+            _ => {}
         }
     }
 
@@ -1775,13 +1826,16 @@ mod tests {
     // ── WizardStep navigation ──────────────────────────────────────────
 
     #[test]
-    fn step_all_returns_9_steps_in_order() {
+    fn step_all_returns_10_steps_in_order() {
+        // Output was inserted before Summary in the "move config-path
+        // into the TUI" refactor, bumping the step count from 9 → 10.
         let steps = WizardStep::all();
-        assert_eq!(steps.len(), 9);
+        assert_eq!(steps.len(), 10);
         assert_eq!(steps[0], WizardStep::Deployment);
         assert_eq!(steps[1], WizardStep::KeyStorage);
         assert_eq!(steps[2], WizardStep::Vta);
-        assert_eq!(steps[8], WizardStep::Summary);
+        assert_eq!(steps[8], WizardStep::Output);
+        assert_eq!(steps[9], WizardStep::Summary);
     }
 
     #[test]
@@ -1868,13 +1922,16 @@ mod tests {
     }
 
     #[test]
-    fn advance_sets_text_input_for_database() {
+    fn advance_sets_text_input_for_database_and_output() {
         let mut app = WizardApp::new("test.toml".into());
-        // Advance to Database step
         while app.current_step != WizardStep::Admin {
             app.advance();
         }
-        // Admin → Summary should set Confirming
+        // Admin → Output (new text-input step for config path)
+        app.advance();
+        assert_eq!(app.current_step, WizardStep::Output);
+        assert_eq!(app.mode, InputMode::TextInput);
+        // Output → Summary (confirmation screen)
         app.advance();
         assert_eq!(app.current_step, WizardStep::Summary);
         assert_eq!(app.mode, InputMode::Confirming);
@@ -1899,15 +1956,18 @@ mod tests {
     }
 
     #[test]
-    fn go_back_from_summary_confirming_returns_to_admin() {
+    fn go_back_from_summary_confirming_returns_to_output() {
+        // Output now sits between Admin and Summary (config-path
+        // prompt moved into the TUI), so Esc on the confirmation
+        // screen lands there rather than at Admin.
         let mut app = WizardApp::new("test.toml".into());
-        // Advance to Summary
         while app.current_step != WizardStep::Summary {
             app.advance();
         }
         assert_eq!(app.mode, InputMode::Confirming);
         app.go_back();
-        assert_eq!(app.current_step, WizardStep::Admin);
+        assert_eq!(app.current_step, WizardStep::Output);
+        assert_eq!(app.mode, InputMode::TextInput);
     }
 
     #[test]

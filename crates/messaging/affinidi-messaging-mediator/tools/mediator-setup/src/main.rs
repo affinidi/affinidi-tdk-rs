@@ -123,8 +123,8 @@ async fn main() -> anyhow::Result<()> {
             if app.write_config {
                 print_banner();
 
-                // Ask for config file location
-                prompt_config_path(&mut app.config);
+                // Config file location was collected inside the TUI
+                // (WizardStep::Output) — no stdin prompt here.
 
                 println!("  Generating cryptographic material...\n");
                 match generate_and_write(&app.config, app.vta_session.as_ref(), true).await {
@@ -1171,22 +1171,6 @@ fn inline_select(prompt: &str, options: &[&str], default: usize) -> Option<usize
             print!("\x1b[{}A", options.len() - 1);
         }
     }
-}
-
-/// Prompt the user for the config file save location.
-fn prompt_config_path(config: &mut app::WizardConfig) {
-    let default = &config.config_path;
-    print!("  \x1b[1mConfig file location\x1b[0m [{}]: ", default);
-    let _ = io::stdout().flush();
-
-    let mut input = String::new();
-    if io::stdin().read_line(&mut input).is_ok() {
-        let input = input.trim();
-        if !input.is_empty() {
-            config.config_path = input.to_string();
-        }
-    }
-    println!();
 }
 
 /// Build the `cargo install` arguments for the mediator.
