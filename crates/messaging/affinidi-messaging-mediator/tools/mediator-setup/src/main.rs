@@ -449,38 +449,62 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
     }
 }
 
+/// Normalise an operator-typed URL to the base webvh host. webvh
+/// resolves `did:webvh:<scid>:example.com` to
+/// `https://example.com/.well-known/did.jsonl`, so the VTA's `url`
+/// field wants the base `<scheme>://<host>[:port]` — any path the
+/// operator typed (often the mediator's API prefix like
+/// `/mediator/v1`) would land the DID document somewhere the webvh
+/// resolver won't look. Strip it.
+///
+/// Malformed / relative URLs fall back to the caller's input verbatim
+/// so the VTA's validation surfaces a useful error rather than the
+/// wizard masking it.
+fn strip_path_from_url(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut u) => {
+            u.set_path("");
+            // `Url::to_string` trailing slash is harmless for webvh,
+            // but trim it so self-host display matches the typical
+            // `https://mediator.example.com` shape.
+            u.to_string().trim_end_matches('/').to_string()
+        }
+        Err(_) => raw.to_string(),
+    }
+}
+
 /// Interactive "where should the VTA publish this DID" prompt. Called
 /// after the TUI exits so we can use plain stdin — the ratatui layer
 /// is already torn down by `generate_and_write`'s time.
 ///
-/// Path 1: if the VTA has webvh servers registered, list them and let
-/// the operator pick one (plus optionally type a mnemonic for the URL
-/// path). Picking "self-host" falls through to Path 2.
+/// Four paths:
 ///
-/// Path 2: self-host at the mediator URL the operator already entered
-/// at the Did step. No extra prompt needed — the URL is the answer.
+/// 1. **Self-host at the mediator URL** (default) — the mediator's own
+///    public URL, stripped to `<scheme>://<host>[:port]` so webvh's
+///    `/.well-known/did.jsonl` resolver hits the right place.
+/// 2. **VTA-hosted** — pick a registered webvh server on the VTA.
+///    Optional mnemonic prompt follows.
+/// 3. **Self-host elsewhere** — operator types a different base URL
+///    (also stripped to host).
 ///
 /// Defensive fallback: empty server list / unreadable stdin / parse
-/// failure all collapse onto self-hosted at `mediator_url`. The goal
-/// is to never block the wizard on an unexpected terminal shape.
+/// failure all collapse onto self-hosted at the stripped mediator URL
+/// so the wizard never blocks on an unexpected terminal shape.
 fn choose_webvh_host(
     servers: &[vta_sdk::webvh::WebvhServerRecord],
     mediator_url: &str,
 ) -> generators::did_vta::WebvhHost {
     use std::io::Write;
 
-    if servers.is_empty() {
-        println!(
-            "  No webvh hosting services registered on the VTA — self-hosting at {mediator_url}."
-        );
-        return generators::did_vta::WebvhHost::SelfHosted {
-            url: mediator_url.to_string(),
-        };
-    }
+    let default_self_host = strip_path_from_url(mediator_url);
 
     println!();
     println!("  \x1b[1mWhere should the VTA publish the mediator DID?\x1b[0m");
-    println!("    0) Self-host at \x1b[36m{mediator_url}\x1b[0m");
+    println!(
+        "    0) Self-host at \x1b[36m{default_self_host}\x1b[0m \
+         \x1b[2m(derived from mediator URL)\x1b[0m"
+    );
+    let elsewhere_index = servers.len() + 1;
     for (i, s) in servers.iter().enumerate() {
         let label = s.label.as_deref().unwrap_or("(no label)");
         println!(
@@ -490,25 +514,46 @@ fn choose_webvh_host(
             s.did
         );
     }
+    println!(
+        "    {elsewhere_index}) Self-host elsewhere \x1b[2m(type a different base URL)\x1b[0m"
+    );
+    if servers.is_empty() {
+        println!("    \x1b[2m(no webvh hosting services registered on the VTA)\x1b[0m");
+    }
     print!("  Choice [0]: ");
     let _ = std::io::stdout().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
         eprintln!("  Could not read stdin — defaulting to self-hosted.");
         return generators::did_vta::WebvhHost::SelfHosted {
-            url: mediator_url.to_string(),
+            url: default_self_host,
         };
     }
     let pick = line.trim().parse::<usize>().unwrap_or(0);
     if pick == 0 {
         return generators::did_vta::WebvhHost::SelfHosted {
-            url: mediator_url.to_string(),
+            url: default_self_host,
+        };
+    }
+    if pick == elsewhere_index {
+        // Path 3: operator types a different base URL.
+        print!("  Base URL (e.g. https://did.example.com): ");
+        let _ = std::io::stdout().flush();
+        let mut u = String::new();
+        if std::io::stdin().read_line(&mut u).is_err() || u.trim().is_empty() {
+            eprintln!("  No URL provided — falling back to self-host at {default_self_host}.");
+            return generators::did_vta::WebvhHost::SelfHosted {
+                url: default_self_host,
+            };
+        }
+        return generators::did_vta::WebvhHost::SelfHosted {
+            url: strip_path_from_url(u.trim()),
         };
     }
     let Some(server) = servers.get(pick - 1) else {
         eprintln!("  Choice {pick} is out of range — defaulting to self-hosted.");
         return generators::did_vta::WebvhHost::SelfHosted {
-            url: mediator_url.to_string(),
+            url: default_self_host,
         };
     };
     // Optional mnemonic — empty input auto-assigns server-side.
@@ -529,6 +574,43 @@ fn choose_webvh_host(
     generators::did_vta::WebvhHost::Hosted {
         server_id: server.id.clone(),
         mnemonic,
+    }
+}
+
+#[cfg(test)]
+mod strip_path_tests {
+    use super::strip_path_from_url;
+
+    #[test]
+    fn strips_path_from_mediator_url() {
+        assert_eq!(
+            strip_path_from_url("https://mediator.example.com/mediator/v1"),
+            "https://mediator.example.com"
+        );
+    }
+
+    #[test]
+    fn preserves_port() {
+        assert_eq!(
+            strip_path_from_url("https://mediator.example.com:8443/mediator/v1"),
+            "https://mediator.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn no_trailing_slash_on_host_only_url() {
+        assert_eq!(
+            strip_path_from_url("https://mediator.example.com/"),
+            "https://mediator.example.com"
+        );
+    }
+
+    #[test]
+    fn unparseable_url_returns_input_unchanged() {
+        // Not a URL — the VTA will reject it with its own validation
+        // error, which is more actionable than the wizard's best
+        // guess.
+        assert_eq!(strip_path_from_url("not a url"), "not a url");
     }
 }
 
