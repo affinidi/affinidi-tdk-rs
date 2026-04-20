@@ -8,7 +8,10 @@ pub mod summary;
 pub mod text_input;
 pub mod theme;
 
-use ratatui::{prelude::*, widgets::Paragraph};
+use ratatui::{
+    prelude::*,
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+};
 
 use crate::app::{InputMode, WizardApp};
 
@@ -157,6 +160,18 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     let step_data = app.current_step_data();
     let content_focused = app.focus == crate::app::FocusPanel::Content;
 
+    // The sealed-handoff RequestGenerated screen renders a single
+    // full-height pane (JSON + commands together) — the usual
+    // top/bottom split would squeeze the producer commands into six
+    // lines and clip them. Branch before the split so we keep a
+    // single Rect to work with.
+    if let Some(state) = app.sealed_handoff.as_ref() {
+        if state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated {
+            render_sealed_request(frame, area, state);
+            return;
+        }
+    }
+
     // Split right panel: options area + info box
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -174,52 +189,11 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
         use crate::sealed_handoff::SealedPhase;
         match state.phase {
             SealedPhase::RequestGenerated => {
-                // The whole request lives on disk too (see
-                // `SealedHandoffState::new`) — that's the copy the
-                // operator should use: mouse selection inside the
-                // TUI picks up the left progress panel, but `cat`
-                // + copy from a second terminal Just Works. Pressing
-                // `c` also stuffs it onto the system clipboard via
-                // arboard.
-                let file_hint = match state.request_path.as_ref() {
-                    Some(p) => format!(
-                        "\n\x1b[1mFile:\x1b[0m {}\n\x1b[1mHotkey:\x1b[0m press \x1b[36mc\x1b[0m to copy to clipboard  \x1b[2m(mouse selection inside the TUI wraps across panels)\x1b[0m\n",
-                        p.display()
-                    ),
-                    None => "\n\x1b[33mCould not write bootstrap-request.json — press \x1b[36mc\x1b[33m to copy to clipboard instead.\x1b[0m\n".into(),
-                };
-                let status_line = match state.clipboard_status.as_deref() {
-                    Some(s) if s.starts_with("Copied") => {
-                        format!("\x1b[32m{s}\x1b[0m\n")
-                    }
-                    Some(s) => format!("\x1b[33m{s}\x1b[0m\n"),
-                    None => String::new(),
-                };
-                let body = format!(
-                    "Ship this bootstrap request to your VTA admin out-of-band:\n\
-                     {file_hint}{status_line}\n{}\n\n\
-                     Press Enter once they've returned an armored bundle. Esc cancels.",
-                    state.request_json
-                );
-                info_box::render_info_box(frame, chunks[0], "Sealed handoff — request", &body);
-                // Exact commands the operator (consumer) and the VTA
-                // admin (producer) run. Matches the `sealed-bootstrap`
-                // design doc: producer = `vta bootstrap seal`, with
-                // `pnm-cli bootstrap seal` as the equivalent on
-                // PNM-operated hosts.
-                let cmd_file = state
-                    .request_path
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "bootstrap-request.json".into());
-                let info_text = format!(
-                    "Producer commands the VTA admin runs, either:\n\n\
-                     vta bootstrap seal \\\n  --request {cmd_file} \\\n  --payload mediator-admin-credential \\\n  --out bundle.armor\n\n\
-                     or from a PNM-operated host:\n\n\
-                     pnm-cli bootstrap seal \\\n  --request {cmd_file} \\\n  --payload mediator-admin-credential \\\n  --out bundle.armor\n\n\
-                     They return `bundle.armor` + the printed digest; paste the bundle on the next screen."
-                );
-                info_box::render_info_box(frame, chunks[1], "Producer commands", &info_text);
+                // Handled above before the two-panel split so the
+                // JSON + producer commands get the full content
+                // width. Unreachable here, but kept as an arm so
+                // the `match` stays exhaustive if `SealedPhase`
+                // gains new variants.
                 return;
             }
             SealedPhase::AwaitingBundle => {
@@ -547,4 +521,208 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     // Info box
     let info_text = app.current_info_text();
     info_box::render_info_box(frame, chunks[1], "Info", &info_text);
+}
+
+/// Full-height render for the sealed-handoff "request" screen.
+///
+/// The default two-panel split (top content + bottom 6-line info
+/// box) squeezes the producer commands into an area that clips the
+/// multi-line `vta bootstrap seal` invocation. Here we take the
+/// whole right-panel `area`, hand-build colored `Line`s, and render
+/// once inside a single bordered `Paragraph`. No ANSI escape string
+/// processing — ratatui renders `Style`d spans directly, so we get
+/// real bold / color instead of literal `\x1b[1m` bleeding through.
+fn render_sealed_request(
+    frame: &mut Frame,
+    area: Rect,
+    state: &crate::sealed_handoff::SealedHandoffState,
+) {
+    let label = theme::title_style();
+    let value = Style::default().fg(theme::TEXT);
+    let hint = theme::muted_style();
+    let key_style = Style::default().fg(theme::ACCENT);
+    let str_style = theme::success_style();
+    let punct_style = theme::muted_style();
+    let num_style = Style::default().fg(theme::PRIMARY);
+    let header_style = theme::title_style();
+    let good = theme::success_style();
+    let warn = Style::default().fg(Color::Yellow);
+    let cmd = Style::default().fg(theme::ACCENT);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        "Ship this bootstrap request to your VTA admin out-of-band.",
+        value,
+    )));
+    lines.push(Line::from(""));
+
+    // ── header strip: file path + hotkey + clipboard status ──
+    let file_display = state
+        .request_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(not written — copy from the JSON below)".into());
+    lines.push(Line::from(vec![
+        Span::styled("File:     ", label),
+        Span::styled(file_display, value),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Hotkey:   ", label),
+        Span::styled("[c]", cmd),
+        Span::styled(" copy to clipboard", value),
+        Span::styled(
+            "    (mouse selection inside the TUI wraps across panels)",
+            hint,
+        ),
+    ]));
+    if let Some(status) = state.clipboard_status.as_deref() {
+        let style = if status.starts_with("Copied") {
+            good
+        } else {
+            warn
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Status:   ", label),
+            Span::styled(status.to_string(), style),
+        ]));
+    }
+    lines.push(Line::from(""));
+
+    // ── JSON block (tiny hand-rolled highlighter) ──
+    for raw in state.request_json.lines() {
+        lines.push(highlight_json_line(
+            raw,
+            key_style,
+            str_style,
+            num_style,
+            punct_style,
+        ));
+    }
+    lines.push(Line::from(""));
+
+    // ── producer commands ──
+    let cmd_file = state
+        .request_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "bootstrap-request.json".into());
+
+    lines.push(Line::from(Span::styled(
+        "── Producer commands ─────────────────────────────────────",
+        header_style,
+    )));
+    lines.push(Line::from(Span::styled(
+        "The VTA admin runs ONE of:",
+        value,
+    )));
+    lines.push(Line::from(""));
+    for s in [
+        "  vta bootstrap seal \\",
+        &format!("    --request {cmd_file} \\"),
+        "    --payload mediator-admin-credential \\",
+        "    --out bundle.armor",
+    ] {
+        lines.push(Line::from(Span::styled(s.to_string(), cmd)));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  or from a PNM host: ", value),
+        Span::styled("pnm-cli bootstrap seal \\", cmd),
+    ]));
+    for s in [
+        &format!("    --request {cmd_file} \\"),
+        "    --payload mediator-admin-credential \\",
+        "    --out bundle.armor",
+    ] {
+        lines.push(Line::from(Span::styled(s.to_string(), cmd)));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "They return bundle.armor + a printed digest. Paste the bundle on the next screen.",
+        value,
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Press ", hint),
+        Span::styled("Enter", cmd),
+        Span::styled(" once you have the bundle. ", hint),
+        Span::styled("Esc", cmd),
+        Span::styled(" cancels.", hint),
+    ]));
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Sealed handoff — request ",
+            theme::info_style(),
+        ))
+        .borders(Borders::ALL)
+        .border_style(theme::border_style())
+        .padding(Padding::new(2, 2, 1, 0));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(para, area);
+}
+
+/// Tiny hand-rolled JSON-line highlighter. Handles the shape
+/// `BootstrapRequest` produces (four `"key": value,` lines plus
+/// outer `{` / `}`). Anything unexpected falls back to muted
+/// text — no panics.
+fn highlight_json_line(
+    raw: &str,
+    key_style: Style,
+    str_style: Style,
+    num_style: Style,
+    punct_style: Style,
+) -> Line<'static> {
+    let trimmed = raw.trim_start();
+    let indent = &raw[..raw.len() - trimmed.len()];
+
+    // Bare structural characters (outer `{` / `}`).
+    if matches!(trimmed, "{" | "}" | "},") {
+        return Line::from(vec![
+            Span::styled(indent.to_string(), punct_style),
+            Span::styled(trimmed.to_string(), punct_style),
+        ]);
+    }
+
+    // `"key": <value>,?` — split at the first `:` after the
+    // closing quote of the key.
+    if let Some(colon_at) = trimmed.find("\":") {
+        let key_end = colon_at + 1; // include closing `"`
+        let key = &trimmed[..key_end];
+        let rest = trimmed[key_end + 1..].trim_start(); // after `:`
+
+        // `rest` is either `"string",`, a number + optional `,`, etc.
+        let (value_body, trailing) = if let Some(stripped) = rest.strip_suffix(',') {
+            (stripped.trim_end(), ",")
+        } else {
+            (rest, "")
+        };
+
+        let value_style = if value_body.starts_with('"') {
+            str_style
+        } else if value_body
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            num_style
+        } else {
+            punct_style
+        };
+
+        return Line::from(vec![
+            Span::styled(indent.to_string(), punct_style),
+            Span::styled(key.to_string(), key_style),
+            Span::styled(": ".to_string(), punct_style),
+            Span::styled(value_body.to_string(), value_style),
+            Span::styled(trailing.to_string(), punct_style),
+        ]);
+    }
+
+    // Fallback — unknown shape, render dim.
+    Line::from(Span::styled(raw.to_string(), punct_style))
 }
