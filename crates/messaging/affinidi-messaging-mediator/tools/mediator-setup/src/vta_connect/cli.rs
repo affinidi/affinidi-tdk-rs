@@ -17,7 +17,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::consts::DEFAULT_VTA_CONTEXT;
-use crate::vta_connect::{DiagCheck, DiagStatus, EphemeralSetupKey, VtaEvent, run_connection_test};
+use crate::vta_connect::{
+    DiagCheck, DiagStatus, EphemeralSetupKey, VtaEvent, VtaIntent, run_connection_test,
+};
 
 /// Phase 1: generate + persist ephemeral key, print ACL command.
 pub async fn run_phase1_init(
@@ -73,15 +75,17 @@ pub async fn run_phase2_connect(
     key_path: &Path,
     vta_did: &str,
     context_id: Option<&str>,
+    mediator_url: &str,
     wait_for_acl: Option<u64>,
 ) -> anyhow::Result<()> {
     let key = EphemeralSetupKey::load_from(key_path)?;
     let ctx = context_id.unwrap_or(DEFAULT_VTA_CONTEXT);
 
     println!();
-    println!("  VTA DID:    {vta_did}");
-    println!("  Context:    {ctx}");
-    println!("  Setup DID:  {}", key.did);
+    println!("  VTA DID:      {vta_did}");
+    println!("  Context:      {ctx}");
+    println!("  Mediator URL: {mediator_url}");
+    println!("  Setup DID:    {}", key.did);
     println!();
 
     let deadline = wait_for_acl.map(|s| Instant::now() + Duration::from_secs(s));
@@ -97,9 +101,25 @@ pub async fn run_phase2_connect(
         let vta_did_owned = vta_did.to_string();
         let setup_did = key.did.clone();
         let privkey_mb = key.private_key_multibase().to_string();
+        let ctx_owned = ctx.to_string();
+        let url_owned = mediator_url.to_string();
 
         let runner = tokio::spawn(async move {
-            run_connection_test(vta_did_owned, setup_did, privkey_mb, tx).await;
+            // CLI phase-2 mirrors the interactive "Online +
+            // FullSetup" flow — provision-integration end-to-end.
+            // AdminOnly online doesn't have a CLI surface today;
+            // add one if needed.
+            run_connection_test(
+                VtaIntent::FullSetup,
+                vta_did_owned,
+                setup_did,
+                privkey_mb,
+                ctx_owned,
+                url_owned,
+                Some("mediator-setup cli".into()),
+                tx,
+            )
+            .await;
         });
 
         let mut connected = false;

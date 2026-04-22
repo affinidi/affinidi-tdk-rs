@@ -7,7 +7,7 @@ pub enum DiagCheck {
     ResolveDid,
     EnumerateServices,
     Authenticate,
-    RotateAdminDid,
+    ProvisionIntegration,
 }
 
 impl DiagCheck {
@@ -15,8 +15,8 @@ impl DiagCheck {
         match self {
             Self::ResolveDid => "Resolve VTA DID",
             Self::EnumerateServices => "Enumerate service endpoints",
-            Self::Authenticate => "Authenticate with setup DID",
-            Self::RotateAdminDid => "Rotate admin DID",
+            Self::Authenticate => "Open authenticated DIDComm session",
+            Self::ProvisionIntegration => "Provision mediator DID + admin credential",
         }
     }
 
@@ -27,7 +27,7 @@ impl DiagCheck {
             Self::ResolveDid,
             Self::EnumerateServices,
             Self::Authenticate,
-            Self::RotateAdminDid,
+            Self::ProvisionIntegration,
         ]
     }
 }
@@ -64,27 +64,35 @@ impl Protocol {
     }
 }
 
-/// Info about a successful connection. Retained on `VtaConnectState` for
-/// downstream phases — the Did step consumes `rest_url` + `access_token` to
-/// provision a VTA-managed mediator DID, and write-config consumes the
-/// rotated admin identity to seed the mediator's secret storage.
+/// Info about a successful VTA round-trip. Retained on
+/// `VtaConnectState` so downstream wizard steps can read the result
+/// without re-contacting the VTA.
+///
+/// The variant carried by `reply` matches the intent the runner was
+/// invoked with:
+///
+/// - [`crate::vta_connect::VtaReply::Full`] — FullSetup path,
+///   provision-integration completed, carries a
+///   [`crate::vta_connect::provision::ProvisionResult`] with the
+///   VTA-minted integration DID, admin key, VC, template outputs.
+/// - [`crate::vta_connect::VtaReply::AdminOnly`] — AdminOnly path,
+///   carries the admin DID + private key the operator enrolled via
+///   `pnm acl create` (wizard verified by opening an authenticated
+///   DIDComm session but did not mint or rotate anything).
 #[derive(Clone, Debug)]
 pub struct ConnectedInfo {
+    /// Which transport actually carried the round-trip. Always
+    /// `Protocol::DidComm` today — the auth check and (for FullSetup)
+    /// the provision-integration call both use DIDComm.
     pub protocol: Protocol,
-    pub access_token: String,
-    /// REST URL resolved from the VTA's DID document.
-    pub rest_url: String,
-    /// Rotated admin did:key. The setup DID the operator briefly exposed
-    /// via ACL registration is gone; this fresh DID is what the mediator
-    /// uses long-term to authenticate to the VTA.
-    pub admin_did: String,
-    /// Private key (multibase) matching `admin_did`. Stored locally and
-    /// eventually persisted to the chosen secret backend.
-    pub admin_private_key_mb: String,
-    /// webvh hosting services registered on the VTA. Retained so the
-    /// Did step can offer them as DID-publish targets without a second
-    /// round-trip.
-    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
+    /// REST URL advertised by the VTA DID document, for runtime-side
+    /// fallback. The wizard itself does not use it.
+    pub rest_url: Option<String>,
+    /// DIDComm mediator DID advertised by the VTA. Always `Some` when
+    /// `protocol == DidComm`.
+    pub mediator_did: Option<String>,
+    /// Unified reply — see [`VtaReply`] for the two variants.
+    pub reply: crate::vta_connect::VtaReply,
 }
 
 /// Seed a fresh diagnostics list with every check in `Pending`.

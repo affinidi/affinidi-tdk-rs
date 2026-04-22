@@ -67,6 +67,21 @@ pub const DEFAULT_VTA_CONTEXT: &str = "mediator";
 /// finish mediator setup; override to `24h`, `7d`, etc. for slower rollouts.
 pub const DEFAULT_VTA_SETUP_EXPIRY: &str = "1h";
 
+/// Name of the built-in VTA DID template the wizard asks the VTA to
+/// render for the mediator's own integration DID. Operators may
+/// shadow this under the context or global scope via
+/// `pnm did-templates upload --name didcomm-mediator …` and the VTA's
+/// resolution order (context → global → builtin) will pick up the
+/// override on the next wizard run.
+pub const DEFAULT_MEDIATOR_TEMPLATE: &str = "didcomm-mediator";
+
+/// Name of the built-in VTA DID template used for the long-term admin
+/// DID the VTA mints during provisioning (`adminTemplate` on the VP
+/// `ask`). Same shadowing rules as
+/// [`DEFAULT_MEDIATOR_TEMPLATE`] — a `vta-admin` template registered
+/// at the context scope overrides the builtin.
+pub const DEFAULT_VTA_ADMIN_TEMPLATE: &str = "vta-admin";
+
 /// Per-backend sensible defaults for the KeyStorage step.
 pub const DEFAULT_SECRET_FILE_PATH: &str = "conf/secrets.json";
 pub const DEFAULT_KEYRING_SERVICE: &str = "affinidi-mediator";

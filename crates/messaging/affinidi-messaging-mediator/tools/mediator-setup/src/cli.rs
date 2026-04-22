@@ -66,6 +66,13 @@ pub struct Args {
     #[arg(long, value_name = "ID")]
     pub vta_context: Option<String>,
 
+    /// Public URL the mediator will serve at (e.g.
+    /// https://mediator.example.com). Passed to the VTA's
+    /// `didcomm-mediator` template as the `URL` variable during
+    /// provisioning. Required for Phase 2 (`--setup-key-file`).
+    #[arg(long, value_name = "URL")]
+    pub mediator_url: Option<String>,
+
     /// Phase 1: generate an ephemeral did:key, write it to the given file,
     /// print the `pnm acl create` command, and exit. The operator registers
     /// the ACL, then re-runs with `--setup-key-file` to finalise.

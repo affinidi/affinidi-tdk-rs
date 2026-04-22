@@ -130,6 +130,7 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
             frame,
             main_area,
             &app.config,
+            app.vta_session.as_ref(),
             app.mode == InputMode::Confirming,
         );
         return;
@@ -188,6 +189,116 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     if let Some(state) = app.sealed_handoff.as_ref() {
         use crate::sealed_handoff::SealedPhase;
         match state.phase {
+            SealedPhase::CollectContext => {
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    "The VTA context this mediator will live in. The VTA admin uses \
+                     this slug with `pnm contexts bootstrap --id <ctx>`. Default is \
+                     `mediator` — override if you run multiple mediators against \
+                     the same VTA."
+                        .into()
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — context slug",
+                    "Which VTA context should the admin credential live in?",
+                    None,
+                    &app.text_input,
+                    "mediator",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "The slug is the VTA's context id, not a human-readable name. It \
+                     must match an existing context on the VTA or one the admin will \
+                     create with `pnm contexts create` before running bootstrap.",
+                );
+                return;
+            }
+            SealedPhase::CollectAdminLabel => {
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    "Optional — a human-readable label recorded alongside the admin \
+                     ACL row on the VTA. Leave blank to skip the `--admin-label` \
+                     flag entirely."
+                        .into()
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — admin label",
+                    "Label for the admin ACL row the VTA will create (optional).",
+                    None,
+                    &app.text_input,
+                    "mediator-admin",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "Labels help when auditing the VTA's ACL table later — pick \
+                     something that distinguishes this mediator's admin row from \
+                     others. The bootstrap request is generated on Enter.",
+                );
+                return;
+            }
+            SealedPhase::CollectMediatorUrl => {
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    "The public URL this mediator will serve on. Fed to the VTA's \
+                     `didcomm-mediator` template as the required `URL` variable, \
+                     which the rendered mediator DID's service endpoints point to."
+                        .into()
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — mediator URL",
+                    "Public URL this mediator will serve at.",
+                    None,
+                    &app.text_input,
+                    "https://mediator.example.com",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "The VTA renders the mediator's DID with this URL baked into \
+                     the service endpoints. Changing it later means re-provisioning.",
+                );
+                return;
+            }
+            SealedPhase::CollectWebvhServer => {
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    "Optional — webvh server id to pin for hosting the minted \
+                     mediator DID's did.jsonl log. Leave blank to let the VTA \
+                     pick its default. Ask your VTA admin which servers are \
+                     registered."
+                        .into()
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — webvh server (optional)",
+                    "Pin a webvh server for this DID's log (optional).",
+                    None,
+                    &app.text_input,
+                    "webvh-prod-1",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "Online mode can discover webvh servers from the VTA — offline \
+                     can't. If your VTA runs multiple webvh hosts, type the id; \
+                     otherwise leave blank. The bootstrap request is generated on \
+                     Enter.",
+                );
+                return;
+            }
             SealedPhase::RequestGenerated => {
                 // Handled above before the two-panel split so the
                 // JSON + producer commands get the full content
@@ -261,7 +372,8 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 let body = format!(
                     "Bundle opened successfully.\n\nAdmin DID: {}\nVTA DID:   {}\n\n\
                      Press Enter to provision the unified secret backend with this credential.",
-                    session.admin_did, session.vta_did
+                    session.admin_did(),
+                    session.vta_did
                 );
                 info_box::render_info_box(frame, chunks[0], "Sealed handoff — complete", &body);
                 info_box::render_info_box(
@@ -305,6 +417,22 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     "mediator  (press Enter to accept default)",
                     "Override if you use a different naming convention or run \
                      multiple mediators against the same VTA.",
+                );
+                return;
+            }
+            ConnectPhase::EnterMediatorUrl => {
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Mediator public URL",
+                    "URL this mediator will serve at — the VTA bakes it into \
+                     the minted DID's service endpoints.",
+                    None,
+                    &app.text_input,
+                    "https://mediator.example.com",
+                    "Passed to the VTA's didcomm-mediator template as the \
+                     `URL` variable. The wizard reuses this value for the \
+                     mediator's own config — you won't be asked again later.",
                 );
                 return;
             }
@@ -568,14 +696,18 @@ fn render_sealed_request(
         Span::styled(file_display, value),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Hotkey:   ", label),
+        Span::styled("Hotkeys:  ", label),
         Span::styled("[c]", cmd),
-        Span::styled(" copy to clipboard", value),
-        Span::styled(
-            "    (mouse selection inside the TUI wraps across panels)",
-            hint,
-        ),
+        Span::styled(" copy JSON   ", value),
+        Span::styled("[v]", cmd),
+        Span::styled(" copy vta cmd   ", value),
+        Span::styled("[p]", cmd),
+        Span::styled(" copy pnm-cli cmd", value),
     ]));
+    lines.push(Line::from(Span::styled(
+        "          (mouse selection inside the TUI wraps across panels)",
+        hint,
+    )));
     if let Some(status) = state.clipboard_status.as_deref() {
         let style = if status.starts_with("Copied") {
             good
@@ -602,44 +734,44 @@ fn render_sealed_request(
     lines.push(Line::from(""));
 
     // ── producer commands ──
-    let cmd_file = state
-        .request_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "bootstrap-request.json".into());
-
     lines.push(Line::from(Span::styled(
         "── Producer commands ─────────────────────────────────────",
         header_style,
     )));
-    lines.push(Line::from(Span::styled(
-        "The VTA admin runs ONE of:",
-        value,
-    )));
-    lines.push(Line::from(""));
-    for s in [
-        "  vta bootstrap seal \\",
-        &format!("    --request {cmd_file} \\"),
-        "    --payload mediator-admin-credential \\",
-        "    --out bundle.armor",
-    ] {
-        lines.push(Line::from(Span::styled(s.to_string(), cmd)));
-    }
+    let (primary_header, primary_hotkey, fallback_header) = match state.intent {
+        crate::vta_connect::VtaIntent::AdminOnly => (
+            "Recommended — VTA admin runs on any host with an authenticated pnm session:",
+            "  [p] ",
+            Some(
+                "Fallback — only if `pnm` isn't available. Requires a hand-authored \
+                 AdminCredential JSON payload at <ADMIN_CREDENTIAL_JSON>:",
+            ),
+        ),
+        crate::vta_connect::VtaIntent::FullSetup => (
+            "VTA admin runs this on the VTA host (has local super-admin access to the \
+             keyspace — no `pnm acl create` required):",
+            "  [v] ",
+            None,
+        ),
+    };
+    lines.push(Line::from(Span::styled(primary_header, value)));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("  or from a PNM host: ", value),
-        Span::styled("pnm-cli bootstrap seal \\", cmd),
+        Span::styled(primary_hotkey, cmd),
+        Span::styled(state.primary_command(), cmd),
     ]));
-    for s in [
-        &format!("    --request {cmd_file} \\"),
-        "    --payload mediator-admin-credential \\",
-        "    --out bundle.armor",
-    ] {
-        lines.push(Line::from(Span::styled(s.to_string(), cmd)));
+    if let (Some(header), Some(fb)) = (fallback_header, state.fallback_command()) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(header, value)));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  [f] ", cmd),
+            Span::styled(fb, cmd),
+        ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "They return bundle.armor + a printed digest. Paste the bundle on the next screen.",
+        "Returns bundle.armor + a printed digest. Paste the bundle on the next screen.",
         value,
     )));
     lines.push(Line::from(""));

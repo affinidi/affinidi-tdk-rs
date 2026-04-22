@@ -38,6 +38,10 @@ url = "2"
 ## mediator crate itself — only writes config files the mediator reads.
 affinidi-tdk = { path = "../../../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 affinidi-secrets-resolver = { path = "../../../../core/affinidi-secrets-resolver" }
+## did:key helpers used by the sealed-handoff full-setup path to derive
+## the `client_did` from the ephemeral Ed25519 pubkey when signing a
+## VP-framed `provision_integration::BootstrapRequest`. Small, no cycles.
+affinidi-crypto = "0.1"
 
 # ── Mediator unified secret backend ─────────────────────────────────────
 ## Shared secrets module (open_store, MediatorSecrets, well-known keys)
@@ -60,7 +64,12 @@ keyring = { version = "3", features = ["apple-native", "linux-native"] }
 ## session:         full DIDComm challenge-response (primary auth path)
 ## sealed-transfer: HPKE-encrypted bundle handoff for the air-gapped
 ##                  bootstrap flow (SealedHandoff / `vta::sealed_transfer`).
-vta-sdk = { version = "0.5", features = ["client", "session", "sealed-transfer"] }
+vta-sdk = { version = "0.5", features = [
+  "client",
+  "session",
+  "sealed-transfer",
+  "provision-integration",
+] }
 
 # ── DID Resolution ───────────────────────────────────────────────────────
 ## Used to resolve the VTA's DID document and extract VTARest /
@@ -92,6 +101,12 @@ sha256 = "1"
 
 # ── Error Handling ───────────────────────────────────────────────────────
 anyhow = "1"
+thiserror = "2"
+
+# ── Date / Time ──────────────────────────────────────────────────────────
+## `chrono::Duration` is the freshness-window type on VP-signed
+## `provision-integration` bootstrap requests.
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 # ── Logging ──────────────────────────────────────────────────────────────
 tracing = "0.1"
@@ -99,6 +114,9 @@ tracing = "0.1"
 [dev-dependencies]
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
+## Sealed-handoff tests construct `ProducerAssertion` values with
+## `producer_did` as a did:key — uses the `affinidi-crypto` dep
+## already declared in `[dependencies]`.
 
 [lints]
 workspace = true

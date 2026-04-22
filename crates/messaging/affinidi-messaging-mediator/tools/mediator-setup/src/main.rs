@@ -65,10 +65,17 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(path) = args.setup_key_file.as_ref() {
         let vta_did = vta_connect::cli::validate_phase2_args(&args.vta_did)?;
+        let mediator_url = args.mediator_url.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "--mediator-url is required for --setup-key-file (Phase 2). The VTA's \
+                 didcomm-mediator template renders the mediator DID using this URL."
+            )
+        })?;
         return vta_connect::cli::run_phase2_connect(
             path,
             vta_did,
             args.vta_context.as_deref(),
+            mediator_url,
             args.wait_for_acl,
         )
         .await;
@@ -394,19 +401,64 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         return;
     }
 
-    // Bare `c` / `C` on the sealed-handoff RequestGenerated screen
-    // copies the bootstrap request JSON to the system clipboard.
-    // Placed ahead of the mode-based dispatch so it fires in both
-    // Selecting and TextInput modes — the RequestGenerated phase
+    // Bare `c` / `v` / `p` on the sealed-handoff RequestGenerated screen
+    // copy one of: the bootstrap request JSON, the `vta bootstrap seal`
+    // command, or the `pnm-cli bootstrap seal` command to the system
+    // clipboard. Placed ahead of the mode-based dispatch so it fires in
+    // both Selecting and TextInput modes — the RequestGenerated phase
     // uses Selecting mode today, but keeping the hotkey mode-agnostic
     // is cheap and future-proofs against UI shuffling.
     if !modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && matches!(
+            code,
+            KeyCode::Char('c')
+                | KeyCode::Char('C')
+                | KeyCode::Char('v')
+                | KeyCode::Char('V')
+                | KeyCode::Char('p')
+                | KeyCode::Char('P')
+                | KeyCode::Char('f')
+                | KeyCode::Char('F')
+        )
         && app.in_sealed_handoff_subflow()
     {
         if let Some(state) = app.sealed_handoff.as_mut() {
             if state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated {
-                state.copy_request_to_clipboard();
+                // Primary command hotkey: `p` for AdminOnly
+                // (pnm contexts bootstrap), `v` for FullSetup
+                // (vta bootstrap provision-integration). `f` copies
+                // the fallback command when one exists (AdminOnly's
+                // raw `vta bootstrap seal` invocation).
+                match code {
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        state.copy_request_to_clipboard();
+                    }
+                    KeyCode::Char('p')
+                    | KeyCode::Char('P')
+                    | KeyCode::Char('v')
+                    | KeyCode::Char('V') => {
+                        state.copy_primary_command_to_clipboard();
+                    }
+                    KeyCode::Char('f') | KeyCode::Char('F') => {
+                        state.copy_fallback_command_to_clipboard();
+                    }
+                    _ => unreachable!("outer matches! guards the code space"),
+                }
+                return;
+            }
+        }
+    }
+
+    // Bare `c` / `C` on the online-VTA AwaitingAcl screen copies the
+    // rendered `pnm acl create` command to the system clipboard. Same
+    // early-return placement as the sealed-handoff hotkey so it fires
+    // regardless of InputMode.
+    if !modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
+    {
+        if let Some(state) = app.vta_connect.as_mut() {
+            if state.phase == crate::vta_connect::ConnectPhase::AwaitingAcl {
+                state.copy_acl_command_to_clipboard();
                 return;
             }
         }
@@ -491,116 +543,6 @@ fn strip_path_from_url(raw: &str) -> String {
     }
 }
 
-/// Unused — the TUI's `DidPhase::SelectWebvhHost` now collects this
-/// choice inside the ratatui flow. Kept as a reference implementation
-/// (and a lightweight safety net for any future recipe-driven path
-/// that skips the TUI) — callers should prefer the stored
-/// `WizardConfig::vta_webvh_*` fields populated in the TUI.
-#[allow(dead_code)]
-/// Interactive "where should the VTA publish this DID" prompt. Called
-/// after the TUI exits so we can use plain stdin — the ratatui layer
-/// is already torn down by `generate_and_write`'s time.
-///
-/// Four paths:
-///
-/// 1. **Self-host at the mediator URL** (default) — the mediator's own
-///    public URL, stripped to `<scheme>://<host>[:port]` so webvh's
-///    `/.well-known/did.jsonl` resolver hits the right place.
-/// 2. **VTA-hosted** — pick a registered webvh server on the VTA.
-///    Optional mnemonic prompt follows.
-/// 3. **Self-host elsewhere** — operator types a different base URL
-///    (also stripped to host).
-///
-/// Defensive fallback: empty server list / unreadable stdin / parse
-/// failure all collapse onto self-hosted at the stripped mediator URL
-/// so the wizard never blocks on an unexpected terminal shape.
-fn choose_webvh_host(
-    servers: &[vta_sdk::webvh::WebvhServerRecord],
-    mediator_url: &str,
-) -> generators::did_vta::WebvhHost {
-    use std::io::Write;
-
-    let default_self_host = strip_path_from_url(mediator_url);
-
-    println!();
-    println!("  \x1b[1mWhere should the VTA publish the mediator DID?\x1b[0m");
-    println!(
-        "    0) Self-host at \x1b[36m{default_self_host}\x1b[0m \
-         \x1b[2m(derived from mediator URL)\x1b[0m"
-    );
-    let elsewhere_index = servers.len() + 1;
-    for (i, s) in servers.iter().enumerate() {
-        let label = s.label.as_deref().unwrap_or("(no label)");
-        println!(
-            "    {}) VTA-hosted \x1b[36m{}\x1b[0m  \x1b[2m{label} — {}\x1b[0m",
-            i + 1,
-            s.id,
-            s.did
-        );
-    }
-    println!(
-        "    {elsewhere_index}) Self-host elsewhere \x1b[2m(type a different base URL)\x1b[0m"
-    );
-    if servers.is_empty() {
-        println!("    \x1b[2m(no webvh hosting services registered on the VTA)\x1b[0m");
-    }
-    print!("  Choice [0]: ");
-    let _ = std::io::stdout().flush();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        eprintln!("  Could not read stdin — defaulting to self-hosted.");
-        return generators::did_vta::WebvhHost::SelfHosted {
-            url: default_self_host,
-        };
-    }
-    let pick = line.trim().parse::<usize>().unwrap_or(0);
-    if pick == 0 {
-        return generators::did_vta::WebvhHost::SelfHosted {
-            url: default_self_host,
-        };
-    }
-    if pick == elsewhere_index {
-        // Path 3: operator types a different base URL.
-        print!("  Base URL (e.g. https://did.example.com): ");
-        let _ = std::io::stdout().flush();
-        let mut u = String::new();
-        if std::io::stdin().read_line(&mut u).is_err() || u.trim().is_empty() {
-            eprintln!("  No URL provided — falling back to self-host at {default_self_host}.");
-            return generators::did_vta::WebvhHost::SelfHosted {
-                url: default_self_host,
-            };
-        }
-        return generators::did_vta::WebvhHost::SelfHosted {
-            url: strip_path_from_url(u.trim()),
-        };
-    }
-    let Some(server) = servers.get(pick - 1) else {
-        eprintln!("  Choice {pick} is out of range — defaulting to self-hosted.");
-        return generators::did_vta::WebvhHost::SelfHosted {
-            url: default_self_host,
-        };
-    };
-    // Optional mnemonic — empty input auto-assigns server-side.
-    print!("  Mnemonic (URL path segment) [auto-assign]: ");
-    let _ = std::io::stdout().flush();
-    let mut m = String::new();
-    if std::io::stdin().read_line(&mut m).is_err() {
-        eprintln!("  Could not read stdin — auto-assigning mnemonic.");
-        return generators::did_vta::WebvhHost::Hosted {
-            server_id: server.id.clone(),
-            mnemonic: None,
-        };
-    }
-    let mnemonic = match m.trim() {
-        "" => None,
-        s => Some(s.to_string()),
-    };
-    generators::did_vta::WebvhHost::Hosted {
-        server_id: server.id.clone(),
-        mnemonic,
-    }
-}
-
 #[cfg(test)]
 mod strip_path_tests {
     use super::strip_path_from_url;
@@ -638,6 +580,32 @@ mod strip_path_tests {
     }
 }
 
+/// Project a [`vta_sdk::provision_integration::payload::DidKeyMaterial`]
+/// onto the `Secret` shape the mediator-common secrets store expects.
+///
+/// Emits two entries — the signing key and the key-agreement key —
+/// keyed by their full DID-URL verification-method ids. The private
+/// bytes move through `Secret::from_multibase`, which decodes the
+/// multibase string and populates the secret's internal zeroized
+/// buffers.
+fn did_key_material_to_secrets(
+    material: &vta_sdk::provision_integration::payload::DidKeyMaterial,
+) -> anyhow::Result<Vec<affinidi_secrets_resolver::secrets::Secret>> {
+    use affinidi_secrets_resolver::secrets::Secret;
+
+    let signing = Secret::from_multibase(
+        &material.signing_key.private_key_multibase,
+        Some(&material.signing_key.key_id),
+    )
+    .map_err(|e| anyhow::anyhow!("decode signing private key: {e}"))?;
+    let ka = Secret::from_multibase(
+        &material.ka_key.private_key_multibase,
+        Some(&material.ka_key.key_id),
+    )
+    .map_err(|e| anyhow::anyhow!("decode key-agreement private key: {e}"))?;
+    Ok(vec![signing, ka])
+}
+
 /// Run all generators and write configuration files.
 /// When `save_recipe` is true, a `mediator-build.toml` recipe is saved alongside
 /// the config for reproducibility. Set to false when running from `--from` to
@@ -668,103 +636,78 @@ async fn generate_and_write(
             (result.did, result.secrets, Some(result.did_doc))
         }
         DID_VTA => {
-            // VTA-managed DID: ask the VTA to mint a webvh DID inside the
-            // context. Keys stay on the VTA — the mediator's runtime
-            // `integration::startup` flow fetches them at boot.
-            if let Some(session) = vta_session {
-                if config.public_url.is_empty() {
-                    anyhow::bail!(
-                        "VTA-managed DID needs a mediator URL; re-run the wizard \
-                         and enter a URL at the DID step."
-                    );
-                }
-                // Resolve the webvh host choice made inside the TUI
-                // (Did step's SelectWebvhHost phase). `server_id` is
-                // `Some(_)` for VTA-hosted, `None` for self-host.
-                // Sealed-handoff sessions and older recipe runs where
-                // the TUI wasn't walked will have `server_id = None`
-                // and `vta_webvh_self_host_url` possibly empty — fall
-                // back to the stripped mediator URL in that case.
-                let host = if let Some(ref id) = config.vta_webvh_server_id {
-                    generators::did_vta::WebvhHost::Hosted {
-                        server_id: id.clone(),
-                        mnemonic: config.vta_webvh_mnemonic.clone(),
+            // VTA-managed DID: the mediator DID + keys were minted by
+            // the VTA at Vta-step provisioning time and shipped inside
+            // the `TemplateBootstrap` sealed bundle. Pull them out of
+            // the session's `ProvisionResult` — no further round-trip.
+            match vta_session.and_then(|s| s.as_full_provision()) {
+                Some(provision) => {
+                    let integration_did = provision.integration_did().to_string();
+                    println!("  VTA-minted mediator DID: {integration_did}");
+
+                    // Persist the integration DID's private keys as
+                    // `Secret` values — the mediator's runtime secrets
+                    // loader reads these at startup.
+                    let secrets = provision
+                        .integration_key()
+                        .map(did_key_material_to_secrets)
+                        .transpose()?
+                        .unwrap_or_default();
+
+                    // Write the VTA-provided did.jsonl alongside the
+                    // config so the mediator (or a downstream operator)
+                    // can publish / inspect the log content locally.
+                    if let Some(log) = provision.webvh_log() {
+                        let did_jsonl_path = std::path::Path::new(&config.config_path)
+                            .parent()
+                            .unwrap_or(std::path::Path::new("."))
+                            .join("did.jsonl");
+                        match std::fs::write(&did_jsonl_path, log) {
+                            Ok(()) => println!(
+                                "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
+                                did_jsonl_path.display()
+                            ),
+                            Err(e) => eprintln!(
+                                "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+                                did_jsonl_path.display()
+                            ),
+                        }
                     }
-                } else {
-                    let fallback = if config.vta_webvh_self_host_url.is_empty() {
-                        // Strip the path the same way the TUI
-                        // default-case does so recipe-driven runs
-                        // behave identically to interactive ones.
-                        strip_path_from_url(&config.public_url)
-                    } else {
-                        config.vta_webvh_self_host_url.clone()
-                    };
-                    generators::did_vta::WebvhHost::SelfHosted { url: fallback }
-                };
-                println!(
-                    "  Creating mediator DID in VTA context '{}'…",
-                    session.context_id
-                );
-                let creation = generators::did_vta::create_vta_mediator_did(
-                    &session.rest_url,
-                    &session.access_token,
-                    &session.context_id,
-                    &config.public_url,
-                    host,
-                )
-                .await;
-                let result = match creation {
-                    Ok(r) => r,
-                    Err(e) => {
-                        // The VTA may reject publish on an unreachable
-                        // host even after minting the keys; there is no
-                        // partial-success hook we can consume, but the
-                        // operator can rerun with a different host
-                        // choice. Surface the error verbatim.
-                        return Err(anyhow::anyhow!(
-                            "{e}\n\nTip: if the VTA couldn't publish to the chosen webvh \
-                             host, re-run the wizard and pick a different server, or \
-                             stand up a webvh server at {}.",
-                            config.public_url
-                        ));
-                    }
-                };
-                println!("  VTA minted DID: {}", result.did);
-                // Always write the did.jsonl log entry next to the
-                // config when the VTA returned one. Gives the operator
-                // a local copy they can republish manually if the
-                // hosted webvh server ever goes away.
-                if let Some(ref log_entry) = result.log_entry {
-                    let did_jsonl_path = std::path::Path::new(&config.config_path)
+
+                    // Archive the VTA-issued authorization VC next to
+                    // the config. Short-lived (~1h validity) but useful
+                    // for operator audit trails.
+                    let vc_path = std::path::Path::new(&config.config_path)
                         .parent()
                         .unwrap_or(std::path::Path::new("."))
-                        .join("did.jsonl");
-                    if let Err(e) = std::fs::write(&did_jsonl_path, log_entry) {
-                        eprintln!(
-                            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
-                            did_jsonl_path.display()
-                        );
-                    } else {
-                        println!(
-                            "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
-                            did_jsonl_path.display()
-                        );
+                        .join("authorization.jsonld");
+                    if let Ok(serialized) =
+                        serde_json::to_string_pretty(provision.authorization_vc())
+                    {
+                        match std::fs::write(&vc_path, serialized) {
+                            Ok(()) => println!(
+                                "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
+                                vc_path.display()
+                            ),
+                            Err(e) => eprintln!(
+                                "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+                                vc_path.display()
+                            ),
+                        }
                     }
+
+                    let doc_string =
+                        serde_json::to_string(&provision.payload.config.did_document).ok();
+                    (integration_did, secrets, doc_string)
                 }
-                let doc_string = result.log_entry.or_else(|| {
-                    result
-                        .did_document
-                        .as_ref()
-                        .and_then(|d| serde_json::to_string(d).ok())
-                });
-                (result.did, vec![], doc_string)
-            } else {
-                eprintln!(
-                    "  Note: VTA-managed DID selected but no authenticated VTA session \
-                     was captured. Falling back to placeholder — edit mediator.toml \
-                     manually before starting the mediator."
-                );
-                ("vta://mediator".into(), vec![], None)
+                None => {
+                    eprintln!(
+                        "  Note: VTA-managed DID selected but no provisioned session \
+                         was captured. Falling back to placeholder — edit mediator.toml \
+                         manually before starting the mediator."
+                    );
+                    ("vta://mediator".into(), vec![], None)
+                }
             }
         }
         _ => {
@@ -802,9 +745,9 @@ async fn generate_and_write(
         (Some(session), _) => {
             println!(
                 "  Using rotated admin DID from VTA session: {}",
-                session.admin_did
+                session.admin_did()
             );
-            (Some(session.admin_did.clone()), None)
+            (Some(session.admin_did().to_string()), None)
         }
         (None, ADMIN_GENERATE) => {
             let (did, secret) = generators::did_key::generate_admin_did_key()?;
@@ -883,10 +826,10 @@ async fn generate_and_write(
     // did:key + the VTA DID/URL that minted it.
     if let Some(session) = vta_session {
         let cred = affinidi_messaging_mediator_common::AdminCredential {
-            did: session.admin_did.clone(),
-            private_key_multibase: session.admin_private_key_mb.clone(),
+            did: session.admin_did().to_string(),
+            private_key_multibase: session.admin_private_key_mb().to_string(),
             vta_did: session.vta_did.clone(),
-            vta_url: Some(session.rest_url.clone()),
+            vta_url: session.rest_url.clone(),
             context: session.context_id.clone(),
         };
         mediator_secrets_store
@@ -960,7 +903,7 @@ async fn generate_and_write(
             );
             println!(
                 "  \x1b[2mPrivate key (multibase): {}\x1b[0m",
-                session.admin_private_key_mb
+                session.admin_private_key_mb()
             );
             println!(
                 "  \x1b[2mVTA DID: {}   Context: {}\x1b[0m",

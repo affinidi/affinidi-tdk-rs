@@ -4,7 +4,8 @@ use crate::consts::*;
 use crate::sealed_handoff::SealedHandoffState;
 use crate::ui::selection::SelectionOption;
 use crate::vta_connect::{
-    ConnectPhase, EphemeralSetupKey, VtaConnectState, VtaSession, pending_list, run_connection_test,
+    ConnectPhase, EphemeralSetupKey, VtaConnectState, VtaIntent, VtaSession, VtaTransport,
+    pending_list, run_connection_test,
 };
 
 /// All wizard steps in order.
@@ -245,6 +246,22 @@ pub enum SecurityPhase {
     JwtMode,
 }
 
+/// Sub-phases of the top-level `Vta` step picker (before any of the
+/// transport-specific sub-flows take over).
+///
+/// Splits the single "VTA mode" question into two orthogonal
+/// questions — intent (what do you want from the VTA?) and transport
+/// (how does the request reach the VTA?). The four intent×transport
+/// leaves each route into one of four adapters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtaStepPhase {
+    /// First question — FullSetup / AdminOnly / No VTA.
+    SelectIntent,
+    /// Second question — Online / Sealed handoff. Only reached after
+    /// the operator picked a non-`None` intent on [`Self::SelectIntent`].
+    SelectTransport,
+}
+
 impl KeyStoragePhase {
     /// First config phase for the given scheme. `None` means the scheme
     /// needs no extra config and can advance immediately.
@@ -394,6 +411,20 @@ pub struct WizardApp {
     /// Present only while the operator is on that sub-flow's screens;
     /// extracted into `vta_session` and dropped on completion.
     pub sealed_handoff: Option<SealedHandoffState>,
+    /// Which of the two top-level picker questions is on screen. Reset
+    /// to [`VtaStepPhase::SelectIntent`] whenever the operator enters
+    /// or re-enters the Vta step.
+    pub vta_step_phase: VtaStepPhase,
+    /// Intent the operator picked on the first question. `None` until
+    /// they pick, then `Some(FullSetup)` or `Some(AdminOnly)` while
+    /// they answer the second question. Cleared when the Vta step is
+    /// left (advance or go-back).
+    pub vta_intent_choice: Option<VtaIntent>,
+    /// Transient notice shown under the transport picker when the
+    /// operator selects a (intent, transport) combination whose
+    /// adapter isn't implemented yet. Cleared on the next
+    /// transition.
+    pub vta_stub_notice: Option<String>,
 }
 
 impl WizardApp {
@@ -419,6 +450,9 @@ impl WizardApp {
             vta_context_prefill: None,
             vta_session: None,
             sealed_handoff: None,
+            vta_step_phase: VtaStepPhase::SelectIntent,
+            vta_intent_choice: None,
+            vta_stub_notice: None,
         }
     }
 
@@ -427,28 +461,26 @@ impl WizardApp {
     /// rendered screen has something to display. Errors here mean the
     /// system RNG failed — bubble them up rather than silently using a
     /// degraded value.
-    fn enter_sealed_handoff_subflow(&mut self) {
-        match crate::sealed_handoff::SealedHandoffState::new(Some(format!(
-            "mediator/{}",
-            self.config.config_path
-        ))) {
-            Ok(state) => {
-                self.sealed_handoff = Some(state);
-                self.mode = InputMode::Selecting;
-            }
-            Err(e) => {
-                // Fall back to ordinary "no VTA" mode and surface the
-                // failure inline. The wizard is unusable without
-                // randomness; the operator needs to know.
-                self.sealed_handoff = None;
-                self.config.use_vta = false;
-                self.config.vta_mode = String::new();
-                eprintln!(
-                    "Could not initialise sealed-handoff sub-flow: {e}. Falling back to 'No VTA'."
-                );
-                self.advance();
-            }
+    fn enter_sealed_handoff_subflow(&mut self, intent: VtaIntent) {
+        // The sub-flow opens on `CollectContext` — a text-input prompt
+        // for the VTA context slug. Seed the input widget with the
+        // state's default so the operator can accept with Enter or
+        // edit. Keypair + request JSON are produced later by
+        // `SealedHandoffState::finalize_request`.
+        //
+        // For `FullSetup` we pre-seed the mediator URL from
+        // `config.public_url` when it's already been set elsewhere in
+        // the wizard — saves the operator from retyping.
+        let mut state = crate::sealed_handoff::SealedHandoffState::new(
+            intent,
+            Some(format!("mediator/{}", self.config.config_path)),
+        );
+        if intent == VtaIntent::FullSetup && !self.config.public_url.is_empty() {
+            state = state.with_mediator_url(self.config.public_url.clone());
         }
+        self.text_input = Input::new(state.context_id.clone());
+        self.mode = InputMode::TextInput;
+        self.sealed_handoff = Some(state);
     }
 
     /// Predicate used by the renderer/key-handler to keep the sealed
@@ -466,6 +498,16 @@ impl WizardApp {
             return;
         };
         match state.phase {
+            SealedPhase::CollectContext
+            | SealedPhase::CollectAdminLabel
+            | SealedPhase::CollectMediatorUrl
+            | SealedPhase::CollectWebvhServer => {
+                // These phases drive text-input; Enter goes through
+                // `sealed_handoff_confirm_text`, not here. The renderer
+                // only lands in `sealed_handoff_select` for these
+                // phases if the mode is out of sync (e.g. the user
+                // toggled focus). Safest to no-op.
+            }
             SealedPhase::RequestGenerated => {
                 // Enter the paste prompt for the armored bundle.
                 state.phase = SealedPhase::AwaitingBundle;
@@ -500,6 +542,77 @@ impl WizardApp {
         };
         let value = self.text_input.value().to_string();
         match state.phase {
+            SealedPhase::CollectContext => {
+                // Accept the typed context slug (empty means "use the
+                // pre-filled default"). Branch to the next collect
+                // phase based on intent: AdminOnly → CollectAdminLabel,
+                // FullSetup → CollectMediatorUrl.
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    state.context_id = trimmed.to_string();
+                }
+                match state.intent {
+                    VtaIntent::AdminOnly => {
+                        state.phase = SealedPhase::CollectAdminLabel;
+                        self.text_input = Input::new(state.admin_label.clone());
+                    }
+                    VtaIntent::FullSetup => {
+                        state.phase = SealedPhase::CollectMediatorUrl;
+                        self.text_input = Input::new(state.mediator_url.clone());
+                    }
+                }
+                true
+            }
+            SealedPhase::CollectMediatorUrl => {
+                // Required field for FullSetup — an empty value keeps
+                // the operator on this phase with `last_error` set
+                // rather than silently finalising a VP the VTA will
+                // reject.
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    state.last_error = Some(
+                        "Mediator public URL is required for full-setup provisioning \
+                         (fed to the VTA's didcomm-mediator template as the `URL` \
+                         variable)."
+                            .into(),
+                    );
+                    return true;
+                }
+                state.mediator_url = trimmed.to_string();
+                state.last_error = None;
+                state.phase = SealedPhase::CollectWebvhServer;
+                self.text_input = Input::new(state.webvh_server.clone());
+                true
+            }
+            SealedPhase::CollectWebvhServer => {
+                // Optional field — empty string means "let the VTA
+                // pick a default webvh server from its catalogue".
+                state.webvh_server = value.trim().to_string();
+                if let Err(e) = state.finalize_request() {
+                    state.last_error = Some(e.to_string());
+                } else {
+                    self.text_input = Input::default();
+                    self.mode = InputMode::Selecting;
+                }
+                true
+            }
+            SealedPhase::CollectAdminLabel => {
+                // Optional field — empty string means "skip the
+                // --admin-label flag in the rendered command".
+                state.admin_label = value.trim().to_string();
+                if let Err(e) = state.finalize_request() {
+                    state.last_error = Some(e.to_string());
+                    // Stay on CollectAdminLabel so the operator can
+                    // retry / back out. `finalize_request` only fails
+                    // on unrecoverable RNG / serialisation errors, so
+                    // in practice this branch is for dev-time
+                    // sanity.
+                } else {
+                    self.text_input = Input::default();
+                    self.mode = InputMode::Selecting;
+                }
+                true
+            }
             SealedPhase::AwaitingBundle => {
                 if let Err(e) = ingest_armored(state, &value) {
                     state.last_error = Some(e.to_string());
@@ -546,8 +659,8 @@ impl WizardApp {
 
     /// Begin the online-VTA sub-flow: initialise ephemeral state and prompt
     /// for the VTA DID.
-    fn enter_vta_subflow(&mut self) {
-        let mut st = VtaConnectState::new();
+    fn enter_vta_subflow(&mut self, intent: VtaIntent) {
+        let mut st = VtaConnectState::new(intent);
         if let Some(did) = self.vta_did_prefill.as_ref() {
             st.vta_did = did.clone();
         }
@@ -587,17 +700,18 @@ impl WizardApp {
             }
             ConnectPhase::Connected => {
                 // Persist the authenticated session so later steps can
-                // provision the mediator's DID inside the VTA.
+                // use the credential material. `conn.reply` already
+                // carries the right variant — FullSetup → Full,
+                // AdminOnly → AdminOnly — we just wrap the transport
+                // context around it.
                 if let Some(state) = self.vta_connect.as_ref() {
                     if let Some(conn) = state.connection.as_ref() {
                         self.vta_session = Some(VtaSession {
-                            rest_url: conn.rest_url.clone(),
-                            access_token: conn.access_token.clone(),
                             context_id: state.context_id.clone(),
                             vta_did: state.vta_did.clone(),
-                            admin_did: conn.admin_did.clone(),
-                            admin_private_key_mb: conn.admin_private_key_mb.clone(),
-                            webvh_servers: conn.webvh_servers.clone(),
+                            rest_url: conn.rest_url.clone(),
+                            mediator_did: conn.mediator_did.clone(),
+                            reply: conn.reply.clone(),
                         });
                     }
                 }
@@ -619,19 +733,34 @@ impl WizardApp {
             st.last_error = Some("setup key missing — regenerate via Esc".into());
             return;
         };
+        let intent = st.intent;
         let vta_did = st.vta_did.clone();
         let setup_did = key.did.clone();
         let setup_privkey_mb = key.private_key_multibase().to_string();
+        let context = st.context_id.clone();
+        let mediator_url = st.mediator_url.clone();
+        let label = Some(format!("mediator setup — {context}"));
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         st.diagnostics = pending_list();
         st.event_rx = Some(rx);
         st.last_error = None;
+        st.clipboard_status = None;
         st.phase = ConnectPhase::Testing;
         self.selection_index = 0;
 
         tokio::spawn(async move {
-            run_connection_test(vta_did, setup_did, setup_privkey_mb, tx).await;
+            run_connection_test(
+                intent,
+                vta_did,
+                setup_did,
+                setup_privkey_mb,
+                context,
+                mediator_url,
+                label,
+                tx,
+            )
+            .await;
         });
     }
 
@@ -691,6 +820,40 @@ impl WizardApp {
                 if !val.is_empty() {
                     st.context_id = val;
                 }
+                // FullSetup needs the mediator's public URL (goes into
+                // the template's `URL` var); AdminOnly doesn't — skip
+                // straight to the ACL instructions screen.
+                match st.intent {
+                    VtaIntent::FullSetup => {
+                        let prefill = if st.mediator_url.is_empty() {
+                            self.config.public_url.clone()
+                        } else {
+                            st.mediator_url.clone()
+                        };
+                        st.phase = ConnectPhase::EnterMediatorUrl;
+                        self.text_input = Input::new(prefill);
+                        // Stay in TextInput mode.
+                    }
+                    VtaIntent::AdminOnly => {
+                        st.setup_key = Some(EphemeralSetupKey::generate()?);
+                        st.phase = ConnectPhase::AwaitingAcl;
+                        self.mode = InputMode::Selecting;
+                        self.selection_index = 0;
+                        self.text_input = Input::default();
+                    }
+                }
+            }
+            ConnectPhase::EnterMediatorUrl => {
+                let val = self.text_input.value().trim().to_string();
+                if val.is_empty() {
+                    // Block advance until the operator provides a URL —
+                    // the VTA template requires it.
+                    return Ok(());
+                }
+                st.mediator_url = val.clone();
+                // Mirror onto WizardConfig so the Did step doesn't
+                // prompt again and later generators have the value.
+                self.config.public_url = val;
                 st.setup_key = Some(EphemeralSetupKey::generate()?);
                 st.phase = ConnectPhase::AwaitingAcl;
                 self.mode = InputMode::Selecting;
@@ -718,11 +881,30 @@ impl WizardApp {
                 self.text_input = Input::new(did);
                 self.mode = InputMode::TextInput;
             }
-            ConnectPhase::AwaitingAcl => {
-                st.setup_key = None;
+            ConnectPhase::EnterMediatorUrl => {
                 st.phase = ConnectPhase::EnterContext;
                 let ctx = st.context_id.clone();
                 self.text_input = Input::new(ctx);
+                self.mode = InputMode::TextInput;
+            }
+            ConnectPhase::AwaitingAcl => {
+                // Step back to the most recent text-input phase —
+                // EnterMediatorUrl for FullSetup (which collected
+                // that), EnterContext for AdminOnly (which skipped
+                // the URL prompt entirely).
+                st.setup_key = None;
+                match st.intent {
+                    VtaIntent::FullSetup => {
+                        st.phase = ConnectPhase::EnterMediatorUrl;
+                        let url = st.mediator_url.clone();
+                        self.text_input = Input::new(url);
+                    }
+                    VtaIntent::AdminOnly => {
+                        st.phase = ConnectPhase::EnterContext;
+                        let ctx = st.context_id.clone();
+                        self.text_input = Input::new(ctx);
+                    }
+                }
                 self.mode = InputMode::TextInput;
             }
             ConnectPhase::Testing | ConnectPhase::Connected => {
@@ -785,6 +967,7 @@ impl WizardApp {
             // Can only jump to completed steps or the current step
             if self.completed.contains(&step) || step == self.current_step {
                 self.current_step = step;
+                self.on_enter_step();
                 self.selection_index = self.default_selection_index();
                 // Set mode based on step type
                 if step == WizardStep::Database {
@@ -819,17 +1002,47 @@ impl WizardApp {
                     "Enter context id",
                     "VTA context name the mediator will live in (default: mediator).",
                 ),
+                ConnectPhase::EnterMediatorUrl => (
+                    "Enter mediator URL",
+                    "Public URL this mediator will serve at — passed to the VTA's DID template.",
+                ),
                 ConnectPhase::AwaitingAcl => (
                     "Register ACL",
-                    "Run the displayed command on the VTA host, then press Enter to test.",
+                    "Run the displayed command on the VTA host, then press Enter to provision.",
                 ),
                 ConnectPhase::Testing => (
-                    "Testing connection",
-                    "Running diagnostic checks against the VTA…",
+                    "Provisioning",
+                    "Authenticating over DIDComm and requesting a VTA-minted mediator DID…",
                 ),
                 ConnectPhase::Connected => (
                     "Connected",
-                    "VTA connection established — advancing to the next step.",
+                    "Mediator DID minted by the VTA — advancing to the next step.",
+                ),
+            };
+            return StepData {
+                title: format!("Step {num}/{total}: VTA Integration — {suffix}"),
+                description: desc.into(),
+            };
+        }
+        // Top-level Vta picker — reflect which of the two questions the
+        // operator is currently answering so the header stays useful
+        // alongside the option list.
+        if self.current_step == WizardStep::Vta
+            && self.vta_connect.is_none()
+            && self.sealed_handoff.is_none()
+        {
+            let num = self.current_step.step_number();
+            let total = WizardStep::total();
+            let (suffix, desc): (&str, &str) = match self.vta_step_phase {
+                VtaStepPhase::SelectIntent => (
+                    "What from VTA?",
+                    "Decide whether the VTA should mint your mediator's DID (Full setup), \
+                     only provide an admin credential, or stay out of the wizard entirely.",
+                ),
+                VtaStepPhase::SelectTransport => (
+                    "How is the request delivered?",
+                    "Pick online for a direct network call or sealed handoff for an \
+                     air-gapped armored-bundle exchange.",
                 ),
             };
             return StepData {
@@ -860,7 +1073,7 @@ impl WizardApp {
                     return match phase {
                         ConnectPhase::AwaitingAcl => vec![SelectionOption::new(
                             "Test VTA connection",
-                            "Run the `pnm acl create` command above, then press Enter to verify",
+                            "Run the `pnm acl create` command below, then press Enter to verify",
                         )],
                         ConnectPhase::Testing => {
                             if st.event_rx.is_some() {
@@ -883,20 +1096,41 @@ impl WizardApp {
                         _ => vec![],
                     };
                 }
-                vec![
-                    SelectionOption::new(
-                        "VTA Online",
-                        "VTA is accessible — connection mode auto-detected from credential",
-                    ),
-                    SelectionOption::new(
-                        "VTA Sealed handoff (air-gapped)",
-                        "Generate a bootstrap request, ship it to the VTA admin out-of-band, paste back the HPKE-armored bundle. No network from this host.",
-                    ),
-                    SelectionOption::new(
-                        "No VTA",
-                        "Manage keys and DIDs independently (local dev, cloud secret stores)",
-                    ),
-                ]
+                match self.vta_step_phase {
+                    VtaStepPhase::SelectIntent => vec![
+                        SelectionOption::new(
+                            "Full setup — VTA mints my mediator DID",
+                            "VTA renders a DID template, mints integration + admin keys, issues an authorisation VC. The wizard will skip the DID step when this path is chosen.",
+                        ),
+                        SelectionOption::new(
+                            "Admin credential only — I'll bring my own DID",
+                            "Mediator keeps the DID from the DID step; the VTA only supplies an admin credential used for VTA admin APIs.",
+                        ),
+                        SelectionOption::new(
+                            "No VTA",
+                            "Manage keys and DIDs independently (local dev, cloud secret stores).",
+                        ),
+                    ],
+                    VtaStepPhase::SelectTransport => {
+                        let intent = self
+                            .vta_intent_choice
+                            .expect("transport phase implies an intent was picked");
+                        let (online_sub, offline_sub) = match intent {
+                            VtaIntent::FullSetup => (
+                                "Direct DIDComm session to a running VTA. Requires: `pnm acl create` run out-of-band first to enrol the wizard's ephemeral setup DID in the target context.",
+                                "No live network from this host. Wizard writes a VP-framed request; VTA admin runs `vta bootstrap provision-integration` on the VTA host and returns an armored bundle.",
+                            ),
+                            VtaIntent::AdminOnly => (
+                                "Direct REST/DIDComm check against the VTA. Requires: `pnm acl create` run out-of-band first to enrol the mediator's own DID as admin of the target context.",
+                                "No live network from this host. Wizard writes a request; VTA admin runs `pnm contexts bootstrap --recipient <file>` on their CLI and returns an armored bundle carrying the admin credential.",
+                            ),
+                        };
+                        vec![
+                            SelectionOption::new("Online", online_sub),
+                            SelectionOption::new("Sealed handoff (air-gapped)", offline_sub),
+                        ]
+                    }
+                }
             }
             WizardStep::Protocol => {
                 let didcomm_check = if self.config.didcomm_enabled {
@@ -935,15 +1169,15 @@ impl WizardApp {
                         format!("Self-host at {stripped}"),
                         "Derived from the mediator URL (path stripped — webvh publishes at /.well-known/did.jsonl).",
                     ));
-                    if let Some(session) = self.vta_session.as_ref() {
-                        for s in &session.webvh_servers {
-                            let label = s.label.as_deref().unwrap_or("(no label)");
-                            opts.push(SelectionOption::new(
-                                format!("VTA-hosted {} — {}", s.id, label),
-                                format!("webvh server DID: {}", s.did),
-                            ));
-                        }
-                    }
+                    // Note: VTA-hosted webvh servers used to appear here
+                    // as individual picks, populated from the VTA's
+                    // `list_webvh_servers` RPC. With provision-integration
+                    // the mediator DID is rendered by a VTA-side template
+                    // that decides publishing itself — so the operator
+                    // chooses templates (via context overrides on the
+                    // VTA), not servers here. Legacy self-host options
+                    // remain for non-VTA flows.
+                    let _ = self.vta_session.as_ref();
                     opts.push(SelectionOption::new(
                         "Self-host elsewhere",
                         "Type a different base URL (e.g. a webvh server you operate separately).",
@@ -951,7 +1185,12 @@ impl WizardApp {
                     return opts;
                 }
                 let mut opts = vec![];
-                if self.config.use_vta {
+                // "Configure via VTA" is only meaningful when the
+                // operator picked `FullSetup` on the Vta step — that's
+                // the intent that has the VTA mint the integration
+                // DID. `AdminOnly` keeps the operator's own DID and
+                // hides this option; `No VTA` never shows it.
+                if self.config.use_vta && self.shows_vta_did_option() {
                     opts.push(SelectionOption::new(
                         "Configure via VTA (recommended)",
                         "Centralized key management — VTA creates and hosts your DID",
@@ -1063,7 +1302,7 @@ impl WizardApp {
                 ];
                 if self.config.use_vta {
                     opts.push(SelectionOption::new(
-                        "Copy admin DID from VTA",
+                        "Generate admin DID from VTA",
                         "Retrieve from VTA context",
                     ));
                 }
@@ -1094,26 +1333,38 @@ impl WizardApp {
                 if let Some(phase) = self.vta_phase() {
                     return match phase {
                         ConnectPhase::EnterDid => {
-                            "Enter the VTA's DID (e.g. did:webvh:vta.example.com). The wizard resolves the DID document to discover its REST and DIDComm service endpoints — you do not need to supply URLs separately.".into()
+                            "Enter the VTA's DID (e.g. did:webvh:vta.example.com). The wizard resolves the DID document to discover its DIDComm service endpoint — you do not need to supply URLs separately.".into()
                         }
                         ConnectPhase::EnterContext => {
                             "The VTA context this mediator will live in. Defaults to 'mediator'; override if you use a different naming convention or run multiple mediators against the same VTA.".into()
                         }
+                        ConnectPhase::EnterMediatorUrl => {
+                            "Public URL this mediator will serve at (e.g. https://mediator.example.com). Passed to the VTA's DID template as the `URL` variable so the rendered mediator DID advertises the right service endpoints.".into()
+                        }
                         ConnectPhase::AwaitingAcl => {
-                            "The wizard has generated an ephemeral did:key to authenticate to the VTA. Run the displayed `pnm acl create` command on your VTA admin host, then press Enter to test the connection.".into()
+                            "The wizard has generated an ephemeral did:key to authenticate to the VTA. Run the displayed `pnm acl create` command on your VTA admin host, then press Enter to provision the mediator's DID and admin credential in one round-trip.".into()
                         }
                         ConnectPhase::Testing => {
-                            "Running diagnostics — resolving transport, pinging the mediator service, attempting authentication…".into()
+                            "Opening a DIDComm session to the VTA, sending the signed provisioning request, and opening the sealed bundle the VTA returns…".into()
                         }
                         ConnectPhase::Connected => {
-                            "Connection established. Advancing to the next step.".into()
+                            "VTA-minted mediator DID received. Advancing to the next step.".into()
                         }
                     };
                 }
-                match self.selection_index {
-                    0 => "The mediator connects to VTA at startup to fetch keys and DID documents. Connection mode is auto-detected from the credential. Recommended for production.".into(),
-                    1 => "The mediator starts with pre-provisioned credentials cached locally. Useful when VTA is temporarily unreachable or during initial bootstrap.".into(),
-                    2 => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
+                // A stub notice — surfaced when the operator picked an
+                // (intent, transport) leaf that's not yet wired — takes
+                // precedence over the per-option hint so the operator
+                // sees why nothing moved.
+                if let Some(ref notice) = self.vta_stub_notice {
+                    return notice.clone();
+                }
+                match (self.vta_step_phase, self.selection_index) {
+                    (VtaStepPhase::SelectIntent, 0) => "The mediator's integration DID, admin DID, and VTA trust bundle are all issued by the VTA via a template render. The wizard skips the DID step when this path is chosen.".into(),
+                    (VtaStepPhase::SelectIntent, 1) => "The mediator keeps the DID you configure in the next step. The VTA only supplies an admin credential used to authenticate against VTA admin APIs.".into(),
+                    (VtaStepPhase::SelectIntent, 2) => "Keys and DIDs are generated locally or stored in cloud secret managers. You are responsible for backup and rotation.".into(),
+                    (VtaStepPhase::SelectTransport, 0) => "Direct network interaction with a running VTA. Lower friction but requires network reachability and an out-of-band `pnm acl create` step to pre-authorise the wizard against the VTA's ACL.".into(),
+                    (VtaStepPhase::SelectTransport, 1) => "Armored sealed-bundle exchange — no network from this host. Suitable for air-gapped or offline deployments, or when the VTA isn't directly reachable.".into(),
                     _ => String::new(),
                 }
             }
@@ -1225,41 +1476,89 @@ impl WizardApp {
                     self.sealed_handoff_select();
                     return;
                 }
-                match self.selection_index {
-                    0 => {
-                        // VTA Online — enter the connection sub-flow rather
-                        // than advancing. The sub-flow collects the VTA DID,
-                        // context id, and an ephemeral setup DID for ACL
-                        // registration, then (in later iterations) runs the
-                        // diagnostic/auth checklist before advancing.
-                        self.config.use_vta = true;
-                        self.config.vta_mode = VTA_MODE_ONLINE.into();
-                        self.apply_vta_defaults();
-                        self.enter_vta_subflow();
-                        return;
+                match self.vta_step_phase {
+                    VtaStepPhase::SelectIntent => match self.selection_index {
+                        0 => {
+                            self.vta_intent_choice = Some(VtaIntent::FullSetup);
+                            self.vta_step_phase = VtaStepPhase::SelectTransport;
+                            self.vta_stub_notice = None;
+                            self.selection_index = 0;
+                        }
+                        1 => {
+                            self.vta_intent_choice = Some(VtaIntent::AdminOnly);
+                            self.vta_step_phase = VtaStepPhase::SelectTransport;
+                            self.vta_stub_notice = None;
+                            self.selection_index = 0;
+                        }
+                        2 => {
+                            self.vta_intent_choice = None;
+                            self.config.use_vta = false;
+                            self.config.vta_mode = String::new();
+                            self.apply_vta_defaults();
+                            self.advance();
+                        }
+                        _ => {}
+                    },
+                    VtaStepPhase::SelectTransport => {
+                        let intent = self
+                            .vta_intent_choice
+                            .expect("transport phase implies an intent was picked");
+                        let transport = match self.selection_index {
+                            0 => VtaTransport::Online,
+                            1 => VtaTransport::Offline,
+                            _ => return,
+                        };
+                        self.vta_stub_notice = None;
+                        match (intent, transport) {
+                            (VtaIntent::FullSetup, VtaTransport::Online) => {
+                                // Online DIDComm flow with full
+                                // provision-integration — wizard
+                                // authenticates then runs the VP
+                                // round-trip.
+                                self.config.use_vta = true;
+                                self.config.vta_mode = VTA_MODE_ONLINE.into();
+                                self.apply_vta_defaults();
+                                self.enter_vta_subflow(VtaIntent::FullSetup);
+                            }
+                            (VtaIntent::AdminOnly, VtaTransport::Offline) => {
+                                // AdminOnly offline: `pnm contexts bootstrap`
+                                // produces an `AdminCredential` sealed
+                                // bundle; wizard extracts fallback admin
+                                // fields.
+                                self.config.use_vta = true;
+                                self.config.vta_mode = VTA_MODE_SEALED.into();
+                                self.apply_vta_defaults();
+                                self.enter_sealed_handoff_subflow(VtaIntent::AdminOnly);
+                            }
+                            (VtaIntent::FullSetup, VtaTransport::Offline) => {
+                                // FullSetup offline: wizard emits a VP-framed
+                                // BootstrapRequest; VTA admin runs
+                                // `vta bootstrap provision-integration` and
+                                // returns a TemplateBootstrap sealed bundle
+                                // that the wizard projects onto a full
+                                // `ProvisionResult`.
+                                self.config.use_vta = true;
+                                self.config.vta_mode = VTA_MODE_SEALED.into();
+                                self.apply_vta_defaults();
+                                self.enter_sealed_handoff_subflow(VtaIntent::FullSetup);
+                            }
+                            (VtaIntent::AdminOnly, VtaTransport::Online) => {
+                                // Online AdminOnly: wizard generates a
+                                // fresh did:key, operator runs `pnm
+                                // acl create` out-of-band, wizard
+                                // opens an authenticated DIDComm
+                                // session to verify enrollment. The
+                                // setup did:key becomes the long-term
+                                // admin credential (no rotation, no
+                                // provision-integration).
+                                self.config.use_vta = true;
+                                self.config.vta_mode = VTA_MODE_ONLINE.into();
+                                self.apply_vta_defaults();
+                                self.enter_vta_subflow(VtaIntent::AdminOnly);
+                            }
+                        }
                     }
-                    1 => {
-                        // VTA Sealed handoff. The actual paste/parse
-                        // sub-flow lives in `sealed_handoff` and is
-                        // launched lazily — selection here just records
-                        // the mode + flips `use_vta` so the
-                        // KeyStorage/Did defaults align before the
-                        // sub-flow runs.
-                        self.config.use_vta = true;
-                        self.config.vta_mode = VTA_MODE_SEALED.into();
-                        self.apply_vta_defaults();
-                        self.enter_sealed_handoff_subflow();
-                        return;
-                    }
-                    2 => {
-                        // No VTA
-                        self.config.use_vta = false;
-                        self.config.vta_mode = String::new();
-                    }
-                    _ => return,
                 }
-                self.apply_vta_defaults();
-                self.advance();
             }
             WizardStep::Protocol => {
                 // Enter always advances on a multi-select step. Toggling is
@@ -1600,12 +1899,11 @@ impl WizardApp {
     /// today.
     #[allow(dead_code)]
     fn webvh_host_option_count(&self) -> usize {
-        let servers = self
-            .vta_session
-            .as_ref()
-            .map(|s| s.webvh_servers.len())
-            .unwrap_or(0);
-        servers + 2
+        // Pre provision-integration there was a list of VTA-registered
+        // webvh servers here. That list is gone — the VTA's template
+        // decides publishing — so only the two static self-host options
+        // remain.
+        2
     }
 
     pub fn in_did_subflow(&self) -> bool {
@@ -1616,35 +1914,22 @@ impl WizardApp {
     /// to 0 = self-host at mediator URL, 1..=servers.len() = VTA-hosted
     /// server, servers.len()+1 = self-host elsewhere.
     fn confirm_webvh_host_choice(&mut self) {
-        let servers_len = self
-            .vta_session
-            .as_ref()
-            .map(|s| s.webvh_servers.len())
-            .unwrap_or(0);
-        let elsewhere_idx = servers_len + 1;
-        let idx = self.selection_index;
-        if idx == 0 {
-            // Self-host at mediator URL (already populated by enter).
-            self.config.vta_webvh_server_id = None;
-            self.config.vta_webvh_mnemonic = None;
-            self.did_phase = None;
-            self.advance();
-        } else if idx == elsewhere_idx {
-            // Self-host elsewhere — ask for the URL.
-            self.did_phase = Some(DidPhase::EnterCustomUrl);
-            self.mode = InputMode::TextInput;
-            self.text_input = Input::new(self.config.vta_webvh_self_host_url.clone());
-        } else if let Some(server) = self
-            .vta_session
-            .as_ref()
-            .and_then(|s| s.webvh_servers.get(idx - 1))
-        {
-            // VTA-hosted — remember the id, optionally collect mnemonic.
-            self.config.vta_webvh_server_id = Some(server.id.clone());
-            self.did_phase = Some(DidPhase::EnterMnemonic);
-            self.mode = InputMode::TextInput;
-            self.text_input =
-                Input::new(self.config.vta_webvh_mnemonic.clone().unwrap_or_default());
+        // Only two static options remain after provision-integration:
+        // idx 0 = self-host at mediator URL, idx 1 = self-host elsewhere.
+        // The VTA-registered server list is gone; the VTA's template
+        // handles publishing for use_vta flows.
+        match self.selection_index {
+            0 => {
+                self.config.vta_webvh_server_id = None;
+                self.config.vta_webvh_mnemonic = None;
+                self.did_phase = None;
+                self.advance();
+            }
+            _ => {
+                self.did_phase = Some(DidPhase::EnterCustomUrl);
+                self.mode = InputMode::TextInput;
+                self.text_input = Input::new(self.config.vta_webvh_self_host_url.clone());
+            }
         }
     }
 
@@ -1711,20 +1996,15 @@ impl WizardApp {
                 }
 
                 self.config.public_url = self.text_input.value().to_string();
-                // For the VTA-managed path, after the operator has
-                // entered the mediator URL and we captured an online
-                // session, walk the webvh-host choice sub-flow before
-                // advancing. did:webvh / import / sealed-handoff fall
-                // through to the straight advance below.
-                let vta_session_has_servers = self
-                    .vta_session
-                    .as_ref()
-                    .map(|s| !s.webvh_servers.is_empty())
-                    .unwrap_or(false);
-                let ask_webvh_host = self.config.did_method == DID_VTA
-                    && (self.vta_session.is_some() || vta_session_has_servers);
-                if ask_webvh_host {
-                    self.enter_webvh_host_phase();
+                // For the VTA-managed path the mediator DID is already
+                // rendered by the VTA's template (provision-integration
+                // happened in the Vta step), so we skip the webvh-host
+                // picker entirely — there's no choice left for the
+                // operator to make. did:webvh / import / sealed-handoff
+                // fall through to the straight advance below.
+                if self.config.did_method == DID_VTA && self.vta_session.is_some() {
+                    self.mode = InputMode::Selecting;
+                    self.advance();
                     return;
                 }
                 self.mode = InputMode::Selecting;
@@ -1794,8 +2074,29 @@ impl WizardApp {
     /// because those steps come after Vta.
     fn apply_vta_defaults(&mut self) {
         if self.config.use_vta {
-            self.config.did_method = DID_VTA.into();
-            self.config.admin_did_mode = ADMIN_VTA.into();
+            // Intent decides whether the VTA supplies the mediator
+            // DID too, or only the admin credential.
+            match self.vta_intent_choice {
+                Some(VtaIntent::FullSetup) | None => {
+                    // `None` shouldn't happen while `use_vta` is
+                    // `true` under the two-question picker, but
+                    // fall through to the legacy "VTA supplies
+                    // everything" defaults for safety.
+                    self.config.did_method = DID_VTA.into();
+                    self.config.admin_did_mode = ADMIN_VTA.into();
+                }
+                Some(VtaIntent::AdminOnly) => {
+                    // Mediator's integration DID is chosen locally
+                    // in the Did step; the VTA only supplies an
+                    // admin credential. Drop any stale DID_VTA
+                    // carry-over from an earlier FullSetup attempt
+                    // so the Did step surfaces the real picker.
+                    if self.config.did_method == DID_VTA {
+                        self.config.did_method = DID_PEER.into();
+                    }
+                    self.config.admin_did_mode = ADMIN_VTA.into();
+                }
+            }
         } else {
             if self.config.did_method == DID_VTA {
                 self.config.did_method = DID_PEER.into();
@@ -1807,10 +2108,34 @@ impl WizardApp {
         }
     }
 
+    /// Whether the Did step should offer the "Configure via VTA"
+    /// option. Only meaningful after the Vta step has completed; read
+    /// from the persisted `did_method` (set by `apply_vta_defaults`
+    /// for FullSetup) plus the session state when present.
+    fn shows_vta_did_option(&self) -> bool {
+        // `did_method == DID_VTA` is the FullSetup signal — AdminOnly
+        // clears it in `apply_vta_defaults`. `No VTA` also clears it.
+        self.config.did_method == DID_VTA
+    }
+
+    /// Per-step entry reset. Called from every point that mutates
+    /// `current_step` so that landing on a step (forward or backward)
+    /// always starts from a clean sub-phase. Keeping this in one place
+    /// avoids the "which sub-phase leaked from the last visit" class
+    /// of bug.
+    fn on_enter_step(&mut self) {
+        if self.current_step == WizardStep::Vta {
+            self.vta_step_phase = VtaStepPhase::SelectIntent;
+            self.vta_intent_choice = None;
+            self.vta_stub_notice = None;
+        }
+    }
+
     fn advance(&mut self) {
         self.completed.push(self.current_step);
         if let Some(next) = self.current_step.next() {
             self.current_step = next;
+            self.on_enter_step();
             self.selection_index = self.default_selection_index();
             // Database + Output both open in text-input mode; Summary
             // goes straight to the confirmation screen. Everything
@@ -1842,6 +2167,22 @@ impl WizardApp {
             self.sealed_handoff_back();
             return;
         }
+        // Top-level Vta picker: Esc from SelectTransport rewinds to
+        // SelectIntent rather than leaving the step entirely. The
+        // intent choice is cleared so SelectIntent's selection_index
+        // can be re-defaulted without a stale pick.
+        if self.current_step == WizardStep::Vta
+            && self.vta_step_phase == VtaStepPhase::SelectTransport
+            && self.vta_connect.is_none()
+            && self.sealed_handoff.is_none()
+        {
+            self.vta_step_phase = VtaStepPhase::SelectIntent;
+            self.vta_intent_choice = None;
+            self.vta_stub_notice = None;
+            self.selection_index = 0;
+            self.mode = InputMode::Selecting;
+            return;
+        }
         if self.in_did_subflow() {
             // EnterCustomUrl and EnterMnemonic → back to SelectWebvhHost.
             // SelectWebvhHost → exit the sub-flow entirely and fall
@@ -1871,6 +2212,7 @@ impl WizardApp {
                     if let Some(prev) = self.current_step.prev() {
                         self.completed.retain(|s| *s != prev);
                         self.current_step = prev;
+                        self.on_enter_step();
                         self.selection_index = self.default_selection_index();
                         self.mode = InputMode::Selecting;
                         self.refresh_text_input_mode();
@@ -1883,6 +2225,7 @@ impl WizardApp {
                 if let Some(prev) = self.current_step.prev() {
                     self.completed.retain(|s| *s != prev);
                     self.current_step = prev;
+                    self.on_enter_step();
                     self.selection_index = self.default_selection_index();
                     self.refresh_text_input_mode();
                 } else {
@@ -2633,15 +2976,34 @@ mod tests {
         }
     }
 
+    /// Walk the two-question Vta picker: pick "Full setup" (intent) then
+    /// "Online" (transport). After this call the wizard is inside the
+    /// online-VTA sub-flow at `ConnectPhase::EnterDid`.
+    fn pick_full_setup_online(app: &mut WizardApp) {
+        app.selection_index = 0;
+        app.select_current(); // SelectIntent → FullSetup
+        app.selection_index = 0;
+        app.select_current(); // SelectTransport → Online (enters sub-flow)
+    }
+
+    /// Walk the two-question Vta picker: pick "Admin credential only"
+    /// (intent) then "Sealed handoff" (transport). After this call the
+    /// wizard is inside the sealed-handoff sub-flow.
+    fn pick_admin_only_sealed(app: &mut WizardApp) {
+        app.selection_index = 1;
+        app.select_current(); // SelectIntent → AdminOnly
+        app.selection_index = 1;
+        app.select_current(); // SelectTransport → Offline (enters sub-flow)
+    }
+
     #[test]
     fn vta_yes_then_online_enters_subflow() {
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
         assert_eq!(app.current_step, WizardStep::Vta);
 
-        // Select "VTA Online" (index 0)
-        app.selection_index = 0;
-        app.select_current();
+        // Two-question picker: "Full setup" then "Online".
+        pick_full_setup_online(&mut app);
 
         // Online picks the DID/context-entry sub-flow — the wizard stays on
         // the Vta step until the connection is tested in a later phase.
@@ -2661,8 +3023,7 @@ mod tests {
     fn vta_subflow_collects_did_then_context_then_instructions() {
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
-        app.selection_index = 0;
-        app.select_current(); // enter sub-flow at EnterDid
+        pick_full_setup_online(&mut app); // enter sub-flow at EnterDid
 
         // Enter the VTA DID.
         app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
@@ -2675,10 +3036,17 @@ mod tests {
 
         // Accept the default context id ("mediator" is pre-filled).
         app.confirm_text_input();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterMediatorUrl));
+
+        // Enter the mediator URL — the new phase added for
+        // provision-integration (template `URL` variable).
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
         assert_eq!(app.mode, InputMode::Selecting);
         let st = app.vta_connect.as_ref().unwrap();
         assert!(st.setup_key.is_some(), "ephemeral setup key generated");
+        assert_eq!(st.mediator_url, "https://mediator.example.com");
         let acl = st.acl_command().unwrap();
         assert!(acl.starts_with("pnm contexts create"));
         assert!(acl.contains("--id mediator"));
@@ -2690,13 +3058,17 @@ mod tests {
     fn vta_subflow_back_rewinds_phases() {
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
-        app.selection_index = 0;
-        app.select_current(); // EnterDid
+        pick_full_setup_online(&mut app); // EnterDid
 
         app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
         app.confirm_text_input(); // → EnterContext
+        app.confirm_text_input(); // → EnterMediatorUrl
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
         app.confirm_text_input(); // → AwaitingAcl
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
+
+        app.go_back(); // → EnterMediatorUrl
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterMediatorUrl));
 
         app.go_back(); // → EnterContext
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::EnterContext));
@@ -2712,15 +3084,16 @@ mod tests {
     #[tokio::test]
     async fn vta_subflow_awaiting_acl_enter_starts_testing() {
         // Pressing Enter on the AwaitingAcl instructions kicks off the
-        // diagnostic + auth runner. The test exits before the runner
+        // provision-integration runner. The test exits before the runner
         // actually contacts any network — we only verify the phase
         // transition and that the channel + diagnostics list are seeded.
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
-        app.selection_index = 0;
-        app.select_current();
+        pick_full_setup_online(&mut app);
         app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
         app.confirm_text_input();
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
         app.confirm_text_input();
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
 
@@ -2740,10 +3113,11 @@ mod tests {
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
-        app.selection_index = 0;
-        app.select_current();
+        pick_full_setup_online(&mut app);
         app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
         app.confirm_text_input();
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
         app.confirm_text_input();
         app.select_current(); // → Testing
 
@@ -2755,12 +3129,12 @@ mod tests {
             DiagStatus::Ok("ok".into()),
         ));
         st.apply_event(VtaEvent::Connected {
-            protocol: Protocol::Rest,
-            access_token: "tok".into(),
-            rest_url: "https://vta.example.com".into(),
-            admin_did: "did:key:z6MkRotated".into(),
-            admin_private_key_mb: "zROTATED".into(),
-            webvh_servers: Vec::new(),
+            protocol: Protocol::DidComm,
+            rest_url: Some("https://vta.example.com".into()),
+            mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
+            reply: crate::vta_connect::VtaReply::Full(
+                crate::vta_connect::provision::test_sample_result(true),
+            ),
         });
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::Connected));
 
@@ -2775,10 +3149,11 @@ mod tests {
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
-        app.selection_index = 0;
-        app.select_current();
+        pick_full_setup_online(&mut app);
         app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
         app.confirm_text_input();
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
         app.confirm_text_input();
         app.select_current(); // → Testing
 
@@ -2809,17 +3184,21 @@ mod tests {
         app.select_current(); // Deployment → KeyStorage
         advance_to(&mut app, WizardStep::Vta);
 
-        // Select "VTA Sealed handoff" (index 1) — the legacy Cold-start
-        // slot. Selection captures the mode + enters the dedicated
-        // sealed sub-flow rather than advancing the wizard. The
-        // sub-flow exits independently when the operator either
-        // completes the bundle exchange or backs out.
-        app.selection_index = 1;
-        app.select_current();
+        // Two-question picker: "Admin credential only" then "Sealed
+        // handoff". Selection captures the mode + enters the dedicated
+        // sealed sub-flow rather than advancing the wizard. AdminOnly
+        // does NOT force `did_method = VTA` — the operator picks their
+        // own DID in the Did step; the VTA only issues an admin
+        // credential.
+        pick_admin_only_sealed(&mut app);
         assert_eq!(app.current_step, WizardStep::Vta);
         assert!(app.config.use_vta);
         assert_eq!(app.config.vta_mode, VTA_MODE_SEALED);
-        assert_eq!(app.config.did_method, DID_VTA);
+        assert_ne!(
+            app.config.did_method, DID_VTA,
+            "AdminOnly keeps operator's own DID choice (not forced to VTA)",
+        );
+        assert_eq!(app.config.admin_did_mode, ADMIN_VTA);
         assert!(app.in_sealed_handoff_subflow());
     }
 
@@ -2853,19 +3232,128 @@ mod tests {
     }
 
     #[test]
-    fn did_options_include_vta_when_enabled() {
+    fn did_options_include_vta_when_full_setup_intent_chosen() {
+        // The "Configure via VTA" option only appears for the
+        // FullSetup intent, signalled by `did_method == DID_VTA`
+        // after `apply_vta_defaults` ran. AdminOnly keeps
+        // `use_vta == true` but clears `did_method` so the operator
+        // picks a local DID method.
         let mut app = WizardApp::new("test.toml".into());
         app.config.use_vta = true;
+        app.config.did_method = DID_VTA.into();
         app.current_step = WizardStep::Did;
         let opts = app.current_options();
         assert_eq!(opts.len(), 4); // VTA, webvh, peer, import
     }
 
     #[test]
-    fn vta_step_has_three_options() {
+    fn did_options_hide_vta_when_admin_only_intent_chosen() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = true;
+        app.config.did_method = DID_PEER.into();
+        app.current_step = WizardStep::Did;
+        let opts = app.current_options();
+        // AdminOnly — operator picks their own DID method; the
+        // "Configure via VTA" option is suppressed.
+        assert_eq!(opts.len(), 3); // webvh, peer, import
+    }
+
+    #[test]
+    fn vta_step_select_intent_has_three_options() {
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::Vta;
+        app.on_enter_step();
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
         let opts = app.current_options();
-        assert_eq!(opts.len(), 3); // Online, Cold-start, No VTA
+        assert_eq!(opts.len(), 3); // FullSetup, AdminOnly, No VTA
+    }
+
+    #[test]
+    fn vta_step_select_transport_has_two_options_after_intent_pick() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        // Pick "Full setup" — advances to transport sub-phase.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectTransport);
+        assert_eq!(app.vta_intent_choice, Some(VtaIntent::FullSetup));
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 2); // Online, Sealed handoff
+        assert!(opts[0].label.starts_with("Online"));
+    }
+
+    #[test]
+    fn vta_step_go_back_from_transport_rewinds_to_intent() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current(); // FullSetup → SelectTransport
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectTransport);
+
+        app.go_back();
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
+        assert!(app.vta_intent_choice.is_none());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn vta_full_setup_offline_enters_sealed_subflow_with_correct_intent() {
+        // Slice 3: FullSetup + Offline is no longer a stub — it enters
+        // the sealed sub-flow with `VtaIntent::FullSetup`, which
+        // drives the VP-framed request + template-bootstrap reply
+        // path. Operator lands on `CollectContext`.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current(); // FullSetup
+        app.selection_index = 1;
+        app.select_current(); // Offline
+        assert!(app.in_sealed_handoff_subflow());
+        let state = app.sealed_handoff.as_ref().unwrap();
+        assert_eq!(state.intent, VtaIntent::FullSetup);
+        assert_eq!(
+            state.phase,
+            crate::sealed_handoff::SealedPhase::CollectContext
+        );
+        assert!(app.vta_stub_notice.is_none());
+        assert_eq!(app.config.vta_mode, VTA_MODE_SEALED);
+    }
+
+    #[test]
+    fn vta_admin_only_online_enters_vta_subflow_with_correct_intent() {
+        // Slice 4: AdminOnly + Online is no longer a stub — it
+        // enters the online VTA sub-flow with
+        // `VtaIntent::AdminOnly`, which skips provision-integration
+        // and keeps the setup DID as the long-term admin credential.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 1;
+        app.select_current(); // AdminOnly
+        app.selection_index = 0;
+        app.select_current(); // Online
+        assert!(app.in_vta_subflow());
+        assert!(!app.in_sealed_handoff_subflow());
+        assert!(app.vta_stub_notice.is_none());
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.intent, VtaIntent::AdminOnly);
+        assert_eq!(st.phase, ConnectPhase::EnterDid);
+        assert_eq!(app.config.vta_mode, VTA_MODE_ONLINE);
+    }
+
+    #[test]
+    fn vta_step_re_entry_resets_picker_phase() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 0;
+        app.select_current(); // FullSetup — now on SelectTransport
+
+        // Jump back to Vta from somewhere else via go_back; the picker
+        // should reset to SelectIntent so the operator can re-answer
+        // cleanly instead of continuing with a stale intent pick.
+        app.vta_step_phase = VtaStepPhase::SelectIntent; // belt-and-braces
+        app.on_enter_step();
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
+        assert!(app.vta_intent_choice.is_none());
+        assert!(app.vta_stub_notice.is_none());
     }
 }

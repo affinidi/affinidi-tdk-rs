@@ -73,8 +73,11 @@ pub fn render_instructions(
 
     let cmd_style = Style::default().fg(theme::PRIMARY);
     let did_style = Style::default().fg(theme::ACCENT);
+    let hotkey_style = Style::default().fg(theme::ACCENT);
+    let good_style = theme::success_style();
+    let warn_style = Style::default().fg(Color::Yellow);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             "Using your Personal Network Manager (PNM) connected to this VTA,",
             theme::muted_style(),
@@ -83,6 +86,25 @@ pub fn render_instructions(
             "create the mediator context and grant admin access to the setup DID:",
             theme::muted_style(),
         )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Hotkey:  ", theme::muted_style()),
+            Span::styled("[c]", hotkey_style),
+            Span::styled(" copy command to clipboard", theme::muted_style()),
+        ]),
+    ];
+    if let Some(status) = state.clipboard_status.as_deref() {
+        let style = if status.starts_with("Copied") {
+            good_style
+        } else {
+            warn_style
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Status:  ", theme::muted_style()),
+            Span::styled(status.to_string(), style),
+        ]));
+    }
+    lines.extend(vec![
         Line::from(""),
         Line::from(Span::styled(format!("  {acl}"), cmd_style)),
         Line::from(""),
@@ -119,7 +141,7 @@ pub fn render_instructions(
         Line::from(""),
         Line::from(Span::styled("Setup DID (ephemeral):", theme::muted_style())),
         Line::from(Span::styled(format!("  {setup_did}"), did_style)),
-    ];
+    ]);
 
     let block = Block::default()
         .borders(Borders::ALL)

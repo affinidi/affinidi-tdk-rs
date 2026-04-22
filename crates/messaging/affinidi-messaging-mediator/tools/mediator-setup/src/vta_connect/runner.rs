@@ -1,27 +1,26 @@
-//! Background connection test.
+//! Background provisioning driver.
 //!
-//! Runs the diagnostic checklist against a running VTA and streams per-check
-//! updates back to the main event loop via an unbounded channel. The runner
-//! is spawned as a detached tokio task; the wizard event loop drains events
-//! on its regular tick.
+//! Runs the diagnostic checklist against a running VTA and drives the
+//! `provision-integration` round-trip — resolve, enumerate, open
+//! DIDComm session as the setup DID, send a VP asking for a
+//! `didcomm-mediator` template render + `vta-admin` admin rollover,
+//! receive the sealed bundle, open locally.
 //!
-//! Authentication goes through `vta_sdk::session::SessionStore::ensure_authenticated`
-//! with a `needs_rotation: true` session. On the first successful challenge-
-//! response the SDK atomically mints a fresh did:key, mirrors the ACL entry
-//! onto it, and drops the temp DID. The setup DID the operator briefly
-//! exposed via copy-paste is therefore short-lived; the wizard surfaces the
-//! rotated DID to the operator as the mediator's long-term admin identity.
-
-use std::collections::HashMap;
-use std::sync::Mutex;
+//! Per-check updates stream back to the main event loop via an
+//! unbounded channel; the wizard event loop drains events on its
+//! regular tick. The runner is spawned as a detached tokio task.
+//!
+//! Provision-integration is DIDComm-only on the wizard side (the
+//! file-path escape hatch lives on the VTA host). If the VTA DID
+//! document doesn't advertise a DIDComm endpoint, the runner hard-
+//! fails with a hint to use the offline sealed-handoff flow instead.
 
 use tokio::sync::mpsc::UnboundedSender;
-use vta_sdk::session::{SessionBackend, SessionStore};
 
 use crate::vta_connect::diagnostics::{DiagCheck, DiagStatus, Protocol};
+use crate::vta_connect::provision::{ProvisionAsk, ProvisionError, provision_mediator_integration};
 use crate::vta_connect::resolve::resolve_vta;
-
-const WIZARD_SESSION_KEY: &str = "mediator-setup-wizard";
+use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
 
 /// Single event emitted by the runner. The consumer applies it to the
 /// diagnostics list and/or transitions the sub-flow phase.
@@ -31,61 +30,39 @@ pub enum VtaEvent {
     CheckDone(DiagCheck, DiagStatus),
     Connected {
         protocol: Protocol,
-        access_token: String,
-        rest_url: String,
-        /// Rotated admin DID returned by the SDK after auto-rotation. The
-        /// setup DID the operator registered is already gone from the ACL.
-        admin_did: String,
-        admin_private_key_mb: String,
-        /// webvh hosting services registered on the VTA. Fetched eagerly
-        /// on successful auth so the Did step can offer them without
-        /// blocking on a second round-trip. Empty when the VTA has no
-        /// servers registered or the list call fails (the Did step
-        /// falls back to self-hosted in both cases).
-        webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
+        /// REST URL advertised in the VTA DID doc, retained for the
+        /// mediator's runtime credential so it has a URL fallback at
+        /// startup. Always `None` when the VTA is DIDComm-only.
+        rest_url: Option<String>,
+        /// DIDComm mediator DID from the VTA DID doc. Always `Some`
+        /// when `protocol == DidComm`.
+        mediator_did: Option<String>,
+        /// Unified reply — carries either the full template-bootstrap
+        /// result (FullSetup) or the enrolled admin credential the
+        /// wizard just verified (AdminOnly). See [`VtaReply`].
+        reply: VtaReply,
     },
     Failed(String),
 }
 
-/// In-memory session backend — the wizard's sessions never touch disk or
-/// the OS keyring. The process-local map is enough because the runner lives
-/// for the duration of the test and hands its result back through
-/// `VtaEvent::Connected`.
-#[derive(Default)]
-struct InMemorySessionBackend {
-    map: Mutex<HashMap<String, String>>,
-}
-
-impl SessionBackend for InMemorySessionBackend {
-    fn load(&self, key: &str) -> Option<String> {
-        self.map.lock().ok()?.get(key).cloned()
-    }
-
-    fn save(&self, key: &str, value: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.map
-            .lock()
-            .map_err(|e| format!("session map poisoned: {e}"))?
-            .insert(key.to_string(), value.to_string());
-        Ok(())
-    }
-
-    fn clear(&self, key: &str) {
-        if let Ok(mut m) = self.map.lock() {
-            m.remove(key);
-        }
-    }
-}
-
-/// Run the full diagnostic + auth sequence.
+/// Run the resolve → enumerate → provision sequence end-to-end.
 ///
-/// Best-effort: every channel `send` is ignored on failure (receiver dropped
-/// if the operator cancelled). Short-circuits on the first non-recoverable
-/// failure (resolve / no REST endpoint). Authentication is REST-only: the
-/// rotation flow requires `ensure_authenticated`, which is REST-backed.
+/// Best-effort: every channel `send` is ignored on failure (receiver
+/// dropped if the operator cancelled). Short-circuits on the first
+/// non-recoverable failure; diagnostic events carry enough detail
+/// for the UI to surface an actionable error without the operator
+/// having to dig into logs.
+///
+/// `context`, `mediator_url`, `label` are captured up-front from the
+/// wizard's earlier phases and fed into the VP's `TemplateBootstrapAsk`.
 pub async fn run_connection_test(
+    intent: VtaIntent,
     vta_did: String,
     setup_did: String,
     setup_privkey_mb: String,
+    context: String,
+    mediator_url: String,
+    label: Option<String>,
     tx: UnboundedSender<VtaEvent>,
 ) {
     // ── 1. Resolve ────────────────────────────────────────────────────
@@ -117,22 +94,40 @@ pub async fn run_connection_test(
     };
 
     // ── 2. Enumerate ──────────────────────────────────────────────────
+    //
+    // Provision-integration is DIDComm-only. A VTA that doesn't
+    // advertise a `#DIDCommMessaging` service cannot be provisioned via
+    // this wizard path — the operator needs to use the offline
+    // sealed-handoff flow instead.
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::EnumerateServices));
     let rest_url = resolved.rest_url.clone();
-    let has_didcomm = resolved.has_didcomm();
+    let mediator_did_opt = resolved.mediator_did.clone();
     let enum_detail = format!(
         "REST: {}, DIDCommMessaging: {}",
         if rest_url.is_some() { "yes" } else { "no" },
-        if has_didcomm { "yes" } else { "no" },
+        if mediator_did_opt.is_some() {
+            "yes"
+        } else {
+            "no"
+        },
     );
-    let Some(rest_url) = rest_url else {
+    let Some(mediator_did) = mediator_did_opt.clone() else {
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::EnumerateServices,
             DiagStatus::Failed(enum_detail),
         ));
+        let _ = tx.send(VtaEvent::CheckDone(
+            DiagCheck::Authenticate,
+            DiagStatus::Skipped("no DIDComm endpoint".into()),
+        ));
+        let _ = tx.send(VtaEvent::CheckDone(
+            DiagCheck::ProvisionIntegration,
+            DiagStatus::Skipped("no DIDComm endpoint".into()),
+        ));
         let _ = tx.send(VtaEvent::Failed(
-            "VTA DID document has no #vta-rest service endpoint — cannot \
-             authenticate. Ask the VTA operator to publish a REST endpoint."
+            "VTA DID document does not advertise a DIDComm mediator endpoint. \
+             Provision-integration requires DIDComm — use the offline \
+             sealed-handoff flow for VTAs that are DIDComm-less or unreachable."
                 .into(),
         ));
         return;
@@ -142,119 +137,157 @@ pub async fn run_connection_test(
         DiagStatus::Ok(enum_detail),
     ));
 
-    // ── 3. Authenticate via SessionStore with rotation ────────────────
-    let store = SessionStore::with_backend(Box::new(InMemorySessionBackend::default()));
-    if let Err(e) = store.store_pending_rotation(
-        WIZARD_SESSION_KEY,
-        &setup_did,
-        &setup_privkey_mb,
-        &vta_did,
-        Some(&rest_url),
-    ) {
-        let _ = tx.send(VtaEvent::Failed(format!(
-            "Could not prepare wizard session: {e}"
-        )));
-        return;
-    }
-
+    // ── 3. Authenticate (+ provision, for FullSetup) ─────────────────
+    //
+    // Both intents open a DIDComm session as the setup DID. For
+    // `FullSetup` the session then carries the VP round-trip;
+    // `AdminOnly` stops after the session opens — the fact that the
+    // authcrypt handshake completes is sufficient proof that the
+    // operator's out-of-band `pnm acl create` worked.
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::Authenticate));
-    let token = match store
-        .ensure_authenticated(&rest_url, WIZARD_SESSION_KEY)
-        .await
-    {
-        Ok(token) => {
-            let _ = tx.send(VtaEvent::CheckDone(
-                DiagCheck::Authenticate,
-                DiagStatus::Ok(format!("setup DID authenticated: {setup_did}")),
-            ));
-            token
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            let _ = tx.send(VtaEvent::CheckDone(
-                DiagCheck::Authenticate,
-                DiagStatus::Failed(msg.clone()),
-            ));
-            let _ = tx.send(VtaEvent::CheckDone(
-                DiagCheck::RotateAdminDid,
-                DiagStatus::Skipped("auth failed — rotation did not run".into()),
-            ));
-            let hint = if msg.contains("401") || msg.contains("403") {
-                "Authentication rejected — confirm the `pnm contexts create` \
-                 command ran successfully on the VTA host for this setup DID."
-            } else if msg.contains("could not connect") {
-                "VTA REST endpoint is unreachable — check network connectivity \
-                 and that the VTA service is running."
-            } else {
-                "Authentication failed. See the diagnostic entry above for \
-                 details."
+
+    match intent {
+        VtaIntent::FullSetup => {
+            let ask = ProvisionAsk::mediator(context.clone(), mediator_url.clone())
+                .with_label(label.unwrap_or_else(|| format!("mediator setup — {context}")));
+
+            let provision = match provision_mediator_integration(
+                &setup_did,
+                &setup_privkey_mb,
+                &vta_did,
+                &mediator_did,
+                &ask,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::Authenticate,
+                        DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckStart(DiagCheck::ProvisionIntegration));
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ProvisionIntegration,
+                        DiagStatus::Ok(format!(
+                            "admin DID: {} (rolled: {}), integration DID: {}",
+                            result.admin_did(),
+                            result.summary.admin_rolled_over,
+                            result.integration_did(),
+                        )),
+                    ));
+                    result
+                }
+                Err(ProvisionError::SessionOpen(msg)) => {
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::Authenticate,
+                        DiagStatus::Failed(msg.clone()),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ProvisionIntegration,
+                        DiagStatus::Skipped("session did not open".into()),
+                    ));
+                    let _ = tx.send(VtaEvent::Failed(format!(
+                        "Could not open an authenticated DIDComm session to the VTA. \
+                         Confirm the `pnm acl create` command ran successfully for \
+                         this setup DID and that the VTA's mediator service is \
+                         reachable. ({msg})"
+                    )));
+                    return;
+                }
+                Err(err) => {
+                    // Authentication opened (DIDComm session is up) but the
+                    // provision call failed downstream.
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::Authenticate,
+                        DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
+                    ));
+                    let msg = err.to_string();
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ProvisionIntegration,
+                        DiagStatus::Failed(msg.clone()),
+                    ));
+                    let hint = if msg.to_lowercase().contains("forbidden")
+                        || msg.contains("401")
+                        || msg.contains("403")
+                    {
+                        format!(
+                            "The VTA rejected the provisioning request. Confirm the \
+                             `pnm acl create` command ran successfully for setup DID \
+                             {setup_did} in context `{context}`, then retry."
+                        )
+                    } else if msg.to_lowercase().contains("template") {
+                        format!(
+                            "VTA rejected the template render — the `didcomm-mediator` \
+                             or `vta-admin` template may be missing or have a \
+                             different required-vars contract. Details: {msg}"
+                        )
+                    } else {
+                        format!("Provisioning failed. Details: {msg}")
+                    };
+                    let _ = tx.send(VtaEvent::Failed(hint));
+                    return;
+                }
             };
-            let _ = tx.send(VtaEvent::Failed(hint.into()));
-            return;
+
+            let _ = tx.send(VtaEvent::Connected {
+                protocol: Protocol::DidComm,
+                rest_url,
+                mediator_did: Some(mediator_did),
+                reply: VtaReply::Full(provision),
+            });
         }
-    };
+        VtaIntent::AdminOnly => {
+            // AdminOnly: open a DIDComm session as the setup DID and
+            // stop there. The setup DID *is* the long-term admin DID
+            // (no rotation) — the session open is the authenticated
+            // proof that the operator's `pnm acl create` landed. We
+            // skip the ProvisionIntegration diagnostic row so the
+            // checklist stays honest about what ran.
+            use vta_sdk::didcomm_session::DIDCommSession;
 
-    // ── 4. Rotation outcome ───────────────────────────────────────────
-    // `ensure_authenticated` has already rotated (or not); we load the
-    // session to find out.
-    let _ = tx.send(VtaEvent::CheckStart(DiagCheck::RotateAdminDid));
-    let rotated = match store.loaded_session(WIZARD_SESSION_KEY) {
-        Some(info) => info,
-        None => {
-            let _ = tx.send(VtaEvent::CheckDone(
-                DiagCheck::RotateAdminDid,
-                DiagStatus::Failed("session vanished after auth".into()),
-            ));
-            let _ = tx.send(VtaEvent::Failed(
-                "Internal error: session disappeared after authentication.".into(),
-            ));
-            return;
-        }
-    };
-
-    if rotated.client_did == setup_did {
-        // The SDK skipped rotation — this shouldn't happen for a session
-        // stored with `store_pending_rotation`, but if it did we surface
-        // it as a soft failure so the operator can tell.
-        let _ = tx.send(VtaEvent::CheckDone(
-            DiagCheck::RotateAdminDid,
-            DiagStatus::Failed("setup DID was not rotated".into()),
-        ));
-        let _ = tx.send(VtaEvent::Failed(
-            "Admin DID rotation did not complete. The setup DID is still \
-             live on the VTA — consider rotating manually or re-running the \
-             wizard."
-                .into(),
-        ));
-        return;
-    }
-
-    let _ = tx.send(VtaEvent::CheckDone(
-        DiagCheck::RotateAdminDid,
-        DiagStatus::Ok(format!("admin DID: {}", rotated.client_did)),
-    ));
-
-    // ── 5. Discover webvh hosting services ─────────────────────────────
-    // Best-effort: the Did step falls back to self-hosting when the
-    // list is empty or the call errors, so a failure here shouldn't
-    // block the wizard. Logging is the only surface.
-    let webvh_servers =
-        match crate::generators::did_vta::list_webvh_servers(&rest_url, &token).await {
-            Ok(servers) => servers,
-            Err(e) => {
-                tracing::warn!(
-                    "Could not list VTA webvh servers: {e}. Did step will offer self-hosted only."
-                );
-                Vec::new()
+            match DIDCommSession::connect(&setup_did, &setup_privkey_mb, &vta_did, &mediator_did)
+                .await
+            {
+                Ok(_session) => {
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::Authenticate,
+                        DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ProvisionIntegration,
+                        DiagStatus::Skipped(
+                            "AdminOnly — wizard verified session only, no template provision"
+                                .into(),
+                        ),
+                    ));
+                    let _ = tx.send(VtaEvent::Connected {
+                        protocol: Protocol::DidComm,
+                        rest_url,
+                        mediator_did: Some(mediator_did),
+                        reply: VtaReply::AdminOnly(AdminCredentialReply {
+                            admin_did: setup_did.clone(),
+                            admin_private_key_mb: setup_privkey_mb.clone(),
+                        }),
+                    });
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::Authenticate,
+                        DiagStatus::Failed(msg.clone()),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ProvisionIntegration,
+                        DiagStatus::Skipped("session did not open".into()),
+                    ));
+                    let _ = tx.send(VtaEvent::Failed(format!(
+                        "Could not open an authenticated DIDComm session to the VTA. \
+                         Confirm the `pnm acl create` command ran successfully for \
+                         this DID and that the VTA's mediator service is reachable. \
+                         ({msg})"
+                    )));
+                }
             }
-        };
-
-    let _ = tx.send(VtaEvent::Connected {
-        protocol: Protocol::Rest,
-        access_token: token,
-        rest_url,
-        admin_did: rotated.client_did,
-        admin_private_key_mb: rotated.private_key_multibase,
-        webvh_servers,
-    });
+        }
+    }
 }

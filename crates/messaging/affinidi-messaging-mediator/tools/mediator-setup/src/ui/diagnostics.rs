@@ -78,16 +78,46 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
             let Some(conn) = state.connection.as_ref() else {
                 return Vec::new();
             };
-            vec![
-                Line::from(Span::styled(
-                    format!("  Connected via {}.", conn.protocol.label()),
-                    theme::success_style(),
-                )),
-                Line::from(Span::styled(
-                    format!("  Admin DID (rotated): {}", conn.admin_did),
-                    theme::info_style(),
-                )),
-            ]
+            // Two reply variants surface different facts. FullSetup
+            // reports both the rolled-over admin DID and the
+            // VTA-minted integration DID; AdminOnly only has the
+            // admin DID (integration DID came from the earlier Did
+            // step, not the VTA).
+            use crate::vta_connect::VtaReply;
+            match &conn.reply {
+                VtaReply::Full(provision) => vec![
+                    Line::from(Span::styled(
+                        format!("  Connected via {}.", conn.protocol.label()),
+                        theme::success_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!(
+                            "  Admin DID: {}{}",
+                            provision.admin_did(),
+                            if provision.summary.admin_rolled_over {
+                                " (rolled over by VTA)"
+                            } else {
+                                ""
+                            }
+                        ),
+                        theme::info_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("  Mediator DID: {}", provision.integration_did()),
+                        theme::info_style(),
+                    )),
+                ],
+                VtaReply::AdminOnly(admin) => vec![
+                    Line::from(Span::styled(
+                        format!("  Connected via {}.", conn.protocol.label()),
+                        theme::success_style(),
+                    )),
+                    Line::from(Span::styled(
+                        format!("  Admin DID: {} (enrolled, no rotation)", admin.admin_did),
+                        theme::info_style(),
+                    )),
+                ],
+            }
         }
         ConnectPhase::Testing => {
             if state.event_rx.is_some() {

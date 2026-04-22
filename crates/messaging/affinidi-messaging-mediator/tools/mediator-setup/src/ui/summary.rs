@@ -3,13 +3,18 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
-use crate::{app::WizardConfig, ui::theme};
+use crate::{
+    app::WizardConfig,
+    ui::theme,
+    vta_connect::{VtaReply, VtaSession},
+};
 
 /// Renders the summary view showing all configuration choices.
 pub fn render_summary(
     frame: &mut Frame,
     area: Rect,
     config: &WizardConfig,
+    vta_session: Option<&VtaSession>,
     confirm_selected: bool,
 ) {
     let block = Block::default()
@@ -58,8 +63,17 @@ pub fn render_summary(
 
     // ── Identity ──
     add_section_header(&mut lines, "Identity", section_style);
+    // VTA summary reflects both the transport (`vta_mode`) and the
+    // intent (FullSetup vs AdminOnly). Intent comes from the session's
+    // reply variant — `Full` means the VTA minted the integration DID,
+    // `AdminOnly` means the VTA only issued an admin credential.
     let vta_display = if config.use_vta {
-        format!("Enabled ({})", config.vta_mode)
+        let intent_label = match vta_session.map(|s| &s.reply) {
+            Some(VtaReply::Full(_)) => "full setup",
+            Some(VtaReply::AdminOnly(_)) => "admin credential only",
+            None => "pending", // Vta step not completed yet (shouldn't show on Summary in practice)
+        };
+        format!("Enabled — {} ({})", intent_label, config.vta_mode)
     } else {
         "Disabled".into()
     };

@@ -12,6 +12,8 @@
 
 pub mod cli;
 pub mod diagnostics;
+pub mod intent;
+pub mod provision;
 pub mod resolve;
 pub mod runner;
 pub mod setup_key;
@@ -19,26 +21,121 @@ pub mod setup_key;
 pub use diagnostics::{
     ConnectedInfo, DiagCheck, DiagEntry, DiagStatus, apply_update, pending_list,
 };
+pub use intent::{AdminCredentialReply, VtaIntent, VtaReply, VtaTransport};
 
-/// A completed VTA connection — retained on `WizardApp` after the sub-flow
-/// exits so downstream steps (Did, Summary, secret-writing) can use the
-/// authenticated session.
+use crate::vta_connect::provision::ProvisionResult;
+
+/// A completed VTA interaction — retained on `WizardApp` after the
+/// sub-flow exits so downstream steps (Did, Summary, secret-writing) can
+/// use the resulting credential material.
+///
+/// The [`reply`](Self::reply) field carries the transport-agnostic payload.
+/// Accessors below flatten the two variants into the shape downstream code
+/// actually consumes (admin DID, admin private key, optional integration
+/// DID).
 #[derive(Clone, Debug)]
 pub struct VtaSession {
-    pub rest_url: String,
-    pub access_token: String,
     pub context_id: String,
     pub vta_did: String,
-    /// Rotated admin did:key — not the setup DID the operator pasted into
-    /// the ACL command. Persisted into the chosen secret backend so the
-    /// mediator can authenticate to the VTA at runtime.
-    pub admin_did: String,
-    /// Private key (multibase) matching `admin_did`.
-    pub admin_private_key_mb: String,
-    /// webvh hosting services registered on the VTA, captured once
-    /// at connect time. The Did step shows these as DID-publish
-    /// options; empty list means "self-host only".
-    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
+    /// REST URL advertised by the VTA DID doc. `None` for a
+    /// DIDComm-only VTA or a sealed-handoff session. Persisted onto
+    /// the mediator's admin credential so its runtime code has a URL
+    /// fallback for VTA operations.
+    pub rest_url: Option<String>,
+    /// DIDComm mediator DID advertised by the VTA. Captured so a
+    /// DIDComm-backed `VtaClient` can be reopened without
+    /// re-resolving the VTA DID document.
+    pub mediator_did: Option<String>,
+    /// Unified reply — either a full template-bootstrap result or an
+    /// admin-credential-only reply. See [`VtaReply`].
+    pub reply: VtaReply,
+}
+
+impl VtaSession {
+    /// Construct a session from a full template-bootstrap reply (both
+    /// online and offline `FullSetup` adapters call this).
+    pub fn full(
+        context_id: String,
+        vta_did: String,
+        rest_url: Option<String>,
+        mediator_did: Option<String>,
+        provision: ProvisionResult,
+    ) -> Self {
+        Self {
+            context_id,
+            vta_did,
+            rest_url,
+            mediator_did,
+            reply: VtaReply::Full(provision),
+        }
+    }
+
+    /// Construct a session from an admin-credential-only reply (both
+    /// online and offline `AdminOnly` adapters call this).
+    pub fn admin_only(
+        context_id: String,
+        vta_did: String,
+        rest_url: Option<String>,
+        mediator_did: Option<String>,
+        admin_did: String,
+        admin_private_key_mb: String,
+    ) -> Self {
+        Self {
+            context_id,
+            vta_did,
+            rest_url,
+            mediator_did,
+            reply: VtaReply::AdminOnly(AdminCredentialReply {
+                admin_did,
+                admin_private_key_mb,
+            }),
+        }
+    }
+
+    /// Long-term admin DID the mediator authenticates as. For a
+    /// [`VtaReply::Full`] reply this is the rolled-over DID from the
+    /// `ProvisionResult`; for `AdminOnly` it's the DID the VTA supplied
+    /// directly.
+    pub fn admin_did(&self) -> &str {
+        match &self.reply {
+            VtaReply::Full(p) => p.admin_did(),
+            VtaReply::AdminOnly(a) => &a.admin_did,
+        }
+    }
+
+    /// Private key (multibase) matching [`Self::admin_did`]. Returns an
+    /// empty slice when a `Full` reply has no admin-key entry (the
+    /// legacy no-rollover path); callers should treat empty as "reuse
+    /// the setup key" exactly as before.
+    pub fn admin_private_key_mb(&self) -> &str {
+        match &self.reply {
+            VtaReply::Full(p) => p
+                .admin_key()
+                .map(|k| k.signing_key.private_key_multibase.as_str())
+                .unwrap_or(""),
+            VtaReply::AdminOnly(a) => &a.admin_private_key_mb,
+        }
+    }
+
+    /// Integration (mediator-service) DID the VTA rendered. `None` for
+    /// `AdminOnly` replies — the mediator brought its own DID.
+    pub fn integration_did(&self) -> Option<&str> {
+        match &self.reply {
+            VtaReply::Full(p) => Some(p.integration_did()),
+            VtaReply::AdminOnly(_) => None,
+        }
+    }
+
+    /// Borrow the full [`ProvisionResult`] when the reply is
+    /// [`VtaReply::Full`]. Returns `None` for `AdminOnly`. Used by
+    /// downstream code that needs VTA-minted keys, did.jsonl, or the
+    /// authorization VC.
+    pub fn as_full_provision(&self) -> Option<&ProvisionResult> {
+        match &self.reply {
+            VtaReply::Full(p) => Some(p),
+            VtaReply::AdminOnly(_) => None,
+        }
+    }
 }
 // `Protocol` is only used by `diagnostics.rs` and the runner internally; the
 // `ConnectedInfo` export above is enough for callers to read the active
@@ -54,8 +151,21 @@ use crate::consts::{DEFAULT_VTA_CONTEXT, DEFAULT_VTA_SETUP_EXPIRY};
 /// `WizardConfig` is what guarantees the setup key and resolved endpoints
 /// cannot leak into `mediator-build.toml`.
 pub struct VtaConnectState {
+    /// Which online path is running — `FullSetup` drives the full
+    /// `provision-integration` round-trip; `AdminOnly` stops after
+    /// verifying the setup DID's ACL enrollment via an authenticated
+    /// DIDComm session. Set at sub-flow entry; never changes.
+    pub intent: VtaIntent,
     pub vta_did: String,
     pub context_id: String,
+    /// Mediator's public URL, captured during
+    /// [`ConnectPhase::EnterMediatorUrl`]. Passed to the
+    /// `didcomm-mediator` template as the `URL` variable when the
+    /// runner calls
+    /// [`crate::vta_connect::provision::provision_mediator_integration`].
+    /// Empty until the operator fills it in. Unused when
+    /// `intent == VtaIntent::AdminOnly`.
+    pub mediator_url: String,
     pub setup_key: Option<EphemeralSetupKey>,
     pub phase: ConnectPhase,
     pub last_error: Option<String>,
@@ -69,14 +179,28 @@ pub struct VtaConnectState {
     /// Populated once auth succeeds; future work wires this into downstream
     /// wizard steps.
     pub connection: Option<ConnectedInfo>,
+    /// Transient status line for the clipboard hotkey on `AwaitingAcl`.
+    /// Short message shown in the instructions block — "Copied!" on
+    /// success, the arboard error on failure. Cleared on phase change
+    /// so it doesn't leak onto the Testing / Connected screens.
+    pub clipboard_status: Option<String>,
 }
 
 /// Linear progression through the online-VTA sub-flow. The UI layer reads this
 /// to decide what to render; actions map onto transitions.
+///
+/// `EnterMediatorUrl` sits between `EnterContext` and `AwaitingAcl`
+/// because the provision-integration runner needs the mediator's
+/// public URL at run time — it's the `URL` template variable for the
+/// `didcomm-mediator` template rendered by the VTA. Capturing it here
+/// (rather than in the later Did step) keeps the Vta step
+/// self-contained: everything the runner needs is collected before
+/// the ACL command is displayed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConnectPhase {
     EnterDid,
     EnterContext,
+    EnterMediatorUrl,
     AwaitingAcl,
     Testing,
     Connected,
@@ -84,21 +208,43 @@ pub enum ConnectPhase {
 
 impl Default for VtaConnectState {
     fn default() -> Self {
-        Self::new()
+        Self::new(VtaIntent::FullSetup)
     }
 }
 
 impl VtaConnectState {
-    pub fn new() -> Self {
+    pub fn new(intent: VtaIntent) -> Self {
         Self {
+            intent,
             vta_did: String::new(),
             context_id: DEFAULT_VTA_CONTEXT.to_string(),
+            mediator_url: String::new(),
             setup_key: None,
             phase: ConnectPhase::EnterDid,
             last_error: None,
             diagnostics: Vec::new(),
             event_rx: None,
             connection: None,
+            clipboard_status: None,
+        }
+    }
+
+    /// Copy the rendered `pnm acl create` command to the system clipboard
+    /// via `arboard`. Result is recorded in `clipboard_status` so the
+    /// renderer can surface "Copied!" or the specific error on the next
+    /// frame. No-op if the setup key isn't generated yet.
+    pub fn copy_acl_command_to_clipboard(&mut self) {
+        let Some(cmd) = self.acl_command() else {
+            self.clipboard_status = Some("Setup key not yet generated".into());
+            return;
+        };
+        match arboard::Clipboard::new().and_then(|mut c| c.set_text(cmd)) {
+            Ok(()) => {
+                self.clipboard_status = Some("Copied pnm acl command".into());
+            }
+            Err(e) => {
+                self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));
+            }
         }
     }
 
@@ -114,19 +260,15 @@ impl VtaConnectState {
             }
             VtaEvent::Connected {
                 protocol,
-                access_token,
                 rest_url,
-                admin_did,
-                admin_private_key_mb,
-                webvh_servers,
+                mediator_did,
+                reply,
             } => {
                 self.connection = Some(ConnectedInfo {
                     protocol,
-                    access_token,
                     rest_url,
-                    admin_did,
-                    admin_private_key_mb,
-                    webvh_servers,
+                    mediator_did,
+                    reply,
                 });
                 self.phase = ConnectPhase::Connected;
                 self.event_rx = None;
@@ -161,7 +303,7 @@ mod tests {
 
     #[test]
     fn acl_command_renders_single_pnm_contexts_create() {
-        let mut st = VtaConnectState::new();
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.context_id = "mediator-prod".into();
         st.setup_key = Some(EphemeralSetupKey::generate().unwrap());
         let cmd = st.acl_command().unwrap();
@@ -174,13 +316,13 @@ mod tests {
 
     #[test]
     fn acl_command_none_without_setup_key() {
-        let st = VtaConnectState::new();
+        let st = VtaConnectState::new(VtaIntent::FullSetup);
         assert!(st.acl_command().is_none());
     }
 
     #[test]
     fn default_context_is_mediator() {
-        let st = VtaConnectState::new();
+        let st = VtaConnectState::new(VtaIntent::FullSetup);
         assert_eq!(st.context_id, DEFAULT_VTA_CONTEXT);
     }
 }
