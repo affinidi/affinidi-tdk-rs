@@ -130,6 +130,10 @@ pub async fn run_connection_test(
             DiagStatus::Skipped("no DIDComm endpoint".into()),
         ));
         let _ = tx.send(VtaEvent::CheckDone(
+            DiagCheck::ListWebvhServers,
+            DiagStatus::Skipped("no DIDComm endpoint".into()),
+        ));
+        let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::ProvisionIntegration,
             DiagStatus::Skipped("no DIDComm endpoint".into()),
         ));
@@ -192,6 +196,10 @@ pub async fn run_connection_test(
                         DiagStatus::Failed(msg.clone()),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ListWebvhServers,
+                        DiagStatus::Skipped("session did not open".into()),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
                         DiagCheck::ProvisionIntegration,
                         DiagStatus::Skipped("session did not open".into()),
                     ));
@@ -207,8 +215,9 @@ pub async fn run_connection_test(
 
             // Webvh-server catalogue lookup. Failure here is
             // non-fatal — the serverless path still works — but we
-            // surface it so the operator knows the picker is
-            // unavailable.
+            // surface the attempt in the checklist so the operator
+            // can see whether the picker is about to show up.
+            let _ = tx.send(VtaEvent::CheckStart(DiagCheck::ListWebvhServers));
             let servers = match session
                 .send_and_wait::<ListWebvhServersResultBody>(
                     LIST_WEBVH_SERVERS,
@@ -218,16 +227,26 @@ pub async fn run_connection_test(
                 )
                 .await
             {
-                Ok(body) => body.servers,
+                Ok(body) => {
+                    let detail = match body.servers.len() {
+                        0 => "no registered servers — serverless path".into(),
+                        1 => format!("1 registered server ({})", body.servers[0].id),
+                        n => format!("{n} registered servers"),
+                    };
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ListWebvhServers,
+                        DiagStatus::Ok(detail),
+                    ));
+                    body.servers
+                }
                 Err(e) => {
-                    // Log a line but keep going — the operator can
-                    // still complete with serverless. Don't pollute
-                    // the diagnostic list; a failed list is not a
-                    // provisioning failure.
-                    tracing::warn!(
-                        error = %e,
-                        "list_webvh_servers failed — continuing with empty catalogue (serverless path)"
-                    );
+                    let msg = e.to_string();
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ListWebvhServers,
+                        DiagStatus::Failed(format!(
+                            "could not list — continuing serverless ({msg})"
+                        )),
+                    ));
                     Vec::new()
                 }
             };
@@ -256,9 +275,16 @@ pub async fn run_connection_test(
                         DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ListWebvhServers,
+                        DiagStatus::Skipped(
+                            "AdminOnly — no VTA-minted DID so no webvh host needed".into(),
+                        ),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
                         DiagCheck::ProvisionIntegration,
                         DiagStatus::Skipped(
-                            "AdminOnly — wizard verified session only, no template provision"
+                            "AdminOnly — setup did:key is the long-term admin credential; \
+                             no template render, no rollover"
                                 .into(),
                         ),
                     ));
@@ -277,6 +303,10 @@ pub async fn run_connection_test(
                     let _ = tx.send(VtaEvent::CheckDone(
                         DiagCheck::Authenticate,
                         DiagStatus::Failed(msg.clone()),
+                    ));
+                    let _ = tx.send(VtaEvent::CheckDone(
+                        DiagCheck::ListWebvhServers,
+                        DiagStatus::Skipped("session did not open".into()),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
                         DiagCheck::ProvisionIntegration,

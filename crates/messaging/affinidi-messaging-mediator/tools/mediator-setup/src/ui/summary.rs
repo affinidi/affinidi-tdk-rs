@@ -78,6 +78,25 @@ pub fn render_summary(
         "Disabled".into()
     };
     add_field(&mut lines, "  VTA", &vta_display, label_style, value_style);
+    // Webvh hosting row — only meaningful on a completed FullSetup.
+    // The `provision.summary.webvh_server_id` comes straight from
+    // the VTA (see the SDK's `ProvisionSummary.webvh_server_id`),
+    // so we render whatever the VTA actually resolved rather than
+    // echoing the operator's pick — useful if the VTA renamed or
+    // re-routed under the covers.
+    if let Some(VtaReply::Full(provision)) = vta_session.map(|s| &s.reply) {
+        let webvh_display = match provision.summary.webvh_server_id.as_deref() {
+            Some(id) => format!("{id} (VTA-pinned)"),
+            None => "serverless (self-host at Public URL)".into(),
+        };
+        add_field(
+            &mut lines,
+            "  Webvh hosting",
+            &webvh_display,
+            label_style,
+            value_style,
+        );
+    }
     add_field(
         &mut lines,
         "  DID Method",

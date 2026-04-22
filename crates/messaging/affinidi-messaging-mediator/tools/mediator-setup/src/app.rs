@@ -730,16 +730,16 @@ impl WizardApp {
                 // carries the right variant — FullSetup → Full,
                 // AdminOnly → AdminOnly — we just wrap the transport
                 // context around it.
-                if let Some(state) = self.vta_connect.as_ref() {
-                    if let Some(conn) = state.connection.as_ref() {
-                        self.vta_session = Some(VtaSession {
-                            context_id: state.context_id.clone(),
-                            vta_did: state.vta_did.clone(),
-                            rest_url: conn.rest_url.clone(),
-                            mediator_did: conn.mediator_did.clone(),
-                            reply: conn.reply.clone(),
-                        });
-                    }
+                if let Some(state) = self.vta_connect.as_ref()
+                    && let Some(conn) = state.connection.as_ref()
+                {
+                    self.vta_session = Some(VtaSession {
+                        context_id: state.context_id.clone(),
+                        vta_did: state.vta_did.clone(),
+                        rest_url: conn.rest_url.clone(),
+                        mediator_did: conn.mediator_did.clone(),
+                        reply: conn.reply.clone(),
+                    });
                 }
                 self.vta_connect = None;
                 self.mode = InputMode::Selecting;
@@ -2116,10 +2116,10 @@ impl WizardApp {
         if self.in_vta_subflow() {
             // Errors here mean the ephemeral key generator failed — surface
             // as a transient error on the sub-flow state, not a panic.
-            if let Err(e) = self.vta_subflow_confirm_text() {
-                if let Some(st) = self.vta_connect.as_mut() {
-                    st.last_error = Some(e.to_string());
-                }
+            if let Err(e) = self.vta_subflow_confirm_text()
+                && let Some(st) = self.vta_connect.as_mut()
+            {
+                st.last_error = Some(e.to_string());
             }
             return;
         }

@@ -7,6 +7,10 @@ pub enum DiagCheck {
     ResolveDid,
     EnumerateServices,
     Authenticate,
+    /// FullSetup-only: fetches the VTA's registered webvh-hosting-server
+    /// catalogue so the wizard can either auto-pick (0/1 entries) or
+    /// prompt the operator (2+). Skipped on AdminOnly.
+    ListWebvhServers,
     ProvisionIntegration,
 }
 
@@ -16,6 +20,7 @@ impl DiagCheck {
             Self::ResolveDid => "Resolve VTA DID",
             Self::EnumerateServices => "Enumerate service endpoints",
             Self::Authenticate => "Open authenticated DIDComm session",
+            Self::ListWebvhServers => "List webvh hosting servers",
             Self::ProvisionIntegration => "Provision mediator DID + admin credential",
         }
     }
@@ -27,6 +32,7 @@ impl DiagCheck {
             Self::ResolveDid,
             Self::EnumerateServices,
             Self::Authenticate,
+            Self::ListWebvhServers,
             Self::ProvisionIntegration,
         ]
     }
