@@ -170,6 +170,12 @@ pub struct ProvisionSummaryLocal {
     pub bundle_id_hex: String,
     pub secret_count: usize,
     pub output_count: usize,
+    /// Id of the webvh hosting server the VTA picked for the minted
+    /// DID's did.jsonl log. `Some` when the operator passed
+    /// `WEBVH_SERVER` on the template vars and the VTA resolved it
+    /// against its server catalogue; `None` for the serverless path
+    /// where the DID self-hosts at its `URL`.
+    pub webvh_server_id: Option<String>,
 }
 
 impl From<ProvisionSummary> for ProvisionSummaryLocal {
@@ -185,6 +191,7 @@ impl From<ProvisionSummary> for ProvisionSummaryLocal {
             bundle_id_hex: s.bundle_id_hex,
             secret_count: s.secret_count,
             output_count: s.output_count,
+            webvh_server_id: s.webvh_server_id,
         }
     }
 }
@@ -251,6 +258,13 @@ impl ProvisionResult {
             .cloned()
             .unwrap_or_else(|| integration_did.clone());
         let admin_rolled_over = admin_did != integration_did;
+        // The offline sealed-handoff path has no VTA-supplied
+        // ProvisionSummary — we synthesise one from the payload. The
+        // VTA-resolved `webvh_server_id` isn't on the payload itself
+        // (the payload just carries the rendered DID doc + keys +
+        // did.jsonl), so leave it `None` on this path. Callers who
+        // need it can inspect `payload.config.outputs` for the
+        // resolved webvh log host.
         let summary = ProvisionSummaryLocal {
             client_did: admin_did.clone(),
             admin_did,
@@ -260,6 +274,7 @@ impl ProvisionResult {
             template_kind: payload.config.template_kind.clone(),
             admin_template_name: None,
             bundle_id_hex: String::new(),
+            webvh_server_id: None,
             secret_count: payload.secrets.len(),
             output_count: payload.config.outputs.len(),
         };
@@ -546,6 +561,7 @@ pub(crate) fn test_sample_result(rolled_over: bool) -> ProvisionResult {
             bundle_id_hex: "00112233445566778899aabbccddeeff".into(),
             secret_count: if rolled_over { 2 } else { 1 },
             output_count: 1,
+            webvh_server_id: None,
         },
         payload,
     }

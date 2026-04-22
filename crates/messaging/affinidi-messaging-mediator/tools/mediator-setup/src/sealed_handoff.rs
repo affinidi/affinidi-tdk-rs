@@ -37,16 +37,26 @@ use crate::consts::DEFAULT_VTA_CONTEXT;
 use crate::vta_connect::provision::{ProvisionAsk, ProvisionResult};
 use crate::vta_connect::{VtaIntent, VtaSession};
 
+/// Template variable the VTA's `didcomm-mediator` template reads to
+/// pin the webvh hosting server for the minted DID's did.jsonl log.
+/// Upstream contract: the value is a string matching
+/// `WebvhServerRecord.id` in the VTA's server catalogue; leaving the
+/// var absent keeps the serverless (self-hosted at `URL`) behaviour.
+/// See `vta-sdk/templates/didcomm-mediator.json` +
+/// `vta-service/src/operations/provision_integration.rs::resolve_webvh_server`.
+const WEBVH_SERVER_TEMPLATE_VAR: &str = "WEBVH_SERVER";
+
 /// Linear progress through the air-gapped flow. The wizard advances
 /// strictly in order — each phase has a single well-defined exit.
 ///
 /// Two intents share this phase machine: `AdminOnly` walks the
 /// `CollectContext → CollectAdminLabel → …` chain and produces a plain
 /// `sealed_transfer::BootstrapRequest`; `FullSetup` walks
-/// `CollectContext → CollectMediatorUrl → …` and produces a VP-framed
-/// `provision_integration::BootstrapRequest`. The shared tail
-/// (`RequestGenerated → AwaitingBundle → DigestVerify → Complete`) is
-/// identical except for which `SealedPayloadV1` variant is accepted.
+/// `CollectContext → CollectMediatorUrl → CollectWebvhServer → …` and
+/// produces a VP-framed `provision_integration::BootstrapRequest`.
+/// The shared tail (`RequestGenerated → AwaitingBundle → DigestVerify
+/// → Complete`) is identical except for which `SealedPayloadV1` variant
+/// is accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SealedPhase {
     /// Text input for the VTA context slug (e.g. `mediator`). Both
@@ -54,10 +64,12 @@ pub enum SealedPhase {
     CollectContext,
     /// FullSetup-only: text input for the mediator's public URL. Fed
     /// to the VTA's `didcomm-mediator` template as the required `URL`
-    /// variable. The built-in template accepts this plus two
-    /// optional vars (`ROUTING_KEYS`, `ACCEPT`) — no other inputs
-    /// are plumbed through today.
+    /// variable.
     CollectMediatorUrl,
+    /// FullSetup-only: optional text input for a webvh server id the
+    /// VTA should host the minted DID's did.jsonl log on. Empty means
+    /// "self-host at the URL" (the VTA's serverless path).
+    CollectWebvhServer,
     /// AdminOnly-only: text input for the admin ACL label. Optional —
     /// empty advances with the `--admin-label` flag omitted.
     CollectAdminLabel,
@@ -102,6 +114,11 @@ pub struct SealedHandoffState {
     /// Required before the VP-framed request can be signed; empty
     /// until the operator fills it in on `CollectMediatorUrl`.
     pub mediator_url: String,
+    /// FullSetup-only: optional webvh server id pinning the VTA to a
+    /// specific hosting server for the minted DID's did.jsonl log.
+    /// Empty means "self-host at the URL". See
+    /// [`WEBVH_SERVER_TEMPLATE_VAR`].
+    pub webvh_server: String,
     /// Consumer's X25519 secret. Required to open the returned bundle;
     /// dropped when the sub-flow exits. Zeroed until the inputs phases
     /// complete and `finalize_request` runs.
@@ -162,6 +179,7 @@ impl SealedHandoffState {
             context_id: DEFAULT_VTA_CONTEXT.to_string(),
             admin_label: String::new(),
             mediator_url: String::new(),
+            webvh_server: String::new(),
             recipient_secret: [0u8; 32],
             nonce: [0u8; 16],
             request_json: String::new(),
@@ -232,6 +250,12 @@ impl SealedHandoffState {
                 let client_did = affinidi_crypto::did_key::ed25519_pub_to_did_key(&ed_pub);
                 let mut ask =
                     ProvisionAsk::mediator(self.context_id.clone(), self.mediator_url.clone());
+                if !self.webvh_server.is_empty() {
+                    ask.mediator_template_vars.insert(
+                        WEBVH_SERVER_TEMPLATE_VAR.to_string(),
+                        serde_json::Value::String(self.webvh_server.clone()),
+                    );
+                }
                 if let Some(ref label) = self.run_label {
                     ask = ask.clone().with_label(label.clone());
                 }
@@ -694,6 +718,43 @@ mod tests {
         // VP shape includes Data Integrity proof fields.
         assert!(state.request_json.contains("\"proof\""));
         assert!(state.request_json.contains("VerifiablePresentation"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_webvh_server_appears_in_vp_template_vars() {
+        // When the operator types a webvh server id on
+        // `CollectWebvhServer`, the VP's ask must carry
+        // `WEBVH_SERVER` as a template var so the VTA's
+        // `resolve_webvh_server` picks it up. Empty input omits the
+        // var entirely (serverless path).
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = "prod-1".into();
+        state.finalize_request().unwrap();
+        // The VP JSON is signed, so field ordering is canonical.
+        // Assert on substrings that are present regardless of
+        // ordering — var name and value both appear verbatim.
+        assert!(
+            state.request_json.contains("\"WEBVH_SERVER\""),
+            "WEBVH_SERVER template var missing from VP: {}",
+            state.request_json
+        );
+        assert!(
+            state.request_json.contains("\"prod-1\""),
+            "resolved server id missing from VP: {}",
+            state.request_json
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_omits_webvh_server_var_when_blank() {
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.finalize_request().unwrap();
+        assert!(
+            !state.request_json.contains("WEBVH_SERVER"),
+            "blank webvh_server should omit the template var entirely"
+        );
     }
 
     #[tokio::test]

@@ -266,8 +266,37 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     chunks[1],
                     "Info",
                     "The VTA renders the mediator's DID with this URL baked into \
-                     the service endpoints. Changing it later means re-provisioning. \
-                     The bootstrap request is generated on Enter.",
+                     the service endpoints. Changing it later means re-provisioning.",
+                );
+                return;
+            }
+            SealedPhase::CollectWebvhServer => {
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    "Optional — id of a webvh hosting server already registered \
+                     on the VTA (matches the `id` returned by the VTA's \
+                     `list_webvh_servers` RPC). Leave blank to self-host at \
+                     the URL above."
+                        .into()
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — webvh server (optional)",
+                    "Pin a webvh hosting server for this DID's log (optional).",
+                    None,
+                    &app.text_input,
+                    "webvh-prod-1",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "Sent to the VTA as the `WEBVH_SERVER` template var. The VTA \
+                     validates the id against its server catalogue before minting \
+                     — an unknown id fails with a clear error. Blank → VTA uses \
+                     the serverless path (self-host at `URL`). The bootstrap \
+                     request is generated on Enter.",
                 );
                 return;
             }
