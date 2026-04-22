@@ -101,22 +101,26 @@ pub async fn run_phase2_connect(
         let vta_did_owned = vta_did.to_string();
         let setup_did = key.did.clone();
         let privkey_mb = key.private_key_multibase().to_string();
-        let ctx_owned = ctx.to_string();
-        let url_owned = mediator_url.to_string();
+        // `ctx` / `mediator_url` are captured only for the CLI
+        // operator message below; AdminOnly doesn't use them in the
+        // runner.
+        let _ = ctx;
+        let _ = mediator_url;
 
         let runner = tokio::spawn(async move {
-            // CLI phase-2 mirrors the interactive "Online +
-            // FullSetup" flow — provision-integration end-to-end.
-            // AdminOnly online doesn't have a CLI surface today;
-            // add one if needed.
+            // CLI phase-2 is AdminOnly — the interactive
+            // FullSetup flow now splits into preflight + webvh
+            // picker + provision, which doesn't fit a one-shot
+            // CLI surface. If FullSetup via CLI is wanted later,
+            // expose a `--webvh-server <id>` flag and call
+            // `run_connection_test` + `run_provision_flight` in
+            // sequence here, auto-picking when only one server is
+            // registered.
             run_connection_test(
-                VtaIntent::FullSetup,
+                VtaIntent::AdminOnly,
                 vta_did_owned,
                 setup_did,
                 privkey_mb,
-                ctx_owned,
-                url_owned,
-                Some("mediator-setup cli".into()),
                 tx,
             )
             .await;
@@ -136,6 +140,11 @@ pub async fn run_phase2_connect(
                     connected = true;
                     println!();
                     println!("  Connected via {}", protocol.label());
+                }
+                VtaEvent::PreflightDone { .. } => {
+                    // AdminOnly never emits PreflightDone. Ignore
+                    // defensively rather than panic if a future
+                    // runner change breaks that invariant.
                 }
                 VtaEvent::Failed(reason) => {
                     last_failure = Some(reason);

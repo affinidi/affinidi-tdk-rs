@@ -469,6 +469,25 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 info_box::render_info_box(frame, chunks[1], "Info", &info_text);
                 return;
             }
+            ConnectPhase::PickWebvhServer => {
+                // Use the standard selection + info-box layout so the
+                // operator can arrow through servers with the usual
+                // keybindings. Options are built by
+                // `current_options()` above.
+                let options = app.current_options();
+                selection::render_selection(
+                    frame,
+                    chunks[0],
+                    &step_data.title,
+                    &step_data.description,
+                    &options,
+                    app.selection_index,
+                    content_focused,
+                );
+                let info_text = app.current_info_text();
+                info_box::render_info_box(frame, chunks[1], "Info", &info_text);
+                return;
+            }
         }
     }
 

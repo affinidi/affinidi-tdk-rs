@@ -169,6 +169,21 @@ pub struct VtaConnectState {
     pub setup_key: Option<EphemeralSetupKey>,
     pub phase: ConnectPhase,
     pub last_error: Option<String>,
+    /// Webvh server catalogue returned from the preflight's
+    /// `list_webvh_servers` call. Populated only on FullSetup when
+    /// the preflight succeeds. Drives the `PickWebvhServer` phase:
+    /// 0 entries → skip (serverless auto), 1 → auto-pick silently,
+    /// 2+ → present a picker.
+    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
+    /// The operator's webvh-server pick (for 2+ catalogues) or the
+    /// auto-selected id (for 1-entry catalogues). `None` means
+    /// serverless — DID self-hosts at `URL`.
+    pub webvh_server_choice: Option<String>,
+    /// Mediator DID captured from the preflight, held across the
+    /// picker dialog so the provision flight doesn't re-resolve.
+    pub preflight_mediator_did: Option<String>,
+    /// REST URL captured from the preflight, same rationale.
+    pub preflight_rest_url: Option<String>,
     /// Checklist populated when Testing starts; updated as runner events
     /// arrive. Empty outside the Testing / Connected phases.
     pub diagnostics: Vec<DiagEntry>,
@@ -203,6 +218,13 @@ pub enum ConnectPhase {
     EnterMediatorUrl,
     AwaitingAcl,
     Testing,
+    /// FullSetup-only. Preflight returned a catalogue of 2+ webvh
+    /// servers and the operator needs to pick one (or opt out of
+    /// hosting via the "serverless (self-host at URL)" option at
+    /// the top of the list). For 0 or 1 servers the main loop
+    /// auto-dispatches the provision flight without transitioning
+    /// here.
+    PickWebvhServer,
     Connected,
 }
 
@@ -226,6 +248,10 @@ impl VtaConnectState {
             event_rx: None,
             connection: None,
             clipboard_status: None,
+            webvh_servers: Vec::new(),
+            webvh_server_choice: None,
+            preflight_mediator_did: None,
+            preflight_rest_url: None,
         }
     }
 
@@ -257,6 +283,25 @@ impl VtaConnectState {
             }
             VtaEvent::CheckDone(c, s) => {
                 apply_update(&mut self.diagnostics, c, s);
+            }
+            VtaEvent::PreflightDone {
+                rest_url,
+                mediator_did,
+                servers,
+            } => {
+                // Stash the preflight's transport details so the
+                // provision flight doesn't re-resolve, and move to
+                // the picker phase. The wizard's main loop
+                // (`dispatch_webvh_choice`) inspects
+                // `webvh_servers.len()` and either auto-selects
+                // (0 / 1) or leaves the phase set for operator
+                // input (2+).
+                self.preflight_rest_url = rest_url;
+                self.preflight_mediator_did = Some(mediator_did);
+                self.webvh_servers = servers;
+                self.webvh_server_choice = None;
+                self.phase = ConnectPhase::PickWebvhServer;
+                self.event_rx = None;
             }
             VtaEvent::Connected {
                 protocol,

@@ -701,6 +701,29 @@ impl WizardApp {
                     self.start_vta_test();
                 }
             }
+            ConnectPhase::PickWebvhServer => {
+                // Index 0 is "serverless"; indices 1..=N map to
+                // `st.webvh_servers[i-1]`. Commit the pick and fire
+                // the provision flight.
+                let choice: Option<String> = if self.selection_index == 0 {
+                    None
+                } else {
+                    st.webvh_servers
+                        .get(self.selection_index - 1)
+                        .map(|s| s.id.clone())
+                };
+                let rest_url = st.preflight_rest_url.clone();
+                let mediator_did = match st.preflight_mediator_did.clone() {
+                    Some(m) => m,
+                    None => return, // defensive — shouldn't happen after PreflightDone
+                };
+                // Record the choice on state so the UI reflects it
+                // (e.g. if the runner fails and we come back).
+                if let Some(st_mut) = self.vta_connect.as_mut() {
+                    st_mut.webvh_server_choice = choice.clone();
+                }
+                self.start_vta_provision(rest_url, mediator_did, choice);
+            }
             ConnectPhase::Connected => {
                 // Persist the authenticated session so later steps can
                 // use the credential material. `conn.reply` already
@@ -740,9 +763,6 @@ impl WizardApp {
         let vta_did = st.vta_did.clone();
         let setup_did = key.did.clone();
         let setup_privkey_mb = key.private_key_multibase().to_string();
-        let context = st.context_id.clone();
-        let mediator_url = st.mediator_url.clone();
-        let label = Some(format!("mediator setup — {context}"));
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         st.diagnostics = pending_list();
@@ -753,14 +773,52 @@ impl WizardApp {
         self.selection_index = 0;
 
         tokio::spawn(async move {
-            run_connection_test(
-                intent,
+            run_connection_test(intent, vta_did, setup_did, setup_privkey_mb, tx).await;
+        });
+    }
+
+    /// Kick off the FullSetup provision flight once the preflight has
+    /// delivered a webvh-server choice (auto or operator-picked). The
+    /// resolved `mediator_did` + `rest_url` captured on preflight
+    /// become inputs so we don't re-resolve.
+    fn start_vta_provision(
+        &mut self,
+        rest_url: Option<String>,
+        mediator_did: String,
+        webvh_server_id: Option<String>,
+    ) {
+        let Some(st) = self.vta_connect.as_mut() else {
+            return;
+        };
+        let Some(key) = st.setup_key.as_ref() else {
+            st.last_error = Some("setup key missing — regenerate via Esc".into());
+            return;
+        };
+        let vta_did = st.vta_did.clone();
+        let setup_did = key.did.clone();
+        let setup_privkey_mb = key.private_key_multibase().to_string();
+        let context = st.context_id.clone();
+        let mediator_url = st.mediator_url.clone();
+        let label = Some(format!("mediator setup — {context}"));
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        st.event_rx = Some(rx);
+        st.last_error = None;
+        st.clipboard_status = None;
+        st.phase = ConnectPhase::Testing;
+        self.selection_index = 0;
+
+        tokio::spawn(async move {
+            crate::vta_connect::runner::run_provision_flight(
                 vta_did,
                 setup_did,
                 setup_privkey_mb,
+                mediator_did,
+                rest_url,
                 context,
                 mediator_url,
                 label,
+                webvh_server_id,
                 tx,
             )
             .await;
@@ -770,34 +828,79 @@ impl WizardApp {
     /// Drain any pending events from the runner and apply them to the
     /// sub-flow state. Called from the main event loop on every tick.
     pub fn drain_vta_events(&mut self) {
-        let Some(st) = self.vta_connect.as_mut() else {
-            return;
-        };
-        if st.event_rx.is_none() {
-            return;
-        }
-        // Collect events first to release the mutable borrow on `event_rx`
-        // before calling `apply_event` (which also borrows `st` mutably).
-        let mut batch = Vec::new();
-        let mut disconnected = false;
-        {
-            let rx = st.event_rx.as_mut().unwrap();
-            loop {
-                match rx.try_recv() {
-                    Ok(event) => batch.push(event),
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
+        // Drain any pending runner events. Both the early-exit
+        // (no sub-flow / no channel) and the normal drain path fall
+        // through to the webvh auto-dispatch below, which also runs
+        // after a synthesised `PreflightDone` (tests) or after the
+        // channel was already closed by a previous drain tick.
+        if let Some(st) = self.vta_connect.as_mut() {
+            if st.event_rx.is_some() {
+                // Collect events first to release the mutable borrow
+                // on `event_rx` before calling `apply_event` (which
+                // also borrows `st` mutably).
+                let mut batch = Vec::new();
+                let mut disconnected = false;
+                {
+                    let rx = st.event_rx.as_mut().unwrap();
+                    loop {
+                        match rx.try_recv() {
+                            Ok(event) => batch.push(event),
+                            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                                disconnected = true;
+                                break;
+                            }
+                        }
                     }
                 }
+                for event in batch {
+                    st.apply_event(event);
+                }
+                if disconnected {
+                    st.event_rx = None;
+                }
             }
+        } else {
+            return;
         }
-        for event in batch {
-            st.apply_event(event);
+
+        // Post-drain dispatch: if we just landed on PickWebvhServer
+        // with 0 or 1 servers, auto-select and kick the provision
+        // flight straight away — no operator interaction needed.
+        // Structured as two borrows (read → write → spawn) so the
+        // `&mut self` call out to `start_vta_provision` doesn't
+        // overlap the `&self` read of `vta_connect`.
+        enum AutoPick {
+            ServerlessOnly,
+            SinglePick(String),
         }
-        if disconnected {
-            st.event_rx = None;
+        let auto = self.vta_connect.as_ref().and_then(|s| {
+            if s.phase != ConnectPhase::PickWebvhServer || s.event_rx.is_some() {
+                return None;
+            }
+            match s.webvh_servers.len() {
+                0 => Some((
+                    AutoPick::ServerlessOnly,
+                    s.preflight_rest_url.clone(),
+                    s.preflight_mediator_did.clone()?,
+                )),
+                1 => Some((
+                    AutoPick::SinglePick(s.webvh_servers[0].id.clone()),
+                    s.preflight_rest_url.clone(),
+                    s.preflight_mediator_did.clone()?,
+                )),
+                _ => None,
+            }
+        });
+        if let Some((pick, rest_url, mediator_did)) = auto {
+            let choice = match pick {
+                AutoPick::ServerlessOnly => None,
+                AutoPick::SinglePick(id) => Some(id),
+            };
+            if let Some(st) = self.vta_connect.as_mut() {
+                st.webvh_server_choice = choice.clone();
+            }
+            self.start_vta_provision(rest_url, mediator_did, choice);
         }
     }
 
@@ -910,6 +1013,20 @@ impl WizardApp {
                 }
                 self.mode = InputMode::TextInput;
             }
+            ConnectPhase::PickWebvhServer => {
+                // Stepping back from the webvh picker rewinds to
+                // `AwaitingAcl` so the operator can re-run
+                // `pnm acl create` or re-kick the preflight. The
+                // captured server catalogue is cleared so we don't
+                // render a stale list on the next attempt.
+                st.phase = ConnectPhase::AwaitingAcl;
+                st.webvh_servers.clear();
+                st.webvh_server_choice = None;
+                st.preflight_mediator_did = None;
+                st.preflight_rest_url = None;
+                self.mode = InputMode::Selecting;
+                self.selection_index = 0;
+            }
             ConnectPhase::Testing | ConnectPhase::Connected => {
                 // Abort the runner (receiver drop closes the channel on its
                 // side) and return to the instructions screen so the
@@ -1017,6 +1134,11 @@ impl WizardApp {
                     "Provisioning",
                     "Authenticating over DIDComm and requesting a VTA-minted mediator DID…",
                 ),
+                ConnectPhase::PickWebvhServer => (
+                    "Pick webvh server",
+                    "The VTA has more than one registered webvh hosting server — pick one \
+                     to host the minted DID's did.jsonl log, or self-host at the URL above.",
+                ),
                 ConnectPhase::Connected => (
                     "Connected",
                     "Mediator DID minted by the VTA — advancing to the next step.",
@@ -1096,6 +1218,25 @@ impl WizardApp {
                             "Continue",
                             "Advance to the next wizard step",
                         )],
+                        ConnectPhase::PickWebvhServer => {
+                            // First option is always "serverless" (self-host at URL); the
+                            // remaining entries mirror `st.webvh_servers` so the
+                            // selection index maps to `idx - 1`.
+                            let mut opts = Vec::with_capacity(st.webvh_servers.len() + 1);
+                            opts.push(SelectionOption::new(
+                                "Serverless — self-host at mediator URL",
+                                "Don't pin a webvh hosting server; the minted DID resolves \
+                                 directly at the mediator's public URL.",
+                            ));
+                            for srv in &st.webvh_servers {
+                                let label = srv.label.as_deref().unwrap_or("(no label)");
+                                opts.push(SelectionOption::new(
+                                    format!("{} — {}", srv.id, label),
+                                    srv.did.clone(),
+                                ));
+                            }
+                            opts
+                        }
                         _ => vec![],
                     };
                 }
@@ -1349,6 +1490,23 @@ impl WizardApp {
                         }
                         ConnectPhase::Testing => {
                             "Opening a DIDComm session to the VTA, sending the signed provisioning request, and opening the sealed bundle the VTA returns…".into()
+                        }
+                        ConnectPhase::PickWebvhServer => {
+                            let st = self.vta_connect.as_ref().expect("phase implies state");
+                            match self.selection_index {
+                                0 => "Self-host the minted DID at the mediator URL (no webvh hosting server). Pick this if the mediator owns the public endpoint for its did.jsonl log.".into(),
+                                i => {
+                                    // Servers are offset by one (index 0 = serverless).
+                                    let idx = i - 1;
+                                    match st.webvh_servers.get(idx) {
+                                        Some(srv) => {
+                                            let label = srv.label.as_deref().unwrap_or("(no label)");
+                                            format!("Host the minted DID's did.jsonl on '{}' ({label}). Sent to the VTA as WEBVH_SERVER = {}.", srv.id, srv.id)
+                                        }
+                                        None => String::new(),
+                                    }
+                                }
+                            }
                         }
                         ConnectPhase::Connected => {
                             "VTA-minted mediator DID received. Advancing to the next step.".into()
@@ -3358,5 +3516,138 @@ mod tests {
         assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
         assert!(app.vta_intent_choice.is_none());
         assert!(app.vta_stub_notice.is_none());
+    }
+
+    // Helpers for the webvh-picker tests below.
+    fn sample_webvh_server(id: &str, label: Option<&str>) -> vta_sdk::webvh::WebvhServerRecord {
+        use chrono::Utc;
+        vta_sdk::webvh::WebvhServerRecord {
+            id: id.into(),
+            did: format!("did:webvh:{id}.example.com"),
+            label: label.map(str::to_string),
+            access_token: None,
+            access_expires_at: None,
+            refresh_token: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// Drive the wizard far enough to have a `vta_connect` sub-flow
+    /// with a setup key + context id in place, then fake a preflight
+    /// with the supplied server catalogue. Returns the wizard ready
+    /// to exercise picker dispatch.
+    fn prime_full_setup_picker(servers: Vec<vta_sdk::webvh::WebvhServerRecord>) -> WizardApp {
+        use crate::vta_connect::EphemeralSetupKey;
+        use crate::vta_connect::runner::VtaEvent;
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        pick_full_setup_online(&mut app); // EnterDid
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input(); // → EnterContext
+        app.confirm_text_input(); // → EnterMediatorUrl
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input(); // → AwaitingAcl (generates setup key)
+        // Synthesise a preflight completion without actually running
+        // a DIDComm session.
+        let st = app.vta_connect.as_mut().unwrap();
+        // Make sure the setup key field is populated (ConnectPhase
+        // machinery does this during `confirm_text_input`).
+        if st.setup_key.is_none() {
+            st.setup_key = Some(EphemeralSetupKey::generate().unwrap());
+        }
+        st.phase = ConnectPhase::Testing;
+        st.event_rx = None;
+        st.apply_event(VtaEvent::PreflightDone {
+            rest_url: Some("https://vta.example.com".into()),
+            mediator_did: "did:webvh:mediator.vta.example.com".into(),
+            servers,
+        });
+        app
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_picker_auto_dispatches_serverless_when_catalogue_empty() {
+        // 0 registered servers → wizard skips the picker entirely and
+        // kicks the provision flight with `webvh_server_choice = None`
+        // (serverless). Phase transitions back to `Testing` while the
+        // runner is in flight.
+        let mut app = prime_full_setup_picker(vec![]);
+        app.drain_vta_events();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::Testing);
+        assert!(st.webvh_server_choice.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_picker_auto_picks_single_entry() {
+        // 1 registered server → wizard auto-selects it; no operator
+        // interaction required. `webvh_server_choice` mirrors the
+        // only entry's id.
+        let only = sample_webvh_server("prod-1", Some("Primary"));
+        let mut app = prime_full_setup_picker(vec![only]);
+        app.drain_vta_events();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::Testing);
+        assert_eq!(st.webvh_server_choice.as_deref(), Some("prod-1"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_picker_waits_when_catalogue_has_multiple_entries() {
+        // 2+ registered servers → stay on `PickWebvhServer`; no
+        // provision flight starts until the operator picks.
+        let servers = vec![
+            sample_webvh_server("prod-1", Some("Primary")),
+            sample_webvh_server("backup-1", Some("DR")),
+        ];
+        let mut app = prime_full_setup_picker(servers);
+        app.drain_vta_events();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::PickWebvhServer);
+        assert!(st.webvh_server_choice.is_none());
+        // Options list: serverless + 2 servers = 3 entries.
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 3);
+        assert!(opts[0].label.starts_with("Serverless"));
+        assert!(opts[1].label.contains("prod-1"));
+        assert!(opts[2].label.contains("backup-1"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_picker_serverless_selection_commits_none_choice() {
+        let servers = vec![
+            sample_webvh_server("prod-1", Some("Primary")),
+            sample_webvh_server("backup-1", Some("DR")),
+        ];
+        let mut app = prime_full_setup_picker(servers);
+        app.drain_vta_events();
+        assert_eq!(
+            app.vta_connect.as_ref().unwrap().phase,
+            ConnectPhase::PickWebvhServer
+        );
+        app.selection_index = 0; // Serverless
+        app.select_current();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert!(
+            st.webvh_server_choice.is_none(),
+            "index 0 should commit serverless (None)"
+        );
+        // Provision flight started.
+        assert_eq!(st.phase, ConnectPhase::Testing);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_picker_server_selection_commits_correct_id() {
+        let servers = vec![
+            sample_webvh_server("prod-1", Some("Primary")),
+            sample_webvh_server("backup-1", Some("DR")),
+        ];
+        let mut app = prime_full_setup_picker(servers);
+        app.drain_vta_events();
+        app.selection_index = 2; // second server ("backup-1")
+        app.select_current();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.webvh_server_choice.as_deref(), Some("backup-1"));
+        assert_eq!(st.phase, ConnectPhase::Testing);
     }
 }
