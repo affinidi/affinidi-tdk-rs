@@ -37,37 +37,27 @@ use crate::consts::DEFAULT_VTA_CONTEXT;
 use crate::vta_connect::provision::{ProvisionAsk, ProvisionResult};
 use crate::vta_connect::{VtaIntent, VtaSession};
 
-/// Template variable name the VTA's `didcomm-mediator` template reads
-/// when the operator wants to pin a specific webvh hosting server for
-/// the minted mediator DID's did.jsonl log. The exact variable name is
-/// part of the template contract — **TODO: confirm with the VTA team.**
-/// Placeholder until the contract is pinned; consumers can rename by
-/// touching only this constant.
-const WEBVH_SERVER_TEMPLATE_VAR: &str = "WEBVH_SERVER";
-
 /// Linear progress through the air-gapped flow. The wizard advances
 /// strictly in order — each phase has a single well-defined exit.
 ///
 /// Two intents share this phase machine: `AdminOnly` walks the
 /// `CollectContext → CollectAdminLabel → …` chain and produces a plain
 /// `sealed_transfer::BootstrapRequest`; `FullSetup` walks
-/// `CollectContext → CollectMediatorUrl → CollectWebvhServer → …` and
-/// produces a VP-framed `provision_integration::BootstrapRequest`.
-/// The shared tail (`RequestGenerated → AwaitingBundle → DigestVerify
-/// → Complete`) is identical except for which `SealedPayloadV1` variant
-/// is accepted.
+/// `CollectContext → CollectMediatorUrl → …` and produces a VP-framed
+/// `provision_integration::BootstrapRequest`. The shared tail
+/// (`RequestGenerated → AwaitingBundle → DigestVerify → Complete`) is
+/// identical except for which `SealedPayloadV1` variant is accepted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SealedPhase {
     /// Text input for the VTA context slug (e.g. `mediator`). Both
     /// intents start here.
     CollectContext,
     /// FullSetup-only: text input for the mediator's public URL. Fed
-    /// to the VTA's `didcomm-mediator` template as the `URL` variable.
+    /// to the VTA's `didcomm-mediator` template as the required `URL`
+    /// variable. The built-in template accepts this plus two
+    /// optional vars (`ROUTING_KEYS`, `ACCEPT`) — no other inputs
+    /// are plumbed through today.
     CollectMediatorUrl,
-    /// FullSetup-only: optional text input for a webvh server id the
-    /// VTA should use to host the minted mediator DID's did.jsonl.
-    /// Empty means "let the VTA pick".
-    CollectWebvhServer,
     /// AdminOnly-only: text input for the admin ACL label. Optional —
     /// empty advances with the `--admin-label` flag omitted.
     CollectAdminLabel,
@@ -112,11 +102,6 @@ pub struct SealedHandoffState {
     /// Required before the VP-framed request can be signed; empty
     /// until the operator fills it in on `CollectMediatorUrl`.
     pub mediator_url: String,
-    /// FullSetup-only: optional webvh server id pinning the VTA to a
-    /// specific hosting server for the minted DID's did.jsonl.
-    /// Empty means "VTA default". See
-    /// [`WEBVH_SERVER_TEMPLATE_VAR`] for the template-var name.
-    pub webvh_server: String,
     /// Consumer's X25519 secret. Required to open the returned bundle;
     /// dropped when the sub-flow exits. Zeroed until the inputs phases
     /// complete and `finalize_request` runs.
@@ -177,7 +162,6 @@ impl SealedHandoffState {
             context_id: DEFAULT_VTA_CONTEXT.to_string(),
             admin_label: String::new(),
             mediator_url: String::new(),
-            webvh_server: String::new(),
             recipient_secret: [0u8; 32],
             nonce: [0u8; 16],
             request_json: String::new(),
@@ -248,12 +232,6 @@ impl SealedHandoffState {
                 let client_did = affinidi_crypto::did_key::ed25519_pub_to_did_key(&ed_pub);
                 let mut ask =
                     ProvisionAsk::mediator(self.context_id.clone(), self.mediator_url.clone());
-                if !self.webvh_server.is_empty() {
-                    ask.mediator_template_vars.insert(
-                        WEBVH_SERVER_TEMPLATE_VAR.to_string(),
-                        serde_json::Value::String(self.webvh_server.clone()),
-                    );
-                }
                 if let Some(ref label) = self.run_label {
                     ask = ask.clone().with_label(label.clone());
                 }

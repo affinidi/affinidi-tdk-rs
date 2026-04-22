@@ -266,36 +266,8 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     chunks[1],
                     "Info",
                     "The VTA renders the mediator's DID with this URL baked into \
-                     the service endpoints. Changing it later means re-provisioning.",
-                );
-                return;
-            }
-            SealedPhase::CollectWebvhServer => {
-                let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Optional — webvh server id to pin for hosting the minted \
-                     mediator DID's did.jsonl log. Leave blank to let the VTA \
-                     pick its default. Ask your VTA admin which servers are \
-                     registered."
-                        .into()
-                });
-                prompt::render_prompt(
-                    frame,
-                    chunks[0],
-                    "Sealed handoff — webvh server (optional)",
-                    "Pin a webvh server for this DID's log (optional).",
-                    None,
-                    &app.text_input,
-                    "webvh-prod-1",
-                    &hint,
-                );
-                info_box::render_info_box(
-                    frame,
-                    chunks[1],
-                    "Info",
-                    "Online mode can discover webvh servers from the VTA — offline \
-                     can't. If your VTA runs multiple webvh hosts, type the id; \
-                     otherwise leave blank. The bootstrap request is generated on \
-                     Enter.",
+                     the service endpoints. Changing it later means re-provisioning. \
+                     The bootstrap request is generated on Enter.",
                 );
                 return;
             }

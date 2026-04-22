@@ -500,8 +500,7 @@ impl WizardApp {
         match state.phase {
             SealedPhase::CollectContext
             | SealedPhase::CollectAdminLabel
-            | SealedPhase::CollectMediatorUrl
-            | SealedPhase::CollectWebvhServer => {
+            | SealedPhase::CollectMediatorUrl => {
                 // These phases drive text-input; Enter goes through
                 // `sealed_handoff_confirm_text`, not here. The renderer
                 // only lands in `sealed_handoff_select` for these
@@ -567,7 +566,8 @@ impl WizardApp {
                 // Required field for FullSetup — an empty value keeps
                 // the operator on this phase with `last_error` set
                 // rather than silently finalising a VP the VTA will
-                // reject.
+                // reject. This is the last input needed for
+                // FullSetup; `finalize_request` runs on confirm.
                 let trimmed = value.trim();
                 if trimmed.is_empty() {
                     state.last_error = Some(
@@ -580,14 +580,6 @@ impl WizardApp {
                 }
                 state.mediator_url = trimmed.to_string();
                 state.last_error = None;
-                state.phase = SealedPhase::CollectWebvhServer;
-                self.text_input = Input::new(state.webvh_server.clone());
-                true
-            }
-            SealedPhase::CollectWebvhServer => {
-                // Optional field — empty string means "let the VTA
-                // pick a default webvh server from its catalogue".
-                state.webvh_server = value.trim().to_string();
                 if let Err(e) = state.finalize_request() {
                     state.last_error = Some(e.to_string());
                 } else {
