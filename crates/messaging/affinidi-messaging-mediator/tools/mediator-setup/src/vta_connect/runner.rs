@@ -321,6 +321,25 @@ pub async fn run_connection_test(
                 }
             }
         }
+        VtaIntent::OfflineExport => {
+            // OfflineExport has no online transport — the entry path
+            // in `app.rs` routes straight to the sealed-handoff
+            // sub-flow without ever spawning the runner. Reaching
+            // here would mean a wiring bug (e.g. someone added an
+            // online entry for OfflineExport without the matching
+            // request shape). Emit a Failed event so the operator
+            // sees the misconfiguration rather than a silent hang.
+            let _ = tx.send(VtaEvent::CheckDone(
+                DiagCheck::Authenticate,
+                DiagStatus::Skipped("OfflineExport has no online transport".into()),
+            ));
+            let _ = tx.send(VtaEvent::Failed(
+                "OfflineExport intent has no online runner — \
+                 use the sealed-handoff sub-flow instead. This is a wizard \
+                 wiring bug; please report."
+                    .into(),
+            ));
+        }
     }
 }
 

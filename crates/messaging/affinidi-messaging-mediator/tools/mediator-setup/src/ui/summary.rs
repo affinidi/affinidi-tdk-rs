@@ -72,6 +72,7 @@ pub fn render_summary(
         let intent_label = match vta_session.map(|s| &s.reply) {
             Some(VtaReply::Full(_)) => "full setup",
             Some(VtaReply::AdminOnly(_)) => "admin credential only",
+            Some(VtaReply::ContextExport(_)) => "offline export of pre-provisioned state",
             None => "pending", // Vta step not completed yet (shouldn't show on Summary in practice)
         };
         format!("Enabled — {} ({})", intent_label, config.vta_mode)

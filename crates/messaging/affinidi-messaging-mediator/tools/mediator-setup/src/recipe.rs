@@ -41,7 +41,13 @@ pub struct DeploymentSection {
     /// Whether VTA integration is enabled
     #[serde(default)]
     pub use_vta: bool,
-    /// VTA connectivity mode: `"online"` or `"cold-start"`
+    /// VTA connectivity mode: `"online"` (live REST/DIDComm),
+    /// `"sealed"` (air-gapped sealed handoff — wizard mints a request
+    /// and the VTA admin returns a sealed bundle from a fresh
+    /// provisioning), or `"export"` (air-gapped export of state the
+    /// VTA already provisioned out-of-band — VTA admin runs
+    /// `vta context reprovision` and returns a `ContextProvision`
+    /// bundle).
     #[serde(default)]
     pub vta_mode: Option<String>,
 }

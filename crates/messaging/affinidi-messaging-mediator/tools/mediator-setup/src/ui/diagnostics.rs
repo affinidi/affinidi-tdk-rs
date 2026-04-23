@@ -117,6 +117,30 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
                         theme::info_style(),
                     )),
                 ],
+                VtaReply::ContextExport(bundle) => {
+                    // The online runner never produces a ContextExport
+                    // reply — that path is exclusively offline. We
+                    // still need an arm for exhaustiveness; surface
+                    // the same shape as the other variants in case a
+                    // future refactor wires it up.
+                    let mut rows = vec![
+                        Line::from(Span::styled(
+                            format!("  Connected via {}.", conn.protocol.label()),
+                            theme::success_style(),
+                        )),
+                        Line::from(Span::styled(
+                            format!("  Admin DID: {} (auto-minted, exported)", bundle.admin_did),
+                            theme::info_style(),
+                        )),
+                    ];
+                    if let Some(did) = bundle.did.as_ref() {
+                        rows.push(Line::from(Span::styled(
+                            format!("  Mediator DID: {} (exported)", did.id),
+                            theme::info_style(),
+                        )));
+                    }
+                    rows
+                }
             }
         }
         ConnectPhase::Testing => {

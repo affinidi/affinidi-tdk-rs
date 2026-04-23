@@ -606,6 +606,55 @@ fn did_key_material_to_secrets(
     Ok(vec![signing, ka])
 }
 
+/// Convert a flat `Vec<SecretEntry>` (the `ContextProvisionBundle`
+/// shape used by the OfflineExport path) into `Secret` values the
+/// mediator's runtime loader consumes.
+///
+/// Sibling to [`did_key_material_to_secrets`] — that one walks a
+/// typed (signing, ka) pair grouped by DID; this one iterates a flat
+/// list keyed by `key_id` and trusts the multibase prefix on each
+/// entry to disambiguate Ed25519 / X25519 / P-256. The loader's
+/// `Secret::from_multibase` does the actual key-type detection.
+///
+/// Both helpers feed into the same downstream sink (`provision_secrets`
+/// in `secrets/mod.rs`); the duplication is in *iteration shape*
+/// only, not in per-key handling.
+fn secret_entries_to_secrets(
+    entries: &[vta_sdk::did_secrets::SecretEntry],
+) -> anyhow::Result<Vec<affinidi_secrets_resolver::secrets::Secret>> {
+    use affinidi_secrets_resolver::secrets::Secret;
+
+    entries
+        .iter()
+        .map(|entry| {
+            Secret::from_multibase(&entry.private_key_multibase, Some(&entry.key_id))
+                .map_err(|e| anyhow::anyhow!("decode key {}: {e}", entry.key_id))
+        })
+        .collect()
+}
+
+/// Write a `did.jsonl` log entry next to the mediator's config file
+/// and print a green tick / yellow warning in the same style as the
+/// rest of `generate_and_write`. Centralises the CWD-versus-config-dir
+/// logic that was duplicated between the FullSetup and OfflineExport
+/// branches.
+fn write_did_jsonl(config_path: &str, log_content: &str) {
+    let did_jsonl_path = std::path::Path::new(config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("did.jsonl");
+    match std::fs::write(&did_jsonl_path, log_content) {
+        Ok(()) => println!(
+            "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
+            did_jsonl_path.display()
+        ),
+        Err(e) => eprintln!(
+            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+            did_jsonl_path.display()
+        ),
+    }
+}
+
 /// Run all generators and write configuration files.
 /// When `save_recipe` is true, a `mediator-build.toml` recipe is saved alongside
 /// the config for reproducibility. Set to false when running from `--from` to
@@ -636,78 +685,99 @@ async fn generate_and_write(
             (result.did, result.secrets, Some(result.did_doc))
         }
         DID_VTA => {
-            // VTA-managed DID: the mediator DID + keys were minted by
-            // the VTA at Vta-step provisioning time and shipped inside
-            // the `TemplateBootstrap` sealed bundle. Pull them out of
-            // the session's `ProvisionResult` — no further round-trip.
-            match vta_session.and_then(|s| s.as_full_provision()) {
-                Some(provision) => {
-                    let integration_did = provision.integration_did().to_string();
-                    println!("  VTA-minted mediator DID: {integration_did}");
+            // VTA-managed DID: the mediator DID + keys came from the
+            // VTA at Vta-step provisioning. Two reply shapes carry it:
+            //
+            // - `Full(ProvisionResult)` — fresh template render
+            //   (online / offline-mint paths, FullSetup intent).
+            // - `ContextExport(ContextProvisionBundle)` — re-export of
+            //   already-provisioned material (offline-export path,
+            //   OfflineExport intent).
+            //
+            // Both land here. We dispatch on whichever accessor
+            // returns `Some`; one of them always will when
+            // `did_method == DID_VTA` and the Vta sub-flow completed.
+            let from_full = vta_session.and_then(|s| s.as_full_provision());
+            let from_export = vta_session.and_then(|s| s.as_context_export());
+            if let Some(provision) = from_full {
+                let integration_did = provision.integration_did().to_string();
+                println!("  VTA-minted mediator DID: {integration_did}");
 
-                    // Persist the integration DID's private keys as
-                    // `Secret` values — the mediator's runtime secrets
-                    // loader reads these at startup.
-                    let secrets = provision
-                        .integration_key()
-                        .map(did_key_material_to_secrets)
-                        .transpose()?
-                        .unwrap_or_default();
+                // Persist the integration DID's private keys as
+                // `Secret` values — the mediator's runtime secrets
+                // loader reads these at startup.
+                let secrets = provision
+                    .integration_key()
+                    .map(did_key_material_to_secrets)
+                    .transpose()?
+                    .unwrap_or_default();
 
-                    // Write the VTA-provided did.jsonl alongside the
-                    // config so the mediator (or a downstream operator)
-                    // can publish / inspect the log content locally.
-                    if let Some(log) = provision.webvh_log() {
-                        let did_jsonl_path = std::path::Path::new(&config.config_path)
-                            .parent()
-                            .unwrap_or(std::path::Path::new("."))
-                            .join("did.jsonl");
-                        match std::fs::write(&did_jsonl_path, log) {
-                            Ok(()) => println!(
-                                "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
-                                did_jsonl_path.display()
-                            ),
-                            Err(e) => eprintln!(
-                                "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
-                                did_jsonl_path.display()
-                            ),
-                        }
-                    }
-
-                    // Archive the VTA-issued authorization VC next to
-                    // the config. Short-lived (~1h validity) but useful
-                    // for operator audit trails.
-                    let vc_path = std::path::Path::new(&config.config_path)
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."))
-                        .join("authorization.jsonld");
-                    if let Ok(serialized) =
-                        serde_json::to_string_pretty(provision.authorization_vc())
-                    {
-                        match std::fs::write(&vc_path, serialized) {
-                            Ok(()) => println!(
-                                "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
-                                vc_path.display()
-                            ),
-                            Err(e) => eprintln!(
-                                "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
-                                vc_path.display()
-                            ),
-                        }
-                    }
-
-                    let doc_string =
-                        serde_json::to_string(&provision.payload.config.did_document).ok();
-                    (integration_did, secrets, doc_string)
+                // Write the VTA-provided did.jsonl alongside the
+                // config so the mediator (or a downstream operator)
+                // can publish / inspect the log content locally.
+                if let Some(log) = provision.webvh_log() {
+                    write_did_jsonl(&config.config_path, log);
                 }
-                None => {
-                    eprintln!(
-                        "  Note: VTA-managed DID selected but no provisioned session \
-                         was captured. Falling back to placeholder — edit mediator.toml \
-                         manually before starting the mediator."
-                    );
-                    ("vta://mediator".into(), vec![], None)
+
+                // Archive the VTA-issued authorization VC next to
+                // the config. Short-lived (~1h validity) but useful
+                // for operator audit trails.
+                let vc_path = std::path::Path::new(&config.config_path)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join("authorization.jsonld");
+                if let Ok(serialized) = serde_json::to_string_pretty(provision.authorization_vc()) {
+                    match std::fs::write(&vc_path, serialized) {
+                        Ok(()) => println!(
+                            "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
+                            vc_path.display()
+                        ),
+                        Err(e) => eprintln!(
+                            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+                            vc_path.display()
+                        ),
+                    }
                 }
+
+                let doc_string = serde_json::to_string(&provision.payload.config.did_document).ok();
+                (integration_did, secrets, doc_string)
+            } else if let Some(bundle) = from_export {
+                // OfflineExport path. Bundle carries the existing
+                // mediator DID + operational keys (Vec<SecretEntry>)
+                // + did.jsonl entry. No authorization VC — the admin
+                // identity is the `bundle.credential` itself.
+                let did_view = bundle.did.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "OfflineExport bundle has no DID slot — admin-only contexts \
+                         can't drive a mediator (`did_method = vta`); \
+                         re-run with `did_method = peer` (admin-only) or \
+                         re-export with a DID-bearing context."
+                    )
+                })?;
+                let integration_did = did_view.id.clone();
+                println!("  VTA-exported mediator DID: {integration_did}");
+
+                let secrets = secret_entries_to_secrets(&did_view.secrets)?;
+
+                // Write the exported log entry. ContextProvision
+                // carries a single Option<String>, not a list of
+                // outputs — simpler than the TemplateBootstrap shape.
+                if let Some(log) = did_view.log_entry.as_deref() {
+                    write_did_jsonl(&config.config_path, log);
+                }
+
+                let doc_string = did_view
+                    .did_document
+                    .as_ref()
+                    .and_then(|v| serde_json::to_string(v).ok());
+                (integration_did, secrets, doc_string)
+            } else {
+                eprintln!(
+                    "  Note: VTA-managed DID selected but no provisioned session \
+                     was captured. Falling back to placeholder — edit mediator.toml \
+                     manually before starting the mediator."
+                );
+                ("vta://mediator".into(), vec![], None)
             }
         }
         _ => {

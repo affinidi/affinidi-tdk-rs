@@ -56,6 +56,16 @@ pub const ADMIN_SKIP: &str = "Skip";
 /// integrity guarantees on the wire.
 pub const VTA_MODE_ONLINE: &str = "online";
 pub const VTA_MODE_SEALED: &str = "sealed";
+/// Air-gapped *export* of pre-provisioned mediator state. The VTA
+/// admin already minted the mediator's context + DID + keys (e.g.
+/// during the VTA's own bootstrap); the wizard's job is to retrieve
+/// that material via a v1 sealed_transfer::BootstrapRequest the
+/// operator carries out-of-band, then the VTA admin runs
+/// `vta context reprovision --id <ctx> --recipient <req> --out <bundle>`
+/// and ships the sealed `ContextProvision` bundle back. Distinct from
+/// `sealed` (which mints fresh material on the VTA in response to a
+/// VP-framed request).
+pub const VTA_MODE_EXPORT: &str = "export";
 
 /// Default values
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";

@@ -788,6 +788,16 @@ fn render_sealed_request(
             "  [v] ",
             None,
         ),
+        crate::vta_connect::VtaIntent::OfflineExport => (
+            "VTA admin runs this on the VTA host to export the existing context's \
+             admin credential, mediator DID, and operational keys (auto-mints a \
+             fresh admin identity by default — no `--admin-key` needed):",
+            "  [v] ",
+            Some(
+                "Advanced — exports DID + operational keys only (no admin credential). \
+                 Use when admin material is being managed out-of-band:",
+            ),
+        ),
     };
     lines.push(Line::from(Span::styled(primary_header, value)));
     lines.push(Line::from(""));

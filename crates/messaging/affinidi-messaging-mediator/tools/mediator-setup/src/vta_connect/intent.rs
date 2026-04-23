@@ -19,6 +19,8 @@
 //! `VtaReply` live beside it (`runner.rs`, `acl_only.rs`,
 //! `sealed_handoff.rs`).
 
+use vta_sdk::context_provision::ContextProvisionBundle;
+
 use crate::vta_connect::provision::ProvisionResult;
 
 /// What the operator wants the VTA to do during setup.
@@ -32,6 +34,15 @@ pub enum VtaIntent {
     /// VTA only issues an admin credential and an ACL row. The reply
     /// carries an admin DID + matching private key.
     AdminOnly,
+    /// Pick up state the VTA admin already provisioned out-of-band.
+    /// The VTA's own bootstrap (or an earlier admin run) created the
+    /// context + mediator DID + keys; the wizard's job is to retrieve
+    /// them sealed to its ephemeral keypair via the v1
+    /// `sealed_transfer::BootstrapRequest` flow. No template render
+    /// happens on the VTA — the bundle carries existing material as
+    /// `SealedPayloadV1::ContextProvision`. Always offline (the v1
+    /// request shape has no online transport equivalent).
+    OfflineExport,
 }
 
 /// How the request reaches the VTA.
@@ -47,7 +58,7 @@ pub enum VtaTransport {
     Offline,
 }
 
-/// Unified reply from any of the four transport-adapter combinations.
+/// Unified reply from any of the transport-adapter combinations.
 ///
 /// Downstream consumers switch on the variant instead of branching on
 /// intent + transport separately.
@@ -55,12 +66,21 @@ pub enum VtaTransport {
 pub enum VtaReply {
     /// Full template-bootstrap reply. The VTA minted the mediator's
     /// integration DID, (optionally) rolled over an admin DID, and
-    /// returned the complete trust bundle.
+    /// returned the complete trust bundle. Produced by FullSetup
+    /// (online or offline-mint).
     Full(ProvisionResult),
     /// Admin-credential-only reply. The mediator keeps its own
     /// integration DID; the VTA supplied an admin identity the mediator
     /// authenticates as against the VTA's admin APIs.
     AdminOnly(AdminCredentialReply),
+    /// Context-export reply. The VTA admin ran `vta context reprovision`
+    /// against an existing context; the bundle carries the
+    /// already-provisioned mediator DID + operational keys + admin
+    /// credential. Produced exclusively by the OfflineExport intent.
+    /// Boxed because [`ContextProvisionBundle`] is the largest variant
+    /// and we want one-pointer-on-the-stack uniformity with
+    /// [`vta_sdk::sealed_transfer::SealedPayloadV1`].
+    ContextExport(Box<ContextProvisionBundle>),
 }
 
 /// Payload of [`VtaReply::AdminOnly`] — an admin DID and its private key.

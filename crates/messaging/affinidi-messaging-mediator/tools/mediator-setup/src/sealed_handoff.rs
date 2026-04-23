@@ -260,7 +260,13 @@ impl SealedHandoffState {
             .map_err(|e| SealedHandoffError::Internal(format!("nonce generation failed: {e}")))?;
 
         let (request_json, filename) = match self.intent {
-            VtaIntent::AdminOnly => {
+            VtaIntent::AdminOnly | VtaIntent::OfflineExport => {
+                // Both intents emit the simpler v1
+                // `sealed_transfer::BootstrapRequest` — pubkey + nonce
+                // + label, no template ask. The VTA-side command
+                // (`pnm contexts bootstrap` for AdminOnly,
+                // `vta context reprovision` for OfflineExport) decides
+                // what payload variant ends up in the sealed bundle.
                 let request = BootstrapRequest::new(ed_pub, nonce, self.run_label.clone());
                 let json = serde_json::to_string_pretty(&request).map_err(|e| {
                     SealedHandoffError::Internal(format!("BootstrapRequest serialise failed: {e}"))
@@ -355,6 +361,7 @@ impl SealedHandoffState {
         let label = match self.intent {
             VtaIntent::AdminOnly => "pnm contexts bootstrap command",
             VtaIntent::FullSetup => "vta bootstrap provision-integration command",
+            VtaIntent::OfflineExport => "vta context reprovision command",
         };
         self.set_clipboard(self.primary_command(), label);
     }
@@ -385,6 +392,16 @@ impl SealedHandoffState {
     /// DID via template render, rolls over admin DID, issues VC,
     /// seals a [`vta_sdk::sealed_transfer::SealedPayloadV1::TemplateBootstrap`]
     /// bundle.
+    ///
+    /// **OfflineExport** — `vta context reprovision --id <ctx>
+    /// --recipient <path> --out bundle.armor`. Runs on the VTA host;
+    /// retrieves *existing* mediator material (DID, operational keys,
+    /// admin credential) for the named context and seals a
+    /// [`vta_sdk::sealed_transfer::SealedPayloadV1::ContextProvision`]
+    /// bundle. `--admin-key` is intentionally omitted — the VTA's
+    /// auto-mint default ships a fresh admin identity in the bundle,
+    /// which is what the wizard wants for self-sufficient mediator
+    /// startup.
     pub fn primary_command(&self) -> String {
         let file = self.request_file_display();
         match self.intent {
@@ -408,6 +425,13 @@ impl SealedHandoffState {
                  --out bundle.armor",
                 file, self.context_id,
             ),
+            VtaIntent::OfflineExport => format!(
+                "vta context reprovision \
+                 --id {} \
+                 --recipient {} \
+                 --out bundle.armor",
+                self.context_id, file,
+            ),
         }
     }
 
@@ -416,6 +440,12 @@ impl SealedHandoffState {
     /// hand-author a `SealedPayloadV1::AdminCredential` JSON file.
     /// FullSetup returns `None` — `provision-integration` is the only
     /// sanctioned offline producer.
+    ///
+    /// OfflineExport returns the `vta keys bundle` variant — narrower
+    /// than `vta context reprovision`: ships only DID + operational
+    /// keys, no admin credential. Use only when admin material is
+    /// being managed out-of-band (key escrow, separate admin
+    /// workstation, principle-of-least-privilege deployments).
     pub fn fallback_command(&self) -> Option<String> {
         match self.intent {
             VtaIntent::AdminOnly => Some(format!(
@@ -423,6 +453,11 @@ impl SealedHandoffState {
                 self.request_file_display(),
             )),
             VtaIntent::FullSetup => None,
+            VtaIntent::OfflineExport => Some(format!(
+                "vta keys bundle --context {} --recipient {} --out bundle.armor",
+                self.context_id,
+                self.request_file_display(),
+            )),
         }
     }
 
@@ -431,7 +466,10 @@ impl SealedHandoffState {
             .as_ref()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| match self.intent {
-                VtaIntent::AdminOnly => "bootstrap-request.json".into(),
+                // AdminOnly + OfflineExport both write the v1
+                // sealed_transfer::BootstrapRequest under the same
+                // name — they're structurally identical requests.
+                VtaIntent::AdminOnly | VtaIntent::OfflineExport => "bootstrap-request.json".into(),
                 VtaIntent::FullSetup => "bootstrap-request-vp.json".into(),
             })
     }
@@ -794,6 +832,23 @@ pub fn open_with_digest(
                 "Sealed handoff (FullSetup): bundle opened, template bootstrap applied"
             );
         }
+        (VtaIntent::OfflineExport, SealedPayloadV1::ContextProvision(boxed)) => {
+            let bundle = *boxed;
+            info!(
+                context = %state.context_id,
+                admin_did = %bundle.admin_did,
+                integration_did = bundle.did.as_ref().map(|d| d.id.as_str()).unwrap_or("(none)"),
+                bundle_id = %state.nonce_display(),
+                "Sealed handoff (OfflineExport): ContextProvision bundle opened"
+            );
+            state.session = Some(VtaSession::context_export(state.context_id.clone(), bundle));
+        }
+        // Either an unexpected payload variant for the running intent,
+        // or a wholly new variant the wizard doesn't know about yet
+        // (e.g. `DidSecrets` from `vta keys bundle` — operator path
+        // that isn't wired into the wizard). Surface as WrongPayload
+        // so the operator can re-check which command the VTA admin
+        // ran.
         _ => return Err(SealedHandoffError::WrongPayload),
     }
 

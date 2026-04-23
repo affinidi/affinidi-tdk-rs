@@ -560,6 +560,18 @@ impl WizardApp {
                         state.phase = SealedPhase::CollectMediatorUrl;
                         self.text_input = Input::new(state.mediator_url.clone());
                     }
+                    VtaIntent::OfflineExport => {
+                        // No further inputs — context_id alone drives
+                        // `vta context reprovision`. Finalise the
+                        // request right here so the operator lands on
+                        // RequestGenerated in one keystroke.
+                        if let Err(e) = state.finalize_request() {
+                            state.last_error = Some(e.to_string());
+                        } else {
+                            self.text_input = Input::default();
+                            self.mode = InputMode::Selecting;
+                        }
+                    }
                 }
                 true
             }
@@ -1006,6 +1018,16 @@ impl WizardApp {
                         self.selection_index = 0;
                         self.text_input = Input::default();
                     }
+                    VtaIntent::OfflineExport => {
+                        // Online sub-flow is never entered for
+                        // OfflineExport — `enter_vta_subflow` rejects
+                        // this intent and the transport selector
+                        // routes straight to `enter_sealed_handoff_subflow`.
+                        // Pattern is exhaustive because the enum
+                        // demands it; reaching here would be a wiring
+                        // bug.
+                        unreachable!("OfflineExport never enters the online VTA sub-flow");
+                    }
                 }
             }
             ConnectPhase::EnterMediatorUrl => {
@@ -1092,6 +1114,12 @@ impl WizardApp {
                         st.phase = ConnectPhase::EnterContext;
                         let ctx = st.context_id.clone();
                         self.text_input = Input::new(ctx);
+                    }
+                    VtaIntent::OfflineExport => {
+                        // Online sub-flow is never entered for
+                        // OfflineExport. See note in
+                        // `vta_subflow_confirm_text` above.
+                        unreachable!("OfflineExport never enters the online VTA sub-flow");
                     }
                 }
                 self.mode = InputMode::TextInput;
@@ -1360,6 +1388,10 @@ impl WizardApp {
                             "Mediator keeps the DID from the DID step; the VTA only supplies an admin credential used for VTA admin APIs.",
                         ),
                         SelectionOption::new(
+                            "Pick up pre-provisioned mediator (offline export)",
+                            "VTA already provisioned the context + mediator DID + keys (e.g. during VTA bootstrap). Wizard writes a request; VTA admin runs `vta context reprovision --id <ctx> --recipient <file>` and returns the existing material in a ContextProvision bundle. Always offline.",
+                        ),
+                        SelectionOption::new(
                             "No VTA",
                             "Manage keys and DIDs independently (local dev, cloud secret stores).",
                         ),
@@ -1377,6 +1409,20 @@ impl WizardApp {
                                 "Direct REST/DIDComm check against the VTA. Requires: `pnm acl create` run out-of-band first to enrol the mediator's own DID as admin of the target context.",
                                 "No live network from this host. Wizard writes a request; VTA admin runs `pnm contexts bootstrap --recipient <file>` on their CLI and returns an armored bundle carrying the admin credential.",
                             ),
+                            VtaIntent::OfflineExport => {
+                                // Defensive: SelectIntent routes
+                                // OfflineExport directly to sealed
+                                // handoff without ever entering this
+                                // phase. If it somehow lands here we
+                                // render a single-row stub explaining
+                                // the situation rather than panicking
+                                // in the renderer (which would tear
+                                // the TUI down mid-frame).
+                                return vec![SelectionOption::new(
+                                    "(no transport choice for OfflineExport)",
+                                    "OfflineExport is always offline — sealed handoff via `vta context reprovision` is the only producer.",
+                                )];
+                            }
                         };
                         vec![
                             SelectionOption::new("Online", online_sub),
@@ -1764,6 +1810,20 @@ impl WizardApp {
                             self.selection_index = 0;
                         }
                         2 => {
+                            // OfflineExport — pick up state the VTA
+                            // already provisioned. Always offline (the
+                            // v1 sealed_transfer::BootstrapRequest has
+                            // no online transport equivalent), so we
+                            // skip the SelectTransport phase entirely
+                            // and route straight into sealed_handoff.
+                            self.vta_intent_choice = Some(VtaIntent::OfflineExport);
+                            self.vta_stub_notice = None;
+                            self.config.use_vta = true;
+                            self.config.vta_mode = VTA_MODE_EXPORT.into();
+                            self.apply_vta_defaults();
+                            self.enter_sealed_handoff_subflow(VtaIntent::OfflineExport);
+                        }
+                        3 => {
                             self.vta_intent_choice = None;
                             self.config.use_vta = false;
                             self.config.vta_mode = String::new();
@@ -1828,6 +1888,19 @@ impl WizardApp {
                                 self.config.vta_mode = VTA_MODE_ONLINE.into();
                                 self.apply_vta_defaults();
                                 self.enter_vta_subflow(VtaIntent::AdminOnly);
+                            }
+                            (VtaIntent::OfflineExport, _) => {
+                                // OfflineExport bypasses the
+                                // SelectTransport phase entirely (see
+                                // SelectIntent index 2 above) — it has
+                                // no online transport. Reaching here
+                                // means the operator's selection_index
+                                // landed on the wrong intent variant;
+                                // treat as a wiring bug.
+                                unreachable!(
+                                    "OfflineExport should never reach SelectTransport — \
+                                     SelectIntent routes it directly to sealed_handoff"
+                                );
                             }
                         }
                     }
@@ -2358,7 +2431,13 @@ impl WizardApp {
             // Intent decides whether the VTA supplies the mediator
             // DID too, or only the admin credential.
             match self.vta_intent_choice {
-                Some(VtaIntent::FullSetup) | None => {
+                Some(VtaIntent::FullSetup) | Some(VtaIntent::OfflineExport) | None => {
+                    // FullSetup mints a fresh integration DID; OfflineExport
+                    // pulls back an *existing* one the VTA already
+                    // provisioned. Either way the mediator's DID and
+                    // admin identity are sourced from the VTA, so the
+                    // downstream defaults match.
+                    //
                     // `None` shouldn't happen while `use_vta` is
                     // `true` under the two-question picker, but
                     // fall through to the legacy "VTA supplies
@@ -3553,8 +3632,9 @@ mod tests {
         advance_to(&mut app, WizardStep::Vta);
         assert_eq!(app.config.did_method, DID_VTA);
 
-        // Select "No VTA" (index 2)
-        app.selection_index = 2;
+        // Select "No VTA" (index 3 — order: FullSetup, AdminOnly,
+        // OfflineExport, No VTA).
+        app.selection_index = 3;
         app.select_current();
         assert_eq!(app.current_step, WizardStep::Protocol);
         assert!(!app.config.use_vta);
@@ -3602,13 +3682,36 @@ mod tests {
     }
 
     #[test]
-    fn vta_step_select_intent_has_three_options() {
+    fn vta_step_select_intent_has_four_options() {
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::Vta;
         app.on_enter_step();
         assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
         let opts = app.current_options();
-        assert_eq!(opts.len(), 3); // FullSetup, AdminOnly, No VTA
+        assert_eq!(opts.len(), 4); // FullSetup, AdminOnly, OfflineExport, No VTA
+    }
+
+    #[test]
+    fn vta_intent_offline_export_skips_transport_phase() {
+        // OfflineExport is always offline (no online transport for the
+        // v1 sealed_transfer::BootstrapRequest shape) so picking it
+        // routes straight into the sealed-handoff sub-flow without
+        // ever entering SelectTransport.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        app.selection_index = 2; // OfflineExport
+        app.select_current();
+        assert_eq!(app.vta_intent_choice, Some(VtaIntent::OfflineExport));
+        assert_eq!(app.config.vta_mode, VTA_MODE_EXPORT);
+        assert!(app.config.use_vta);
+        // SelectTransport is bypassed.
+        assert_eq!(app.vta_step_phase, VtaStepPhase::SelectIntent);
+        // Sealed-handoff sub-flow is now active with OfflineExport
+        // intent — context_id is the only further input the operator
+        // needs to provide.
+        assert!(app.in_sealed_handoff_subflow());
+        let st = app.sealed_handoff.as_ref().unwrap();
+        assert_eq!(st.intent, VtaIntent::OfflineExport);
     }
 
     #[test]
