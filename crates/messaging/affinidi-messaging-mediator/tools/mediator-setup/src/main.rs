@@ -94,22 +94,30 @@ async fn main() -> anyhow::Result<()> {
     // The unified backend stores the JWT signing key, the admin
     // credential, and the operating keys; rotating any of them while a
     // mediator is running invalidates active sessions.
+    //
+    // `inspect_existing()` scans every well-known key on the backend —
+    // on keyring that's N reads, each of which can trigger a macOS
+    // Keychain unlock prompt when the binary's ACL identity differs
+    // from the last write (common across `cargo build` rebuilds).
+    // When the operator has already opted in via `--force-reprovision`
+    // the scan result is only used for the listing in
+    // `refuse_overwrite`, which we skip — so skip the scan too. The
+    // file-level backup below still runs from `mediator.toml` alone.
     let config_path = args.config.clone();
     let config_path_obj = std::path::Path::new(&config_path);
-    if let Some(setup) = reprovision::inspect_existing(config_path_obj).await? {
-        if setup.is_provisioned() && !args.force_reprovision {
-            reprovision::refuse_overwrite(config_path_obj, &setup);
-        }
-        if config_path_obj.exists() {
-            // Operator opted in (or there were no provisioned keys —
-            // e.g. backend was wiped manually). Back up the existing
-            // mediator.toml before generating the new one so the
-            // previous configuration is recoverable.
-            std::fs::copy(&config_path, format!("{config_path}.bak"))?;
-            eprintln!(
-                "Existing {config_path} backed up to {config_path}.bak before re-provisioning."
-            );
-        }
+    if !args.force_reprovision
+        && let Some(setup) = reprovision::inspect_existing(config_path_obj).await?
+        && setup.is_provisioned()
+    {
+        reprovision::refuse_overwrite(config_path_obj, &setup);
+    }
+    if config_path_obj.exists() {
+        // Operator opted in (or there were no provisioned keys —
+        // e.g. backend was wiped manually). Back up the existing
+        // mediator.toml before generating the new one so the
+        // previous configuration is recoverable.
+        std::fs::copy(&config_path, format!("{config_path}.bak"))?;
+        eprintln!("Existing {config_path} backed up to {config_path}.bak before re-provisioning.");
     }
 
     let mut app = WizardApp::new(config_path);
@@ -193,12 +201,15 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
 /// Non-interactive mode: build config from CLI args + deployment defaults, then generate.
 async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     // Same re-run safety story as the interactive flow — refuse to
-    // overwrite an existing setup unless `--force-reprovision` is set.
+    // overwrite an existing setup unless `--force-reprovision` is
+    // set. Skip the keyring scan when the operator has already opted
+    // in (see the matching note in `main()` above).
     let existing_path = std::path::Path::new(&args.config);
-    if let Some(setup) = reprovision::inspect_existing(existing_path).await? {
-        if setup.is_provisioned() && !args.force_reprovision {
-            reprovision::refuse_overwrite(existing_path, &setup);
-        }
+    if !args.force_reprovision
+        && let Some(setup) = reprovision::inspect_existing(existing_path).await?
+        && setup.is_provisioned()
+    {
+        reprovision::refuse_overwrite(existing_path, &setup);
     }
 
     let deployment = args.deployment.unwrap_or(cli::DeploymentType::Local);
@@ -1014,6 +1025,20 @@ async fn generate_and_write(
     //   to the VTA at boot) + JWT. Operating keys come from the VTA.
     let backend_url = config_writer::build_backend_url(config);
     println!("  Provisioning unified secret backend: {backend_url}");
+    // macOS Keychain prompts once per keychain item the first time a
+    // given binary (code-signature ACL) accesses it. Each `cargo
+    // build` produces a new binary — so operators rebuilding the
+    // wizard during development see fresh prompts on every run. Tell
+    // them up-front so they know to click "Always Allow" once per
+    // item, and that subsequent re-runs from the same binary won't
+    // re-prompt.
+    if backend_url.starts_with("keyring://") {
+        println!(
+            "    \x1b[2mNote: macOS may prompt the Keychain once per item on first \
+             access. Click \"Always Allow\" to grant this binary permanent access; \
+             subsequent re-runs of the same binary won't re-prompt.\x1b[0m"
+        );
+    }
     let mediator_secrets_store =
         affinidi_messaging_mediator_common::MediatorSecrets::from_url(&backend_url)
             .map_err(|e| anyhow::anyhow!("Failed to open secret backend '{backend_url}': {e}"))?;

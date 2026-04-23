@@ -113,4 +113,38 @@ impl SecretStore for KeyringStore {
             }),
         }
     }
+
+    /// Override the default put+get+delete roundtrip with a read-only
+    /// probe. On macOS every distinct keyring-entry ACL can trigger a
+    /// separate Keychain unlock prompt; the default probe creates an
+    /// ephemeral sentinel entry that is visible only to this probe,
+    /// adding a dialog the operator then has to manually "Always
+    /// Allow" for an entry that never gets used again.
+    ///
+    /// Instead, we issue a `get()` against a fixed sentinel key. The
+    /// keyring crate returns `NoEntry` immediately without prompting
+    /// on all three platforms we target (macOS Keychain, Windows
+    /// Credential Manager, Secret Service / libsecret) — that's a
+    /// sufficient liveness check because any real "backend
+    /// unreachable" failure (library unloadable, daemon down,
+    /// keychain locked and not unlockable) would surface as an error
+    /// from `get_password()` rather than `NoEntry`. A pre-existing
+    /// entry under the sentinel name returning a real value is also
+    /// fine — we only care that the call completed.
+    ///
+    /// The subsequent real writes (`put()` via `store_admin_credential`,
+    /// etc.) catch ACL / permission misconfigurations at first use;
+    /// the probe's job is narrower — "is the backend reachable at
+    /// all?" — and a read-only probe answers that without leaving
+    /// ephemeral state behind.
+    async fn probe(&self) -> Result<()> {
+        let entry = self.entry("mediator/.probe")?;
+        match entry.get_password() {
+            Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(SecretStoreError::ProbeFailed {
+                backend: BACKEND_LABEL,
+                reason: format!("keyring read-probe failed: {e}"),
+            }),
+        }
+    }
 }
