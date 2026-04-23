@@ -2587,21 +2587,26 @@ impl WizardApp {
     /// confirmation screen.
     ///
     /// Today only the `Did` step qualifies, and only under online
-    /// FullSetup: the VTA minted the integration DID during
-    /// provision-integration, `apply_vta_defaults` already pinned
-    /// `did_method = DID_VTA`, and the rendered DID doc + keys +
-    /// did.jsonl ride on `vta_session`. Operators can still reach this
-    /// step via the progress-panel jump if they want to inspect it.
+    /// FullSetup / OfflineExport: the VTA either minted the integration
+    /// DID during provision-integration (FullSetup — TemplateBootstrap
+    /// reply) or exported a pre-provisioned one via `vta context
+    /// reprovision` (OfflineExport — ContextProvision reply). Either
+    /// way `apply_vta_defaults` already pinned `did_method = DID_VTA`
+    /// and the mediator DID + doc + keys + did.jsonl ride on
+    /// `vta_session`. Operators can still reach this step via the
+    /// progress-panel jump if they want to inspect it.
     fn should_auto_skip_step(&self) -> bool {
         match self.current_step {
             WizardStep::Did => {
                 self.config.use_vta
                     && self.config.did_method == DID_VTA
-                    && self
-                        .vta_session
-                        .as_ref()
-                        .and_then(|s| s.as_full_provision())
-                        .is_some()
+                    && self.vta_session.as_ref().is_some_and(|s| {
+                        // Either provisioning shape carries a minted
+                        // integration DID. AdminOnly has neither
+                        // accessor populated — the mediator brought
+                        // its own DID, so the Did step still runs.
+                        s.as_full_provision().is_some() || s.as_context_export().is_some()
+                    })
             }
             _ => false,
         }
@@ -4164,6 +4169,58 @@ mod tests {
         // Did still marked completed so the progress bar reflects the
         // full walk, not a gap.
         assert!(app.completed_steps().contains(&WizardStep::Did));
+    }
+
+    #[test]
+    fn did_step_auto_skipped_on_offline_export() {
+        // OfflineExport's ContextProvision reply carries the
+        // mediator DID + keys the same way FullSetup's
+        // TemplateBootstrap reply does — both should trigger the
+        // Did-step auto-skip. Drive the predicate directly with a
+        // synthetic VtaSession since the sealed-handoff entry flow
+        // is interactive.
+        use crate::vta_connect::VtaSession;
+        use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
+        use vta_sdk::credentials::CredentialBundle;
+        use vta_sdk::did_secrets::SecretEntry;
+        use vta_sdk::keys::KeyType;
+
+        let bundle = ContextProvisionBundle {
+            context_id: "mediator-local".into(),
+            context_name: "Mediator local".into(),
+            vta_url: Some("https://vta.example.com".into()),
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            credential: CredentialBundle::new(
+                "did:key:z6MkAdmin",
+                "zAdminPrivate",
+                "did:webvh:vta.example.com",
+            ),
+            admin_did: "did:key:z6MkAdmin".into(),
+            did: Some(ProvisionedDid {
+                id: "did:webvh:mediator.example.com".into(),
+                did_document: None,
+                log_entry: None,
+                secrets: vec![SecretEntry {
+                    key_id: "did:webvh:mediator.example.com#key-0".into(),
+                    key_type: KeyType::Ed25519,
+                    private_key_multibase: "zSigning".into(),
+                }],
+            }),
+        };
+
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = true;
+        app.config.did_method = DID_VTA.into();
+        app.vta_session = Some(VtaSession::context_export("mediator-local".into(), bundle));
+
+        // Predicate must fire with the ContextExport shape too —
+        // this is the regression the earlier `as_full_provision`-only
+        // check caused.
+        app.current_step = WizardStep::Did;
+        assert!(
+            app.should_auto_skip_step(),
+            "OfflineExport session with did_method=DID_VTA must auto-skip the Did step"
+        );
     }
 
     #[tokio::test]

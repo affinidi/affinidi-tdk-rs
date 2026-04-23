@@ -379,20 +379,92 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     .session
                     .as_ref()
                     .expect("Complete phase always has a session");
-                let body = format!(
-                    "Bundle opened successfully.\n\nAdmin DID: {}\nVTA DID:   {}\n\n\
-                     Press Enter to provision the unified secret backend with this credential.",
-                    session.admin_did(),
-                    session.vta_did
+
+                // Build the body line-by-line so each reply variant
+                // surfaces the material it actually carries. All
+                // three show Admin + VTA DIDs; FullSetup /
+                // OfflineExport additionally show the minted (or
+                // exported) integration DID + key-pair summary so
+                // the operator can visually confirm the bundle
+                // matches what PNM shows and knows the Did step
+                // will be auto-skipped.
+                let mut body = String::from("Bundle opened successfully.\n\n");
+                body.push_str(&format!("Admin DID:     {}\n", session.admin_did()));
+                body.push_str(&format!("VTA DID:       {}\n", session.vta_did));
+                if let Some(did) = session.integration_did() {
+                    body.push_str(&format!("Mediator DID:  {did}\n"));
+                }
+                if let Some(bundle) = session.as_context_export() {
+                    // Key-pair summary: type counts, no private
+                    // bytes. Matches what the mediator's operating
+                    // secrets loader expects (Ed25519 signing +
+                    // X25519 key-agreement as the standard pair).
+                    if let Some(d) = bundle.did.as_ref() {
+                        let mut signing = 0usize;
+                        let mut ka = 0usize;
+                        let mut other = 0usize;
+                        for entry in &d.secrets {
+                            match entry.key_type {
+                                vta_sdk::keys::KeyType::Ed25519 => signing += 1,
+                                vta_sdk::keys::KeyType::X25519 => ka += 1,
+                                _ => other += 1,
+                            }
+                        }
+                        body.push_str(&format!(
+                            "Keys:          {signing} signing + {ka} key-agreement"
+                        ));
+                        if other > 0 {
+                            body.push_str(&format!(" (+{other} other)"));
+                        }
+                        body.push('\n');
+                        if d.did_document.is_some() {
+                            body.push_str("DID document:  included (matches exported DID)\n");
+                        }
+                        if d.log_entry.is_some() {
+                            body.push_str(
+                                "did.jsonl:     included (will be written next to mediator.toml)\n",
+                            );
+                        }
+                    }
+                } else if let Some(provision) = session.as_full_provision() {
+                    // FullSetup summary — key shape is inferable from
+                    // `integration_key()` presence; mirror the
+                    // ContextExport summary for consistency.
+                    if let Some(material) = provision.integration_key() {
+                        body.push_str(&format!(
+                            "Keys:          {} signing + {} key-agreement\n",
+                            if material.signing_key.private_key_multibase.is_empty() {
+                                0
+                            } else {
+                                1
+                            },
+                            if material.ka_key.private_key_multibase.is_empty() {
+                                0
+                            } else {
+                                1
+                            }
+                        ));
+                    }
+                    if provision.webvh_log().is_some() {
+                        body.push_str(
+                            "did.jsonl:     included (will be written next to mediator.toml)\n",
+                        );
+                    }
+                }
+                body.push_str(
+                    "\nPress Enter — the wizard will skip the Did step (already provisioned) \
+                     and continue to Protocol. Keys will be written to your secret backend at \
+                     the end.",
                 );
+
                 info_box::render_info_box(frame, chunks[0], "Sealed handoff — complete", &body);
                 info_box::render_info_box(
                     frame,
                     chunks[1],
                     "Info",
-                    "The wizard will continue to the Protocol step. The captured admin \
-                     credential will be written to your chosen secret backend at the end \
-                     of the wizard.",
+                    "The wizard did NOT see your private key bytes — those are handled by \
+                     `Secret::from_multibase` at the end of the flow and pushed into the \
+                     backend without passing through the TUI.",
                 );
                 return;
             }
