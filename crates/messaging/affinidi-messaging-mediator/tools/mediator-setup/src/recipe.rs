@@ -28,6 +28,37 @@ pub struct BuildRecipe {
     pub output: OutputSection,
     #[serde(default)]
     pub install: InstallSection,
+    /// VTA-specific inputs previously collected interactively on the
+    /// Vta step. Only meaningful when `deployment.use_vta = true`;
+    /// individual fields are mode-gated at validation time (e.g.
+    /// `context` is required for every sealed mode, `webvh_server`
+    /// only for `sealed-mint`).
+    #[serde(default)]
+    pub vta: VtaSection,
+}
+
+/// `[vta]` section — operator inputs for the VTA integration. Split out
+/// of `DeploymentSection` because a growing recipe with VTA-specific
+/// fields reads more naturally as its own table than a widening
+/// `[deployment]`.
+#[derive(Debug, Default, Deserialize)]
+pub struct VtaSection {
+    /// VTA context ID this mediator lives in. Defaults to `"mediator"`
+    /// via `apply_vta_defaults` when absent; operators with multiple
+    /// mediators against one VTA should set this explicitly.
+    #[serde(default)]
+    pub context: Option<String>,
+    /// Optional webvh server id the VTA should pin the minted DID's
+    /// `did.jsonl` log to. Only honoured for `vta_mode =
+    /// "sealed-mint"`; ignored for `sealed-export` (nothing is being
+    /// minted) and for `online` (the TUI collects it interactively).
+    #[serde(default)]
+    pub webvh_server: Option<String>,
+    /// Optional webvh path / mnemonic the VTA forwards to the chosen
+    /// webvh server's `request_uri` call. Pairs with `webvh_server`;
+    /// both are sealed-mint-only.
+    #[serde(default)]
+    pub webvh_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,13 +72,25 @@ pub struct DeploymentSection {
     /// Whether VTA integration is enabled
     #[serde(default)]
     pub use_vta: bool,
-    /// VTA connectivity mode: `"online"` (live REST/DIDComm),
-    /// `"sealed"` (air-gapped sealed handoff — wizard mints a request
-    /// and the VTA admin returns a sealed bundle from a fresh
-    /// provisioning), or `"export"` (air-gapped export of state the
-    /// VTA already provisioned out-of-band — VTA admin runs
-    /// `vta context reprovision` and returns a `ContextProvision`
-    /// bundle).
+    /// VTA connectivity mode:
+    ///
+    /// - `"online"` — live REST/DIDComm round-trip from the mediator
+    ///   to a running VTA. Only supported via the interactive TUI
+    ///   today because the `pnm acl create` step is inherently
+    ///   operator-gated; recipe-driven `--from` for `online` is
+    ///   rejected with a pointer at the TUI.
+    /// - `"sealed-mint"` — air-gapped sealed handoff where the VTA
+    ///   mints a *fresh* mediator DID + keys on the VTA side and
+    ///   returns a `TemplateBootstrap` bundle. Use for greenfield
+    ///   deployments.
+    /// - `"sealed-export"` — air-gapped export of state the VTA has
+    ///   already provisioned (ran a prior `sealed-mint` or online
+    ///   setup). VTA admin runs `vta context reprovision` and
+    ///   returns a `ContextProvision` bundle. Use for migrations
+    ///   and restores.
+    /// - `"sealed"` — **deprecated** alias for `"sealed-mint"`,
+    ///   accepted for backward compatibility with recipes written
+    ///   before the split. Emits a warning on load.
     #[serde(default)]
     pub vta_mode: Option<String>,
 }
@@ -212,6 +255,38 @@ impl Default for InstallSection {
     }
 }
 
+/// Normalise a raw `vta_mode` string from a recipe into the canonical
+/// values the wizard code uses ([`VTA_MODE_ONLINE`] /
+/// [`VTA_MODE_SEALED_MINT`] / [`VTA_MODE_SEALED_EXPORT`]).
+///
+/// `None` and empty strings return `""` — `to_wizard_config` then runs
+/// its legacy auto-detect path (did_method=vta → ONLINE). A deprecated
+/// `"sealed"` is silently rewritten to `sealed-mint` because every
+/// pre-split recipe used the single value for the mint case.
+fn normalise_vta_mode(raw: Option<&str>) -> anyhow::Result<String> {
+    let trimmed = raw.unwrap_or("").trim();
+    Ok(match trimmed {
+        "" => String::new(),
+        VTA_MODE_ONLINE => VTA_MODE_ONLINE.into(),
+        VTA_MODE_SEALED_MINT => VTA_MODE_SEALED_MINT.into(),
+        VTA_MODE_SEALED_EXPORT => VTA_MODE_SEALED_EXPORT.into(),
+        // Backward compat: pre-split recipes wrote `"sealed"` to
+        // mean what's now `"sealed-mint"`. Accept silently —
+        // nobody's written `"sealed"` to mean anything else.
+        VTA_MODE_SEALED_LEGACY => VTA_MODE_SEALED_MINT.into(),
+        other => anyhow::bail!(
+            "Invalid deployment.vta_mode '{}': expected one of '{}', '{}', '{}' \
+             (or legacy '{}' which maps to '{}')",
+            other,
+            VTA_MODE_ONLINE,
+            VTA_MODE_SEALED_MINT,
+            VTA_MODE_SEALED_EXPORT,
+            VTA_MODE_SEALED_LEGACY,
+            VTA_MODE_SEALED_MINT,
+        ),
+    })
+}
+
 /// Load a build recipe from a TOML file.
 pub fn load(path: &str) -> anyhow::Result<BuildRecipe> {
     let contents = std::fs::read_to_string(path)
@@ -238,7 +313,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
 
     // VTA integration
     config.use_vta = recipe.deployment.use_vta;
-    config.vta_mode = recipe.deployment.vta_mode.clone().unwrap_or_default();
+    config.vta_mode = normalise_vta_mode(recipe.deployment.vta_mode.as_deref())?;
 
     // Auto-detect: if recipe uses VTA-managed DID but use_vta is missing
     // (backward compat). Note: `secrets.storage = "vta://"` is no longer
@@ -248,6 +323,47 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         if config.vta_mode.is_empty() {
             config.vta_mode = VTA_MODE_ONLINE.into();
         }
+    }
+
+    // [vta] section — operator inputs previously collected
+    // interactively. `context` defaults to `DEFAULT_VTA_CONTEXT`
+    // (`"mediator"`) when absent; webvh_server / webvh_path stay
+    // `None` when absent (meaningful only for sealed-mint and
+    // auto-routed by `apply_vta_defaults` equivalents in the
+    // non-interactive path).
+    config.vta_context = recipe
+        .vta
+        .context
+        .clone()
+        .unwrap_or_else(|| DEFAULT_VTA_CONTEXT.into());
+    // Reuse the existing `vta_webvh_server_id` / `vta_webvh_mnemonic`
+    // fields on `WizardConfig` — they were originally populated by
+    // the TUI's online-VTA webvh picker and have the right shape for
+    // the recipe-driven sealed-mint flow too. `WEBVH_PATH` on the
+    // VTA template maps to `vta_webvh_mnemonic`.
+    config.vta_webvh_server_id = recipe.vta.webvh_server.clone();
+    config.vta_webvh_mnemonic = recipe.vta.webvh_path.clone();
+
+    // Mode-specific validation: `sealed-mint` mints a new DID on the
+    // VTA whose template requires a `URL` — identity.public_url must
+    // therefore be present. `sealed-export` pulls back an existing
+    // DID (URL already baked in), so `public_url` is informational.
+    // `online` uses the live DIDComm round-trip; the TUI collects
+    // the URL interactively when missing — recipe-driven `online` is
+    // rejected separately in `run_from_recipe`.
+    if config.use_vta
+        && config.vta_mode == VTA_MODE_SEALED_MINT
+        && recipe
+            .identity
+            .public_url
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        anyhow::bail!(
+            "vta_mode = \"sealed-mint\" requires identity.public_url — \
+             the VTA's didcomm-mediator template renders the mediator DID \
+             using this URL."
+        );
     }
 
     // Protocols
@@ -431,6 +547,31 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     }
     out.push('\n');
 
+    // [vta] — only emit when VTA is enabled and at least one field
+    // has a non-default value. Keeping an empty section out of the
+    // written recipe means the rendered TOML stays small for the
+    // common case where the operator didn't customise webvh
+    // hosting.
+    if config.use_vta {
+        let has_nondefault_context =
+            !config.vta_context.is_empty() && config.vta_context != DEFAULT_VTA_CONTEXT;
+        let has_webvh_server = config.vta_webvh_server_id.is_some();
+        let has_webvh_path = config.vta_webvh_mnemonic.is_some();
+        if has_nondefault_context || has_webvh_server || has_webvh_path {
+            out.push_str("[vta]\n");
+            if has_nondefault_context {
+                out.push_str(&format!("context = \"{}\"\n", config.vta_context));
+            }
+            if let Some(ref s) = config.vta_webvh_server_id {
+                out.push_str(&format!("webvh_server = \"{s}\"\n"));
+            }
+            if let Some(ref p) = config.vta_webvh_mnemonic {
+                out.push_str(&format!("webvh_path = \"{p}\"\n"));
+            }
+            out.push('\n');
+        }
+    }
+
     // Identity
     out.push_str("[identity]\n");
     let did_method = match config.did_method.as_str() {
@@ -573,6 +714,7 @@ mod tests {
             database: DatabaseSection::default(),
             output: OutputSection::default(),
             install: InstallSection::default(),
+            vta: VtaSection::default(),
         }
     }
 
@@ -756,6 +898,100 @@ mod tests {
         assert_eq!(restored.config_path, original.config_path);
         assert_eq!(restored.listen_address, original.listen_address);
         assert_eq!(restored.use_vta, original.use_vta);
+    }
+
+    #[test]
+    fn test_vta_mode_values_and_legacy_alias() {
+        // Canonical split: `sealed-mint` / `sealed-export` / `online`.
+        // Legacy `"sealed"` (pre-split) normalises silently to
+        // `sealed-mint` because that was the only interpretation
+        // before the split landed.
+        let mut recipe = minimal_recipe();
+        recipe.deployment.use_vta = true;
+        recipe.identity.public_url = Some("https://mediator.example.com".into());
+
+        for raw in ["sealed-mint", "sealed-export", "online"] {
+            recipe.deployment.vta_mode = Some(raw.into());
+            let cfg = to_wizard_config(&recipe).unwrap();
+            assert_eq!(cfg.vta_mode, raw);
+        }
+
+        recipe.deployment.vta_mode = Some("sealed".into());
+        let cfg = to_wizard_config(&recipe).unwrap();
+        assert_eq!(
+            cfg.vta_mode, VTA_MODE_SEALED_MINT,
+            "legacy `sealed` normalises to `sealed-mint`"
+        );
+
+        recipe.deployment.vta_mode = Some("cold-start".into());
+        let err = to_wizard_config(&recipe).unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid deployment.vta_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sealed_mint_requires_public_url() {
+        let mut recipe = minimal_recipe();
+        recipe.deployment.use_vta = true;
+        recipe.deployment.vta_mode = Some(VTA_MODE_SEALED_MINT.into());
+        // public_url omitted → rejected
+        let err = to_wizard_config(&recipe).unwrap_err().to_string();
+        assert!(
+            err.contains("requires identity.public_url"),
+            "unexpected error: {err}"
+        );
+        // public_url present → accepted
+        recipe.identity.public_url = Some("https://mediator.example.com".into());
+        let cfg = to_wizard_config(&recipe).unwrap();
+        assert_eq!(cfg.vta_mode, VTA_MODE_SEALED_MINT);
+    }
+
+    #[test]
+    fn test_vta_section_round_trips_through_recipe() {
+        // Non-default context + webvh fields must be written to the
+        // recipe text AND parsed back into the matching wizard
+        // config fields. Defaults are elided so the recipe text
+        // stays lean.
+        let original = WizardConfig {
+            use_vta: true,
+            vta_mode: VTA_MODE_SEALED_MINT.into(),
+            vta_context: "prod-mediator".into(),
+            did_method: DID_VTA.into(),
+            public_url: "https://mediator.example.com".into(),
+            secret_storage: STORAGE_KEYRING.into(),
+            admin_did_mode: ADMIN_VTA.into(),
+            vta_webvh_server_id: Some("prod-1".into()),
+            vta_webvh_mnemonic: Some("mediator/v1".into()),
+            ..WizardConfig::default()
+        };
+
+        let recipe_toml = from_wizard_config(&original);
+        assert!(recipe_toml.contains("[vta]"));
+        assert!(recipe_toml.contains("context = \"prod-mediator\""));
+        assert!(recipe_toml.contains("webvh_server = \"prod-1\""));
+        assert!(recipe_toml.contains("webvh_path = \"mediator/v1\""));
+
+        let parsed: BuildRecipe = toml::from_str(&recipe_toml).unwrap();
+        let restored = to_wizard_config(&parsed).unwrap();
+        assert_eq!(restored.vta_context, "prod-mediator");
+        assert_eq!(restored.vta_webvh_server_id.as_deref(), Some("prod-1"));
+        assert_eq!(restored.vta_webvh_mnemonic.as_deref(), Some("mediator/v1"));
+    }
+
+    #[test]
+    fn test_vta_section_omitted_on_defaults() {
+        // Default context + no webvh pins → no `[vta]` in recipe
+        // output, keeping the TOML small for the common case.
+        let original = WizardConfig {
+            use_vta: true,
+            vta_mode: VTA_MODE_ONLINE.into(),
+            did_method: DID_VTA.into(),
+            ..WizardConfig::default()
+        };
+        let recipe_toml = from_wizard_config(&original);
+        assert!(!recipe_toml.contains("[vta]"));
     }
 
     #[test]

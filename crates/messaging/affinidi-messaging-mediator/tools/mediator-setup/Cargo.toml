@@ -114,6 +114,12 @@ tracing = "0.1"
 [dev-dependencies]
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
+## Required by `bootstrap_headless` tests that mutate CWD via
+## `std::env::set_current_dir` — tests run in parallel threads by
+## default and the global CWD is shared, so the double-run detector
+## could race against an unrelated test's artefacts. `#[serial]`
+## forces affected tests to run one at a time.
+serial_test = "3"
 ## Sealed-handoff tests construct `ProducerAssertion` values with
 ## `producer_did` as a did:key — uses the `affinidi-crypto` dep
 ## already declared in `[dependencies]`.

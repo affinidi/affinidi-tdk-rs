@@ -56,6 +56,21 @@ pub struct Args {
     #[arg(long, value_name = "FILE")]
     pub from: Option<String>,
 
+    /// Phase 2 of a sealed-handoff setup: path to the armored
+    /// `bundle.armor` returned by the VTA operator. When present,
+    /// `--from` switches from phase 1 (emit request) to phase 2
+    /// (open bundle, write mediator config). Requires `--from`.
+    #[arg(long, value_name = "PATH")]
+    pub bundle: Option<PathBuf>,
+
+    /// Phase 2 only: optional SHA-256 digest the VTA admin printed
+    /// out-of-band. When present, the wizard verifies the bundle's
+    /// canonical digest matches before unsealing and refuses on
+    /// mismatch. Omit to skip the OOB check (the bundle's internal
+    /// AEAD still authenticates the payload).
+    #[arg(long, value_name = "HEX")]
+    pub digest: Option<String>,
+
     // ── Online-VTA connection flags ────────────────────────────────────
     /// VTA DID (e.g. did:webvh:vta.example.com). Pre-fills the TUI; required
     /// for non-interactive / --setup-key-{out,file} flows.

@@ -1,4 +1,5 @@
 mod app;
+mod bootstrap_headless;
 mod cli;
 mod config_writer;
 mod consts;
@@ -82,7 +83,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(ref recipe_path) = args.from {
-        return run_from_recipe(recipe_path, args.force_reprovision).await;
+        return run_from_recipe(
+            recipe_path,
+            args.force_reprovision,
+            args.bundle.as_deref(),
+            args.digest.as_deref(),
+        )
+        .await;
+    } else if args.bundle.is_some() {
+        anyhow::bail!(
+            "--bundle requires --from <recipe.toml>. The recipe tells the wizard \
+             the deployment type, secret backend, and VTA mode the bundle belongs to."
+        );
     }
 
     if args.non_interactive {
@@ -144,6 +156,16 @@ async fn main() -> anyhow::Result<()> {
                 println!("  Generating cryptographic material...\n");
                 match generate_and_write(&app.config, app.vta_session.as_ref(), true).await {
                     Ok(()) => {
+                        // Clean up the sealed-handoff request / seed
+                        // files if the setup went through that flow.
+                        // Same contract as the non-interactive path:
+                        // only material the mediator needs to start
+                        // survives. No-op when the interactive flow
+                        // didn't hit sealed-handoff (e.g. online VTA
+                        // or non-VTA deployments).
+                        if let Some(ref artefacts) = app.tui_bootstrap_artifacts {
+                            bootstrap_headless::cleanup_artifacts(artefacts);
+                        }
                         offer_build_and_guidance(&app.config);
                     }
                     Err(e) => {
@@ -265,7 +287,12 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
 }
 
 /// Run from a declarative build recipe TOML file (fully non-interactive).
-async fn run_from_recipe(recipe_path: &str, force_reprovision: bool) -> anyhow::Result<()> {
+async fn run_from_recipe(
+    recipe_path: &str,
+    force_reprovision: bool,
+    bundle_path: Option<&std::path::Path>,
+    digest: Option<&str>,
+) -> anyhow::Result<()> {
     let recipe = recipe::load(recipe_path)?;
     let mut config = recipe::to_wizard_config(&recipe)?;
 
@@ -308,9 +335,57 @@ async fn run_from_recipe(recipe_path: &str, force_reprovision: bool) -> anyhow::
     println!("  Config file:  {}", config.config_path);
     println!("  Listen:       {}", config.listen_address);
     println!();
-    println!("  Generating cryptographic material...\n");
 
-    generate_and_write(&config, None, false).await?;
+    // Sealed-handoff dispatch:
+    //   use_vta + vta_mode sealed-* → phase 1 (no --bundle) or phase 2
+    //     (with --bundle). Phase 1 emits request and exits early;
+    //     phase 2 produces a `VtaSession` that feeds `generate_and_write`.
+    //   use_vta + vta_mode online    → rejected (see intent_for_mode)
+    //   use_vta = false OR no vta_mode → legacy no-VTA generation path.
+    let vta_session = if config.use_vta
+        && matches!(
+            config.vta_mode.as_str(),
+            consts::VTA_MODE_SEALED_MINT | consts::VTA_MODE_SEALED_EXPORT | consts::VTA_MODE_ONLINE
+        ) {
+        use bootstrap_headless::HeadlessOutcome;
+        let outcome = bootstrap_headless::dispatch(&config, bundle_path, digest).await?;
+        match outcome {
+            HeadlessOutcome::RequestEmitted {
+                request_path,
+                bundle_id_hex,
+                producer_command,
+            } => {
+                print_phase1_next_steps(
+                    recipe_path,
+                    &request_path,
+                    &bundle_id_hex,
+                    &producer_command,
+                );
+                return Ok(());
+            }
+            HeadlessOutcome::Applied { session, artifacts } => {
+                println!("  Generating cryptographic material...\n");
+                generate_and_write(&config, Some(&session), false).await?;
+                bootstrap_headless::cleanup_artifacts(&artifacts);
+                println!(
+                    "  \x1b[32m\u{2714}\x1b[0m Setup artefacts removed — \
+                     the mediator has everything it needs in the \
+                     configured secret backend.\n"
+                );
+                Some(session)
+            }
+        }
+    } else {
+        println!("  Generating cryptographic material...\n");
+        generate_and_write(&config, None, false).await?;
+        None
+    };
+
+    // `vta_session` is intentionally dropped here — it already fed
+    // `generate_and_write` above, and the install step below doesn't
+    // need it. Consuming it keeps the variable live for the compiler
+    // without leaving a dangling binding.
+    drop(vta_session);
 
     let features = build_features(&config);
 
@@ -1473,6 +1548,39 @@ fn build_install_args(features: &[&str], install_root: Option<&str>) -> Vec<Stri
 }
 
 /// Print the run command for the mediator binary.
+/// Emit the "phase 1 complete — now do this on the VTA host, then
+/// re-run with --bundle" guidance after the headless dispatcher
+/// writes the request file. Mirrors the interactive TUI's
+/// `primary_command` screen but addressed to an operator looking at
+/// a shell prompt rather than a ratatui panel.
+fn print_phase1_next_steps(
+    recipe_path: &str,
+    request_path: &std::path::Path,
+    bundle_id_hex: &str,
+    producer_command: &str,
+) {
+    println!("  \x1b[32m\u{2714}\x1b[0m Phase 1 complete — bootstrap request written.");
+    println!();
+    println!(
+        "  \x1b[1mRequest file:\x1b[0m  \x1b[36m{}\x1b[0m",
+        request_path.display()
+    );
+    println!("  \x1b[1mBundle ID:\x1b[0m     \x1b[36m{bundle_id_hex}\x1b[0m");
+    println!();
+    println!("  \x1b[1mNext — on the VTA host, run:\x1b[0m");
+    println!("    \x1b[36m{producer_command}\x1b[0m");
+    println!();
+    println!("  \x1b[1mThen — back on this host, run:\x1b[0m");
+    println!(
+        "    \x1b[36mmediator-setup --from {recipe_path} --bundle bundle.armor \\\n     [--digest <sha256>]\x1b[0m"
+    );
+    println!();
+    println!(
+        "  \x1b[2mThe --digest is optional but recommended — paste the SHA-256\n  \
+         the VTA admin prints out-of-band.\x1b[0m"
+    );
+}
+
 fn print_run_command(config_path: &str, install_location: &str) {
     let abs_config = resolve_config_path(config_path);
     println!("  \x1b[1mTo start the mediator:\x1b[0m");

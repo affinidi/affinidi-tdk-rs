@@ -55,17 +55,34 @@ pub const ADMIN_SKIP: &str = "Skip";
 /// pre-dated the unified sealed-transfer envelope and offered no
 /// integrity guarantees on the wire.
 pub const VTA_MODE_ONLINE: &str = "online";
-pub const VTA_MODE_SEALED: &str = "sealed";
-/// Air-gapped *export* of pre-provisioned mediator state. The VTA
-/// admin already minted the mediator's context + DID + keys (e.g.
-/// during the VTA's own bootstrap); the wizard's job is to retrieve
-/// that material via a v1 sealed_transfer::BootstrapRequest the
-/// operator carries out-of-band, then the VTA admin runs
-/// `vta context reprovision --id <ctx> --recipient <req> --out <bundle>`
-/// and ships the sealed `ContextProvision` bundle back. Distinct from
-/// `sealed` (which mints fresh material on the VTA in response to a
-/// VP-framed request).
-pub const VTA_MODE_EXPORT: &str = "export";
+/// Air-gapped sealed handoff where the VTA **mints** a fresh mediator
+/// DID + keys and returns them in a `TemplateBootstrap` bundle. Use
+/// for greenfield deployments. This is the canonical value the
+/// wizard writes; recipes containing the legacy value `"sealed"` are
+/// normalised to this on load.
+pub const VTA_MODE_SEALED_MINT: &str = "sealed-mint";
+/// Air-gapped sealed handoff where the VTA **exports** material it
+/// already provisioned (via a prior `sealed-mint` or online setup)
+/// into a `ContextProvision` bundle. Use for migrations and
+/// restoring a mediator on a new host.
+pub const VTA_MODE_SEALED_EXPORT: &str = "sealed-export";
+/// Deprecated alias for [`VTA_MODE_SEALED_MINT`]. Accepted by the
+/// recipe loader for backward compatibility — recipes written before
+/// the mint/export split used the single value `"sealed"`. New code
+/// should write [`VTA_MODE_SEALED_MINT`] directly.
+pub const VTA_MODE_SEALED_LEGACY: &str = "sealed";
+/// Legacy alias retained for call sites that still check
+/// `VTA_MODE_SEALED`. Value equals [`VTA_MODE_SEALED_LEGACY`]
+/// (the string `"sealed"`). Prefer [`VTA_MODE_SEALED_MINT`] in new
+/// code — this constant only appears where we compare against
+/// recipes that haven't been rewritten to the split values yet.
+pub const VTA_MODE_SEALED: &str = VTA_MODE_SEALED_LEGACY;
+/// Legacy alias for [`VTA_MODE_SEALED_EXPORT`]. Retained because
+/// earlier wizard commits shipped it as the field name on
+/// `WizardConfig.vta_mode`. New code should write
+/// [`VTA_MODE_SEALED_EXPORT`]; the recipe loader normalises both
+/// values onto the canonical form.
+pub const VTA_MODE_EXPORT: &str = VTA_MODE_SEALED_EXPORT;
 
 /// Default values
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";

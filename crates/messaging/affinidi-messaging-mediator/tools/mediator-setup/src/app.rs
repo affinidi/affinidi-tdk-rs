@@ -285,8 +285,14 @@ pub struct WizardConfig {
     pub deployment_type: String,
     /// Whether VTA integration is enabled
     pub use_vta: bool,
-    /// VTA connectivity mode: "online" or "cold-start"
+    /// VTA connectivity mode: `"online"`, `"sealed-mint"`, or
+    /// `"sealed-export"`. See `consts::VTA_MODE_*`.
     pub vta_mode: String,
+    /// VTA context id this mediator lives in. Populated from the
+    /// recipe's `[vta] context` field or the TUI's sealed-handoff
+    /// CollectContext phase. Defaults to
+    /// [`crate::consts::DEFAULT_VTA_CONTEXT`] when unset.
+    pub vta_context: String,
     /// DIDComm v2 protocol enabled (default: true)
     pub didcomm_enabled: bool,
     /// TSP protocol enabled (experimental, default: false)
@@ -345,6 +351,7 @@ impl Default for WizardConfig {
             deployment_type: String::new(),
             use_vta: false,
             vta_mode: String::new(),
+            vta_context: DEFAULT_VTA_CONTEXT.into(),
             didcomm_enabled: true,
             tsp_enabled: false,
             did_method: String::new(),
@@ -411,6 +418,14 @@ pub struct WizardApp {
     /// Present only while the operator is on that sub-flow's screens;
     /// extracted into `vta_session` and dropped on completion.
     pub sealed_handoff: Option<SealedHandoffState>,
+    /// Snapshot of on-disk artefact paths captured at the moment the
+    /// sealed-handoff sub-flow transitions out of `Complete`. Used
+    /// post-setup to clean up the ephemeral seed + request file
+    /// after the mediator has written its config — same cleanup the
+    /// non-interactive `--from` path does via
+    /// [`crate::bootstrap_headless::cleanup_artifacts`]. `None`
+    /// when the setup didn't go through the sealed-handoff flow.
+    pub tui_bootstrap_artifacts: Option<crate::bootstrap_headless::BootstrapArtifacts>,
     /// Which of the two top-level picker questions is on screen. Reset
     /// to [`VtaStepPhase::SelectIntent`] whenever the operator enters
     /// or re-enters the Vta step.
@@ -450,6 +465,7 @@ impl WizardApp {
             vta_context_prefill: None,
             vta_session: None,
             sealed_handoff: None,
+            tui_bootstrap_artifacts: None,
             vta_step_phase: VtaStepPhase::SelectIntent,
             vta_intent_choice: None,
             vta_stub_notice: None,
@@ -524,6 +540,18 @@ impl WizardApp {
                 // Project the captured session onto the wizard and
                 // exit the sub-flow. From here the wizard advances to
                 // Protocol like the Online VTA path.
+                //
+                // Before dropping the sealed_handoff state, snapshot
+                // the on-disk artefact paths so main.rs can clean
+                // them up after the TUI finishes and writes the
+                // mediator config. Matches the non-interactive
+                // path's cleanup contract — "only what the mediator
+                // needs to start should be kept".
+                self.tui_bootstrap_artifacts =
+                    Some(crate::bootstrap_headless::BootstrapArtifacts {
+                        request_path: state.request_path.take(),
+                        seed_path: state.seed_path.take(),
+                    });
                 self.vta_session = state.session.take();
                 self.sealed_handoff = None;
                 self.mode = InputMode::Selecting;
