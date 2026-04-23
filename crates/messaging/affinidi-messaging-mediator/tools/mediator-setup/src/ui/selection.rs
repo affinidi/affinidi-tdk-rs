@@ -1,6 +1,6 @@
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 
 use crate::ui::theme;
@@ -57,7 +57,13 @@ pub fn render_selection(
         width: inner.width,
         height: desc_height,
     };
-    let desc = Paragraph::new(description).style(theme::dim_style());
+    // Wrap so a long description flows into the second fixed row
+    // rather than clipping at the column boundary. `trim: true`
+    // collapses multiple whitespace at line breaks — matches the
+    // `summary.rs` and `prompt.rs` convention for descriptive text.
+    let desc = Paragraph::new(description)
+        .style(theme::dim_style())
+        .wrap(Wrap { trim: true });
     frame.render_widget(desc, desc_area);
 
     // Options list

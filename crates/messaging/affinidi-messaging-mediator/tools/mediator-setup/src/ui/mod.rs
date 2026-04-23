@@ -821,6 +821,16 @@ fn render_sealed_request(
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
+        Span::styled("Scroll:   ", label),
+        Span::styled("\u{2191}/\u{2193}", cmd),
+        Span::styled(" line   ", value),
+        Span::styled("PgUp/PgDn", cmd),
+        Span::styled(" page   ", value),
+        Span::styled("Home", cmd),
+        Span::styled(" top", value),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
         Span::styled("Press ", hint),
         Span::styled("Enter", cmd),
         Span::styled(" once you have the bundle. ", hint),
@@ -828,18 +838,34 @@ fn render_sealed_request(
         Span::styled(" cancels.", hint),
     ]));
 
+    // Right-edge scrollbar hint: "... more below" indicator when the
+    // content extends past the visible viewport. We don't know the
+    // rendered wrap width up front, so use a conservative heuristic
+    // — just show the current offset as a small header annotation
+    // when it's non-zero. Prevents operators on small terminals from
+    // thinking the panel is stuck at the top.
+    let scroll_title = if state.request_scroll > 0 {
+        format!(
+            " Sealed handoff — request (scrolled \u{2193}{}) ",
+            state.request_scroll
+        )
+    } else {
+        " Sealed handoff — request ".to_string()
+    };
+
     let block = Block::default()
-        .title(Span::styled(
-            " Sealed handoff — request ",
-            theme::info_style(),
-        ))
+        .title(Span::styled(scroll_title, theme::info_style()))
         .borders(Borders::ALL)
         .border_style(theme::border_style())
         .padding(Padding::new(2, 2, 1, 0));
 
     let para = Paragraph::new(lines)
         .block(block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        // Apply the operator's current scroll offset. Ratatui
+        // renders empty rows past content without erroring, so we
+        // don't need to know the total line count up-front.
+        .scroll((state.request_scroll, 0));
     frame.render_widget(para, area);
 }
 

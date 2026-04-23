@@ -420,10 +420,13 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
     // Bare `c` / `v` / `p` on the sealed-handoff RequestGenerated screen
     // copy one of: the bootstrap request JSON, the `vta bootstrap seal`
     // command, or the `pnm-cli bootstrap seal` command to the system
-    // clipboard. Placed ahead of the mode-based dispatch so it fires in
-    // both Selecting and TextInput modes — the RequestGenerated phase
-    // uses Selecting mode today, but keeping the hotkey mode-agnostic
-    // is cheap and future-proofs against UI shuffling.
+    // clipboard. Arrow / Page / Home keys scroll the panel — the
+    // rendered content (VP JSON + commands + hotkey cheatsheet) exceeds
+    // the viewport on smaller terminals. Placed ahead of the mode-based
+    // dispatch so it fires in both Selecting and TextInput modes — the
+    // RequestGenerated phase uses Selecting mode today, but keeping the
+    // hotkey mode-agnostic is cheap and future-proofs against UI
+    // shuffling.
     if !modifiers.contains(KeyModifiers::CONTROL)
         && matches!(
             code,
@@ -435,6 +438,11 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                 | KeyCode::Char('P')
                 | KeyCode::Char('f')
                 | KeyCode::Char('F')
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
         )
         && app.in_sealed_handoff_subflow()
     {
@@ -445,6 +453,12 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                 // (vta bootstrap provision-integration). `f` copies
                 // the fallback command when one exists (AdminOnly's
                 // raw `vta bootstrap seal` invocation).
+                //
+                // Scroll keys: one line (arrows) or 10 lines (Page).
+                // 10 is a compromise between "obvious jump" and "don't
+                // shoot past useful content in one keystroke"; the
+                // panel is about 40–60 rendered lines typically.
+                const PAGE: u16 = 10;
                 match code {
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         state.copy_request_to_clipboard();
@@ -458,6 +472,11 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                     KeyCode::Char('f') | KeyCode::Char('F') => {
                         state.copy_fallback_command_to_clipboard();
                     }
+                    KeyCode::Up => state.scroll_request_up(1),
+                    KeyCode::Down => state.scroll_request_down(1),
+                    KeyCode::PageUp => state.scroll_request_up(PAGE),
+                    KeyCode::PageDown => state.scroll_request_down(PAGE),
+                    KeyCode::Home => state.scroll_request_home(),
                     _ => unreachable!("outer matches! guards the code space"),
                 }
                 return;

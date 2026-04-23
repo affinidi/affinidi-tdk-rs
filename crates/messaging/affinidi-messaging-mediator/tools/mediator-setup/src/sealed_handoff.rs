@@ -182,6 +182,18 @@ pub struct SealedHandoffState {
     /// this string makes the trust posture explicit so the operator
     /// doesn't read silence as success.
     pub assertion_warning: Option<String>,
+    /// Vertical scroll offset (in rendered rows) for the
+    /// RequestGenerated panel. The panel's content — VP JSON +
+    /// producer commands + hotkey cheatsheet — routinely exceeds
+    /// the terminal viewport, especially on smaller windows. The
+    /// main loop bumps this in response to Up/Down/PageUp/PageDown
+    /// keys, and the renderer passes it to `Paragraph::scroll()`.
+    /// Clamped to `>= 0` on the decrement side; the upper bound is
+    /// left to ratatui, which renders empty rows past content
+    /// rather than refusing. Reset to zero whenever the phase
+    /// transitions so a later re-entry (e.g. operator backtracks)
+    /// starts at the top.
+    pub request_scroll: u16,
 }
 
 impl SealedHandoffState {
@@ -216,6 +228,7 @@ impl SealedHandoffState {
             seed_path: None,
             producer_assertion: None,
             assertion_warning: None,
+            request_scroll: 0,
         }
     }
 
@@ -341,8 +354,37 @@ impl SealedHandoffState {
         self.request_json = request_json;
         self.request_path = persisted;
         self.seed_path = seed_path;
+        // Fresh content → fresh viewport. Without this, an operator
+        // who scrolled earlier and backtracked would land on
+        // RequestGenerated partway down the new JSON.
+        self.request_scroll = 0;
         self.phase = SealedPhase::RequestGenerated;
         Ok(())
+    }
+
+    /// Scroll the RequestGenerated panel up by `rows`, saturating
+    /// at the top. Row count is configurable so the same helper
+    /// drives both single-line (Up/Down) and page-wise (PageUp/
+    /// PageDown) keybindings.
+    pub fn scroll_request_up(&mut self, rows: u16) {
+        self.request_scroll = self.request_scroll.saturating_sub(rows);
+    }
+
+    /// Scroll the RequestGenerated panel down by `rows`. Upper
+    /// bound is deliberately not clamped here — ratatui renders
+    /// blank rows past content rather than erroring, and the
+    /// content height depends on terminal width (line-wrap) which
+    /// isn't known at this layer. Lets the operator scroll
+    /// slightly past the bottom without us having to predict the
+    /// wrap; they can scroll back up.
+    pub fn scroll_request_down(&mut self, rows: u16) {
+        self.request_scroll = self.request_scroll.saturating_add(rows);
+    }
+
+    /// Jump back to the top of the RequestGenerated panel. Used
+    /// for Home key and as a phase-transition reset.
+    pub fn scroll_request_home(&mut self) {
+        self.request_scroll = 0;
     }
 
     /// Copy `request_json` onto the system clipboard via `arboard`.
@@ -877,6 +919,38 @@ mod tests {
         assert_eq!(state.context_id, DEFAULT_VTA_CONTEXT);
         assert!(state.admin_label.is_empty());
         assert!(state.request_json.is_empty());
+    }
+
+    #[test]
+    fn scroll_saturates_at_zero_and_free_grows_on_down() {
+        // RequestGenerated panel scroll — Up saturates at 0 so the
+        // operator can't wedge the viewport past the top; Down is
+        // unbounded because the rendered height depends on wrap
+        // width we don't know at this layer. `Home` resets.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        assert_eq!(state.request_scroll, 0);
+        state.scroll_request_up(5);
+        assert_eq!(state.request_scroll, 0, "Up from 0 must saturate");
+        state.scroll_request_down(3);
+        assert_eq!(state.request_scroll, 3);
+        state.scroll_request_down(10);
+        assert_eq!(state.request_scroll, 13, "Down accumulates without clamp");
+        state.scroll_request_up(4);
+        assert_eq!(state.request_scroll, 9);
+        state.scroll_request_home();
+        assert_eq!(state.request_scroll, 0);
+    }
+
+    #[test]
+    fn finalize_request_resets_scroll_to_top() {
+        // Re-entering RequestGenerated (e.g. after a backtrack) must
+        // land on row 0, otherwise the operator would see fresh JSON
+        // rendered from partway down.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.scroll_request_down(20);
+        state.finalize_request().expect("finalize succeeds");
+        assert_eq!(state.phase, SealedPhase::RequestGenerated);
+        assert_eq!(state.request_scroll, 0);
     }
 
     #[test]
