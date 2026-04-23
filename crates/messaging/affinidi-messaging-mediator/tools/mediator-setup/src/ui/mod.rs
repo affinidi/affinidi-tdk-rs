@@ -310,10 +310,15 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
             }
             SealedPhase::AwaitingBundle => {
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Enter the path to the `bundle.armor` file your VTA admin sent back, \
-                     or paste the armored contents directly. Press Enter. Esc cancels.\n\n\
-                     File path is the reliable route — most terminals strip newlines on \
-                     paste, which breaks the armor format's BEGIN/END markers."
+                    // Two short lines — split by `\n` and rendered as
+                    // separate `Line`s by `render_prompt`. Reads cleanly
+                    // on narrow terminals and calls out the preferred
+                    // route without burying it in prose.
+                    "Tip: file path is the reliable route — most terminals strip \
+                     newlines on paste, which breaks the armor format's \
+                     BEGIN/END markers.\n\
+                     Accepted: an absolute or relative path to bundle.armor, \
+                     or an inline armored paste."
                         .into()
                 });
                 prompt::render_prompt(

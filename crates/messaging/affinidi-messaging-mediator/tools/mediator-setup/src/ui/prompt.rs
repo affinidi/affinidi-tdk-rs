@@ -40,8 +40,12 @@ pub fn render_prompt(
     hint: &str,
 ) {
     // Vertical layout: title, description, optional tip, blank, prompt,
-    // blank, hint, then flex. The global bottom help bar already shows
-    // `Enter Confirm / Esc Cancel`, so we don't duplicate those keys here.
+    // blank, hint (grows for multi-line hints), then flex. The global
+    // bottom help bar already shows `Enter Confirm / Esc Cancel`, so we
+    // don't duplicate those keys here. The hint region is `Min(2)` so a
+    // single-line hint renders one row + one row of breathing space, and
+    // a multi-line hint (split on `\n`) flows into as many rows as the
+    // remaining area allows.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -51,7 +55,7 @@ pub fn render_prompt(
             Constraint::Length(1), // 3: blank
             Constraint::Length(1), // 4: prompt
             Constraint::Length(1), // 5: blank
-            Constraint::Length(1), // 6: hint
+            Constraint::Min(2),    // 6: hint (grows for multi-line / wrap)
             Constraint::Min(0),
         ])
         .split(area);
@@ -99,12 +103,25 @@ pub fn render_prompt(
     let cursor_x = after_glyph_x + input.visual_cursor() as u16;
     frame.set_cursor_position(Position::new(cursor_x, chunks[4].y));
 
-    // Hint text below the input.
+    // Hint text below the input. Split the hint string on `\n` so
+    // callers can use `\n` (or `\n\n`) as an explicit line break —
+    // `Span` treats newlines as literal characters by default, which
+    // is why the multi-paragraph hint on AwaitingBundle previously
+    // rendered as one clipped line. Each segment becomes its own
+    // `Line` with the same dim style and `  ` indent; long lines
+    // wrap within the hint's row budget via `Wrap { trim: true }`.
     if !hint.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(format!("  {hint}"), theme::dim_style()))
-                .wrap(Wrap { trim: true }),
-            chunks[6],
-        );
+        let style = theme::dim_style();
+        let lines: Vec<Line> = hint
+            .split('\n')
+            .map(|segment| {
+                if segment.is_empty() {
+                    Line::from("")
+                } else {
+                    Line::from(Span::styled(format!("  {segment}"), style))
+                }
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), chunks[6]);
     }
 }
