@@ -536,7 +536,9 @@ impl WizardApp {
     /// sub-flow. Returns `true` if the input was consumed so the
     /// outer dispatcher knows not to fall through.
     fn sealed_handoff_confirm_text(&mut self) -> bool {
-        use crate::sealed_handoff::{SealedPhase, ingest_armored, open_with_digest};
+        use crate::sealed_handoff::{
+            SealedPhase, ingest_armored, ingest_armored_file, open_with_digest,
+        };
         let Some(state) = self.sealed_handoff.as_mut() else {
             return false;
         };
@@ -629,7 +631,53 @@ impl WizardApp {
                 true
             }
             SealedPhase::AwaitingBundle => {
-                if let Err(e) = ingest_armored(state, &value) {
+                // Accept either a file path or an inline armored paste.
+                // File-path is the reliable primary route — TUI paste
+                // of multi-line armor doesn't survive `tui_input`'s
+                // single-line widget on most terminals (newlines get
+                // stripped before reaching `ingest_armored`, so the
+                // armor decoder can't find its BEGIN/END markers).
+                //
+                // Detection order:
+                // 1. If the input starts with `-----BEGIN ` and has
+                //    newlines intact, treat as inline armor. Handles
+                //    operators who pipe the contents through a
+                //    terminal paste that genuinely preserved newlines.
+                // 2. Otherwise trim whitespace and check whether the
+                //    input names a path that exists — load the file
+                //    and decode.
+                // 3. If the path doesn't exist but the input is a
+                //    long single-line starting with `-----BEGIN `,
+                //    hint that paste likely stripped newlines.
+                // 4. Fall through to raw-armor decode which will
+                //    error with `"no BEGIN blocks found"` — the
+                //    surfaced message lets the operator see the
+                //    exact mismatch.
+                let trimmed = value.trim();
+                let result = if trimmed.starts_with("-----BEGIN ") && value.contains('\n') {
+                    ingest_armored(state, &value)
+                } else {
+                    let path_candidate = trimmed;
+                    let path_exists = !path_candidate.is_empty()
+                        && std::path::Path::new(path_candidate).is_file();
+                    if path_exists {
+                        ingest_armored_file(state, path_candidate)
+                    } else if trimmed.starts_with("-----BEGIN ") {
+                        // Paste looked like armor but has no newlines
+                        // — most common failure mode (terminal /
+                        // tui_input stripped them). Give a specific
+                        // hint instead of a generic armor error.
+                        Err(crate::sealed_handoff::SealedHandoffError::ArmorDecode(
+                            "paste appears to be armored but contains no line breaks — \
+                             terminals often strip newlines on paste. Try entering the \
+                             path to `bundle.armor` instead."
+                                .into(),
+                        ))
+                    } else {
+                        ingest_armored(state, &value)
+                    }
+                };
+                if let Err(e) = result {
                     state.last_error = Some(e.to_string());
                 } else {
                     self.text_input = Input::default();
@@ -2725,13 +2773,31 @@ impl WizardApp {
     /// control characters are dropped so a multi-line paste collapses to a
     /// single line (our fields — DID, context id, URLs — are single-line by
     /// design).
+    ///
+    /// **Exception**: the sealed-handoff `AwaitingBundle` phase accepts
+    /// armored bytes whose format is fundamentally multi-line (`-----BEGIN
+    /// VTA SEALED BUNDLE-----` / `-----END ...-----` with newlines between
+    /// them). We preserve `\n` and `\r` on that phase so a genuine
+    /// bracketed-paste of the armor content survives through to
+    /// `armor::decode`. In practice most terminals still collapse large
+    /// pastes, which is why the confirm handler also accepts a file path —
+    /// see `sealed_handoff_confirm_text::AwaitingBundle`.
     pub fn paste_text(&mut self, raw: &str) {
         if self.mode != InputMode::TextInput {
             return;
         }
+        let preserve_newlines = matches!(
+            self.sealed_handoff.as_ref().map(|s| s.phase),
+            Some(crate::sealed_handoff::SealedPhase::AwaitingBundle)
+        );
         let cleaned: String = raw
             .chars()
-            .filter(|c| !c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
+            .filter(|c| {
+                if preserve_newlines && (*c == '\n' || *c == '\r') {
+                    return true;
+                }
+                !c.is_control() && *c != '\n' && *c != '\r' && *c != '\t'
+            })
             .collect();
         if cleaned.is_empty() {
             return;
@@ -2990,6 +3056,44 @@ mod tests {
         app.text_input = tui_input::Input::new(String::new());
         app.paste_text("did:web\tvh:\r\nexample.com");
         assert_eq!(app.text_input.value(), "did:webvh:example.com");
+    }
+
+    #[test]
+    fn paste_text_preserves_newlines_on_awaiting_bundle() {
+        // Sealed-handoff armor requires newlines between its BEGIN/END
+        // markers; the default single-line-collapse behaviour would
+        // break `armor::decode`. Must preserve \n and \r when the
+        // sealed-handoff state is on AwaitingBundle.
+        use crate::sealed_handoff::{SealedHandoffState, SealedPhase};
+        use crate::vta_connect::VtaIntent;
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::TextInput;
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None);
+        state.phase = SealedPhase::AwaitingBundle;
+        app.sealed_handoff = Some(state);
+        app.text_input = tui_input::Input::new(String::new());
+        app.paste_text(
+            "-----BEGIN VTA SEALED BUNDLE-----\nBundle-Id: abc\n-----END VTA SEALED BUNDLE-----\n",
+        );
+        assert!(app.text_input.value().contains('\n'));
+        assert!(app.text_input.value().contains("-----BEGIN"));
+        assert!(app.text_input.value().contains("-----END"));
+    }
+
+    #[test]
+    fn paste_text_still_strips_newlines_outside_awaiting_bundle() {
+        // Other sealed-handoff phases (CollectContext, CollectMediatorUrl,
+        // etc.) are single-line prompts — paste must still collapse.
+        use crate::sealed_handoff::{SealedHandoffState, SealedPhase};
+        use crate::vta_connect::VtaIntent;
+        let mut app = WizardApp::new("test.toml".into());
+        app.mode = InputMode::TextInput;
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None);
+        state.phase = SealedPhase::CollectContext;
+        app.sealed_handoff = Some(state);
+        app.text_input = tui_input::Input::new(String::new());
+        app.paste_text("mediator-local\nextra");
+        assert_eq!(app.text_input.value(), "mediator-localextra");
     }
 
     #[test]

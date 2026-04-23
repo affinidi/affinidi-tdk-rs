@@ -310,26 +310,30 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
             }
             SealedPhase::AwaitingBundle => {
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Paste the entire `-----BEGIN VTA SEALED BUNDLE-----` block, then press \
-                     Enter. Bracketed paste is supported. Esc cancels."
+                    "Enter the path to the `bundle.armor` file your VTA admin sent back, \
+                     or paste the armored contents directly. Press Enter. Esc cancels.\n\n\
+                     File path is the reliable route — most terminals strip newlines on \
+                     paste, which breaks the armor format's BEGIN/END markers."
                         .into()
                 });
                 prompt::render_prompt(
                     frame,
                     chunks[0],
-                    "Sealed handoff — paste armored bundle",
-                    "Paste the HPKE-armored bundle returned by your VTA admin.",
+                    "Sealed handoff — load armored bundle",
+                    "Enter a path to bundle.armor, or paste its contents.",
                     None,
                     &app.text_input,
-                    "-----BEGIN VTA SEALED BUNDLE-----",
+                    "/path/to/bundle.armor  (or -----BEGIN VTA SEALED BUNDLE-----)",
                     &hint,
                 );
                 info_box::render_info_box(
                     frame,
                     chunks[1],
                     "Info",
-                    "Bundle is parsed locally — no network call. The wizard verifies its \
-                     internal AEAD on every chunk and refuses on any tamper.",
+                    "Bundle is parsed locally — no network call. The wizard auto-detects \
+                     whether the input is a file path (loads + decodes) or an inline armor \
+                     paste (decodes directly), verifies the AEAD on every chunk, and \
+                     refuses on any tamper.",
                 );
                 return;
             }
