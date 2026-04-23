@@ -107,20 +107,25 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         vta_did: vta_did.clone(),
         vta_url: vta_url.clone(),
     };
+    // vta-sdk 0.6.x split `VtaServiceConfig` into `auth` + `context`.
+    // Admin rotation is a one-shot operator command, not a hot path —
+    // REST is the right fit. Explicit `PreferRest` on the context
+    // keeps the ACL create/rotate calls off the DIDComm channel
+    // (where they'd need to negotiate an async reply envelope) and
+    // lands on the synchronous REST API that `get_acl` / `create_acl`
+    // are built for.
     let svc = VtaServiceConfig {
-        credential: bundle,
-        context: context.clone(),
-        url_override: vta_url.clone().filter(|u| !u.is_empty()),
-        timeout: None,
-        // Admin rotation is a one-shot operator command, not a hot
-        // path — REST is the right fit. Explicit `PreferRest` keeps
-        // the ACL create/rotate calls off the DIDComm channel (where
-        // they'd need to negotiate an async reply envelope) and lands
-        // on the synchronous REST API that `get_acl` / `create_acl`
-        // are built for.
-        mediator_did: None,
-        transport_preference: TransportPreference::PreferRest,
-        did_resolver: None,
+        auth: vta_sdk::integration::VtaAuthConfig {
+            credential: bundle,
+            url_override: vta_url.clone().filter(|u| !u.is_empty()),
+            timeout: None,
+        },
+        context: vta_sdk::integration::VtaContextConfig {
+            id: context.clone(),
+            mediator_did: None,
+            transport_preference: TransportPreference::PreferRest,
+            did_resolver: None,
+        },
     };
     let client = authenticate(&svc)
         .await

@@ -377,28 +377,42 @@ impl TryFrom<ConfigRaw> for Config {
                 vta_did: admin.vta_did.clone(),
                 vta_url: admin.vta_url.clone(),
             };
+            // vta-sdk 0.6.x split `VtaServiceConfig` into an
+            // `auth` block (credential + URL + timeout) and a
+            // `context` block (id + transport preferences + DID
+            // resolver). Construct explicitly rather than using
+            // `VtaServiceConfig::new` because we want to express
+            // each transport default in a comment, not hide them
+            // behind the convenience constructor.
             let service_config = VtaServiceConfig {
-                credential,
-                context: admin.context.clone(),
-                url_override: admin.vta_url.clone().filter(|u| !u.is_empty()),
-                timeout: None,
-                // DIDComm-first with REST fallback: the mediator already
-                // speaks DIDComm for its primary workload, and the VTA
-                // exposes its `DIDCommMessaging` service endpoint in its
-                // DID doc. Auto-preference lets the SDK try DIDComm when
-                // `mediator_did` is resolvable and fall through to REST
-                // otherwise — no circular-dependency hazard because
-                // `integration::startup` resolves the VTA's mediator
-                // from the VTA's DID doc, not from our own config.
-                mediator_did: None,
-                transport_preference: TransportPreference::Auto,
-                // `None` → SDK builds a one-shot resolver on demand.
-                // Mediator boot is a one-shot flow so we don't share
-                // our own `did_resolver` here; it isn't constructed
-                // until later in this TryFrom (line ~498). Sharing it
-                // would require reordering the config build, which is
-                // a bigger change than this wire-up warrants.
-                did_resolver: None,
+                auth: integration::VtaAuthConfig {
+                    credential,
+                    url_override: admin.vta_url.clone().filter(|u| !u.is_empty()),
+                    timeout: None,
+                },
+                context: integration::VtaContextConfig {
+                    id: admin.context.clone(),
+                    // DIDComm-first with REST fallback: the mediator
+                    // already speaks DIDComm for its primary workload,
+                    // and the VTA exposes its `DIDCommMessaging`
+                    // service endpoint in its DID doc. Auto-preference
+                    // lets the SDK try DIDComm when `mediator_did` is
+                    // resolvable and fall through to REST otherwise —
+                    // no circular-dependency hazard because
+                    // `integration::startup` resolves the VTA's
+                    // mediator from the VTA's DID doc, not from our
+                    // own config.
+                    mediator_did: None,
+                    transport_preference: TransportPreference::Auto,
+                    // `None` → SDK builds a one-shot resolver on
+                    // demand. Mediator boot is a one-shot flow so we
+                    // don't share our own `did_resolver` here; it
+                    // isn't constructed until later in this TryFrom.
+                    // Sharing it would require reordering the config
+                    // build, which is a bigger change than this
+                    // wire-up warrants.
+                    did_resolver: None,
+                },
             };
 
             // Parse cache TTL — default to 30 days when unset, `0` means
@@ -421,22 +435,22 @@ impl TryFrom<ConfigRaw> for Config {
             // need both — "did it try?" + "did it succeed, and from
             // where?" — without chasing the SDK's internal log lines.
             info!(
-                context = %service_config.context,
-                vta_url = %service_config.url_override.as_deref().unwrap_or("(from DID doc)"),
+                context = %service_config.context.id,
+                vta_url = %service_config.auth.url_override.as_deref().unwrap_or("(from DID doc)"),
                 "Starting VTA integration — attempting live fetch with cache fallback"
             );
             let result = integration::startup(&service_config, &cache)
                 .await
-                .map_err(|e| vta_startup_error(&service_config.context, e))?;
+                .map_err(|e| vta_startup_error(&service_config.context.id, e))?;
             match result.source {
                 SecretSource::Vta => info!(
-                    context = %service_config.context,
+                    context = %service_config.context.id,
                     did = %result.did,
                     secrets = result.bundle.secrets.len(),
                     "VTA integration OK — loaded fresh secrets from VTA"
                 ),
                 SecretSource::Cache => warn!(
-                    context = %service_config.context,
+                    context = %service_config.context.id,
                     did = %result.did,
                     secrets = result.bundle.secrets.len(),
                     "VTA integration DEGRADED — booted from LAST-KNOWN CACHED secrets. \
