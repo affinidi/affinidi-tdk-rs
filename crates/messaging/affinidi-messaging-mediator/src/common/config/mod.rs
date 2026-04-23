@@ -39,7 +39,7 @@ use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
-use vta_sdk::integration::{self, VtaServiceConfig};
+use vta_sdk::integration::{self, SecretSource, VtaIntegrationError, VtaServiceConfig};
 
 use helpers::{
     get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
@@ -230,6 +230,53 @@ impl Config {
     }
 }
 
+/// Render a `VtaIntegrationError` from `integration::startup()` into a
+/// `MediatorError::ConfigError` whose message names *both* what went
+/// wrong and what the operator can do about it. Also emits a structured
+/// `error!` log before returning so the failure cause is captured
+/// independently of however the calling panic / process exit is
+/// surfaced upstream.
+///
+/// `NoCachedSecrets` is the most operator-hostile path — the mediator
+/// has never successfully contacted the VTA *and* the wizard didn't
+/// seed the cache (or the cache was wiped). Spell out both remediation
+/// paths so the operator doesn't have to read the SDK source to figure
+/// out which one applies.
+fn vta_startup_error(context: &str, err: VtaIntegrationError) -> MediatorError {
+    let detail = match &err {
+        VtaIntegrationError::NoCachedSecrets => format!(
+            "VTA is unreachable (or rejected the request) and no cached secrets \
+             exist for context '{context}'. Either (a) restore VTA connectivity \
+             and restart, or (b) re-run the setup wizard so it can seed the \
+             last-known-bundle cache with the mediator's provisioned keys."
+        ),
+        VtaIntegrationError::EmptySecretsBundle(ctx) => format!(
+            "VTA context '{ctx}' returned an empty secrets bundle. The context \
+             must have at least one key provisioned — check the wizard's Vta \
+             step completed, or inspect the context on the VTA admin side."
+        ),
+        VtaIntegrationError::CacheError(inner) => format!(
+            "Local secret-cache backend failed for context '{context}': {inner}. \
+             Check that the configured secret store (keyring / file / AWS / ...) \
+             is reachable and that the mediator process has permission to read \
+             from it."
+        ),
+        VtaIntegrationError::Vta(e) => format!(
+            "VTA call failed for context '{context}' and no usable cache fallback \
+             was available: {e}. If the VTA is reachable, look at the SDK warning \
+             above for the specific error — a `validation error` typically means \
+             the VTA-side context or DID is misconfigured rather than a network \
+             problem."
+        ),
+    };
+    error!(
+        context = context,
+        error = %err,
+        "VTA startup failed terminally — mediator cannot boot"
+    );
+    MediatorError::ConfigError(12, "NA".into(), detail)
+}
+
 #[async_trait]
 impl TryFrom<ConfigRaw> for Config {
     type Error = MediatorError;
@@ -349,12 +396,36 @@ impl TryFrom<ConfigRaw> for Config {
             };
             let cache = vta_cache::MediatorSecretCache::new(mediator_secrets.clone(), ttl_secs);
 
-            info!("Starting VTA integration...");
+            // Two-line bootstrap narrative: what we're *attempting* first,
+            // what we actually *got* second (see the post-startup match
+            // below). Operators reading `journalctl` / container logs
+            // need both — "did it try?" + "did it succeed, and from
+            // where?" — without chasing the SDK's internal log lines.
+            info!(
+                context = %service_config.context,
+                vta_url = %service_config.url_override.as_deref().unwrap_or("(from DID doc)"),
+                "Starting VTA integration — attempting live fetch with cache fallback"
+            );
             let result = integration::startup(&service_config, &cache)
                 .await
-                .map_err(|e| {
-                    MediatorError::ConfigError(12, "NA".into(), format!("VTA startup failed: {e}"))
-                })?;
+                .map_err(|e| vta_startup_error(&service_config.context, e))?;
+            match result.source {
+                SecretSource::Vta => info!(
+                    context = %service_config.context,
+                    did = %result.did,
+                    secrets = result.bundle.secrets.len(),
+                    "VTA integration OK — loaded fresh secrets from VTA"
+                ),
+                SecretSource::Cache => warn!(
+                    context = %service_config.context,
+                    did = %result.did,
+                    secrets = result.bundle.secrets.len(),
+                    "VTA integration DEGRADED — booted from LAST-KNOWN CACHED secrets. \
+                     Mediator will continue to run with keys as of the last successful VTA \
+                     contact; the runtime will refresh the cache on the next successful call. \
+                     Investigate the preceding SDK warning for the root cause."
+                ),
+            }
 
             if let Some(client) = &result.client {
                 match client.health().await {
