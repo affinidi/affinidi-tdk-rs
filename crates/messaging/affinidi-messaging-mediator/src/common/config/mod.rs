@@ -39,7 +39,9 @@ use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
-use vta_sdk::integration::{self, SecretSource, VtaIntegrationError, VtaServiceConfig};
+use vta_sdk::integration::{
+    self, SecretSource, TransportPreference, VtaIntegrationError, VtaServiceConfig,
+};
 
 use helpers::{
     get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
@@ -380,6 +382,23 @@ impl TryFrom<ConfigRaw> for Config {
                 context: admin.context.clone(),
                 url_override: admin.vta_url.clone().filter(|u| !u.is_empty()),
                 timeout: None,
+                // DIDComm-first with REST fallback: the mediator already
+                // speaks DIDComm for its primary workload, and the VTA
+                // exposes its `DIDCommMessaging` service endpoint in its
+                // DID doc. Auto-preference lets the SDK try DIDComm when
+                // `mediator_did` is resolvable and fall through to REST
+                // otherwise — no circular-dependency hazard because
+                // `integration::startup` resolves the VTA's mediator
+                // from the VTA's DID doc, not from our own config.
+                mediator_did: None,
+                transport_preference: TransportPreference::Auto,
+                // `None` → SDK builds a one-shot resolver on demand.
+                // Mediator boot is a one-shot flow so we don't share
+                // our own `did_resolver` here; it isn't constructed
+                // until later in this TryFrom (line ~498). Sharing it
+                // would require reordering the config build, which is
+                // a bigger change than this wire-up warrants.
+                did_resolver: None,
             };
 
             // Parse cache TTL — default to 30 days when unset, `0` means

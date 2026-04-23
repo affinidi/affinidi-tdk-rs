@@ -46,7 +46,7 @@ use affinidi_messaging_mediator_common::{AdminCredential, MediatorSecrets};
 use tracing::{error, info, warn};
 use vta_sdk::client::CreateAclRequest;
 use vta_sdk::credentials::CredentialBundle;
-use vta_sdk::integration::{VtaServiceConfig, authenticate};
+use vta_sdk::integration::{TransportPreference, VtaServiceConfig, authenticate};
 
 /// Top-level entry called from the CLI dispatcher in `main.rs`.
 pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -112,6 +112,15 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         context: context.clone(),
         url_override: vta_url.clone().filter(|u| !u.is_empty()),
         timeout: None,
+        // Admin rotation is a one-shot operator command, not a hot
+        // path — REST is the right fit. Explicit `PreferRest` keeps
+        // the ACL create/rotate calls off the DIDComm channel (where
+        // they'd need to negotiate an async reply envelope) and lands
+        // on the synchronous REST API that `get_acl` / `create_acl`
+        // are built for.
+        mediator_did: None,
+        transport_preference: TransportPreference::PreferRest,
+        did_resolver: None,
     };
     let client = authenticate(&svc)
         .await
