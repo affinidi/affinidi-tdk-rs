@@ -1647,7 +1647,7 @@ impl WizardApp {
                     ),
                     SelectionOption::new("Paste an existing admin DID", "Use any DID method"),
                 ];
-                if self.config.use_vta {
+                if self.admin_options_include_vta() {
                     opts.push(SelectionOption::new(
                         "Generate admin DID from VTA",
                         "Retrieve from VTA context",
@@ -2083,22 +2083,20 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Admin => {
-                if self.config.use_vta {
-                    self.config.admin_did_mode = match self.selection_index {
-                        0 => ADMIN_GENERATE.into(),
-                        1 => ADMIN_PASTE.into(),
-                        2 => ADMIN_VTA.into(),
-                        3 => ADMIN_SKIP.into(),
-                        _ => return,
-                    };
-                } else {
-                    self.config.admin_did_mode = match self.selection_index {
-                        0 => ADMIN_GENERATE.into(),
-                        1 => ADMIN_PASTE.into(),
-                        2 => ADMIN_SKIP.into(),
-                        _ => return,
-                    };
-                }
+                // Options list is [generate, paste, (vta,) skip] with
+                // the `vta` entry at index 2 only when
+                // `admin_options_include_vta()` agrees. Use that same
+                // predicate to map the selection back to the enum so
+                // a layout change doesn't need two-place updates.
+                let with_vta = self.admin_options_include_vta();
+                self.config.admin_did_mode = match (with_vta, self.selection_index) {
+                    (_, 0) => ADMIN_GENERATE.into(),
+                    (_, 1) => ADMIN_PASTE.into(),
+                    (true, 2) => ADMIN_VTA.into(),
+                    (true, 3) => ADMIN_SKIP.into(),
+                    (false, 2) => ADMIN_SKIP.into(),
+                    _ => return,
+                };
                 self.advance();
             }
             WizardStep::Output => {
@@ -2479,12 +2477,12 @@ impl WizardApp {
             // Intent decides whether the VTA supplies the mediator
             // DID too, or only the admin credential.
             match self.vta_intent_choice {
-                Some(VtaIntent::FullSetup) | Some(VtaIntent::OfflineExport) | None => {
-                    // FullSetup mints a fresh integration DID; OfflineExport
-                    // pulls back an *existing* one the VTA already
-                    // provisioned. Either way the mediator's DID and
-                    // admin identity are sourced from the VTA, so the
-                    // downstream defaults match.
+                Some(VtaIntent::FullSetup) | None => {
+                    // FullSetup deliberately mints a fresh admin DID
+                    // as part of `provision_integration`'s admin-DID
+                    // rollover — that DID is the intended mediator
+                    // admin handoff, so `ADMIN_VTA` is the correct
+                    // default.
                     //
                     // `None` shouldn't happen while `use_vta` is
                     // `true` under the two-question picker, but
@@ -2493,12 +2491,34 @@ impl WizardApp {
                     self.config.did_method = DID_VTA.into();
                     self.config.admin_did_mode = ADMIN_VTA.into();
                 }
+                Some(VtaIntent::OfflineExport) => {
+                    // OfflineExport mints an admin credential as a
+                    // side effect of `vta context reprovision` (for
+                    // the mediator to authenticate back to the VTA),
+                    // NOT as an intentional mediator-admin-API
+                    // handoff. Reusing that same DID for both the
+                    // mediator→VTA trust boundary and the
+                    // clients→mediator-admin trust boundary
+                    // overloads one key across two scopes.
+                    //
+                    // Default the mediator's admin-API identity to
+                    // `ADMIN_GENERATE` (fresh did:key) so the two
+                    // roles stay separate by default. Operator can
+                    // still override at the Admin step if their
+                    // deployment warrants reusing the VTA credential.
+                    self.config.did_method = DID_VTA.into();
+                    self.config.admin_did_mode = ADMIN_GENERATE.into();
+                }
                 Some(VtaIntent::AdminOnly) => {
                     // Mediator's integration DID is chosen locally
                     // in the Did step; the VTA only supplies an
                     // admin credential. Drop any stale DID_VTA
                     // carry-over from an earlier FullSetup attempt
                     // so the Did step surfaces the real picker.
+                    //
+                    // AdminOnly keeps `ADMIN_VTA` because that IS
+                    // the point of the intent — the VTA is explicitly
+                    // asked to supply the mediator's admin identity.
                     if self.config.did_method == DID_VTA {
                         self.config.did_method = DID_PEER.into();
                     }
@@ -2514,6 +2534,23 @@ impl WizardApp {
             }
             self.config.vta_mode = String::new();
         }
+    }
+
+    /// Whether the Admin step's option list should include the
+    /// "Generate admin DID from VTA" entry.
+    ///
+    /// Returns `true` for deployments where the VTA intentionally mints
+    /// an admin DID meant for the mediator (FullSetup's admin-DID
+    /// rollover, AdminOnly's whole-flow purpose). Returns `false` for
+    /// OfflineExport — the bundle's admin credential there is an
+    /// auto-mint for mediator↔VTA authentication, and reusing it as
+    /// the mediator's own admin-API identity conflates two trust
+    /// scopes behind one key.
+    fn admin_options_include_vta(&self) -> bool {
+        if !self.config.use_vta {
+            return false;
+        }
+        !matches!(self.vta_intent_choice, Some(VtaIntent::OfflineExport))
     }
 
     /// Whether the Did step should offer the "Configure via VTA"
@@ -2867,19 +2904,20 @@ impl WizardApp {
                 _ => 0,
             },
             WizardStep::Admin => {
-                if self.config.use_vta {
-                    match self.config.admin_did_mode.as_str() {
-                        ADMIN_PASTE => 1,
-                        ADMIN_VTA => 2,
-                        ADMIN_SKIP => 3,
-                        _ => 0,
-                    }
-                } else {
-                    match self.config.admin_did_mode.as_str() {
-                        ADMIN_PASTE => 1,
-                        ADMIN_SKIP => 2,
-                        _ => 0,
-                    }
+                // Mirror the layout logic in `current_options` /
+                // `select_current`: VTA entry at index 2 only when
+                // `admin_options_include_vta()`. When absent (e.g.
+                // OfflineExport), `ADMIN_VTA` is no longer a valid
+                // stored mode for this flow — fall back to the
+                // generate-new-did:key default rather than pointing
+                // at an option that isn't rendered.
+                let with_vta = self.admin_options_include_vta();
+                match (with_vta, self.config.admin_did_mode.as_str()) {
+                    (_, ADMIN_PASTE) => 1,
+                    (true, ADMIN_VTA) => 2,
+                    (true, ADMIN_SKIP) => 3,
+                    (false, ADMIN_SKIP) => 2,
+                    _ => 0,
                 }
             }
             _ => 0,
@@ -4169,6 +4207,47 @@ mod tests {
         // Did still marked completed so the progress bar reflects the
         // full walk, not a gap.
         assert!(app.completed_steps().contains(&WizardStep::Did));
+    }
+
+    #[test]
+    fn admin_options_exclude_vta_on_offline_export() {
+        // OfflineExport's bundle carries an auto-minted admin
+        // credential meant for mediator↔VTA auth only. Reusing it
+        // as the mediator's own admin-API identity overloads one
+        // key across two trust scopes, so the "Generate admin DID
+        // from VTA" option must NOT appear in the Admin step
+        // picker for this intent — and the default mode must be
+        // ADMIN_GENERATE, not ADMIN_VTA.
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = true;
+        app.vta_intent_choice = Some(VtaIntent::OfflineExport);
+        app.apply_vta_defaults();
+        assert_eq!(app.config.admin_did_mode, ADMIN_GENERATE);
+
+        assert!(!app.admin_options_include_vta());
+
+        app.current_step = WizardStep::Admin;
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 3, "generate / paste / skip — no VTA entry");
+        assert!(!opts.iter().any(|o| o.label.contains("VTA")));
+    }
+
+    #[test]
+    fn admin_options_include_vta_on_full_setup() {
+        // FullSetup's admin-DID rollover is a deliberate handoff
+        // of a fresh mediator-admin DID — keep the "Generate admin
+        // DID from VTA" option available and default to it.
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = true;
+        app.vta_intent_choice = Some(VtaIntent::FullSetup);
+        app.apply_vta_defaults();
+        assert_eq!(app.config.admin_did_mode, ADMIN_VTA);
+        assert!(app.admin_options_include_vta());
+
+        app.current_step = WizardStep::Admin;
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 4, "generate / paste / VTA / skip");
+        assert!(opts.iter().any(|o| o.label.contains("VTA")));
     }
 
     #[test]
