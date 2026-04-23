@@ -2413,8 +2413,19 @@ impl WizardApp {
     }
 
     fn advance(&mut self) {
-        self.completed.push(self.current_step);
-        if let Some(next) = self.current_step.next() {
+        // Step through the wizard, auto-skipping any step whose inputs
+        // have already been settled upstream (see
+        // `should_auto_skip_step`). The loop lets us chain skips —
+        // e.g. a future step that's also FullSetup-noop — without
+        // reworking callers. Bounded by `WizardStep::total()` to
+        // guarantee termination even if the predicate pathologically
+        // fires on every remaining step.
+        let mut guard = WizardStep::total();
+        loop {
+            self.completed.push(self.current_step);
+            let Some(next) = self.current_step.next() else {
+                return;
+            };
             self.current_step = next;
             self.on_enter_step();
             self.selection_index = self.default_selection_index();
@@ -2432,6 +2443,40 @@ impl WizardApp {
             } else {
                 self.mode = InputMode::Selecting;
             }
+            if !self.should_auto_skip_step() {
+                return;
+            }
+            guard = guard.saturating_sub(1);
+            if guard == 0 {
+                return;
+            }
+        }
+    }
+
+    /// Per-step predicate: true when the step has no operator-actionable
+    /// decision left because upstream work already settled it. The
+    /// wizard's `advance` / `go_back` loops consult this to jump over
+    /// such steps silently rather than presenting a single-option
+    /// confirmation screen.
+    ///
+    /// Today only the `Did` step qualifies, and only under online
+    /// FullSetup: the VTA minted the integration DID during
+    /// provision-integration, `apply_vta_defaults` already pinned
+    /// `did_method = DID_VTA`, and the rendered DID doc + keys +
+    /// did.jsonl ride on `vta_session`. Operators can still reach this
+    /// step via the progress-panel jump if they want to inspect it.
+    fn should_auto_skip_step(&self) -> bool {
+        match self.current_step {
+            WizardStep::Did => {
+                self.config.use_vta
+                    && self.config.did_method == DID_VTA
+                    && self
+                        .vta_session
+                        .as_ref()
+                        .and_then(|s| s.as_full_provision())
+                        .is_some()
+            }
+            _ => false,
         }
     }
 
@@ -2490,29 +2535,46 @@ impl WizardApp {
             InputMode::Confirming => {
                 // On Summary, Esc goes back to the previous step
                 if self.current_step == WizardStep::Summary {
-                    if let Some(prev) = self.current_step.prev() {
-                        self.completed.retain(|s| *s != prev);
-                        self.current_step = prev;
-                        self.on_enter_step();
-                        self.selection_index = self.default_selection_index();
-                        self.mode = InputMode::Selecting;
-                        self.refresh_text_input_mode();
-                    }
+                    self.step_back_auto_skipping();
+                    self.mode = InputMode::Selecting;
+                    self.refresh_text_input_mode();
                 } else {
                     self.mode = InputMode::Selecting;
                 }
             }
             InputMode::Selecting => {
-                if let Some(prev) = self.current_step.prev() {
-                    self.completed.retain(|s| *s != prev);
-                    self.current_step = prev;
-                    self.on_enter_step();
-                    self.selection_index = self.default_selection_index();
-                    self.refresh_text_input_mode();
-                } else {
-                    // First step — Esc quits the wizard
+                if !self.step_back_auto_skipping() {
+                    // Already at the first step — Esc quits the wizard.
                     self.should_quit = true;
+                    return;
                 }
+                self.refresh_text_input_mode();
+            }
+        }
+    }
+
+    /// Walk `current_step` backwards one step, skipping any step that
+    /// [`Self::should_auto_skip_step`] reports as non-actionable. The
+    /// forward path uses the same predicate inside `advance`, so
+    /// back-nav lands on the same step the operator saw on the way in.
+    /// Returns `true` when a previous step was found (current_step
+    /// mutated), `false` when we're already at the first step.
+    fn step_back_auto_skipping(&mut self) -> bool {
+        let mut guard = WizardStep::total();
+        loop {
+            let Some(prev) = self.current_step.prev() else {
+                return false;
+            };
+            self.completed.retain(|s| *s != prev);
+            self.current_step = prev;
+            self.on_enter_step();
+            self.selection_index = self.default_selection_index();
+            if !self.should_auto_skip_step() {
+                return true;
+            }
+            guard = guard.saturating_sub(1);
+            if guard == 0 {
+                return true;
             }
         }
     }
@@ -3844,5 +3906,80 @@ mod tests {
         assert_eq!(st.phase, ConnectPhase::PickWebvhServer);
         assert_eq!(st.webvh_path.as_deref(), Some("typed"));
         assert_eq!(st.webvh_server_choice.as_deref(), Some("prod-1"));
+    }
+
+    /// Drive the wizard to the point where online FullSetup has
+    /// received a synthetic `Connected` event with a full provision
+    /// reply. Leaves `current_step == Vta`, phase `Connected`,
+    /// `vta_session` populated, `did_method = DID_VTA`. Callers
+    /// typically immediately `select_current()` to advance past the
+    /// Vta step.
+    fn prime_full_setup_connected() -> WizardApp {
+        use crate::vta_connect::{DiagStatus, VtaEvent, diagnostics::Protocol};
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        pick_full_setup_online(&mut app);
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+        app.select_current(); // → Testing (runner spawned, we'll detach)
+        let st = app.vta_connect.as_mut().unwrap();
+        st.event_rx = None;
+        st.apply_event(VtaEvent::CheckDone(
+            crate::vta_connect::DiagCheck::Authenticate,
+            DiagStatus::Ok("ok".into()),
+        ));
+        st.apply_event(VtaEvent::Connected {
+            protocol: Protocol::DidComm,
+            rest_url: Some("https://vta.example.com".into()),
+            mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
+            reply: crate::vta_connect::VtaReply::Full(
+                crate::vta_connect::provision::test_sample_result(true),
+            ),
+        });
+        app
+    }
+
+    #[tokio::test]
+    async fn did_step_auto_skipped_on_full_setup_online() {
+        // After VTA FullSetup provisions the DID, the Did step has
+        // nothing left for the operator to decide — apply_vta_defaults
+        // already pinned did_method = DID_VTA and vta_session carries
+        // the rendered DID doc + keys. `advance` should jump straight
+        // from Protocol to Security (the step after Did).
+        let mut app = prime_full_setup_connected();
+        app.select_current(); // Vta → Protocol
+        assert_eq!(app.current_step, WizardStep::Protocol);
+        app.select_current(); // Protocol → (auto-skip Did) → Security
+        assert_eq!(app.current_step, WizardStep::Security);
+        // Did still marked completed so the progress bar reflects the
+        // full walk, not a gap.
+        assert!(app.completed_steps().contains(&WizardStep::Did));
+    }
+
+    #[tokio::test]
+    async fn did_step_back_nav_skips_past_on_full_setup_online() {
+        // Coming back the other way should land on Protocol, not on
+        // the auto-skipped Did step — same predicate, same behaviour.
+        let mut app = prime_full_setup_connected();
+        app.select_current(); // Vta → Protocol
+        app.select_current(); // Protocol → Security (Did skipped)
+        assert_eq!(app.current_step, WizardStep::Security);
+        app.go_back(); // Security → (skip Did) → Protocol
+        assert_eq!(app.current_step, WizardStep::Protocol);
+    }
+
+    #[test]
+    fn did_step_not_skipped_without_vta_session() {
+        // Sanity: the skip predicate requires all three of
+        // `use_vta`, `did_method == DID_VTA`, and a Full provision
+        // reply on `vta_session`. Without a VTA session (e.g. No-VTA
+        // path, or mid-flow before provisioning succeeds) the Did
+        // step must still appear.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Did);
+        assert_eq!(app.current_step, WizardStep::Did);
     }
 }
