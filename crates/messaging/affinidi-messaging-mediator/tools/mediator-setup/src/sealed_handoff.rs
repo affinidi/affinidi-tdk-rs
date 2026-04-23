@@ -26,15 +26,17 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use rand::TryRngCore;
-use tracing::info;
+use tracing::{info, warn};
 use vta_sdk::credentials::CredentialBundle;
 use vta_sdk::sealed_transfer::{
-    BootstrapRequest, SealedBundle, SealedPayloadV1, armor, bundle_digest,
-    ed25519_seed_to_x25519_secret, generate_ed25519_keypair, open_bundle,
+    AssertionProof, BootstrapRequest, ProducerAssertion, SealedBundle, SealedPayloadV1, armor,
+    bundle_digest, ed25519_seed_to_x25519_secret, generate_ed25519_keypair, open_bundle,
 };
 
 use crate::consts::DEFAULT_VTA_CONTEXT;
-use crate::vta_connect::provision::{ProvisionAsk, ProvisionResult};
+use crate::vta_connect::provision::{
+    DEFAULT_VALIDITY_OFFLINE, ProvisionAsk, ProvisionResult, decode_nonce_b64url,
+};
 use crate::vta_connect::{VtaIntent, VtaSession};
 
 /// Template variable the VTA's `didcomm-mediator` template reads to
@@ -159,6 +161,27 @@ pub struct SealedHandoffState {
     /// finalisation. Captured at sub-flow entry so the wizard can
     /// stamp runs even across re-renders.
     pub run_label: Option<String>,
+    /// On-disk path the wizard wrote the ephemeral Ed25519 seed to,
+    /// alongside the request file. Convention is
+    /// `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key` mode
+    /// 0600 — same lookup key used by the v1 `vta bootstrap` CLI so
+    /// a future resume path can reconstruct the X25519 secret without
+    /// asking the operator for it again. `None` when the wizard could
+    /// not create the directory or write the file (best-effort —
+    /// in-memory state still works for same-session opens).
+    pub seed_path: Option<std::path::PathBuf>,
+    /// Producer assertion extracted from the opened bundle. Captured
+    /// so the renderer can surface "verified by digest only"
+    /// (PinnedOnly) vs "DID-signed by …" (DidSigned) without
+    /// reaching back into the SDK envelope. `None` until
+    /// [`open_with_digest`] runs and succeeds.
+    pub producer_assertion: Option<ProducerAssertion>,
+    /// Single-line summary of the producer assertion's verification
+    /// state, suitable for direct rendering in the wizard's info
+    /// pane. Greenfield deployments commonly land in `PinnedOnly` —
+    /// this string makes the trust posture explicit so the operator
+    /// doesn't read silence as success.
+    pub assertion_warning: Option<String>,
 }
 
 impl SealedHandoffState {
@@ -190,6 +213,9 @@ impl SealedHandoffState {
             last_error: None,
             clipboard_status: None,
             run_label,
+            seed_path: None,
+            producer_assertion: None,
+            assertion_warning: None,
         }
     }
 
@@ -249,7 +275,8 @@ impl SealedHandoffState {
                 }
                 let client_did = affinidi_crypto::did_key::ed25519_pub_to_did_key(&ed_pub);
                 let mut ask =
-                    ProvisionAsk::mediator(self.context_id.clone(), self.mediator_url.clone());
+                    ProvisionAsk::mediator(self.context_id.clone(), self.mediator_url.clone())
+                        .with_validity(DEFAULT_VALIDITY_OFFLINE);
                 if !self.webvh_server.is_empty() {
                     ask.mediator_template_vars.insert(
                         WEBVH_SERVER_TEMPLATE_VAR.to_string(),
@@ -257,28 +284,24 @@ impl SealedHandoffState {
                     );
                 }
                 if let Some(ref label) = self.run_label {
-                    ask = ask.clone().with_label(label.clone());
+                    ask = ask.with_label(label.clone());
                 }
-                let bootstrap_ask = ask.to_bootstrap_ask();
-                let validity = ask.validity;
-                let label = self.run_label.clone();
                 // VP signing is async; bridge back to sync via
                 // `block_in_place`. The tokio::main runtime the
                 // wizard runs on is multi-threaded, so this is safe.
+                //
+                // The builder's `sign_with` generates its own VP nonce
+                // — we decode it back from the rendered VP and adopt
+                // it as the bundle id (the producer will seal to the
+                // matching `bundle_id`).
+                let builder = ask.to_builder();
                 let vp = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        vta_sdk::provision_integration::BootstrapRequest::sign(
-                            &seed_bytes,
-                            &client_did,
-                            nonce,
-                            validity,
-                            label,
-                            bootstrap_ask,
-                        )
-                        .await
-                    })
+                    tokio::runtime::Handle::current()
+                        .block_on(async { builder.sign_with(&seed_bytes, &client_did).await })
                 })
                 .map_err(|e| SealedHandoffError::Internal(format!("VP signing failed: {e}")))?;
+                nonce = decode_nonce_b64url(&vp.nonce)
+                    .map_err(|e| SealedHandoffError::Internal(format!("VP nonce decode: {e}")))?;
                 let json = serde_json::to_string_pretty(&vp).map_err(|e| {
                     SealedHandoffError::Internal(format!("VP serialise failed: {e}"))
                 })?;
@@ -296,10 +319,22 @@ impl SealedHandoffState {
             Err(_) => None,
         };
 
+        // Best-effort persist of the ephemeral Ed25519 seed alongside
+        // the request file. Convention mirrors the v1 `vta bootstrap`
+        // CLI: `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key`
+        // mode 0600. The seed is required to reconstruct the HPKE
+        // recipient secret at bundle-open time — keeping a copy on
+        // disk lets a future resume path recover state if the wizard
+        // is killed between Phase 1 (request) and Phase 3 (open).
+        // Same-session opens still use the in-memory `recipient_secret`
+        // unconditionally; the file is purely a recovery artefact.
+        let seed_path = persist_ephemeral_seed(persisted.as_deref(), &nonce, &seed_bytes);
+
         self.recipient_secret = sk;
         self.nonce = nonce;
         self.request_json = request_json;
         self.request_path = persisted;
+        self.seed_path = seed_path;
         self.phase = SealedPhase::RequestGenerated;
         Ok(())
     }
@@ -480,6 +515,162 @@ impl std::error::Error for SealedHandoffError {
     }
 }
 
+/// Classify the producer's trust-anchor proof and return an
+/// operator-facing summary line for the wizard's info pane.
+///
+/// We deliberately *do not* perform DID resolution / signature
+/// verification yet — greenfield deployments commonly run this flow
+/// before the VTA's DID is published to its webvh log, in which case
+/// resolution would fail on a live attempt. The honest position today
+/// is: surface what the producer claimed, label `PinnedOnly` as
+/// "verified by operator-supplied digest only", and flag `DidSigned`
+/// / `Attested` as "claim recorded; cryptographic verification
+/// pending future implementation". Returning `None` means "no
+/// caveat worth surfacing" (reserved for the future verified case).
+///
+/// Logged via `tracing::warn` so even non-TUI runs leave an audit
+/// trail. Renderer reads `SealedHandoffState::assertion_warning` for
+/// the on-screen line.
+fn classify_producer_assertion(assertion: &ProducerAssertion) -> Option<String> {
+    match &assertion.proof {
+        AssertionProof::PinnedOnly => {
+            warn!(
+                producer_did = %assertion.producer_did,
+                proof = "pinned_only",
+                "Sealed handoff: producer assertion is PinnedOnly — \
+                 trust anchored by your supplied digest only, no DID-signature verification"
+            );
+            Some(format!(
+                "Trust anchor: PinnedOnly. Verified by your supplied digest; \
+                 the producer DID {} was not resolved.",
+                assertion.producer_did
+            ))
+        }
+        AssertionProof::DidSigned(sig) => {
+            // Future work: resolve `assertion.producer_did`, walk to
+            // `sig.verification_method`, verify `sig.signature_b64`
+            // over the bundle digest. Today we only record the claim.
+            warn!(
+                producer_did = %assertion.producer_did,
+                vm = %sig.verification_method,
+                proof = "did_signed",
+                "Sealed handoff: producer claims DidSigned proof — \
+                 cryptographic verification is not yet implemented; \
+                 trust still anchored by your supplied digest"
+            );
+            Some(format!(
+                "Trust anchor: DidSigned by {} ({}). Signature is recorded but not \
+                 yet verified — relying on your supplied digest until DID resolution \
+                 lands.",
+                assertion.producer_did, sig.verification_method
+            ))
+        }
+        AssertionProof::Attested(quote) => {
+            warn!(
+                producer_did = %assertion.producer_did,
+                format = %quote.format,
+                proof = "attested",
+                "Sealed handoff: producer claims Attested proof — \
+                 attestation verification is not yet implemented"
+            );
+            Some(format!(
+                "Trust anchor: Attested ({}) by {}. Attestation is recorded but \
+                 not yet verified.",
+                quote.format, assertion.producer_did
+            ))
+        }
+    }
+}
+
+/// Best-effort persist of the ephemeral Ed25519 seed used for a
+/// sealed-handoff round.
+///
+/// Layout: `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key`,
+/// mode `0600` on Unix. `request_path` provides the directory
+/// (defaults to CWD when `None` or when the path has no parent).
+/// Returns the written path on success; `None` on any I/O failure —
+/// the in-memory `recipient_secret` still drives same-session opens,
+/// so a write failure must not abort `finalize_request`.
+///
+/// The bundle-id-keyed filename matches the v1 `vta bootstrap` CLI
+/// convention so a future resume path can locate the seed by the
+/// bundle id printed in the request file alone.
+fn persist_ephemeral_seed(
+    request_path: Option<&std::path::Path>,
+    nonce: &[u8; 16],
+    seed: &[u8; 32],
+) -> Option<std::path::PathBuf> {
+    let parent = request_path
+        .and_then(|p| p.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let secrets_dir = parent.join("bootstrap-secrets");
+    if let Err(e) = std::fs::create_dir_all(&secrets_dir) {
+        warn!(
+            dir = %secrets_dir.display(),
+            error = %e,
+            "Sealed handoff: bootstrap-secrets dir create failed; seed not persisted"
+        );
+        return None;
+    }
+    let bundle_id_hex = hex_lower(nonce);
+    let seed_path = secrets_dir.join(format!("{bundle_id_hex}.key"));
+
+    // Write + chmod in one go on Unix; on other platforms fall back
+    // to a plain write and trust the OS default umask. The file
+    // contents are the raw 32-byte seed — no envelope, no header —
+    // matching what the resume path would feed back into
+    // `ed25519_seed_to_x25519_secret`.
+    let write_result = write_secret_file(&seed_path, seed);
+    match write_result {
+        Ok(()) => {
+            info!(
+                path = %seed_path.display(),
+                bundle_id = %bundle_id_hex,
+                "Sealed handoff: ephemeral seed persisted (resume artefact)"
+            );
+            Some(seed_path)
+        }
+        Err(e) => {
+            warn!(
+                path = %seed_path.display(),
+                error = %e,
+                "Sealed handoff: seed write failed; in-memory state unaffected"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const T: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        s.push(T[(b >> 4) as usize] as char);
+        s.push(T[(b & 0xf) as usize] as char);
+    }
+    s
+}
+
 /// Decode armored bytes (paste OR file) into a single sealed bundle and
 /// stash it onto the state, advancing to the digest-verify phase. The
 /// computed digest is recorded so the verify prompt can surface
@@ -551,6 +742,15 @@ pub fn open_with_digest(
             }
             other => SealedHandoffError::Open(other.to_string()),
         })?;
+
+    // Capture the producer assertion for the renderer + audit log
+    // before we move the payload. Trust-policy classification follows
+    // (`PinnedOnly` → operator-supplied digest is the only anchor;
+    // `DidSigned` / `Attested` → cryptographic verification is the
+    // *intended* anchor but is currently a TODO — see
+    // `classify_producer_assertion`).
+    state.assertion_warning = classify_producer_assertion(&opened.producer);
+    state.producer_assertion = Some(opened.producer);
 
     match (state.intent, opened.payload) {
         (VtaIntent::AdminOnly, SealedPayloadV1::AdminCredential(boxed)) => {

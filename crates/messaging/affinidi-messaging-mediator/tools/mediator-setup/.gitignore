@@ -1,2 +1,7 @@
 # Setup wizard test/run artifacts
 /conf/
+# Sealed-handoff resume seeds (mode 0600 ephemeral Ed25519 seeds keyed
+# by bundle_id_hex). Persisted alongside the request file by the
+# wizard's `finalize_request` for offline-handoff resumability; tests
+# write them to CWD so they accumulate here under cargo runs.
+/bootstrap-secrets/

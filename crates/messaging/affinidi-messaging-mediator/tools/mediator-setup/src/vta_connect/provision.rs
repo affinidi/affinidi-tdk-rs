@@ -46,8 +46,7 @@ use vta_sdk::did_key::decode_private_key_multibase;
 use vta_sdk::didcomm_session::DIDCommSession;
 use vta_sdk::error::VtaError;
 use vta_sdk::provision_integration::{
-    BootstrapAsk, BootstrapRequest, DidTemplateRef, ProvisionIntegrationError,
-    TemplateBootstrapAsk,
+    ProvisionIntegrationError, ProvisionRequestBuilder,
     didcomm::provision_integration_didcomm,
     http::ProvisionSummary,
     payload::{DidKeyMaterial, TemplateBootstrapPayload, TemplateOutput},
@@ -56,11 +55,20 @@ use vta_sdk::sealed_transfer::{SealedPayloadV1, SealedTransferError, armor, open
 
 use crate::consts::{DEFAULT_MEDIATOR_TEMPLATE, DEFAULT_VTA_ADMIN_TEMPLATE};
 
-/// Default validity on a wizard-issued VP — chosen to comfortably
-/// cover human-paced bundle handoff latency with the verifier's ±5min
-/// skew margin, without leaving a stale request valid long enough to
-/// resurface.
+/// Default validity on a wizard-issued VP for the **online** path —
+/// chosen to comfortably cover the DIDComm round-trip with the
+/// verifier's ±5min skew margin, without leaving a stale request valid
+/// long enough to resurface. Network is fast; a stale request shouldn't
+/// linger.
 pub const DEFAULT_VALIDITY: Duration = Duration::minutes(15);
+
+/// Default validity on a wizard-issued VP for the **offline** path
+/// (sealed handoff). The request file is shuttled between hosts by
+/// hand — USB sticks, scp sessions, ticket attachments — so the
+/// freshness window has to absorb realistic operator latency.
+/// 7 days mirrors the VTA-team v1 CLI convention for `vta bootstrap
+/// provision-integration` requests.
+pub const DEFAULT_VALIDITY_OFFLINE: Duration = Duration::days(7);
 
 /// Holder-side parameters for a mediator provisioning request.
 ///
@@ -118,6 +126,14 @@ impl ProvisionAsk {
         self
     }
 
+    /// Override the VP freshness window. Online callers stick with
+    /// [`DEFAULT_VALIDITY`]; offline callers should set
+    /// [`DEFAULT_VALIDITY_OFFLINE`] to absorb hand-shuffled latency.
+    pub fn with_validity(mut self, d: Duration) -> Self {
+        self.validity = d;
+        self
+    }
+
     /// Disable admin-DID rollover — the VC subject stays the setup
     /// DID, and no second DID is minted. Rarely what the wizard
     /// wants; exposed for tests and recipe-driven flows that need the
@@ -128,19 +144,33 @@ impl ProvisionAsk {
         self
     }
 
-    pub(crate) fn to_bootstrap_ask(&self) -> BootstrapAsk {
-        BootstrapAsk::TemplateBootstrap(TemplateBootstrapAsk {
-            context_hint: Some(self.context.clone()),
-            template: DidTemplateRef {
-                name: self.mediator_template.clone(),
-                vars: self.mediator_template_vars.clone(),
-            },
-            admin_template: self.admin_template.as_ref().map(|n| DidTemplateRef {
-                name: n.clone(),
-                vars: self.admin_template_vars.clone(),
-            }),
-            note: self.label.clone(),
-        })
+    /// Translate this wizard-shaped ask into a fully-configured
+    /// [`ProvisionRequestBuilder`]. The caller chooses how to sign:
+    /// [`ProvisionRequestBuilder::sign_with`] for an existing keypair
+    /// (online setup-key path) or
+    /// [`ProvisionRequestBuilder::sign_ephemeral`] for a fresh one.
+    ///
+    /// Centralising the wizard-field → builder-field mapping here keeps
+    /// the SDK's `BootstrapAsk` enum off the wizard surface.
+    pub(crate) fn to_builder(&self) -> ProvisionRequestBuilder {
+        let mut builder = ProvisionRequestBuilder::new(self.mediator_template.clone())
+            .vars(self.mediator_template_vars.clone())
+            .context_hint(self.context.clone())
+            .validity(self.validity);
+        if let Some(ref name) = self.admin_template {
+            builder = builder.admin_template(name.clone());
+            for (k, v) in &self.admin_template_vars {
+                builder = builder.admin_template_var(k.clone(), v.clone());
+            }
+        }
+        if let Some(ref label) = self.label {
+            // Wizard reuses `label` for both the VP-level audit label
+            // and the per-ask operator note — they end up in different
+            // fields downstream but the wizard doesn't currently
+            // distinguish.
+            builder = builder.label(label.clone()).note(label.clone());
+        }
+        builder
     }
 }
 
@@ -417,16 +447,14 @@ pub async fn provision_mediator_integration(
         .await
         .map_err(|e| ProvisionError::SessionOpen(e.to_string()))?;
 
-    let nonce: [u8; 16] = rand::random();
-    let vp = BootstrapRequest::sign(
-        &seed,
-        setup_did,
-        nonce,
-        ask.validity,
-        ask.label.clone(),
-        ask.to_bootstrap_ask(),
-    )
-    .await?;
+    // The setup key is long-lived for the duration of the setup flow,
+    // so we use `sign_with`. The builder generates the VP nonce
+    // internally; we recover it from the signed VP for the bundle-id
+    // round-trip check below. (`BootstrapRequest::nonce` is a
+    // base64url string; only the `VerifiedBootstrapRequest` form
+    // exposes a typed `decode_nonce`, so we decode inline.)
+    let vp = ask.to_builder().sign_with(&seed, setup_did).await?;
+    let nonce = decode_nonce_b64url(&vp.nonce).map_err(ProvisionError::Armor)?;
 
     let response =
         provision_integration_didcomm(&session, vp, ask.context.clone(), None, None).await?;
@@ -460,6 +488,23 @@ pub async fn provision_mediator_integration(
         summary: response.summary.into(),
         payload,
     })
+}
+
+/// Decode a base64url-no-pad VP nonce string (as carried on
+/// `BootstrapRequest::nonce`) back to the 16-byte sealed-bundle id.
+///
+/// Returns the raw bytes plus a one-line error string on failure.
+/// The string-error shape lets the offline sealed-handoff path wrap
+/// it in its own [`crate::sealed_handoff::SealedHandoffError`] without
+/// needing to depend on [`ProvisionError`].
+pub(crate) fn decode_nonce_b64url(s: &str) -> Result<[u8; 16], String> {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+    let raw = B64URL
+        .decode(s)
+        .map_err(|e| format!("VP nonce base64url: {e}"))?;
+    raw.try_into()
+        .map_err(|_| "VP nonce must be 16 bytes".to_string())
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -596,10 +641,22 @@ mod tests {
         assert!(ask.admin_template_vars.is_empty());
     }
 
-    #[test]
-    fn ask_to_bootstrap_ask_carries_admin_template() {
+    #[tokio::test]
+    async fn ask_to_builder_renders_signed_vp_with_admin_template() {
+        // The builder is opaque (no public field accessors) so we
+        // verify by signing with a deterministic seed and asserting
+        // the rendered VP carries the expected ask shape.
         let ask = ProvisionAsk::mediator("ctx", "https://m").with_label("wizard run");
-        let BootstrapAsk::TemplateBootstrap(inner) = ask.to_bootstrap_ask();
+        let (seed, pub_bytes) = vta_sdk::sealed_transfer::generate_ed25519_keypair();
+        let client_did = affinidi_crypto::did_key::ed25519_pub_to_did_key(&pub_bytes);
+        let vp = ask
+            .to_builder()
+            .sign_with(&*seed, &client_did)
+            .await
+            .expect("sign_with");
+        // The ask field on the BootstrapRequest is a tagged enum; pull
+        // the TemplateBootstrap variant and assert its shape.
+        let vta_sdk::provision_integration::BootstrapAsk::TemplateBootstrap(inner) = &vp.ask;
         assert_eq!(inner.context_hint.as_deref(), Some("ctx"));
         assert_eq!(inner.template.name, DEFAULT_MEDIATOR_TEMPLATE);
         assert_eq!(
@@ -607,6 +664,7 @@ mod tests {
             Some(DEFAULT_VTA_ADMIN_TEMPLATE)
         );
         assert_eq!(inner.note.as_deref(), Some("wizard run"));
+        assert_eq!(vp.label.as_deref(), Some("wizard run"));
     }
 
     fn sample_key(did: &str, fragment: &str) -> KeyPair {
