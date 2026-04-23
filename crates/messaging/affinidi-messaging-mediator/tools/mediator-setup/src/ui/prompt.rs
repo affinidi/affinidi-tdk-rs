@@ -42,10 +42,18 @@ pub fn render_prompt(
     // Vertical layout: title, description, optional tip, blank, prompt,
     // blank, hint (grows for multi-line hints), then flex. The global
     // bottom help bar already shows `Enter Confirm / Esc Cancel`, so we
-    // don't duplicate those keys here. The hint region is `Min(2)` so a
-    // single-line hint renders one row + one row of breathing space, and
-    // a multi-line hint (split on `\n`) flows into as many rows as the
-    // remaining area allows.
+    // don't duplicate those keys here.
+    //
+    // The hint region is `Min(5)` — enough to fit our widest hint today
+    // (the DigestVerify screen: "Computed digest…" + "<digest>" + blank
+    // + "If the producer…" wrapping to 2 rows on narrow terminals = 5
+    // rows). When a hint is only one line, the extra rows are wasted
+    // visual space but would have gone to the trailing flex anyway, so
+    // there's no cost to short-hint screens. When two Min constraints
+    // compete for leftover rows, ratatui divides them evenly, which on
+    // narrow terminals can leave the hint at its minimum — hence a
+    // floor generous enough to contain the longest hint rather than
+    // depending on terminal height.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -55,7 +63,7 @@ pub fn render_prompt(
             Constraint::Length(1), // 3: blank
             Constraint::Length(1), // 4: prompt
             Constraint::Length(1), // 5: blank
-            Constraint::Min(2),    // 6: hint (grows for multi-line / wrap)
+            Constraint::Min(5),    // 6: hint (multi-line + wrap safety)
             Constraint::Min(0),
         ])
         .split(area);
