@@ -633,6 +633,169 @@ fn secret_entries_to_secrets(
         .collect()
 }
 
+/// Project a completed [`vta_connect::VtaSession`] onto the
+/// [`vta_sdk::did_secrets::DidSecretsBundle`] shape the mediator's
+/// runtime expects in its VTA fallback cache.
+///
+/// The mediator boots, tries to reach its VTA, and on any failure
+/// (network, timeout, or VTA-side validation — `integration::startup`
+/// in vta-sdk doesn't distinguish) loads this bundle to keep serving
+/// DIDComm traffic with its existing keys. Pre-populating it at
+/// wizard time means first-boot survives VTA unavailability.
+///
+/// Returns `None` for [`VtaReply::AdminOnly`] sessions — those don't
+/// carry a VTA-provisioned integration DID (the mediator brought its
+/// own via the Did step), so there's nothing for the VTA cache to
+/// seed. `TemplateBootstrap` and `ContextProvision` replies both map
+/// to a bundle; their shapes differ but the target is unified.
+fn build_did_secrets_bundle(
+    session: &vta_connect::VtaSession,
+) -> Option<vta_sdk::did_secrets::DidSecretsBundle> {
+    use vta_sdk::did_secrets::{DidSecretsBundle, SecretEntry};
+    use vta_sdk::keys::KeyType;
+
+    if let Some(provision) = session.as_full_provision() {
+        // TemplateBootstrap path — `DidKeyMaterial` is a typed
+        // (signing, ka) pair keyed by DID. Pin the discriminants to
+        // match the `didcomm-mediator` template's renderer contract:
+        // signing_key is always Ed25519, ka_key is always X25519.
+        let material = provision.integration_key()?;
+        let secrets = vec![
+            SecretEntry {
+                key_id: material.signing_key.key_id.clone(),
+                key_type: KeyType::Ed25519,
+                private_key_multibase: material.signing_key.private_key_multibase.clone(),
+            },
+            SecretEntry {
+                key_id: material.ka_key.key_id.clone(),
+                key_type: KeyType::X25519,
+                private_key_multibase: material.ka_key.private_key_multibase.clone(),
+            },
+        ];
+        return Some(DidSecretsBundle {
+            did: provision.integration_did().to_string(),
+            secrets,
+        });
+    }
+
+    if let Some(bundle) = session.as_context_export() {
+        // OfflineExport path — ContextProvisionBundle already carries
+        // a flat `Vec<SecretEntry>` typed by the VTA, so we pass it
+        // through verbatim (including any future key types the VTA
+        // adds).
+        let did = bundle.did.as_ref()?;
+        return Some(DidSecretsBundle {
+            did: did.id.clone(),
+            secrets: did.secrets.clone(),
+        });
+    }
+
+    // AdminOnly — no VTA-provisioned integration DID to cache.
+    None
+}
+
+#[cfg(test)]
+mod cache_bundle_tests {
+    use super::build_did_secrets_bundle;
+    use crate::vta_connect::VtaSession;
+    use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
+    use vta_sdk::credentials::CredentialBundle;
+    use vta_sdk::did_secrets::SecretEntry;
+    use vta_sdk::keys::KeyType;
+
+    #[test]
+    fn full_provision_projects_to_signing_plus_ka_bundle() {
+        // TemplateBootstrap path: mediator DID + typed signing/ka key
+        // pair. Must land as two SecretEntries with the correct
+        // discriminants (Ed25519 for signing, X25519 for key-agreement)
+        // and the raw multibase passthrough.
+        let provision =
+            crate::vta_connect::provision::test_sample_result(/*rolled_over=*/ true);
+        let session = VtaSession::full(
+            "prod-mediator".into(),
+            "did:webvh:vta.example.com".into(),
+            Some("https://vta.example.com".into()),
+            None,
+            provision,
+        );
+
+        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
+        assert_eq!(bundle.did, "did:webvh:mediator.example.com");
+        assert_eq!(bundle.secrets.len(), 2);
+        assert!(matches!(bundle.secrets[0].key_type, KeyType::Ed25519));
+        assert!(matches!(bundle.secrets[1].key_type, KeyType::X25519));
+        // Multibase passthrough — the runtime's `Secret::from_multibase`
+        // is the one doing the actual key decode, so we round-trip the
+        // string verbatim.
+        assert_eq!(bundle.secrets[0].private_key_multibase, "zPrivateSample");
+        assert_eq!(bundle.secrets[1].private_key_multibase, "zKaPrivate");
+    }
+
+    #[test]
+    fn admin_only_yields_no_bundle() {
+        // AdminOnly session doesn't carry a VTA-provisioned integration
+        // DID — the mediator brought its own. Nothing to cache; the
+        // helper must signal that explicitly so the caller doesn't
+        // write a malformed bundle keyed to the admin DID.
+        let session = VtaSession::admin_only(
+            "prod-mediator".into(),
+            "did:webvh:vta.example.com".into(),
+            None,
+            None,
+            "did:key:z6MkAdmin".into(),
+            "zAdminPrivate".into(),
+        );
+        assert!(build_did_secrets_bundle(&session).is_none());
+    }
+
+    #[test]
+    fn context_export_passes_through_secret_entries() {
+        // OfflineExport path: ContextProvisionBundle already has a
+        // flat Vec<SecretEntry> (including whatever key types the VTA
+        // chose), so the projection is a direct copy.
+        let did_view = ProvisionedDid {
+            id: "did:webvh:mediator.example.com".into(),
+            did_document: None,
+            log_entry: None,
+            secrets: vec![
+                SecretEntry {
+                    key_id: "did:webvh:mediator.example.com#key-0".into(),
+                    key_type: KeyType::Ed25519,
+                    private_key_multibase: "zSigning".into(),
+                },
+                SecretEntry {
+                    key_id: "did:webvh:mediator.example.com#key-1".into(),
+                    key_type: KeyType::X25519,
+                    private_key_multibase: "zKa".into(),
+                },
+            ],
+        };
+        let ctx_bundle = ContextProvisionBundle {
+            context_id: "prod-mediator".into(),
+            context_name: "Prod mediator".into(),
+            vta_url: None,
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            credential: CredentialBundle::new(
+                "did:key:z6MkAdmin",
+                "zAdminPrivate",
+                "did:webvh:vta.example.com",
+            ),
+            admin_did: "did:key:z6MkAdmin".into(),
+            did: Some(did_view),
+        };
+        let session = VtaSession::context_export("prod-mediator".into(), ctx_bundle);
+
+        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
+        assert_eq!(bundle.did, "did:webvh:mediator.example.com");
+        assert_eq!(bundle.secrets.len(), 2);
+        assert_eq!(
+            bundle.secrets[0].key_id,
+            "did:webvh:mediator.example.com#key-0"
+        );
+        assert_eq!(bundle.secrets[1].private_key_multibase, "zKa");
+    }
+}
+
 /// Write a `did.jsonl` log entry next to the mediator's config file
 /// and print a green tick / yellow warning in the same style as the
 /// rest of `generate_and_write`. Centralises the CWD-versus-config-dir
@@ -910,6 +1073,34 @@ async fn generate_and_write(
             "    \x1b[32m\u{2714}\x1b[0m {}",
             affinidi_messaging_mediator_common::ADMIN_CREDENTIAL
         );
+
+        // Seed the VTA fallback cache with the bundle we just
+        // provisioned. The mediator's runtime boot calls
+        // `vta_sdk::integration::startup()`, which tries a live fetch
+        // and falls back to this cache on *any* failure — network
+        // timeout, auth rejection, or VTA-side validation error
+        // (see `integration/mod.rs::startup` match arms). Pre-populating
+        // here means first-boot survives VTA unavailability and, as
+        // a side effect, unblocks the "context has no DID assigned"
+        // validation failure until the VTA service auto-binds the
+        // provisioned DID to the context row. TTL `0` = no expiry:
+        // the runtime overwrites this with a fresh snapshot on every
+        // successful VTA contact, so staleness is self-healing.
+        // AdminOnly sessions return `None` — the mediator brought its
+        // own DID and there's nothing to cache.
+        if let Some(bundle) = build_did_secrets_bundle(session) {
+            let json = serde_json::to_value(&bundle)
+                .map_err(|e| anyhow::anyhow!("Failed to serialize cached VTA bundle: {e}"))?;
+            mediator_secrets_store
+                .store_vta_cached_bundle(json, 0)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to seed VTA cache: {e}"))?;
+            println!(
+                "    \x1b[32m\u{2714}\x1b[0m mediator/vta/last_known_bundle ({} key{})",
+                bundle.secrets.len(),
+                if bundle.secrets.len() == 1 { "" } else { "s" }
+            );
+        }
     }
 
     // Legacy backend-specific provisioning (file://: secrets.json,
