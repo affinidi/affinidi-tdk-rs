@@ -318,7 +318,12 @@ async fn run_from_recipe(recipe_path: &str, force_reprovision: bool) -> anyhow::
             format!("{cargo_home}/bin")
         });
 
-        println!("  \x1b[1mInstall command:\x1b[0m\n    \x1b[36m{install_cmd}\x1b[0m\n");
+        println!("  \x1b[1mInstall command:\x1b[0m");
+        println!(
+            "    \x1b[2mcd\x1b[0m \x1b[36m{}\x1b[0m",
+            build_dir.display()
+        );
+        println!("    \x1b[36m{install_cmd}\x1b[0m\n");
         println!(
             "  \x1b[38;5;69mInstalling mediator to {install_location} \
              (this may take a few minutes)...\x1b[0m\n"
@@ -1516,8 +1521,21 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         .map(|r| format!("{r}/bin"))
         .unwrap_or_else(|| default_bin.clone());
 
+    // Print the full command + working directory *before* running it.
+    // Mirrors `run_from_recipe`'s existing behaviour — the command
+    // lives in the operator's scroll history regardless of whether
+    // the build succeeds, so a "retry with different flags" or
+    // "inspect why this rebuilt everything" follow-up doesn't need
+    // them to chase the recipe or memo the feature set.
+    println!("\n  \x1b[1mInstall command:\x1b[0m");
     println!(
-        "\n  \x1b[38;5;69mInstalling mediator to {install_location} \
+        "    \x1b[2mcd\x1b[0m \x1b[36m{}\x1b[0m",
+        build_dir.display()
+    );
+    println!("    \x1b[36m{install_cmd}\x1b[0m\n");
+
+    println!(
+        "  \x1b[38;5;69mInstalling mediator to {install_location} \
          (this may take a few minutes)...\x1b[0m\n"
     );
 
