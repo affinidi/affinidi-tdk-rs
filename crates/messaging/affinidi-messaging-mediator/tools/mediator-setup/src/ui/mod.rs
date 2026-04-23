@@ -488,6 +488,21 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 info_box::render_info_box(frame, chunks[1], "Info", &info_text);
                 return;
             }
+            ConnectPhase::EnterWebvhPath => {
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Webvh path (optional)",
+                    "Path or mnemonic for the minted DID on the chosen webvh server.",
+                    None,
+                    &app.text_input,
+                    "leave blank to auto-assign",
+                    "Forwarded to the VTA as the `WEBVH_PATH` template variable. The VTA \
+                     relays it to the webvh server's request_uri call; blank means the \
+                     server picks the mnemonic.",
+                );
+                return;
+            }
         }
     }
 

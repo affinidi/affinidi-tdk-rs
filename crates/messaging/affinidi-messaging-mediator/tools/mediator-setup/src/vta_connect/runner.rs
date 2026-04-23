@@ -339,6 +339,12 @@ pub async fn run_connection_test(
 /// VP's `mediator_template_vars` so the VTA pins the minted DID's
 /// did.jsonl log to that server; `None` → serverless path (DID
 /// self-hosts at `URL`).
+///
+/// `webvh_path`: `Some(p)` → injects `WEBVH_PATH` into
+/// `mediator_template_vars` so the VTA forwards the operator's path
+/// suggestion to the webvh server's `request_uri` call; `None` →
+/// server auto-assigns. Only meaningful when `webvh_server_id` is
+/// `Some` (the serverless branch has no server to ask).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_provision_flight(
     vta_did: String,
@@ -350,6 +356,7 @@ pub async fn run_provision_flight(
     mediator_url: String,
     label: Option<String>,
     webvh_server_id: Option<String>,
+    webvh_path: Option<String>,
     tx: UnboundedSender<VtaEvent>,
 ) {
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::ProvisionIntegration));
@@ -360,6 +367,12 @@ pub async fn run_provision_flight(
         ask.mediator_template_vars.insert(
             "WEBVH_SERVER".to_string(),
             serde_json::Value::String(id.clone()),
+        );
+    }
+    if let Some(ref p) = webvh_path {
+        ask.mediator_template_vars.insert(
+            "WEBVH_PATH".to_string(),
+            serde_json::Value::String(p.clone()),
         );
     }
 

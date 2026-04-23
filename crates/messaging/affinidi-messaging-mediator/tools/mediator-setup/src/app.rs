@@ -703,8 +703,11 @@ impl WizardApp {
             }
             ConnectPhase::PickWebvhServer => {
                 // Index 0 is "serverless"; indices 1..=N map to
-                // `st.webvh_servers[i-1]`. Commit the pick and fire
-                // the provision flight.
+                // `st.webvh_servers[i-1]`. Commit the pick. Serverless
+                // jumps straight to the provision flight — there's no
+                // server to request a URI from, so no path prompt.
+                // Server picks route through `EnterWebvhPath` so the
+                // operator can supply an optional path.
                 let choice: Option<String> = if self.selection_index == 0 {
                     None
                 } else {
@@ -717,12 +720,38 @@ impl WizardApp {
                     Some(m) => m,
                     None => return, // defensive — shouldn't happen after PreflightDone
                 };
-                // Record the choice on state so the UI reflects it
-                // (e.g. if the runner fails and we come back).
-                if let Some(st_mut) = self.vta_connect.as_mut() {
+                // Record the choice on state (read by
+                // `start_vta_provision` after the path prompt resolves,
+                // and by the UI if the runner later fails). Serverless
+                // also wipes any stale `webvh_path` from a back-nav.
+                let is_serverless = {
+                    let Some(st_mut) = self.vta_connect.as_mut() else {
+                        return;
+                    };
                     st_mut.webvh_server_choice = choice.clone();
+                    if choice.is_none() {
+                        st_mut.webvh_path = None;
+                        true
+                    } else {
+                        st_mut.phase = ConnectPhase::EnterWebvhPath;
+                        false
+                    }
+                };
+                if is_serverless {
+                    self.start_vta_provision(rest_url, mediator_did);
+                } else {
+                    // Server-hosted — prompt for an optional path.
+                    // Pre-fill with any value captured on a prior
+                    // attempt (back-nav round-trip) so the operator
+                    // can accept with Enter.
+                    let prefill = self
+                        .vta_connect
+                        .as_ref()
+                        .and_then(|s| s.webvh_path.clone())
+                        .unwrap_or_default();
+                    self.mode = InputMode::TextInput;
+                    self.text_input = Input::new(prefill);
                 }
-                self.start_vta_provision(rest_url, mediator_did, choice);
             }
             ConnectPhase::Connected => {
                 // Persist the authenticated session so later steps can
@@ -778,15 +807,13 @@ impl WizardApp {
     }
 
     /// Kick off the FullSetup provision flight once the preflight has
-    /// delivered a webvh-server choice (auto or operator-picked). The
+    /// delivered a webvh-server choice (auto or operator-picked) and —
+    /// for the server-hosted branch — the operator has typed an
+    /// optional path via [`ConnectPhase::EnterWebvhPath`]. The
     /// resolved `mediator_did` + `rest_url` captured on preflight
-    /// become inputs so we don't re-resolve.
-    fn start_vta_provision(
-        &mut self,
-        rest_url: Option<String>,
-        mediator_did: String,
-        webvh_server_id: Option<String>,
-    ) {
+    /// become inputs so we don't re-resolve; the webvh server pick
+    /// and path are read from state.
+    fn start_vta_provision(&mut self, rest_url: Option<String>, mediator_did: String) {
         let Some(st) = self.vta_connect.as_mut() else {
             return;
         };
@@ -800,6 +827,8 @@ impl WizardApp {
         let context = st.context_id.clone();
         let mediator_url = st.mediator_url.clone();
         let label = Some(format!("mediator setup — {context}"));
+        let webvh_server_id = st.webvh_server_choice.clone();
+        let webvh_path = st.webvh_path.clone();
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         st.event_rx = Some(rx);
@@ -807,6 +836,12 @@ impl WizardApp {
         st.clipboard_status = None;
         st.phase = ConnectPhase::Testing;
         self.selection_index = 0;
+        // Callers reach here from either a selection (PickWebvhServer)
+        // or a text-input confirmation (EnterWebvhPath). Force
+        // `Selecting` so the renderer drops the prompt widget while
+        // the runner works, and so `Connected`'s "Continue" Enter
+        // routes to `select_current`, not `confirm_text_input`.
+        self.mode = InputMode::Selecting;
 
         tokio::spawn(async move {
             crate::vta_connect::runner::run_provision_flight(
@@ -819,6 +854,7 @@ impl WizardApp {
                 mediator_url,
                 label,
                 webvh_server_id,
+                webvh_path,
                 tx,
             )
             .await;
@@ -897,10 +933,32 @@ impl WizardApp {
                 AutoPick::ServerlessOnly => None,
                 AutoPick::SinglePick(id) => Some(id),
             };
-            if let Some(st) = self.vta_connect.as_mut() {
+            let is_serverless = {
+                let Some(st) = self.vta_connect.as_mut() else {
+                    return;
+                };
                 st.webvh_server_choice = choice.clone();
+                if choice.is_none() {
+                    st.webvh_path = None;
+                    true
+                } else {
+                    // Auto-picked a server — still prompt for the
+                    // optional path so the operator can supply one.
+                    st.phase = ConnectPhase::EnterWebvhPath;
+                    false
+                }
+            };
+            if is_serverless {
+                self.start_vta_provision(rest_url, mediator_did);
+            } else {
+                let prefill = self
+                    .vta_connect
+                    .as_ref()
+                    .and_then(|s| s.webvh_path.clone())
+                    .unwrap_or_default();
+                self.mode = InputMode::TextInput;
+                self.text_input = Input::new(prefill);
             }
-            self.start_vta_provision(rest_url, mediator_did, choice);
         }
     }
 
@@ -909,6 +967,7 @@ impl WizardApp {
         let Some(st) = self.vta_connect.as_mut() else {
             return Ok(());
         };
+        let mut webvh_path_dispatch = false;
         match st.phase {
             ConnectPhase::EnterDid => {
                 let val = self.text_input.value().trim().to_string();
@@ -966,7 +1025,31 @@ impl WizardApp {
                 self.selection_index = 0;
                 self.text_input = Input::default();
             }
+            ConnectPhase::EnterWebvhPath => {
+                // Blank is a valid answer — server auto-assigns the
+                // path. Non-blank is forwarded to the VTA as
+                // `WEBVH_PATH`. The provision flight itself is
+                // dispatched after this match closes so the
+                // `&mut VtaConnectState` borrow on `st` is released.
+                let val = self.text_input.value().trim().to_string();
+                st.webvh_path = if val.is_empty() { None } else { Some(val) };
+                self.text_input = Input::default();
+                webvh_path_dispatch = true;
+            }
             _ => {}
+        }
+        if webvh_path_dispatch {
+            let (rest_url, mediator_did) = {
+                let Some(st) = self.vta_connect.as_ref() else {
+                    return Ok(());
+                };
+                match st.preflight_mediator_did.clone() {
+                    Some(m) => (st.preflight_rest_url.clone(), m),
+                    // Defensive — shouldn't happen past PickWebvhServer.
+                    None => return Ok(()),
+                }
+            };
+            self.start_vta_provision(rest_url, mediator_did);
         }
         Ok(())
     }
@@ -1022,10 +1105,31 @@ impl WizardApp {
                 st.phase = ConnectPhase::AwaitingAcl;
                 st.webvh_servers.clear();
                 st.webvh_server_choice = None;
+                st.webvh_path = None;
                 st.preflight_mediator_did = None;
                 st.preflight_rest_url = None;
                 self.mode = InputMode::Selecting;
                 self.selection_index = 0;
+            }
+            ConnectPhase::EnterWebvhPath => {
+                // Back to the server picker — the operator may want a
+                // different server or to drop to serverless. The
+                // typed path is kept on state so it re-pre-fills if
+                // they land here again.
+                st.phase = ConnectPhase::PickWebvhServer;
+                self.mode = InputMode::Selecting;
+                // Seed the picker highlight on the previously-chosen
+                // server (offset by 1 for the "serverless" row at 0).
+                self.selection_index = st
+                    .webvh_server_choice
+                    .as_ref()
+                    .and_then(|id| {
+                        st.webvh_servers
+                            .iter()
+                            .position(|s| &s.id == id)
+                            .map(|idx| idx + 1)
+                    })
+                    .unwrap_or(0);
             }
             ConnectPhase::Testing | ConnectPhase::Connected => {
                 // Abort the runner (receiver drop closes the channel on its
@@ -1138,6 +1242,11 @@ impl WizardApp {
                     "Pick webvh server",
                     "The VTA has more than one registered webvh hosting server — pick one \
                      to host the minted DID's did.jsonl log, or self-host at the URL above.",
+                ),
+                ConnectPhase::EnterWebvhPath => (
+                    "Enter webvh path",
+                    "Optional path/mnemonic for the minted DID on the chosen webvh server. \
+                     Press Enter with the field blank to let the server auto-assign.",
                 ),
                 ConnectPhase::Connected => (
                     "Connected",
@@ -1508,6 +1617,9 @@ impl WizardApp {
                                 }
                             }
                         }
+                        ConnectPhase::EnterWebvhPath => {
+                            "Optional path or mnemonic the webvh server should publish the minted DID under (forwarded to the VTA as the `WEBVH_PATH` template variable, then on to the server's `request_uri` call). Leave blank to let the server auto-assign.".into()
+                        }
                         ConnectPhase::Connected => {
                             "VTA-minted mediator DID received. Advancing to the next step.".into()
                         }
@@ -1747,8 +1859,16 @@ impl WizardApp {
                     };
                     // DID_VTA and DID_WEBVH both need the mediator URL so
                     // the resulting DID document can publish correct
-                    // service endpoints.
-                    if self.selection_index == 0 || self.selection_index == 1 {
+                    // service endpoints. Skip the prompt when an upstream
+                    // VTA subflow (online ConnectPhase::EnterMediatorUrl
+                    // or sealed SealedPhase::CollectMediatorUrl) already
+                    // captured it — the mediator DID has been minted
+                    // from that value, so re-prompting is redundant.
+                    let url_already_captured =
+                        self.vta_session.is_some() && !self.config.public_url.is_empty();
+                    if (self.selection_index == 0 || self.selection_index == 1)
+                        && !url_already_captured
+                    {
                         self.mode = InputMode::TextInput;
                         self.text_input = Input::new(self.config.public_url.clone());
                         return;
@@ -3581,15 +3701,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn webvh_picker_auto_picks_single_entry() {
-        // 1 registered server → wizard auto-selects it; no operator
-        // interaction required. `webvh_server_choice` mirrors the
-        // only entry's id.
+        // 1 registered server → wizard auto-selects it, commits the
+        // choice, and transitions to `EnterWebvhPath` so the operator
+        // can supply an optional path before the provision flight
+        // starts. The text-input mode is activated for that prompt.
         let only = sample_webvh_server("prod-1", Some("Primary"));
         let mut app = prime_full_setup_picker(vec![only]);
         app.drain_vta_events();
         let st = app.vta_connect.as_ref().unwrap();
-        assert_eq!(st.phase, ConnectPhase::Testing);
+        assert_eq!(st.phase, ConnectPhase::EnterWebvhPath);
         assert_eq!(st.webvh_server_choice.as_deref(), Some("prod-1"));
+        assert!(st.webvh_path.is_none());
+        assert!(matches!(app.mode, InputMode::TextInput));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -3637,7 +3760,11 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn webvh_picker_server_selection_commits_correct_id() {
+    async fn webvh_picker_server_selection_routes_through_path_prompt() {
+        // Picking a real server commits the choice, but the provision
+        // flight doesn't start yet — we stop on `EnterWebvhPath` so
+        // the operator can supply an optional path. Only serverless
+        // dispatches immediately.
         let servers = vec![
             sample_webvh_server("prod-1", Some("Primary")),
             sample_webvh_server("backup-1", Some("DR")),
@@ -3648,6 +3775,74 @@ mod tests {
         app.select_current();
         let st = app.vta_connect.as_ref().unwrap();
         assert_eq!(st.webvh_server_choice.as_deref(), Some("backup-1"));
+        assert_eq!(st.phase, ConnectPhase::EnterWebvhPath);
+        assert!(st.webvh_path.is_none());
+        assert!(matches!(app.mode, InputMode::TextInput));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_path_prompt_blank_dispatches_with_none() {
+        // Blank input on `EnterWebvhPath` means "server auto-assigns".
+        // The flight kicks off (phase → Testing), `webvh_path` stays
+        // `None` so no `WEBVH_PATH` var is injected downstream, and
+        // mode drops back to `Selecting` so the eventual `Connected`
+        // "Continue" Enter routes correctly.
+        let only = sample_webvh_server("prod-1", Some("Primary"));
+        let mut app = prime_full_setup_picker(vec![only]);
+        app.drain_vta_events();
+        assert_eq!(
+            app.vta_connect.as_ref().unwrap().phase,
+            ConnectPhase::EnterWebvhPath
+        );
+        app.text_input = tui_input::Input::default();
+        app.confirm_text_input();
+        let st = app.vta_connect.as_ref().unwrap();
         assert_eq!(st.phase, ConnectPhase::Testing);
+        assert!(st.webvh_path.is_none());
+        assert!(matches!(app.mode, InputMode::Selecting));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_path_prompt_captures_trimmed_value() {
+        // Non-blank input lands on state verbatim (trimmed) and then
+        // the provision flight starts. Downstream the runner relays
+        // it as the `WEBVH_PATH` template var. Mode drops back to
+        // `Selecting` so the `Connected` continue-Enter works.
+        let only = sample_webvh_server("prod-1", Some("Primary"));
+        let mut app = prime_full_setup_picker(vec![only]);
+        app.drain_vta_events();
+        app.text_input = tui_input::Input::new("  my-mediator  ".into());
+        app.confirm_text_input();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::Testing);
+        assert_eq!(st.webvh_path.as_deref(), Some("my-mediator"));
+        assert!(matches!(app.mode, InputMode::Selecting));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn webvh_path_back_nav_returns_to_picker_without_losing_path() {
+        // Typing a path and then backing out lands on the picker with
+        // the typed value preserved on state, so re-entering the
+        // prompt (e.g. to switch servers) pre-fills the field.
+        let servers = vec![
+            sample_webvh_server("prod-1", Some("Primary")),
+            sample_webvh_server("backup-1", Some("DR")),
+        ];
+        let mut app = prime_full_setup_picker(servers);
+        app.drain_vta_events();
+        app.selection_index = 1;
+        app.select_current();
+        assert_eq!(
+            app.vta_connect.as_ref().unwrap().phase,
+            ConnectPhase::EnterWebvhPath
+        );
+        // Operator types a path, then Esc — the back-nav should
+        // retain the state field and rewind to the picker.
+        app.vta_connect.as_mut().unwrap().webvh_path = Some("typed".into());
+        app.vta_subflow_back();
+        let st = app.vta_connect.as_ref().unwrap();
+        assert_eq!(st.phase, ConnectPhase::PickWebvhServer);
+        assert_eq!(st.webvh_path.as_deref(), Some("typed"));
+        assert_eq!(st.webvh_server_choice.as_deref(), Some("prod-1"));
     }
 }

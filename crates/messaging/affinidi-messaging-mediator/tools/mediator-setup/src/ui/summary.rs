@@ -5,6 +5,7 @@ use ratatui::{
 
 use crate::{
     app::WizardConfig,
+    config_writer::build_backend_url,
     ui::theme,
     vta_connect::{VtaReply, VtaSession},
 };
@@ -113,10 +114,11 @@ pub fn render_summary(
             value_style,
         );
     }
+    let key_storage_display = build_backend_url(config);
     add_field(
         &mut lines,
         "  Key Storage",
-        &config.secret_storage,
+        &key_storage_display,
         label_style,
         value_style,
     );

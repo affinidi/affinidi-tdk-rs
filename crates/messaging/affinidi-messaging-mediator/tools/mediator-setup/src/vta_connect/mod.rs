@@ -179,6 +179,15 @@ pub struct VtaConnectState {
     /// auto-selected id (for 1-entry catalogues). `None` means
     /// serverless — DID self-hosts at `URL`.
     pub webvh_server_choice: Option<String>,
+    /// Optional path/mnemonic the operator typed in the
+    /// [`ConnectPhase::EnterWebvhPath`] prompt. Forwarded to the VTA as
+    /// the `WEBVH_PATH` template variable — the VTA passes it to the
+    /// webvh server's `request_uri` call so the minted DID publishes
+    /// under the chosen path. `None` means "server auto-assigns"
+    /// (the empty-input case). Only meaningful when
+    /// [`Self::webvh_server_choice`] is `Some` — the prompt is
+    /// skipped on the serverless path.
+    pub webvh_path: Option<String>,
     /// Mediator DID captured from the preflight, held across the
     /// picker dialog so the provision flight doesn't re-resolve.
     pub preflight_mediator_did: Option<String>,
@@ -225,6 +234,12 @@ pub enum ConnectPhase {
     /// auto-dispatches the provision flight without transitioning
     /// here.
     PickWebvhServer,
+    /// FullSetup-only, server-hosted path only. After a webvh server
+    /// has been chosen (auto-pick on single-entry catalogues, or
+    /// operator-pick on 2+), prompt for an optional path/mnemonic.
+    /// Blank input = server auto-assigns. Skipped on the serverless
+    /// branch since there's no server to request a URI from.
+    EnterWebvhPath,
     Connected,
 }
 
@@ -250,6 +265,7 @@ impl VtaConnectState {
             clipboard_status: None,
             webvh_servers: Vec::new(),
             webvh_server_choice: None,
+            webvh_path: None,
             preflight_mediator_did: None,
             preflight_rest_url: None,
         }
