@@ -32,6 +32,8 @@ pub use error::{Result, SecretStoreError};
 pub use store::{DynSecretStore, SecretStore, open_store};
 pub use url::{BackendUrl, parse_url};
 pub use well_known::{
-    ADMIN_CREDENTIAL, AdminCredential, JWT_SECRET, MediatorSecrets, OPERATING_DID_DOCUMENT,
-    OPERATING_KEY_AGREEMENT, OPERATING_SIGNING, VTA_LAST_KNOWN_BUNDLE, VtaCachedBundle,
+    ADMIN_CREDENTIAL, AdminCredential, BOOTSTRAP_EPHEMERAL_SEED_PREFIX, BOOTSTRAP_SEED_INDEX,
+    BootstrapSeedIndex, BootstrapSeedIndexEntry, JWT_SECRET, MediatorSecrets,
+    OPERATING_DID_DOCUMENT, OPERATING_KEY_AGREEMENT, OPERATING_SIGNING, PROBE_SENTINEL_PREFIX,
+    VTA_LAST_KNOWN_BUNDLE, VtaCachedBundle,
 };

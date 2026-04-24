@@ -138,7 +138,11 @@ impl SecretStore for KeyringStore {
     /// all?" — and a read-only probe answers that without leaving
     /// ephemeral state behind.
     async fn probe(&self) -> Result<()> {
-        let entry = self.entry("mediator/.probe")?;
+        // Read-only probe with a fixed sentinel name — a keychain that
+        // refuses to answer is the failure we want to catch; leaving no
+        // residue keeps us out of the keychain's write ACL dialog on
+        // macOS. Name lives in the shared `mediator_probe_*` namespace.
+        let entry = self.entry("mediator_probe_keyring_sentinel")?;
         match entry.get_password() {
             Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(SecretStoreError::ProbeFailed {

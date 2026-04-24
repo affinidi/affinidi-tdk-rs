@@ -6,13 +6,15 @@
 //! freshness.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use hmac::{Hmac, Mac};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::secrets::envelope::Envelope;
 use crate::secrets::error::{Result, SecretStoreError};
@@ -46,6 +48,25 @@ pub const OPERATING_DID_DOCUMENT: &str = "mediator_operating_did_document";
 /// Last successful `DidSecretsBundle` fetch from the VTA. Used as a
 /// fall-back at boot when the VTA is unreachable.
 pub const VTA_LAST_KNOWN_BUNDLE: &str = "mediator_vta_last_known_bundle";
+
+/// Prefix for in-flight sealed-handoff HPKE recipient seeds written by
+/// the non-interactive wizard in phase 1 and consumed in phase 2. The
+/// full key is `<prefix><bundle_id_hex>`; bundle ids are lowercase hex
+/// (16 bytes / 32 chars) so the result stays within the flat
+/// `[a-z0-9_]` class every backend accepts.
+pub const BOOTSTRAP_EPHEMERAL_SEED_PREFIX: &str = "mediator_bootstrap_ephemeral_seed_";
+
+/// Index of in-flight bootstrap seeds with their creation timestamps.
+/// Written on every `store_bootstrap_seed`, pruned on every
+/// `delete_bootstrap_seed`, swept by `sweep_bootstrap_seeds`. Exists
+/// because `SecretStore` has no `list_keys(prefix)` method — the index
+/// is the enumeration substrate.
+pub const BOOTSTRAP_SEED_INDEX: &str = "mediator_bootstrap_seed_index";
+
+/// Prefix for `SecretStore::probe` sentinel keys. A UUID (simple form
+/// — 32 hex chars, no hyphens) is appended to produce a per-probe
+/// unique name that fits the flat character class.
+pub const PROBE_SENTINEL_PREFIX: &str = "mediator_probe_";
 
 /// HKDF salt for deriving the cache-HMAC key from the admin credential's
 /// private key. Versioned so we can rotate the derivation in the future
@@ -375,6 +396,214 @@ impl MediatorSecrets {
         let bytes = Envelope::new(KIND_VTA_BUNDLE, cached).seal()?;
         self.store.put(VTA_LAST_KNOWN_BUNDLE, &bytes).await
     }
+
+    // ── Bootstrap ephemeral seeds ────────────────────────────────────
+    //
+    // The non-interactive sealed-handoff flow mints an Ed25519 seed in
+    // phase 1 (request emission) and uses it in phase 2 (bundle open).
+    // The two phases run as separate process invocations, so the seed
+    // must outlive phase 1 — it is written here (into the configured
+    // backend) rather than to disk.
+    //
+    // Each seed carries an index entry under `BOOTSTRAP_SEED_INDEX`
+    // recording `{bundle_id_hex, created_at}`. The index is the listing
+    // substrate for `sweep_bootstrap_seeds`; without it we would need a
+    // trait-level `list_keys(prefix)` method that not every backend can
+    // cheaply provide.
+
+    /// Persist a 32-byte Ed25519 seed keyed by `bundle_id_hex` and
+    /// record the entry in the bootstrap sweep index. Subsequent
+    /// invocations overwrite both the seed and its index entry,
+    /// refreshing the timestamp.
+    pub async fn store_bootstrap_seed(&self, bundle_id_hex: &str, seed: &[u8; 32]) -> Result<()> {
+        validate_bundle_id_hex(bundle_id_hex)?;
+        let key = bootstrap_seed_key(bundle_id_hex);
+        let payload = EphemeralSeedPayload {
+            seed_b64: B64URL.encode(seed),
+        };
+        let bytes = Envelope::new(KIND_EPHEMERAL_SEED, payload).seal()?;
+        self.store.put(&key, &bytes).await?;
+        self.upsert_seed_index(bundle_id_hex, now_unix()).await?;
+        Ok(())
+    }
+
+    /// Fetch the 32-byte seed stored under `bundle_id_hex`. Returns
+    /// `Ok(None)` when no seed is present (expected for the common
+    /// "wrong bundle id" case).
+    pub async fn load_bootstrap_seed(&self, bundle_id_hex: &str) -> Result<Option<[u8; 32]>> {
+        validate_bundle_id_hex(bundle_id_hex)?;
+        let key = bootstrap_seed_key(bundle_id_hex);
+        let Some(bytes) = self.store.get(&key).await? else {
+            return Ok(None);
+        };
+        let payload: EphemeralSeedPayload = Envelope::open(&bytes, &key, KIND_EPHEMERAL_SEED)?;
+        let raw = B64URL.decode(payload.seed_b64.as_bytes()).map_err(|e| {
+            SecretStoreError::InvalidShape {
+                key: key.clone(),
+                reason: format!("ephemeral seed is not valid base64url: {e}"),
+            }
+        })?;
+        let seed: [u8; 32] =
+            raw.try_into()
+                .map_err(|v: Vec<u8>| SecretStoreError::InvalidShape {
+                    key: key.clone(),
+                    reason: format!(
+                        "ephemeral seed must decode to exactly 32 bytes (got {})",
+                        v.len()
+                    ),
+                })?;
+        Ok(Some(seed))
+    }
+
+    /// Remove the seed for `bundle_id_hex` from both the backend and
+    /// the sweep index. No-op if the seed isn't present; the index
+    /// entry is removed regardless so a partial earlier write cannot
+    /// leave it orphaned forever.
+    pub async fn delete_bootstrap_seed(&self, bundle_id_hex: &str) -> Result<()> {
+        validate_bundle_id_hex(bundle_id_hex)?;
+        let key = bootstrap_seed_key(bundle_id_hex);
+        self.store.delete(&key).await?;
+        self.remove_from_seed_index(bundle_id_hex).await?;
+        Ok(())
+    }
+
+    /// Delete any bootstrap-seed entries older than `max_age`. Returns
+    /// the bundle ids that were removed. Best-effort: if a per-entry
+    /// delete fails the index entry stays (so a later sweep retries)
+    /// but the overall call still returns `Ok` with whatever succeeded.
+    pub async fn sweep_bootstrap_seeds(&self, max_age: Duration) -> Result<Vec<String>> {
+        let index = self.load_seed_index().await?;
+        if index.entries.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cutoff = now_unix().saturating_sub(max_age.as_secs());
+        let mut swept = Vec::new();
+        let mut surviving = Vec::with_capacity(index.entries.len());
+        for entry in index.entries {
+            if entry.created_at > cutoff {
+                surviving.push(entry);
+                continue;
+            }
+            let key = bootstrap_seed_key(&entry.bundle_id_hex);
+            match self.store.delete(&key).await {
+                Ok(()) => {
+                    info!(
+                        bundle_id = %entry.bundle_id_hex,
+                        age_s = now_unix().saturating_sub(entry.created_at),
+                        "swept stale bootstrap seed",
+                    );
+                    swept.push(entry.bundle_id_hex);
+                }
+                Err(e) => {
+                    warn!(
+                        bundle_id = %entry.bundle_id_hex,
+                        error = %e,
+                        "failed to delete stale bootstrap seed; will retry next sweep",
+                    );
+                    surviving.push(entry);
+                }
+            }
+        }
+        self.write_seed_index(&BootstrapSeedIndex { entries: surviving })
+            .await?;
+        Ok(swept)
+    }
+
+    async fn load_seed_index(&self) -> Result<BootstrapSeedIndex> {
+        let Some(bytes) = self.store.get(BOOTSTRAP_SEED_INDEX).await? else {
+            return Ok(BootstrapSeedIndex::default());
+        };
+        Envelope::open(&bytes, BOOTSTRAP_SEED_INDEX, KIND_SEED_INDEX)
+    }
+
+    async fn write_seed_index(&self, index: &BootstrapSeedIndex) -> Result<()> {
+        if index.entries.is_empty() {
+            // Don't leave an empty index lying around — delete it so
+            // `load_seed_index` on the next call cheaply returns the
+            // default without a round-trip.
+            return self.store.delete(BOOTSTRAP_SEED_INDEX).await;
+        }
+        let bytes = Envelope::new(KIND_SEED_INDEX, index.clone()).seal()?;
+        self.store.put(BOOTSTRAP_SEED_INDEX, &bytes).await
+    }
+
+    async fn upsert_seed_index(&self, bundle_id_hex: &str, created_at: u64) -> Result<()> {
+        let mut index = self.load_seed_index().await?;
+        if let Some(existing) = index
+            .entries
+            .iter_mut()
+            .find(|e| e.bundle_id_hex == bundle_id_hex)
+        {
+            existing.created_at = created_at;
+        } else {
+            index.entries.push(BootstrapSeedIndexEntry {
+                bundle_id_hex: bundle_id_hex.to_string(),
+                created_at,
+            });
+        }
+        self.write_seed_index(&index).await
+    }
+
+    async fn remove_from_seed_index(&self, bundle_id_hex: &str) -> Result<()> {
+        let mut index = self.load_seed_index().await?;
+        let before = index.entries.len();
+        index.entries.retain(|e| e.bundle_id_hex != bundle_id_hex);
+        if index.entries.len() == before {
+            // Nothing to rewrite — save a round trip.
+            return Ok(());
+        }
+        self.write_seed_index(&index).await
+    }
+}
+
+// ── Bootstrap seed envelope + index types ───────────────────────────
+
+const KIND_EPHEMERAL_SEED: &str = "ephemeral-seed";
+const KIND_SEED_INDEX: &str = "bootstrap-seed-index";
+
+/// Envelope-inner payload for a bootstrap seed. `seed_b64` carries the
+/// raw 32-byte Ed25519 seed encoded as URL-safe base64 (no padding).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EphemeralSeedPayload {
+    seed_b64: String,
+}
+
+/// One entry in the bootstrap sweep index.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BootstrapSeedIndexEntry {
+    pub bundle_id_hex: String,
+    /// Unix seconds (UTC) when the entry was first written.
+    pub created_at: u64,
+}
+
+/// Serialised form of the sweep index — a JSON array under
+/// [`BOOTSTRAP_SEED_INDEX`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BootstrapSeedIndex {
+    pub entries: Vec<BootstrapSeedIndexEntry>,
+}
+
+fn bootstrap_seed_key(bundle_id_hex: &str) -> String {
+    format!("{BOOTSTRAP_EPHEMERAL_SEED_PREFIX}{bundle_id_hex}")
+}
+
+/// Defence-in-depth: bundle ids originate from the wizard's own
+/// `hex_lower(&nonce)` so should always be 32 lowercase-hex chars, but
+/// a typo in a future caller would otherwise produce a key that's
+/// accepted by some backends and rejected by others. Reject eagerly
+/// here so the failure mode is uniform.
+fn validate_bundle_id_hex(bundle_id_hex: &str) -> Result<()> {
+    if bundle_id_hex.len() != 32
+        || !bundle_id_hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(SecretStoreError::InvalidShape {
+            key: bootstrap_seed_key(bundle_id_hex),
+            reason: "bundle id must be exactly 32 lowercase-hex characters".into(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -550,6 +779,205 @@ mod tests {
 
         // Load treats the cache as absent because HMAC no longer verifies.
         assert!(secrets.load_vta_cached_bundle().await.unwrap().is_none());
+    }
+
+    // ── Bootstrap seed helpers ───────────────────────────────────────
+
+    fn valid_bundle_id() -> &'static str {
+        // 32 lowercase hex chars — matches the wizard's
+        // hex_lower(&nonce) output for a 16-byte bundle id.
+        "0123456789abcdef0123456789abcdef"
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seed_roundtrip_returns_same_bytes() {
+        let secrets = helper();
+        let seed = [7u8; 32];
+        secrets
+            .store_bootstrap_seed(valid_bundle_id(), &seed)
+            .await
+            .unwrap();
+        let got = secrets
+            .load_bootstrap_seed(valid_bundle_id())
+            .await
+            .unwrap()
+            .expect("seed must be present after store");
+        assert_eq!(got, seed);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seed_delete_then_load_returns_none() {
+        let secrets = helper();
+        let seed = [9u8; 32];
+        secrets
+            .store_bootstrap_seed(valid_bundle_id(), &seed)
+            .await
+            .unwrap();
+        secrets
+            .delete_bootstrap_seed(valid_bundle_id())
+            .await
+            .unwrap();
+        let got = secrets
+            .load_bootstrap_seed(valid_bundle_id())
+            .await
+            .unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seed_rejects_invalid_bundle_id() {
+        let secrets = helper();
+        assert!(matches!(
+            secrets.store_bootstrap_seed("too-short", &[0u8; 32]).await,
+            Err(SecretStoreError::InvalidShape { .. })
+        ));
+        assert!(matches!(
+            secrets
+                .store_bootstrap_seed("UPPERCASEISNOTOKHEXXHEXXHEXXHEXXH", &[0u8; 32])
+                .await,
+            Err(SecretStoreError::InvalidShape { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn sweep_removes_aged_entries_and_keeps_fresh_ones() {
+        let secrets = helper();
+        let aged_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let fresh_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        secrets
+            .store_bootstrap_seed(aged_id, &[1u8; 32])
+            .await
+            .unwrap();
+        secrets
+            .store_bootstrap_seed(fresh_id, &[2u8; 32])
+            .await
+            .unwrap();
+
+        // Manually backdate the aged entry's index timestamp — the
+        // seed itself stays put; we are only backdating the sweep's
+        // source of truth.
+        let mut index = secrets.load_seed_index().await.unwrap();
+        let now = now_unix();
+        for entry in index.entries.iter_mut() {
+            if entry.bundle_id_hex == aged_id {
+                entry.created_at = now.saturating_sub(48 * 3600);
+            } else if entry.bundle_id_hex == fresh_id {
+                entry.created_at = now.saturating_sub(3600);
+            }
+        }
+        secrets.write_seed_index(&index).await.unwrap();
+
+        let swept = secrets
+            .sweep_bootstrap_seeds(Duration::from_secs(24 * 3600))
+            .await
+            .unwrap();
+        assert_eq!(swept, vec![aged_id.to_string()]);
+
+        // Aged seed gone from both the backend and the index.
+        assert!(
+            secrets
+                .load_bootstrap_seed(aged_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let after = secrets.load_seed_index().await.unwrap();
+        assert_eq!(after.entries.len(), 1);
+        assert_eq!(after.entries[0].bundle_id_hex, fresh_id);
+
+        // Fresh seed survives.
+        assert_eq!(
+            secrets.load_bootstrap_seed(fresh_id).await.unwrap(),
+            Some([2u8; 32])
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_keeps_index_entry_when_backend_delete_fails() {
+        use crate::secrets::store::SecretStore;
+        use async_trait::async_trait;
+
+        struct FailingDelete {
+            inner: DynSecretStore,
+            failing_key: String,
+        }
+
+        #[async_trait]
+        impl SecretStore for FailingDelete {
+            fn backend(&self) -> &'static str {
+                "test-failing-delete"
+            }
+            async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+                self.inner.get(key).await
+            }
+            async fn put(&self, key: &str, value: &[u8]) -> Result<()> {
+                self.inner.put(key, value).await
+            }
+            async fn delete(&self, key: &str) -> Result<()> {
+                if key == self.failing_key {
+                    return Err(SecretStoreError::Other("simulated delete failure".into()));
+                }
+                self.inner.delete(key).await
+            }
+        }
+
+        let mem: DynSecretStore = Arc::new(MemoryStore::new("memory"));
+        let aged_id = "cccccccccccccccccccccccccccccccc";
+        let aged_key = bootstrap_seed_key(aged_id);
+        // Seed through the plain memory store so state exists before
+        // the failing wrapper takes over — easier to reason about.
+        let plain = MediatorSecrets::new(mem.clone());
+        plain
+            .store_bootstrap_seed(aged_id, &[3u8; 32])
+            .await
+            .unwrap();
+        let mut idx = plain.load_seed_index().await.unwrap();
+        for entry in idx.entries.iter_mut() {
+            entry.created_at = now_unix().saturating_sub(48 * 3600);
+        }
+        plain.write_seed_index(&idx).await.unwrap();
+
+        let wrapping = Arc::new(FailingDelete {
+            inner: mem,
+            failing_key: aged_key.clone(),
+        });
+        let secrets = MediatorSecrets::new(wrapping);
+
+        let swept = secrets
+            .sweep_bootstrap_seeds(Duration::from_secs(24 * 3600))
+            .await
+            .unwrap();
+        assert!(
+            swept.is_empty(),
+            "nothing should be reported as swept when the backend delete fails"
+        );
+        let retained = secrets.load_seed_index().await.unwrap();
+        assert_eq!(
+            retained.entries.len(),
+            1,
+            "failed sweep must leave the index entry for the next run"
+        );
+        assert_eq!(retained.entries[0].bundle_id_hex, aged_id);
+    }
+
+    #[tokio::test]
+    async fn sweep_on_empty_index_is_noop() {
+        let secrets = helper();
+        let swept = secrets
+            .sweep_bootstrap_seeds(Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert!(swept.is_empty());
+    }
+
+    #[tokio::test]
+    async fn probe_still_succeeds_with_new_sentinel_prefix() {
+        let store: DynSecretStore = Arc::new(MemoryStore::new("memory"));
+        // The trait-default probe writes a key under `PROBE_SENTINEL_PREFIX`
+        // and reads it back. A failing MemoryStore would fail here; a
+        // passing round-trip confirms the new key shape still works.
+        store.probe().await.unwrap();
     }
 
     #[tokio::test]

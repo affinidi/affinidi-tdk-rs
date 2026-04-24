@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::secrets::backends;
 use crate::secrets::error::{Result, SecretStoreError};
 use crate::secrets::url::{BackendUrl, parse_url};
+use crate::secrets::well_known::PROBE_SENTINEL_PREFIX;
 
 /// Convenience alias for a heap-allocated, trait-object-backed store.
 pub type DynSecretStore = Arc<dyn SecretStore>;
@@ -49,7 +50,10 @@ pub trait SecretStore: Send + Sync {
     /// key, read it back, delete it. Returns `Err` if any step fails
     /// (unreachable backend, permission issue, read/write mismatch).
     async fn probe(&self) -> Result<()> {
-        let key = format!("mediator/.probe/{}", Uuid::new_v4());
+        // UUID in simple form = 32 hex chars (no hyphens) which keeps
+        // the sentinel within the flat [a-z0-9_] class all backends
+        // accept verbatim.
+        let key = format!("{PROBE_SENTINEL_PREFIX}{}", Uuid::new_v4().simple());
         let expected: Vec<u8> = b"probe".to_vec();
         self.put(&key, &expected).await?;
         let got = self.get(&key).await?;
