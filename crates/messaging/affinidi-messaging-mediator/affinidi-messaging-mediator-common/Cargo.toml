@@ -20,7 +20,7 @@ repository.workspace = true
 default = []
 secrets-keyring = ["dep:keyring"]
 secrets-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
-secrets-gcp = []
+secrets-gcp = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
 secrets-azure = []
 secrets-vault = []
 
@@ -55,6 +55,17 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 keyring = { version = "3", features = ["apple-native", "linux-native"], optional = true }
 aws-config = { version = "1", optional = true }
 aws-sdk-secretsmanager = { version = "1", optional = true }
+## GCP Secret Manager (official googleapis/google-cloud-rust crate).
+## gRPC client via tonic; uses rustls (via `default-rustls-provider`)
+## so it joins the workspace TLS story without pulling native-tls.
+## Auth flows through google-cloud-gax's ADC chain
+## (GOOGLE_APPLICATION_CREDENTIALS, workload identity, etc.).
+google-cloud-secretmanager-v1 = { version = "1.8", optional = true }
+## Transitive dep of `google-cloud-secretmanager-v1`; reached directly
+## so the GCP backend can classify errors by their rpc::Code (NotFound,
+## Unavailable, ResourceExhausted, …) without string-matching the
+## Display form.
+google-cloud-gax = { version = "1.9", optional = true }
 
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
