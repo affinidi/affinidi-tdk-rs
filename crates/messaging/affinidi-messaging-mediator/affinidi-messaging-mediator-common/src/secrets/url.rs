@@ -166,16 +166,31 @@ fn parse_gcp(rest: &str, raw: &str) -> Result<BackendUrl> {
 }
 
 fn parse_azure(rest: &str, raw: &str) -> Result<BackendUrl> {
-    let vault = rest.trim_end_matches('/');
-    if vault.is_empty() {
+    let trimmed = rest.trim_end_matches('/');
+    if trimmed.is_empty() {
         return Err(SecretStoreError::InvalidUrl {
             url: raw.to_string(),
             reason: "azure_keyvault:// requires a vault name or URL".into(),
         });
     }
-    Ok(BackendUrl::Azure {
-        vault: vault.to_string(),
-    })
+    // Accept three input shapes:
+    //   - `azure_keyvault://my-vault`
+    //     → bare name, expand to `https://my-vault.vault.azure.net`.
+    //     Works for Azure Commercial; the DNS is region-agnostic.
+    //   - `azure_keyvault://my-vault.vault.usgovcloudapi.net`
+    //     → full DNS name (the `.` in the host is the signal); prepend
+    //     `https://`. Required for sovereign clouds (Government,
+    //     China, Germany).
+    //   - `azure_keyvault://https://my-vault.vault.azure.net`
+    //     → already a full URL; pass through verbatim.
+    let resolved = if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        trimmed.to_string()
+    } else if trimmed.contains('.') {
+        format!("https://{trimmed}")
+    } else {
+        format!("https://{trimmed}.vault.azure.net")
+    };
+    Ok(BackendUrl::Azure { vault: resolved })
 }
 
 fn parse_vault(rest: &str, raw: &str) -> Result<BackendUrl> {
@@ -281,13 +296,41 @@ mod tests {
     }
 
     #[test]
-    fn azure_ok() {
+    fn azure_bare_name_expands_to_commercial_cloud_url() {
         assert_eq!(
             parse_url("azure_keyvault://my-vault").unwrap(),
             BackendUrl::Azure {
-                vault: "my-vault".into()
+                vault: "https://my-vault.vault.azure.net".into()
             }
         );
+    }
+
+    #[test]
+    fn azure_full_https_url_is_passed_through() {
+        assert_eq!(
+            parse_url("azure_keyvault://https://my-vault.vault.azure.net").unwrap(),
+            BackendUrl::Azure {
+                vault: "https://my-vault.vault.azure.net".into()
+            }
+        );
+    }
+
+    #[test]
+    fn azure_sovereign_dns_name_gets_https_prefix() {
+        // A DNS name with `.` in it signals a sovereign-cloud host;
+        // the parser prepends `https://` rather than treating it as a
+        // bare name that would expand to the commercial DNS.
+        assert_eq!(
+            parse_url("azure_keyvault://my-vault.vault.usgovcloudapi.net").unwrap(),
+            BackendUrl::Azure {
+                vault: "https://my-vault.vault.usgovcloudapi.net".into()
+            }
+        );
+    }
+
+    #[test]
+    fn azure_empty_input_errors() {
+        assert!(parse_url("azure_keyvault://").is_err());
     }
 
     #[test]

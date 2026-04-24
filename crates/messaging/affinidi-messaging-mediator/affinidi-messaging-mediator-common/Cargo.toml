@@ -21,7 +21,11 @@ default = []
 secrets-keyring = ["dep:keyring"]
 secrets-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 secrets-gcp = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
-secrets-azure = []
+secrets-azure = [
+  "dep:azure_security_keyvault_secrets",
+  "dep:azure_identity",
+  "dep:azure_core",
+]
 secrets-vault = []
 
 [dependencies]
@@ -66,6 +70,13 @@ google-cloud-secretmanager-v1 = { version = "1.8", optional = true }
 ## Unavailable, ResourceExhausted, …) without string-matching the
 ## Display form.
 google-cloud-gax = { version = "1.9", optional = true }
+## Azure Key Vault Secrets (official Microsoft crate). Paired with
+## `azure_identity` for the credential chain. Both pulled with
+## default-features kept on — they already target rustls via
+## `azure_core::http::RustlsClient` on recent versions.
+azure_security_keyvault_secrets = { version = "0.14", optional = true }
+azure_identity = { version = "0.35", optional = true }
+azure_core = { version = "0.35", optional = true }
 
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
