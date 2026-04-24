@@ -65,6 +65,45 @@
 - **CHORE:** Deleted `backends::stubs` — every scheme now routes
   to a real implementation.
 
+## 20th April 2026
+
+### 0.13.0 — Unified Secret Backend Foundation
+
+Backfilled entry for the unified-backend foundation that landed
+on `b20daae` (previously documented inline in the mediator crate's
+CHANGELOG as "Phases A–L"). Listed here so the common crate's
+changelog has continuous history between 0.12.3 and 0.14.0.
+
+- **FEAT:** New `SecretStore` trait + pluggable backends under
+  `secrets::backends::*`. Single URL (`[secrets].backend = "<url>"`)
+  selects which store the mediator uses at boot, with per-entry
+  env-var overrides for CI (e.g. `MEDIATOR_SECRETS_ADMIN_CREDENTIAL`).
+- **FEAT:** Schema-versioned `Envelope<T>` wrapper for every
+  stored entry (`{version, kind, data}`), with end-to-end
+  `probe()` via a sentinel round-trip.
+- **FEAT:** Well-known key constants + typed `MediatorSecrets`
+  accessors for `ADMIN_CREDENTIAL`, `JWT_SECRET`,
+  `OPERATING_SECRETS`, `OPERATING_DID_DOCUMENT`,
+  `VTA_LAST_KNOWN_BUNDLE`. VTA cache entries carry an HMAC-SHA256
+  keyed from the admin credential's private key (HKDF-SHA256,
+  salt `"mediator-vta-cache-hmac-v1"`).
+- **FEAT:** Feature-gated backends:
+  - `secrets-keyring` — OS keychain, base64-encoded values.
+  - Always-on `file://` (plaintext JSON) and `file://?encrypt=1`
+    (AES-256-GCM + Argon2id; passphrase via
+    `MEDIATOR_FILE_BACKEND_PASSPHRASE` / `_FILE`).
+  - `secrets-aws` — AWS Secrets Manager with 3-attempt
+    exponential-backoff retry keyed off per-backend
+    `RetryPolicy`. Throttling / 5xx / transport errors retry;
+    NotFound / AccessDenied / Validation short-circuit.
+  - `secrets-gcp` / `secrets-azure` / `secrets-vault` —
+    URL-parser placeholders that return
+    `BackendUnavailable` at open time. (Real implementations
+    landed in 0.14.0.)
+- **CHORE:** Retry + backoff helper (`secrets::retry::with_retry`)
+  exposes `RetryPolicy<E>` so each backend supplies its own
+  transient/terminal classifier.
+
 ## 28th March 2026
 
 ### 0.12.3
