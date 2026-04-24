@@ -186,13 +186,17 @@ impl BitstringStatusList {
             .decode(encoded)
             .map_err(|e| StatusListError::Encoding(e.to_string()))?;
 
-        let mut decoder = GzDecoder::new(&compressed[..]);
-        let mut bits = Vec::new();
+        let expected_bytes = size.div_ceil(8);
+        // Cap inflation at the size we actually need (plus one byte so we can
+        // tell "exactly right" from "still more coming"). A hostile issuer
+        // could otherwise hand us a few KB of gzip that expands to gigabytes.
+        let limit = (expected_bytes as u64).saturating_add(1);
+        let mut decoder = GzDecoder::new(&compressed[..]).take(limit);
+        let mut bits = Vec::with_capacity(expected_bytes);
         decoder
             .read_to_end(&mut bits)
             .map_err(|e| StatusListError::Compression(e.to_string()))?;
 
-        let expected_bytes = size.div_ceil(8);
         if bits.len() < expected_bytes {
             return Err(StatusListError::Invalid(format!(
                 "decoded bitstring too short: {} bytes, expected {}",
