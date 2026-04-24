@@ -165,7 +165,7 @@ pub struct AuthorizationCodeGrant {
 }
 
 /// Pre-authorized code grant parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PreAuthorizedCodeGrant {
     /// The pre-authorized code.
     #[serde(rename = "pre-authorized_code")]
@@ -174,6 +174,17 @@ pub struct PreAuthorizedCodeGrant {
     /// Whether a user PIN is required.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_code: Option<TxCodeConfig>,
+}
+
+impl std::fmt::Debug for PreAuthorizedCodeGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `pre_authorized_code` is a bearer credential redeemable at the token
+        // endpoint (OpenID4VCI §3.5) — never let it land in logs.
+        f.debug_struct("PreAuthorizedCodeGrant")
+            .field("pre_authorized_code", &"[REDACTED]")
+            .field("tx_code", &self.tx_code)
+            .finish()
+    }
 }
 
 /// Transaction code (PIN) configuration.
