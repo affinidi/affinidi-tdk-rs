@@ -129,9 +129,11 @@ mediator-setup --from recipe.toml
 
 The wizard validates the recipe, generates an ephemeral keypair,
 writes a VP-framed request to `./bootstrap-request-vp.json`, persists
-the seed under `./bootstrap-secrets/<bundle-id>.key` (mode 0600), and
-prints the exact VTA-side command to run plus the follow-up phase-2
-command. Exit code is 0 — this is a normal pause point, not an error.
+the HPKE recipient seed into the configured secret backend (under
+`mediator_bootstrap_ephemeral_seed_<bundle-id>`, indexed by
+`mediator_bootstrap_seed_index` for auto-sweep), and prints the
+exact VTA-side command to run plus the follow-up phase-2 command.
+Exit code is 0 — this is a normal pause point, not an error.
 
 Carry `bootstrap-request-vp.json` to the VTA host by whatever transfer
 mechanism you use.
@@ -164,14 +166,15 @@ mediator-setup --from recipe.toml \
 The wizard:
 
 1. Opens the armored bundle, verifies the digest matches what you
-   typed, looks up the ephemeral seed by bundle id, and unseals.
+   typed, looks up the ephemeral seed in the secret backend by
+   bundle id, and unseals.
 2. Auto-detects the `TemplateBootstrap` payload variant and projects
    it onto an internal session.
 3. Runs the same config-writing pipeline as the TUI: writes
    `mediator.toml`, pushes operating keys / admin credential / JWT
    secret / cached bundle into the secret backend.
-4. Cleans up the seed file, the request file, and the empty
-   `bootstrap-secrets/` directory.
+4. Deletes the ephemeral seed from the backend and cleans up the
+   request file.
 
 Exit code 0 means the mediator is ready to start.
 
@@ -190,8 +193,8 @@ Same as online mode:
 
 | Symptom | Cause | Remedy |
 |---|---|---|
-| "A bootstrap is already in progress" on phase 1 | Previous phase-1 run didn't finalise; seed is still on disk | Either run phase 2 with `--bundle` to finalise, or `rm -rf bootstrap-secrets/ bootstrap-request-vp.json` to restart |
-| "could not locate the ephemeral seed" on phase 2 | Phase 2 ran from a different working directory than phase 1, or the seed dir was wiped | Run phase 2 from the same directory phase 1 wrote the seed to; confirm the bundle id in the error matches the phase-1 output |
+| "A bootstrap is already in progress" on phase 1 | Previous phase-1 run didn't finalise; seed is still in the secret backend's sweep index | Either run phase 2 with `--bundle` to finalise, wait for the 24h auto-sweep (`MEDIATOR_BOOTSTRAP_SEED_TTL` overrides), or re-run with `--force-reprovision` to wipe |
+| "could not locate the ephemeral seed" on phase 2 | Phase 2 is pointing at a different secret backend than phase 1, or the seed was swept / manually deleted | Re-run phase 2 with the same recipe (same `[secrets].backend`) as phase 1; confirm the bundle id in the error matches what phase 1 printed |
 | "provided digest did not match the bundle" | The digest you typed differs from what the VTA printed | Re-copy the digest from the VTA host; if it still fails, the bundle was tampered with — re-request |
 | Phase 1 fails with "requires identity.public_url" | Recipe doesn't set the mediator URL | Add `public_url = "https://..."` under `[identity]` in the recipe — the VTA's `didcomm-mediator` template needs it to render the mediator DID |
 | Bundle opens but `did.jsonl` doesn't get written | Config dir is not writable, or `--config` points at a path with no parent directory | Check permissions on the directory holding `mediator.toml` |
@@ -426,8 +429,8 @@ any existing keys).
 
 | Observed | Diagnosis | Remedy |
 |---|---|---|
-| Phase 1 fails: `A bootstrap is already in progress` | Previous phase-1 run is unfinished; seed still on disk | Either `--bundle bundle.armor` to finalise, or `rm -rf bootstrap-secrets/ bootstrap-request*.json` |
-| Phase 2 fails: `could not locate the ephemeral seed for bundle id XYZ` | Phase 2 running from different directory than phase 1, or seed dir wiped | Run phase 2 from the directory containing `bootstrap-secrets/` |
+| Phase 1 fails: `A bootstrap is already in progress` | Previous phase-1 run is unfinished; seed is still in the backend's sweep index | Either `--bundle bundle.armor` to finalise, wait 24h for the auto-sweep (`MEDIATOR_BOOTSTRAP_SEED_TTL=<dur>` overrides), or `--force-reprovision` |
+| Phase 2 fails: `could not locate the ephemeral seed for bundle id XYZ` | Phase 2 points at a different `[secrets].backend` than phase 1, or the seed was swept / manually deleted | Re-run phase 2 with the same recipe (and therefore the same `[secrets].backend`) phase 1 used |
 | Phase 2 fails: `provided digest did not match the bundle` | Mis-typed digest, or bundle tampered in transit | Re-copy digest from VTA host; if still mismatched, re-request the bundle |
 | Phase 2 fails: `sealed payload was the wrong variant` | Recipe says `sealed-mint` but VTA ran `vta context reprovision` (or vice versa) | Match `vta_mode` to the VTA-side command. `sealed-mint` expects `provision-integration`; `sealed-export` expects `context reprovision` |
 | Mediator boots but logs `VTA integration DEGRADED` | VTA returned a validation error or was unreachable at boot; cached bundle loaded | Check the preceding SDK warning for root cause. Mediator continues to serve on cached keys; it will refresh on next successful VTA call |

@@ -2,6 +2,30 @@
 
 ## Changelog history
 
+## 24th April 2026
+
+### 0.15.0
+
+- **FEATURE:** Complete secure-backend support. `secrets-gcp`,
+  `secrets-azure`, and `secrets-vault` are now fully wired end to
+  end (read/write/delete/probe + retry) — previously stubs that
+  returned `BackendUnavailable`. See the mediator-common 0.14.0
+  changelog for the SDK choices and URL shapes.
+- **BREAKING:** Self-hosted admin credentials are now stored as an
+  `AdminCredential` with `vta_did: None`, `vta_url: None`. The
+  mediator's config-load path gates the VTA integration branch on
+  `admin.is_vta_linked()` — self-hosted setups no longer attempt
+  to authenticate to a VTA at boot. `rotate-admin` refuses to run
+  against a self-hosted credential ("nothing to rotate against").
+- **BREAKING:** The flat-underscore rename in mediator-common
+  (`mediator/admin/credential` → `mediator_admin_credential`, etc.)
+  transparently updates the mediator's own reads. Any entries
+  hand-seeded under the old names will need to be re-seeded under
+  the new ones.
+- **CHORE:** Internal dep pin on `affinidi-messaging-mediator-common`
+  bumped to `0.14`; `affinidi-messaging-mediator-processors` bumped
+  to `0.14`.
+
 ## 20th April 2026
 
 ### Unreleased — Unified Secret Backend (Phases A–L)

@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+## 24th April 2026
+
+### 0.14.0
+
+- **CHORE:** Bumped internal pin on
+  `affinidi-messaging-mediator-common` to `0.14` (new cloud
+  backends + schema change on `AdminCredential`). Processors
+  themselves are unchanged in this release — the version bump
+  exists only to move the workspace in lockstep.
+
 ## 28th March 2026
 
 ### 0.12.3

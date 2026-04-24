@@ -27,9 +27,9 @@ running the interactive wizard, and how to migrate from the legacy
 | `file:///<absolute-path>` | One JSON file, base64 values | none | Dev only — plaintext on disk |
 | `file:///<absolute-path>?encrypt=1` | One JSON file, AEAD-sealed | AES-256-GCM, Argon2id-derived key | Requires `MEDIATOR_FILE_BACKEND_PASSPHRASE` (or `_FILE`) at boot |
 | `aws_secrets://<region>/<prefix>` | One AWS secret per key, named `<prefix><key>` | AWS server-side | Build with `--features secrets-aws` |
-| `gcp_secrets://<project>/<prefix>` | _Reserved_ — not yet implemented | — | `--features secrets-gcp` placeholder |
-| `azure_keyvault://<vault>` | _Reserved_ — not yet implemented | — | `--features secrets-azure` placeholder |
-| `vault://<endpoint>/<kv-path>` | _Reserved_ — not yet implemented | — | `--features secrets-vault` placeholder |
+| `gcp_secrets://<project>/<prefix>` | One GCP Secret per key, named `<prefix><key>`; `put` appends a new version | Google-managed | Auth via Application Default Credentials. Build with `--features secrets-gcp` |
+| `azure_keyvault://<vault-name-or-url>` | One Key Vault secret per key, names normalised `_` → `-` | Azure-managed | Bare name → `https://<name>.vault.azure.net`; full `https://…` URL passed verbatim (sovereign clouds). Auth via `DeveloperToolsCredential` (Azure CLI). Build with `--features secrets-azure` |
+| `vault://<endpoint>/<mount>[/<prefix>]` | KV v2 secret per key under `<mount>`, prefixed path | Vault-managed | First path segment = KV v2 mount; remainder = per-key prefix. Auth via `VAULT_TOKEN`. Build with `--features secrets-vault` |
 
 `string://` (inline secrets in TOML) is **not supported**. Inline
 secrets in a config file are unsafe even for CI; use `file://` with
@@ -65,11 +65,21 @@ Operators provisioning the backend by hand (Terraform, k8s
 **name** under which the mediator looks it up, and the **`data`
 shape** inside the envelope.
 
-### `mediator/admin/credential` — kind `admin-credential`
+### `mediator_admin_credential` — kind `admin-credential`
 
-The credential the mediator uses to authenticate to its VTA at boot.
-Required when VTA integration is enabled. Absent in self-hosted
-deployments.
+The persistent admin identity for a mediator. Two valid shapes
+share the same envelope:
+
+- **VTA-linked** (`vta_did` + `vta_url` both set): the mediator
+  uses the credential to authenticate to its VTA at boot. Produced
+  by the online-VTA or sealed-handoff flows.
+- **Self-hosted** (`vta_did` + `vta_url` both omitted / null): the
+  mediator does not talk to a VTA; the credential is a persistent
+  record of the admin DID + private key so a later wizard run can
+  reuse it. The runtime skips the VTA integration branch for these.
+
+Half-set combinations (only one of `vta_did` / `vta_url` populated)
+are rejected at write time.
 
 ```json
 {
@@ -89,14 +99,15 @@ deployments.
 |-------|------|-------|
 | `did` | string | Mediator's admin DID (must start with `did:`). |
 | `private_key_multibase` | string | Ed25519 seed, base58btc-encoded with multibase prefix. |
-| `vta_did` | string | DID of the VTA this mediator authenticates against (must start with `did:`). |
-| `vta_url` | string \| null | Optional REST URL override. Populated by the wizard when the operator pasted a URL; otherwise resolved from the VTA DID at runtime. |
-| `context` | string | VTA context this mediator lives in. Defaults to `"mediator"` if omitted. |
+| `vta_did` | string \| null | DID of the VTA this mediator authenticates against (`null` or absent for self-hosted; must start with `did:` when set). |
+| `vta_url` | string \| null | Optional REST URL override. Present iff `vta_did` is. |
+| `context` | string | VTA context this mediator lives in. Defaults to `"mediator"` if omitted. Ignored for self-hosted. |
 
-Provision via `mediator-setup` (Online VTA or Sealed handoff) or
-hand-write the JSON above. Rotate via `mediator rotate-admin`.
+Provision via `mediator-setup` (Online VTA, Sealed handoff, or
+self-hosted ADMIN_GENERATE) or hand-write the JSON above. Rotate
+via `mediator rotate-admin` (VTA-linked only).
 
-### `mediator/jwt/secret` — kind `jwt-secret`
+### `mediator_jwt_secret` — kind `jwt-secret`
 
 HMAC secret used to sign the mediator admin API's JWTs. **Required**
 in every deployment.
@@ -117,7 +128,7 @@ Provision via the wizard (`generate` mode), or pre-provision externally
 and choose `provide` mode in the wizard so the mediator reads the key
 from `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at boot.
 
-### `mediator/operating/secrets` — kind `operating-secrets`
+### `mediator_operating_secrets` — kind `operating-secrets`
 
 Operating keys for the mediator's own DID. Populated in self-hosted
 mode (did:peer / did:webvh); **absent** in VTA-managed deployments —
@@ -142,7 +153,7 @@ those fetch operating keys from the VTA at startup.
 Hand-provisioning is unusual — this is normally written by the
 wizard when the operator picks did:peer or did:webvh.
 
-### `mediator/operating/did_document` — kind `did-document`
+### `mediator_operating_did_document` — kind `did-document`
 
 Optional cached copy of the mediator's own DID document (self-hosted
 mode). Mediator boots without it; if present, used to short-circuit
@@ -156,7 +167,7 @@ DID resolution for the mediator's own identity.
 }
 ```
 
-### `mediator/vta/last_known_bundle` — kind `vta-cached-bundle`
+### `mediator_vta_last_known_bundle` — kind `vta-cached-bundle`
 
 Last-good `DidSecretsBundle` snapshot from the VTA. Used as a
 fallback at boot when the VTA is unreachable. Carries an HMAC-SHA256
@@ -180,6 +191,59 @@ entry is rejected as if absent.
 Operators **should not** hand-provision this entry — the HMAC
 derivation is private to the mediator. Let the runtime populate it on
 the first successful VTA fetch.
+
+### `mediator_bootstrap_ephemeral_seed_<bundle_id_hex>` — kind `ephemeral-seed`
+
+Transient HPKE recipient seed written by the non-interactive
+sealed-handoff wizard in phase 1 (`mediator-setup --from <recipe>`)
+and consumed in phase 2 (`… --bundle <path>`). Phase 2 deletes the
+entry on successful open; a stranded entry is swept automatically
+by the next wizard run that ages past the TTL (default 24h,
+override via `MEDIATOR_BOOTSTRAP_SEED_TTL` — any `humantime`
+duration like `"6h"` or `"7d"`).
+
+```json
+{
+  "version": 1,
+  "kind": "ephemeral-seed",
+  "created_at": 1735689600,
+  "data": { "seed_b64": "<base64url of 32-byte Ed25519 seed>" }
+}
+```
+
+Operators should not hand-provision this entry; the wizard owns
+both sides of the round-trip.
+
+### `mediator_bootstrap_seed_index` — kind `bootstrap-seed-index`
+
+Sibling index key that `mediator_bootstrap_ephemeral_seed_*` entries
+register themselves in so the sweeper can enumerate without a
+`list_keys(prefix)` trait call. Each entry carries the bundle id and
+a Unix-seconds timestamp.
+
+```json
+{
+  "version": 1,
+  "kind": "bootstrap-seed-index",
+  "data": {
+    "entries": [
+      { "bundle_id_hex": "abcd…", "created_at": 1735689600 }
+    ]
+  }
+}
+```
+
+Hand-wiping this key is safe — the worst case is a stranded
+ephemeral-seed entry that no longer has a sweep record, which
+operators can then clean up with a direct backend delete. The
+wizard re-creates the index on the next phase-1 run.
+
+### `mediator_probe_*` — no kind
+
+End-to-end probe sentinels written + deleted in a single call by
+`SecretStore::probe()`. Short-lived; no operator interaction.
+Listed here only so the `mediator_probe_` prefix isn't a surprise
+when operators browse the backend.
 
 ---
 

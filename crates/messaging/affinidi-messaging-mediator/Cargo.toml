@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.14.0"
+version = "0.15.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -55,11 +55,11 @@ affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)
 affinidi-encoding = { version = "0.1", optional = true }
 ## Background processors: message expiry cleanup, forwarding
-affinidi-messaging-mediator-processors = { version = "0.13", path = "affinidi-messaging-mediator-processors" }
+affinidi-messaging-mediator-processors = { version = "0.14", path = "affinidi-messaging-mediator-processors" }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.13", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.14", path = "affinidi-messaging-mediator-common" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

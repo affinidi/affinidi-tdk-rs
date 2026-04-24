@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
-version = "0.13.0"
+version = "0.14.0"
 description = "Background processors for the Affinidi Messaging Mediator (message expiry, forwarding)"
 edition.workspace = true
 authors.workspace = true
@@ -28,7 +28,7 @@ path = "src/forwarding/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## Shared types: DatabaseHandler, errors, config
-affinidi-messaging-mediator-common = { version = "0.13", path = "../affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.14", path = "../affinidi-messaging-mediator-common" }
 
 # ── CLI (for standalone processor binaries) ──────────────────────────────
 clap = { version = "4", features = ["derive"] }

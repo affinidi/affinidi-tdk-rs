@@ -2,6 +2,69 @@
 
 ## Changelog history
 
+## 24th April 2026
+
+### 0.14.0
+
+- **FEATURE:** Added GCP Secret Manager backend behind the existing
+  `secrets-gcp` cargo feature. Uses the official
+  `google-cloud-secretmanager-v1` crate (gRPC/tonic, rustls via
+  `default-rustls-provider`). Authenticates through Application
+  Default Credentials. `put` appends a new SecretVersion and falls
+  back to `CreateSecret` → `AddSecretVersion` on NotFound; `get`
+  reads `versions/latest`; `delete` removes the whole secret.
+- **FEATURE:** Added Azure Key Vault backend behind `secrets-azure`.
+  Uses `azure_security_keyvault_secrets` 0.14 with
+  `azure_identity::DeveloperToolsCredential` (Azure CLI → Azure
+  Developer CLI). Secret names normalise `_ → -` to fit Key Vault's
+  `[0-9A-Za-z-]` constraint; the mapping is bijective because the
+  flat well-known key schema never uses `-` inside keys.
+- **FEATURE:** Added HashiCorp Vault KV v2 backend behind
+  `secrets-vault`. Uses `vaultrs` 0.8 (rustls transport, token
+  auth via `VAULT_TOKEN`). URL shape is
+  `vault://<host>/<mount>[/<prefix>]`; first path segment is the
+  KV v2 mount.
+- **FEATURE:** `MediatorSecrets::{store,load,delete}_bootstrap_seed`
+  helpers for the non-interactive sealed-handoff phase-1 → phase-2
+  seed handoff. Each write updates a `BOOTSTRAP_SEED_INDEX` entry
+  with a `created_at` timestamp.
+- **FEATURE:** `MediatorSecrets::sweep_bootstrap_seeds(max_age)`
+  reaps abandoned phase-1 seeds older than the given age. Failed
+  per-entry deletes stay in the index for the next sweep (best
+  effort, no silent loss). New `bootstrap_seed_index()` accessor
+  exposes pending entries without the internal implementation
+  details.
+- **BREAKING:** `AdminCredential.vta_did` is now `Option<String>`
+  (was `String`). Self-hosted admin credentials set it to `None`;
+  VTA-linked credentials set both `vta_did` and `vta_url` to
+  `Some`. Half-set combinations are rejected at `store` time with
+  `InvalidShape`. Added `AdminCredential::is_vta_linked()` helper.
+  `#[serde(default, skip_serializing_if = "Option::is_none")]` so
+  the wire format stays compact and forward-compatible.
+- **BREAKING:** Renamed every well-known key from the path-style
+  `"mediator/<a>/<b>"` form to a flat `"mediator_<a>_<b>"` form.
+  Constant Rust names (`ADMIN_CREDENTIAL`, `JWT_SECRET`,
+  `OPERATING_SECRETS`, `OPERATING_SIGNING`,
+  `OPERATING_KEY_AGREEMENT`, `OPERATING_DID_DOCUMENT`,
+  `VTA_LAST_KNOWN_BUNDLE`) are unchanged so rust callers are
+  unaffected — but any entries written under the old key strings
+  will not be found. Unshipped on main at the time of this
+  release, no migration path provided.
+- **FEATURE:** New well-known constants:
+  `BOOTSTRAP_EPHEMERAL_SEED_PREFIX`, `BOOTSTRAP_SEED_INDEX`,
+  `PROBE_SENTINEL_PREFIX`.
+- **FEATURE:** `Envelope<T>` gains an optional `created_at: u64`
+  (Unix seconds) stamped on every `Envelope::new`. `Option<u64>`
+  with `#[serde(default, skip_serializing_if = "Option::is_none")]`
+  so pre-change envelopes still deserialize. Consumed by the
+  bootstrap-seed sweeper; ignored by `get`/`put`.
+- **FEATURE:** `SecretStore::probe()` default impl now writes
+  under `PROBE_SENTINEL_PREFIX` + a hyphen-free UUID (simple form)
+  — keeps sentinels inside the flat `[a-z0-9_]` class every
+  backend accepts verbatim.
+- **CHORE:** Deleted `backends::stubs` — every scheme now routes
+  to a real implementation.
+
 ## 28th March 2026
 
 ### 0.12.3
