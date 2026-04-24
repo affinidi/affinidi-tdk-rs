@@ -83,15 +83,27 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
         .await
         .map_err(|e| format!("Could not load admin credential: {e}"))?
         .ok_or_else(|| {
-            "No admin credential present in the backend (well-known key \
-             `mediator/admin/credential`). Nothing to rotate — bootstrap with \
-             `mediator-setup` first."
+            "No admin credential present in the backend. Nothing to rotate — \
+             bootstrap with `mediator-setup` first."
                 .to_string()
         })?;
 
+    // rotate-admin is exclusively a VTA operation: it re-registers
+    // the admin identity with the VTA's ACL. A self-hosted admin
+    // credential (no VTA DID/URL) has nothing to rotate against.
+    if !current.is_vta_linked() {
+        return Err(
+            "Admin credential is self-hosted (no VTA linkage). `mediator rotate-admin` only \
+             works for VTA-linked deployments — nothing to rotate against."
+                .into(),
+        );
+    }
     let old_did = current.did.clone();
     let context = current.context.clone();
-    let vta_did = current.vta_did.clone();
+    let vta_did = current
+        .vta_did
+        .clone()
+        .expect("is_vta_linked() guarantees vta_did is Some");
     let vta_url = current.vta_url.clone();
 
     info!(
@@ -186,7 +198,7 @@ pub async fn run(config_path: &str, dry_run: bool) -> Result<(), Box<dyn std::er
     let new_credential = AdminCredential {
         did: new_did.clone(),
         private_key_multibase: new_private_key_multibase,
-        vta_did: vta_did.clone(),
+        vta_did: Some(vta_did.clone()),
         vta_url: vta_url.clone(),
         context: context.clone(),
     };

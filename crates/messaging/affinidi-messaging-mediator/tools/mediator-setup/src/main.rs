@@ -1177,14 +1177,13 @@ async fn generate_and_write(
         );
     }
 
-    // Admin credential — only when the operator went through the
-    // online-VTA sub-flow. The session captures the rotated admin
-    // did:key + the VTA DID/URL that minted it.
+    // Admin credential — VTA-linked path. The session captures the
+    // rotated admin did:key + the VTA DID/URL that minted it.
     if let Some(session) = vta_session {
         let cred = affinidi_messaging_mediator_common::AdminCredential {
             did: session.admin_did().to_string(),
             private_key_multibase: session.admin_private_key_mb().to_string(),
-            vta_did: session.vta_did.clone(),
+            vta_did: Some(session.vta_did.clone()),
             vta_url: session.rest_url.clone(),
             context: session.context_id.clone(),
         };
@@ -1222,6 +1221,31 @@ async fn generate_and_write(
                 "    \x1b[32m\u{2714}\x1b[0m mediator/vta/last_known_bundle ({} key{})",
                 bundle.secrets.len(),
                 if bundle.secrets.len() == 1 { "" } else { "s" }
+            );
+        }
+    } else if let (Some(did), Some(secret)) = (admin_did.as_ref(), admin_secret.as_ref()) {
+        // Self-hosted ADMIN_GENERATE: the wizard minted the admin DID
+        // locally (no VTA session), so the only place the private key
+        // exists outside this process is the operator's terminal
+        // buffer. Persist it into the configured backend under the
+        // same well-known key VTA-linked runs use, with vta_did /
+        // vta_url left `None` so the mediator's config loader skips
+        // the VTA integration branch for this deployment.
+        if let Ok(privkey) = secret.get_private_keymultibase() {
+            let cred = affinidi_messaging_mediator_common::AdminCredential {
+                did: did.clone(),
+                private_key_multibase: privkey,
+                vta_did: None,
+                vta_url: None,
+                context: "mediator".into(),
+            };
+            mediator_secrets_store
+                .store_admin_credential(&cred)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to store admin credential: {e}"))?;
+            println!(
+                "    \x1b[32m\u{2714}\x1b[0m {} (self-hosted)",
+                affinidi_messaging_mediator_common::ADMIN_CREDENTIAL
             );
         }
     }
@@ -1265,33 +1289,16 @@ async fn generate_and_write(
         println!("  \x1b[32m\u{2714}\x1b[0m Admin DID: \x1b[36m{did}\x1b[0m");
         if let Some(ref secret) = admin_secret {
             if let Ok(privkey) = secret.get_private_keymultibase() {
-                println!();
-                println!(
-                    "  \x1b[33m\u{26A0}  IMPORTANT: Save this admin private key securely!\x1b[0m"
-                );
-                println!("  \x1b[2mPrivate key (multibase): {privkey}\x1b[0m");
+                print_admin_key_echo(&privkey, None);
             }
         } else if let Some(session) = vta_session {
-            // VTA-session rotation case: we don't have a `Secret` object,
-            // just the multibase private key. Surface it plainly so the
-            // operator can stash it until full secret-backend persistence
-            // lands (followup to task 15).
-            println!();
-            println!(
-                "  \x1b[33m\u{26A0}  IMPORTANT: Save this rotated admin private key — the mediator will need it to authenticate to the VTA.\x1b[0m"
-            );
-            println!(
-                "  \x1b[2mPrivate key (multibase): {}\x1b[0m",
-                session.admin_private_key_mb()
-            );
-            println!(
-                "  \x1b[2mVTA DID: {}   Context: {}\x1b[0m",
-                session.vta_did, session.context_id
-            );
-            println!(
-                "  \x1b[2m(Auto-provisioning into the selected secret backend is \
-                 tracked as a follow-up — for now, store the key pair yourself and \
-                 configure `[vta].credential` in mediator.toml accordingly.)\x1b[0m"
+            // VTA-session rotation case: the credential is already in
+            // the backend (stored above). The stdout echo is a
+            // convenience so operators can copy the key for offline
+            // storage — same UNSAFE warning applies.
+            print_admin_key_echo(
+                session.admin_private_key_mb(),
+                Some((session.vta_did.as_str(), session.context_id.as_str())),
             );
         }
     }
@@ -1324,6 +1331,35 @@ async fn generate_and_write(
     }
 
     Ok(())
+}
+
+/// Print the admin private key to stdout alongside an UNSAFE banner.
+/// Used for both the self-hosted ADMIN_GENERATE path and the VTA
+/// rotation path — in both cases the key is ALREADY safely stored in
+/// the configured secret backend, so the stdout echo is a courtesy
+/// that the operator can copy to offline storage. The banner makes
+/// the trust posture explicit: anything that tails this output
+/// (systemd-journal, CI logs, shoulder-surfers) gets the key.
+///
+/// `vta_context`, when supplied, prints the VTA DID + context the
+/// credential was minted against. It doesn't change the warning.
+fn print_admin_key_echo(privkey_multibase: &str, vta_context: Option<(&str, &str)>) {
+    println!();
+    // Red-background bold ` UNSAFE ` badge, then a white-bold
+    // explanation. Copying exact escape sequences from the spec.
+    println!(
+        "  \x1b[41;97m UNSAFE \x1b[0m \x1b[1mAdmin private key printed below for operator \
+         bookkeeping.\x1b[0m"
+    );
+    println!(
+        "  \x1b[2mThis key is already stored in the configured secret backend — copy it to \
+         an offline store now and clear your terminal scrollback if you care about \
+         confidentiality.\x1b[0m"
+    );
+    println!("  \x1b[2mPrivate key (multibase): {privkey_multibase}\x1b[0m");
+    if let Some((vta_did, context)) = vta_context {
+        println!("  \x1b[2mVTA DID: {vta_did}   Context: {context}\x1b[0m");
+    }
 }
 
 fn print_banner() {

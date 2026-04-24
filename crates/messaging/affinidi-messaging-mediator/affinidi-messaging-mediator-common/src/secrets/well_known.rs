@@ -77,17 +77,35 @@ const CACHE_HMAC_SALT: &[u8] = b"mediator-vta-cache-hmac-v1";
 
 const KIND_ADMIN_CREDENTIAL: &str = "admin-credential";
 
-/// What the mediator needs to authenticate to its VTA on every startup.
+/// Persistent admin identity for a mediator.
+///
+/// Two shapes share the same envelope so subsequent wizard invocations
+/// (and tooling like `mediator rotate-admin`) always load from one
+/// well-known key:
+///
+/// - **VTA-linked** (`vta_did.is_some() && vta_url.is_some()`): the
+///   mediator uses the credential to authenticate to its VTA at
+///   startup. Produced by the online-VTA or sealed-handoff flows.
+/// - **Self-hosted** (`vta_did.is_none() && vta_url.is_none()`): the
+///   mediator does not talk to a VTA; the credential is just a
+///   persistent record of the admin DID + private key so a later
+///   wizard run can reuse it without prompting the operator. The
+///   runtime `config::load` path skips the VTA integration branch for
+///   these.
 ///
 /// `context` is the VTA context this mediator lives in (defaults to
-/// `"mediator"` if missing). Holding it alongside the credential means
-/// `mediator.toml` needs only a pointer at the secret backend — no
-/// separate `[vta]` block to keep in sync.
+/// `"mediator"` if missing). Ignored for self-hosted credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminCredential {
     pub did: String,
     pub private_key_multibase: String,
-    pub vta_did: String,
+    /// VTA DID this credential authenticates against. `None` for
+    /// self-hosted deployments. `#[serde(default)]` so older
+    /// VTA-only records that always carried this field still
+    /// deserialize; new self-hosted records omit it entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vta_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vta_url: Option<String>,
     #[serde(default = "default_context")]
     pub context: String,
@@ -111,16 +129,36 @@ impl AdminCredential {
                 reason: "admin credential has empty private_key_multibase".into(),
             });
         }
-        if !self.vta_did.starts_with("did:") {
+        if let Some(ref vta) = self.vta_did
+            && !vta.starts_with("did:")
+        {
             return Err(SecretStoreError::InvalidShape {
                 key: key.to_string(),
-                reason: format!(
-                    "admin credential VTA DID '{}' is not a DID URI",
-                    self.vta_did
-                ),
+                reason: format!("admin credential VTA DID '{vta}' is not a DID URI"),
+            });
+        }
+        // Soft invariant: a VTA-linked credential should have both
+        // fields populated. Reject the half-set case where only one
+        // of vta_did / vta_url is present — that's almost certainly
+        // a caller bug, and the mediator runtime would later fail in
+        // an unhelpful way.
+        if self.vta_did.is_some() != self.vta_url.is_some() {
+            return Err(SecretStoreError::InvalidShape {
+                key: key.to_string(),
+                reason: "admin credential must set vta_did and vta_url together, or neither \
+                         (self-hosted)"
+                    .into(),
             });
         }
         Ok(())
+    }
+
+    /// True when this credential represents a VTA-linked admin
+    /// identity — the mediator's runtime VTA-startup branch is
+    /// gated on this. A `None` means "self-hosted admin, no VTA
+    /// integration".
+    pub fn is_vta_linked(&self) -> bool {
+        self.vta_did.is_some() && self.vta_url.is_some()
     }
 
     /// Derive the 32-byte HMAC key used to sign the VTA cache. Derivation
@@ -629,8 +667,18 @@ mod tests {
         AdminCredential {
             did: "did:key:z6MkSAMPLE".into(),
             private_key_multibase: "z3u2SAMPLE".into(),
-            vta_did: "did:webvh:vta.example.com".into(),
+            vta_did: Some("did:webvh:vta.example.com".into()),
             vta_url: Some("https://vta.example.com".into()),
+            context: "mediator".into(),
+        }
+    }
+
+    fn sample_self_hosted_admin() -> AdminCredential {
+        AdminCredential {
+            did: "did:key:z6MkSELFHOSTED".into(),
+            private_key_multibase: "z3u2SELFHOSTED".into(),
+            vta_did: None,
+            vta_url: None,
             context: "mediator".into(),
         }
     }
@@ -646,13 +694,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn self_hosted_admin_credential_roundtrips_without_vta_fields() {
+        let secrets = helper();
+        let cred = sample_self_hosted_admin();
+        secrets.store_admin_credential(&cred).await.unwrap();
+        let got = secrets
+            .load_admin_credential()
+            .await
+            .unwrap()
+            .expect("credential must be present");
+        assert_eq!(got.did, cred.did);
+        assert_eq!(got.private_key_multibase, cred.private_key_multibase);
+        assert!(got.vta_did.is_none());
+        assert!(got.vta_url.is_none());
+        assert!(
+            !got.is_vta_linked(),
+            "self-hosted credential must not be flagged as VTA-linked"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_credential_rejects_half_set_vta_fields() {
+        let secrets = helper();
+        // Populating vta_url alone without vta_did (or vice versa) is
+        // almost certainly a caller bug — the mediator runtime would
+        // later fail the VTA startup in an unhelpful way. Reject at
+        // write time instead.
+        let half_set = AdminCredential {
+            did: "did:key:z6MkSAMPLE".into(),
+            private_key_multibase: "z3u2SAMPLE".into(),
+            vta_did: None,
+            vta_url: Some("https://vta.example.com".into()),
+            context: "mediator".into(),
+        };
+        assert!(matches!(
+            secrets.store_admin_credential(&half_set).await,
+            Err(SecretStoreError::InvalidShape { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn admin_credential_shape_validation_rejects_bogus_dids() {
         let secrets = helper();
         let bad = AdminCredential {
             did: "not-a-did".into(),
             private_key_multibase: "z...".into(),
-            vta_did: "did:webvh:ok".into(),
-            vta_url: None,
+            vta_did: Some("did:webvh:ok".into()),
+            vta_url: Some("https://vta.example.com".into()),
             context: "mediator".into(),
         };
         assert!(matches!(

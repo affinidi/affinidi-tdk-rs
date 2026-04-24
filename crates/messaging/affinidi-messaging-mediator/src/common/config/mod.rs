@@ -370,11 +370,18 @@ impl TryFrom<ConfigRaw> for Config {
                 )
             })?;
 
-        let vta_startup = if let Some(ref admin) = admin_cred {
+        // Only the VTA-linked shape drives the VTA startup branch.
+        // Self-hosted admin credentials (stored so subsequent wizard
+        // runs can recover the private key) have `vta_did` / `vta_url`
+        // unset; the mediator skips VTA integration for those.
+        let vta_startup = if let Some(admin) = admin_cred.as_ref().filter(|a| a.is_vta_linked()) {
             let credential = CredentialBundle {
                 did: admin.did.clone(),
                 private_key_multibase: admin.private_key_multibase.clone(),
-                vta_did: admin.vta_did.clone(),
+                vta_did: admin
+                    .vta_did
+                    .clone()
+                    .expect("is_vta_linked() guarantees vta_did is Some"),
                 vta_url: admin.vta_url.clone(),
             };
             // vta-sdk 0.6.x split `VtaServiceConfig` into an
