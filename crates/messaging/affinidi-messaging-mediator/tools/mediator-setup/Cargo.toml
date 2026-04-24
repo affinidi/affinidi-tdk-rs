@@ -10,6 +10,25 @@ publish = false
 name = "mediator-setup"
 path = "src/main.rs"
 
+[features]
+## Default build speaks every secret backend the mediator runtime
+## supports. Operators who want a slimmer binary can disable default
+## features and select only the backends they need, e.g.
+## `cargo install affinidi-messaging-mediator-setup \
+##     --no-default-features --features secrets-aws`.
+default = [
+  "secrets-keyring",
+  "secrets-aws",
+  "secrets-gcp",
+  "secrets-azure",
+  "secrets-vault",
+]
+secrets-keyring = ["affinidi-messaging-mediator-common/secrets-keyring"]
+secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws"]
+secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
+secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
+secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
+
 [dependencies]
 # ── TUI Framework ────────────────────────────────────────────────────────
 ## Note: pinned to 0.29/0.28 to match affinidi-messaging-text-client.
@@ -48,16 +67,12 @@ affinidi-crypto = "0.1"
 ## lives in mediator-common. The wizard provisions admin credential, JWT
 ## secret, and operating keys directly into the chosen backend so the
 ## mediator finds them at startup without any inline config plumbing.
-## `secrets-keyring` matches the wizard's pre-existing keyring usage so
-## the linker doesn't pull two different keyring versions.
-affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", features = ["secrets-keyring", "secrets-aws"] }
+## Backend selection flows through the wizard's own `secrets-*` features
+## declared at the top of this file; no hardcoded list here.
+affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", default-features = false }
 
 # ── DID:webvh ────────────────────────────────────────────────────────────
 didwebvh-rs = "0.5"
-
-# ── Secret Storage Backends ──────────────────────────────────────────────
-## OS keyring: macOS Keychain, Linux Secret Service, Windows Credential Manager
-keyring = { version = "3", features = ["apple-native", "linux-native"] }
 
 # ── VTA Integration ──────────────────────────────────────────────────────
 ## client:          auth_light (REST challenge-response)

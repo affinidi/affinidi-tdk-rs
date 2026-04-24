@@ -8,7 +8,6 @@ mod generators;
 mod recipe;
 mod reprovision;
 mod sealed_handoff;
-mod secrets;
 mod ui;
 mod vta_connect;
 
@@ -1226,11 +1225,6 @@ async fn generate_and_write(
             );
         }
     }
-
-    // Legacy backend-specific provisioning (file://: secrets.json,
-    // keyring:// debug helpers, etc.) — only meaningful for backends the
-    // unified store can't fully express yet. Most paths are now no-ops.
-    secrets::provision_secrets(&config.secret_storage, &mediator_secrets, &mediator_did)?;
 
     let generated = config_writer::GeneratedValues {
         mediator_did,
