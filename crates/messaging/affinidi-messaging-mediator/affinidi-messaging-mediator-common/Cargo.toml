@@ -26,7 +26,7 @@ secrets-azure = [
   "dep:azure_identity",
   "dep:azure_core",
 ]
-secrets-vault = []
+secrets-vault = ["dep:vaultrs"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
@@ -77,6 +77,10 @@ google-cloud-gax = { version = "1.9", optional = true }
 azure_security_keyvault_secrets = { version = "0.14", optional = true }
 azure_identity = { version = "0.35", optional = true }
 azure_core = { version = "0.35", optional = true }
+## HashiCorp Vault KV v2 (rustify-based async REST client). Token auth
+## via VAULT_TOKEN env. Default features bring in the rustls HTTP
+## stack; pin to `0.8` so future breaking bumps don't land silently.
+vaultrs = { version = "0.8", default-features = false, features = ["rustls"], optional = true }
 
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
