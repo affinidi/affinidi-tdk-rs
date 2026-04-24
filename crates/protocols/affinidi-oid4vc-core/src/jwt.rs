@@ -108,6 +108,27 @@ pub fn decode_compact_jws_verified(
         ));
     }
 
+    let header_bytes = URL_SAFE_NO_PAD
+        .decode(parts[0])
+        .map_err(|e| JwtError::Base64(format!("header: {e}")))?;
+    let header: Value = serde_json::from_slice(&header_bytes)?;
+
+    // RFC 7515/7519: an Unsecured JWS (`alg: none`, empty signature) must
+    // never satisfy a verified decode. Don't rely on every JwtVerifier impl
+    // happening to reject a zero-length signature.
+    match header.get("alg").and_then(Value::as_str) {
+        Some(alg) if alg.eq_ignore_ascii_case("none") => {
+            return Err(JwtError::Verification("alg=none is not permitted".into()));
+        }
+        Some(_) => {}
+        None => {
+            return Err(JwtError::Verification("missing alg in JWS header".into()));
+        }
+    }
+    if parts[2].is_empty() {
+        return Err(JwtError::Verification("empty JWS signature".into()));
+    }
+
     let signing_input = format!("{}.{}", parts[0], parts[1]);
     let signature = URL_SAFE_NO_PAD
         .decode(parts[2])
@@ -115,14 +136,9 @@ pub fn decode_compact_jws_verified(
 
     verifier.verify(signing_input.as_bytes(), &signature)?;
 
-    let header_bytes = URL_SAFE_NO_PAD
-        .decode(parts[0])
-        .map_err(|e| JwtError::Base64(format!("header: {e}")))?;
     let payload_bytes = URL_SAFE_NO_PAD
         .decode(parts[1])
         .map_err(|e| JwtError::Base64(format!("payload: {e}")))?;
-
-    let header: Value = serde_json::from_slice(&header_bytes)?;
     let payload: Value = serde_json::from_slice(&payload_bytes)?;
 
     Ok((header, payload))
@@ -261,6 +277,16 @@ mod tests {
         let jws = encode_compact_jws(&json!({"alg": "HS256"}), &json!({"x": 1}), &signer).unwrap();
 
         assert!(decode_compact_jws_verified(&jws, &wrong_verifier).is_err());
+    }
+
+    #[test]
+    fn rejects_alg_none() {
+        let verifier = HmacTestVerifier::new(b"k");
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"x"}"#);
+        let jws = format!("{header}.{payload}.");
+        let err = decode_compact_jws_verified(&jws, &verifier).unwrap_err();
+        assert!(matches!(err, JwtError::Verification(_)), "got {err:?}");
     }
 
     #[test]
