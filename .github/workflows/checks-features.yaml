@@ -1,0 +1,83 @@
+name: checks-features
+# Matrix check: `cargo check --no-default-features --features secrets-<X>`
+# for each secret backend against the mediator runtime and the setup
+# wizard. Catches the case where a new cfg-gate misses a backend and
+# the lean per-backend install breaks.
+#
+# Runs alongside the main `checks.yaml` (which drives fmt/clippy/test
+# through the shared pipeline-rust workflow). Kept standalone because
+# the matrix shape is wizard-specific and doesn't belong in the shared
+# workflow.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    paths:
+      - "crates/messaging/affinidi-messaging-mediator/**"
+      - ".github/workflows/checks-features.yaml"
+
+jobs:
+  feature-matrix:
+    name: ${{ matrix.crate.short }} / ${{ matrix.backend }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [keyring, aws, gcp, azure, vault]
+        crate:
+          - short: mediator
+            package: affinidi-messaging-mediator
+            # Mediator default = ["didcomm"]. Keep didcomm enabled
+            # explicitly alongside the backend-under-test so the
+            # check matches a real deployment build rather than a
+            # protocol-less binary that never compiles in practice.
+            extra_features: "didcomm"
+          - short: setup
+            package: affinidi-messaging-mediator-setup
+            # Wizard has no protocol feature; the backend is the
+            # only moving piece.
+            extra_features: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps for keyring + aws_lc_rs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: features-${{ matrix.crate.short }}-${{ matrix.backend }}
+
+      - name: Assemble feature list
+        id: features
+        run: |
+          if [ -n "${{ matrix.crate.extra_features }}" ]; then
+            echo "list=${{ matrix.crate.extra_features }},secrets-${{ matrix.backend }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "list=secrets-${{ matrix.backend }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: cargo check --no-default-features --features ${{ steps.features.outputs.list }}
+        env:
+          # Keep `--cfg tracing_unstable` to match the main pipeline so
+          # the `valuable` feature on `tracing` resolves consistently,
+          # but don't promote warnings to errors: the wizard has
+          # pre-existing `dead_code` lints that the main rust-pipeline
+          # workflow tolerates, and the matrix's job is to catch
+          # missing `cfg(feature = "secrets-*")` gates, not lint
+          # cleanliness.
+          RUSTFLAGS: "--cfg tracing_unstable"
+        run: |
+          cargo check \
+            -p ${{ matrix.crate.package }} \
+            --no-default-features \
+            --features "${{ steps.features.outputs.list }}"
