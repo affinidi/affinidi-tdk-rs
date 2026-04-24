@@ -31,11 +31,12 @@ secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
 
 [dependencies]
 # ── TUI Framework ────────────────────────────────────────────────────────
-## Note: pinned to 0.29/0.28 to match affinidi-messaging-text-client.
-## Upgrading to ratatui 0.30 / crossterm 0.29 requires coordinated workspace bump.
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
-tui-input = { version = "0.14", features = ["ratatui-crossterm"] }
+## Workspace-wide pin — ratatui 0.29 carries `unicode-width = "=0.2.0"`
+## so every workspace consumer of ratatui (here, text-client,
+## mediator-monitor) must move together. Bumped in coordination.
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+tui-input = { version = "0.15", features = ["ratatui-crossterm"] }
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }
@@ -98,8 +99,9 @@ affinidi-did-resolver-cache-sdk = { path = "../../../../identity/affinidi-did-re
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 # ── Random ───────────────────────────────────────────────────────────────
-## Used to generate the ephemeral setup keypair seed.
-rand = "0.9"
+## Used to generate the ephemeral setup keypair seed. Matches the
+## workspace-wide `rand = "0.10"` pin used by mediator-common.
+rand = "0.10"
 
 # ── Clipboard ────────────────────────────────────────────────────────────
 ## `arboard` copies the bootstrap request JSON onto the system clipboard

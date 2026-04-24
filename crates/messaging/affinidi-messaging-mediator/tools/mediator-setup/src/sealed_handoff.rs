@@ -25,7 +25,7 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
-use rand::TryRngCore;
+use rand::TryRng;
 use tracing::{info, warn};
 use vta_sdk::credentials::CredentialBundle;
 use vta_sdk::sealed_transfer::{

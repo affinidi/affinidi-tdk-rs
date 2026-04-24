@@ -58,7 +58,7 @@ tracing = { version = "0.1", features = ["valuable"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "valuable"] }
 
 # ── Utilities ────────────────────────────────────────────────────────────
-lru = "0.12"
+lru = "0.17"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [lints]
