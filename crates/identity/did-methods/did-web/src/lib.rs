@@ -99,6 +99,9 @@ impl DIDWeb {
         let client = reqwest::Client::builder()
             .user_agent(concat!("affinidi-did-web/", env!("CARGO_PKG_VERSION")))
             .timeout(DEFAULT_TIMEOUT)
+            // The DID names the host. Following a 3xx lets that host pivot the
+            // resolver to an arbitrary internal address (SSRF), so refuse.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client with default config");
         Self { client }
@@ -199,6 +202,18 @@ pub fn build_url(domain: &str, path_segments: &[String]) -> Result<String, DidWe
             let decoded_segment = percent_decode_str(segment).decode_utf8().map_err(|e| {
                 DidWebError::InvalidDid(format!("path segment {segment:?} is not valid UTF-8: {e}"))
             })?;
+            // A decoded segment must stay a single path component. `%2E%2E`
+            // (`..`), `%2F` (`/`), `%5C` (`\`), etc. would otherwise let a
+            // crafted DID escape the expected `/{segments}/did.json` shape.
+            if decoded_segment.is_empty()
+                || decoded_segment == "."
+                || decoded_segment == ".."
+                || decoded_segment.contains(['/', '\\'])
+            {
+                return Err(DidWebError::InvalidDid(format!(
+                    "path segment {segment:?} is not a valid single path component"
+                )));
+            }
             url.push('/');
             url.push_str(&decoded_segment);
         }
@@ -234,6 +249,17 @@ mod tests {
     fn url_decodes_percent_encoded_port() {
         let url = build_url("example.com%3A8443", &[]).unwrap();
         assert_eq!(url, "https://example.com:8443/.well-known/did.json");
+    }
+
+    #[test]
+    fn url_rejects_path_traversal_segments() {
+        for seg in ["%2E%2E", "..", ".", "", "a%2Fb", "a%5Cb"] {
+            let err = build_url("example.com", &[seg.to_string()]).unwrap_err();
+            assert!(
+                matches!(err, DidWebError::InvalidDid(_)),
+                "segment {seg:?} should be rejected, got {err:?}"
+            );
+        }
     }
 
     #[test]
