@@ -169,15 +169,6 @@ pub struct SealedHandoffState {
     /// finalisation. Captured at sub-flow entry so the wizard can
     /// stamp runs even across re-renders.
     pub run_label: Option<String>,
-    /// On-disk path the wizard wrote the ephemeral Ed25519 seed to,
-    /// alongside the request file. Convention is
-    /// `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key` mode
-    /// 0600 — same lookup key used by the v1 `vta bootstrap` CLI so
-    /// a future resume path can reconstruct the X25519 secret without
-    /// asking the operator for it again. `None` when the wizard could
-    /// not create the directory or write the file (best-effort —
-    /// in-memory state still works for same-session opens).
-    pub seed_path: Option<std::path::PathBuf>,
     /// Producer assertion extracted from the opened bundle. Captured
     /// so the renderer can surface "verified by digest only"
     /// (PinnedOnly) vs "DID-signed by …" (DidSigned) without
@@ -234,7 +225,6 @@ impl SealedHandoffState {
             last_error: None,
             clipboard_status: None,
             run_label,
-            seed_path: None,
             producer_assertion: None,
             assertion_warning: None,
             request_scroll: 0,
@@ -347,23 +337,18 @@ impl SealedHandoffState {
             Err(_) => None,
         };
 
-        // Best-effort persist of the ephemeral Ed25519 seed alongside
-        // the request file. Convention mirrors the v1 `vta bootstrap`
-        // CLI: `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key`
-        // mode 0600. The seed is required to reconstruct the HPKE
-        // recipient secret at bundle-open time — keeping a copy on
-        // disk lets a future resume path recover state if the wizard
-        // is killed between Phase 1 (request) and Phase 3 (open).
-        // Same-session opens still use the in-memory `recipient_secret`
-        // unconditionally; the file is purely a recovery artefact.
-        let seed_path = persist_ephemeral_seed(persisted.as_deref(), &nonce, &seed_bytes);
-
+        // The seed intentionally stays in-memory for the TUI — a
+        // single-process session opens bundles directly via
+        // `recipient_secret`. For the non-interactive two-phase flow,
+        // `seed_bytes` is surfaced on this state so
+        // `bootstrap_headless::phase1_emit_request` can persist it
+        // into the configured secret backend. No disk copy is written
+        // from either path.
         self.recipient_secret = sk;
         self.seed_bytes = seed_bytes;
         self.nonce = nonce;
         self.request_json = request_json;
         self.request_path = persisted;
-        self.seed_path = seed_path;
         // Fresh content → fresh viewport. Without this, an operator
         // who scrolled earlier and backtracked would land on
         // RequestGenerated partway down the new JSON.
@@ -670,95 +655,6 @@ fn classify_producer_assertion(assertion: &ProducerAssertion) -> Option<String> 
             ))
         }
     }
-}
-
-/// Best-effort persist of the ephemeral Ed25519 seed used for a
-/// sealed-handoff round.
-///
-/// Layout: `<request-dir>/bootstrap-secrets/<bundle_id_hex>.key`,
-/// mode `0600` on Unix. `request_path` provides the directory
-/// (defaults to CWD when `None` or when the path has no parent).
-/// Returns the written path on success; `None` on any I/O failure —
-/// the in-memory `recipient_secret` still drives same-session opens,
-/// so a write failure must not abort `finalize_request`.
-///
-/// The bundle-id-keyed filename matches the v1 `vta bootstrap` CLI
-/// convention so a future resume path can locate the seed by the
-/// bundle id printed in the request file alone.
-fn persist_ephemeral_seed(
-    request_path: Option<&std::path::Path>,
-    nonce: &[u8; 16],
-    seed: &[u8; 32],
-) -> Option<std::path::PathBuf> {
-    let parent = request_path
-        .and_then(|p| p.parent())
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let secrets_dir = parent.join("bootstrap-secrets");
-    if let Err(e) = std::fs::create_dir_all(&secrets_dir) {
-        warn!(
-            dir = %secrets_dir.display(),
-            error = %e,
-            "Sealed handoff: bootstrap-secrets dir create failed; seed not persisted"
-        );
-        return None;
-    }
-    let bundle_id_hex = hex_lower(nonce);
-    let seed_path = secrets_dir.join(format!("{bundle_id_hex}.key"));
-
-    // Write + chmod in one go on Unix; on other platforms fall back
-    // to a plain write and trust the OS default umask. The file
-    // contents are the raw 32-byte seed — no envelope, no header —
-    // matching what the resume path would feed back into
-    // `ed25519_seed_to_x25519_secret`.
-    let write_result = write_secret_file(&seed_path, seed);
-    match write_result {
-        Ok(()) => {
-            info!(
-                path = %seed_path.display(),
-                bundle_id = %bundle_id_hex,
-                "Sealed handoff: ephemeral seed persisted (resume artefact)"
-            );
-            Some(seed_path)
-        }
-        Err(e) => {
-            warn!(
-                path = %seed_path.display(),
-                error = %e,
-                "Sealed handoff: seed write failed; in-memory state unaffected"
-            );
-            None
-        }
-    }
-}
-
-#[cfg(unix)]
-fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(bytes)
-}
-
-#[cfg(not(unix))]
-fn write_secret_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    std::fs::write(path, bytes)
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const T: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(T[(b >> 4) as usize] as char);
-        s.push(T[(b & 0xf) as usize] as char);
-    }
-    s
 }
 
 /// Decode armored bytes (paste OR file) into a single sealed bundle and
