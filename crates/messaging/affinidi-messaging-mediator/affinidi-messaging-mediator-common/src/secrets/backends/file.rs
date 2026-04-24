@@ -202,11 +202,11 @@ mod tests {
 
         let store = open(url).unwrap();
         store
-            .put("mediator/admin/credential", b"hello")
+            .put("mediator_admin_credential", b"hello")
             .await
             .unwrap();
-        store.put("mediator/jwt/secret", b"world").await.unwrap();
-        let got = store.get("mediator/admin/credential").await.unwrap();
+        store.put("mediator_jwt_secret", b"world").await.unwrap();
+        let got = store.get("mediator_admin_credential").await.unwrap();
         assert_eq!(got.as_deref(), Some(b"hello" as &[u8]));
 
         // Second open on the same path sees persisted data.
@@ -215,7 +215,7 @@ mod tests {
             encrypted: false,
         };
         let store2 = open(url2).unwrap();
-        let got = store2.get("mediator/jwt/secret").await.unwrap();
+        let got = store2.get("mediator_jwt_secret").await.unwrap();
         assert_eq!(got.as_deref(), Some(b"world" as &[u8]));
     }
 
@@ -251,7 +251,7 @@ mod tests {
             encrypted: false,
         };
         let store = open(url).unwrap();
-        store.put("mediator/jwt/secret", b"x").await.unwrap();
+        store.put("mediator_jwt_secret", b"x").await.unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "file:// must write owner-only");
     }

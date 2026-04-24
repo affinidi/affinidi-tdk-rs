@@ -588,17 +588,17 @@ mod tests {
         let store = open(url_for(&path)).unwrap();
         block_on(async {
             store
-                .put("mediator/admin/credential", b"secret-bytes")
+                .put("mediator_admin_credential", b"secret-bytes")
                 .await
                 .unwrap();
-            let got = store.get("mediator/admin/credential").await.unwrap();
+            let got = store.get("mediator_admin_credential").await.unwrap();
             assert_eq!(got.as_deref(), Some(&b"secret-bytes"[..]));
         });
 
         // Re-open with the same passphrase: data survives.
         let store2 = open(url_for(&path)).unwrap();
         block_on(async {
-            let got = store2.get("mediator/admin/credential").await.unwrap();
+            let got = store2.get("mediator_admin_credential").await.unwrap();
             assert_eq!(got.as_deref(), Some(&b"secret-bytes"[..]));
         });
 

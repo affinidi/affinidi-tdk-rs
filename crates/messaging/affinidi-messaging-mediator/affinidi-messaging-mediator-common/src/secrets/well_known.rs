@@ -20,25 +20,32 @@ use crate::secrets::store::{DynSecretStore, open_store};
 
 type HmacSha256 = Hmac<Sha256>;
 
+// All well-known key names use flat `[a-z0-9_]` identifiers. This is
+// the common subset every backend accepts verbatim (GCP rejects `/`
+// and `.`, Azure rejects `_` unless we substitute, and Vault KV v2
+// paths happen to round-trip either). Sticking to the flat form means
+// no per-backend encoding and no hidden invariants about which
+// separators are safe — add new keys by following the same shape.
+
 /// Credential the mediator uses to authenticate to its VTA.
-pub const ADMIN_CREDENTIAL: &str = "mediator/admin/credential";
+pub const ADMIN_CREDENTIAL: &str = "mediator_admin_credential";
 /// HMAC secret used by the mediator admin-API JWT.
-pub const JWT_SECRET: &str = "mediator/jwt/secret";
+pub const JWT_SECRET: &str = "mediator_jwt_secret";
 /// Operating keys for the mediator's own DID — stored as a JSON array of
 /// `affinidi_secrets_resolver::secrets::Secret` values. Populated in
 /// self-hosted mode; VTA-managed deployments leave this absent and pull
 /// keys from the VTA at startup.
-pub const OPERATING_SECRETS: &str = "mediator/operating/secrets";
+pub const OPERATING_SECRETS: &str = "mediator_operating_secrets";
 /// Reserved for a future per-key typed storage scheme. Not currently
 /// written or read — `OPERATING_SECRETS` holds the full bundle today.
-pub const OPERATING_SIGNING: &str = "mediator/operating/signing";
+pub const OPERATING_SIGNING: &str = "mediator_operating_signing";
 /// Reserved — see [`OPERATING_SIGNING`].
-pub const OPERATING_KEY_AGREEMENT: &str = "mediator/operating/key_agreement";
+pub const OPERATING_KEY_AGREEMENT: &str = "mediator_operating_key_agreement";
 /// Optional cached copy of the mediator's DID document (self-hosted mode).
-pub const OPERATING_DID_DOCUMENT: &str = "mediator/operating/did_document";
+pub const OPERATING_DID_DOCUMENT: &str = "mediator_operating_did_document";
 /// Last successful `DidSecretsBundle` fetch from the VTA. Used as a
 /// fall-back at boot when the VTA is unreachable.
-pub const VTA_LAST_KNOWN_BUNDLE: &str = "mediator/vta/last_known_bundle";
+pub const VTA_LAST_KNOWN_BUNDLE: &str = "mediator_vta_last_known_bundle";
 
 /// HKDF salt for deriving the cache-HMAC key from the admin credential's
 /// private key. Versioned so we can rotate the derivation in the future
@@ -553,7 +560,7 @@ mod tests {
         }
 
         let secrets = helper();
-        let key = "mediator/test/sample";
+        let key = "mediator_test_sample";
         assert!(
             secrets
                 .load_entry::<Sample>(key, "sample")
