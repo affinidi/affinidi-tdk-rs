@@ -11,6 +11,8 @@
 //! stored kind doesn't match, it's an early error rather than a silent
 //! shape surprise further in.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
 
 use crate::secrets::error::{Result, SecretStoreError};
@@ -24,17 +26,45 @@ pub struct Envelope<T> {
     pub version: u32,
     pub kind: String,
     pub data: T,
+    /// Unix seconds (UTC) when this envelope was written. Additive
+    /// field introduced after the initial schema; envelopes produced
+    /// by older writers deserialize as `None` and round-trip without
+    /// a stamp. Consumed by the bootstrap-seed sweeper; ignored by
+    /// `get` / `put` paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
 }
 
 impl<T> Envelope<T> {
-    /// Wrap a value as the current envelope version.
+    /// Wrap a value as the current envelope version, stamped with the
+    /// current wall-clock time.
     pub fn new(kind: impl Into<String>, data: T) -> Self {
+        Self::with_created_at(kind, data, Some(now_unix_seconds()))
+    }
+
+    /// Construct an envelope with an explicit (or absent) `created_at`.
+    /// Useful for tests that need deterministic timestamps and for the
+    /// sweeper's index-rewrite path, which preserves the original
+    /// timestamp on surviving entries.
+    pub fn with_created_at(kind: impl Into<String>, data: T, created_at: Option<u64>) -> Self {
         Self {
             version: ENVELOPE_VERSION,
             kind: kind.into(),
             data,
+            created_at,
         }
     }
+}
+
+/// Current wall-clock time in Unix seconds. Saturates to `0` on the
+/// pathological case of a system clock set before 1970 — envelopes
+/// written under those conditions simply look "ancient" to the sweeper
+/// and get cleaned up on the next run, which is the right behaviour.
+fn now_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 impl<T> Envelope<T>
@@ -127,5 +157,51 @@ mod tests {
     fn open_surfaces_malformed_json() {
         let err = Envelope::<Sample>::open(b"not json", "k", "sample").unwrap_err();
         assert!(matches!(err, SecretStoreError::EnvelopeDecode { .. }));
+    }
+
+    /// Envelopes written before `created_at` existed on the struct
+    /// still round-trip — the field is `#[serde(default)]`, so missing
+    /// JSON keys deserialize to `None`. Guards the cold-upgrade path
+    /// where a mediator updated to the new envelope shape reads an
+    /// entry a pre-update instance wrote.
+    #[test]
+    fn open_accepts_legacy_envelope_without_created_at() {
+        let bytes = br#"{"version":1,"kind":"sample","data":{"name":"x","value":1}}"#;
+        let restored: Sample = Envelope::open(bytes, "legacy-key", "sample").unwrap();
+        assert_eq!(
+            restored,
+            Sample {
+                name: "x".into(),
+                value: 1
+            }
+        );
+    }
+
+    /// Round-trip via `Envelope::new` stamps `created_at` with the
+    /// current wall-clock time; the stamped value survives
+    /// seal/open when the envelope is parsed back into a full
+    /// `Envelope<T>` (rather than just its inner `T`).
+    #[test]
+    fn new_stamps_created_at_within_a_reasonable_window() {
+        let before = now_unix_seconds();
+        let env = Envelope::new(
+            "sample",
+            Sample {
+                name: "x".into(),
+                value: 1,
+            },
+        );
+        let after = now_unix_seconds();
+        let stamped = env.created_at.expect("new() must stamp created_at");
+        assert!(
+            stamped >= before && stamped <= after,
+            "stamp {stamped} outside the [{before}, {after}] window"
+        );
+
+        // And the stamp survives a full seal/open when the caller
+        // deserializes the whole envelope (not just its inner data).
+        let bytes = env.seal().unwrap();
+        let parsed: Envelope<Sample> = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed.created_at, Some(stamped));
     }
 }
