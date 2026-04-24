@@ -3,19 +3,20 @@
 //!
 //! `--from recipe.toml` drives a fully declarative setup. For the two
 //! sealed modes (`sealed-mint`, `sealed-export`) the flow splits into
-//! two invocations with a physical file handoff between them:
+//! two invocations with a handoff between them:
 //!
-//! **Phase 1** — mediator host emits a request file and persists an
-//! ephemeral seed under `bootstrap-secrets/<bundle_id_hex>.key`. The
+//! **Phase 1** — mediator host emits a request file and persists the
+//! ephemeral HPKE recipient seed into the configured secret backend
+//! under `mediator_bootstrap_ephemeral_seed_<bundle_id_hex>`. The
 //! operator ships the request file to the VTA host, the VTA admin
 //! runs the appropriate `vta …` command, and ships back a
 //! `bundle.armor`.
 //!
 //! **Phase 2** — mediator host is re-run with `--bundle <path>`. The
-//! wizard looks up the matching seed by bundle id, unseals, projects
-//! onto a [`VtaSession`], runs the same `generate_and_write` pipeline
-//! the TUI uses, and cleans up the request + seed artefacts on
-//! success.
+//! wizard looks up the matching seed in the same backend, derives the
+//! X25519 recipient secret, unseals the bundle, projects onto a
+//! [`VtaSession`], runs the same `generate_and_write` pipeline the
+//! TUI uses, and deletes the seed from the backend on success.
 //!
 //! The live-DIDComm `online` path is intentionally NOT supported here
 //! — the VTA's `pnm acl create` step is inherently operator-gated and
@@ -29,6 +30,7 @@
 
 use std::path::{Path, PathBuf};
 
+use affinidi_messaging_mediator_common::MediatorSecrets;
 use tracing::{info, warn};
 
 use crate::consts::{VTA_MODE_ONLINE, VTA_MODE_SEALED_EXPORT, VTA_MODE_SEALED_MINT};
@@ -59,26 +61,30 @@ pub enum HeadlessOutcome {
 /// The on-disk artefacts created during a sealed-handoff round. Passed
 /// to [`cleanup_artifacts`] after a successful apply so the setup
 /// directory is returned to a clean state.
+///
+/// The ephemeral HPKE seed is no longer an on-disk artefact — it lives
+/// in the configured secret backend (see
+/// `MediatorSecrets::store_bootstrap_seed`) and is deleted directly
+/// from the backend on successful phase-2 apply.
 #[derive(Debug, Clone)]
 pub struct BootstrapArtifacts {
     /// The request JSON file the wizard wrote in phase 1. `None` when
     /// phase 1's best-effort write failed (we don't track what we
-    /// didn't create).
+    /// didn't create). Contains public data only (the operator's
+    /// ephemeral pubkey, nonce, and VP framing) — safe to leave
+    /// behind on a failure, but cleaner to delete on success.
     pub request_path: Option<PathBuf>,
-    /// The ephemeral Ed25519 seed under
-    /// `bootstrap-secrets/<bundle_id_hex>.key`. `None` when phase 1's
-    /// best-effort write failed.
-    pub seed_path: Option<PathBuf>,
 }
 
 /// Dispatch into phase 1 (request emission) or phase 2 (bundle apply)
 /// based on whether `--bundle` was supplied.
 ///
-/// Also enforces "don't clobber an in-flight bootstrap": if a seed
-/// file exists under `bootstrap-secrets/` and the caller is attempting
-/// phase 1 (no `--bundle`), we error rather than overwrite — the
-/// operator must either finalise with `--bundle` or explicitly wipe
-/// the directory.
+/// Also enforces "don't clobber an in-flight bootstrap": if the
+/// configured backend's sweep index has any entries and the caller
+/// is attempting phase 1 (no `--bundle`), we error rather than
+/// overwrite — the operator must either finalise with `--bundle` or
+/// re-run with `--force-reprovision` (which wipes the existing
+/// setup).
 pub async fn dispatch(
     config: &crate::app::WizardConfig,
     bundle_path: Option<&Path>,
@@ -91,35 +97,45 @@ pub async fn dispatch(
 }
 
 /// Phase 1 — mint the ephemeral keypair, build the request (shape
-/// depends on `config.vta_mode`), write the request JSON + seed, and
-/// return the operator's next-step command for the caller to print.
+/// depends on `config.vta_mode`), persist the HPKE recipient seed
+/// into the configured secret backend, and return the operator's
+/// next-step command for the caller to print.
 async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Result<HeadlessOutcome> {
-    // Refuse to clobber an in-flight bootstrap. The seed directory is
-    // our only cross-invocation state; its presence means "a request
-    // is out to a VTA operator, waiting for a bundle". Silently
-    // regenerating would invalidate whatever comes back.
-    let request_filename = default_request_filename(&config.vta_mode);
-    let request_dir = std::env::current_dir()?;
-    let secrets_dir = request_dir.join("bootstrap-secrets");
-    if secrets_dir.is_dir() {
-        let has_seeds = std::fs::read_dir(&secrets_dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .any(|e| e.path().extension().is_some_and(|x| x == "key"))
-            })
-            .unwrap_or(false);
-        if has_seeds {
-            anyhow::bail!(
-                "A bootstrap is already in progress.\n  \
-                 Seeds: {}/*.key\n  \
-                 Request (likely): ./{request_filename}\n\n\
-                 To finalise: re-run `mediator-setup --from <recipe> --bundle bundle.armor`\n\
-                 To restart:  rm -rf {} ./{request_filename}  # destroys the in-flight request",
-                secrets_dir.display(),
-                secrets_dir.display(),
-            );
-        }
+    // Open the backend first so we fail fast on a misconfigured
+    // secret store — no point minting a request, writing it to disk,
+    // and then discovering `aws_secrets://...` can't talk to AWS.
+    let backend_url = crate::config_writer::build_backend_url(config);
+    let store = MediatorSecrets::from_url(&backend_url)
+        .map_err(|e| anyhow::anyhow!("open secret backend '{backend_url}': {e}"))?;
+    store
+        .probe()
+        .await
+        .map_err(|e| anyhow::anyhow!("secret backend '{backend_url}' failed probe: {e}"))?;
+
+    // Refuse to clobber an in-flight bootstrap. The backend index is
+    // our cross-invocation state now; any entry means "a request is
+    // out to a VTA operator, waiting for a bundle". Silently
+    // regenerating would invalidate whatever comes back. Stale
+    // entries are removed by the sweeper (wired in T11) before we
+    // reach this check.
+    let in_flight = store
+        .bootstrap_seed_index()
+        .await
+        .map_err(|e| anyhow::anyhow!("read bootstrap seed index: {e}"))?;
+    if !in_flight.entries.is_empty() {
+        let ids: Vec<_> = in_flight
+            .entries
+            .iter()
+            .map(|e| e.bundle_id_hex.as_str())
+            .collect();
+        anyhow::bail!(
+            "A bootstrap is already in progress in backend '{backend_url}'.\n  \
+             In-flight bundle id(s): {}\n\n\
+             To finalise: re-run `mediator-setup --from <recipe> --bundle bundle.armor`\n\
+             To restart:  wait {BOOTSTRAP_SEED_TTL_HINT} for auto-cleanup, \
+             or re-run with `--force-reprovision` to wipe.",
+            ids.join(", "),
+        );
     }
 
     let intent = intent_for_mode(&config.vta_mode)?;
@@ -159,11 +175,20 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     let bundle_id_hex = hex_lower(&state.nonce);
     let producer_command = state.primary_command();
 
+    // Persist the HPKE recipient seed into the configured backend.
+    // Phase 2 reads it back by bundle id to derive `recipient_secret`
+    // without asking the operator for anything.
+    store
+        .store_bootstrap_seed(&bundle_id_hex, &state.seed_bytes)
+        .await
+        .map_err(|e| anyhow::anyhow!("could not persist ephemeral seed to '{backend_url}': {e}"))?;
+
     info!(
         bundle_id = %bundle_id_hex,
         intent = ?intent,
         request = %request_path.display(),
-        "Sealed-handoff phase 1 complete — request emitted"
+        backend = %backend_url,
+        "Sealed-handoff phase 1 complete — request emitted, seed stored in backend"
     );
 
     Ok(HeadlessOutcome::RequestEmitted {
@@ -173,8 +198,15 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     })
 }
 
-/// Phase 2 — ingest the armored bundle, look up the seed by bundle
-/// id, unseal, and return a populated `VtaSession`.
+/// Default cleanup hint shown when an in-flight bootstrap blocks
+/// phase-1. Kept as a constant so the wording stays consistent if the
+/// sweeper TTL is raised later.
+const BOOTSTRAP_SEED_TTL_HINT: &str = "24h";
+
+/// Phase 2 — ingest the armored bundle, look up the seed in the
+/// configured backend, unseal, and return a populated `VtaSession`.
+/// The seed is deleted from the backend on successful open so a
+/// stale index entry doesn't linger.
 async fn phase2_apply(
     config: &crate::app::WizardConfig,
     bundle_path: &Path,
@@ -185,11 +217,16 @@ async fn phase2_apply(
     let armored = std::fs::read_to_string(bundle_path)
         .map_err(|e| anyhow::anyhow!("could not read bundle '{}': {e}", bundle_path.display()))?;
 
+    // Open the backend up front; a broken store is a phase-2 fatal.
+    let backend_url = crate::config_writer::build_backend_url(config);
+    let store = MediatorSecrets::from_url(&backend_url)
+        .map_err(|e| anyhow::anyhow!("open secret backend '{backend_url}': {e}"))?;
+
     // Reconstruct a synthetic `SealedHandoffState` keyed to this
     // bundle. The reconstructed state doesn't need the ephemeral
-    // pub/private pair — `ingest_armored` just parses the armor and
-    // computes the digest. The seed lookup happens between ingest
-    // and `open_with_digest`.
+    // pub/private pair up front — `ingest_armored` just parses the
+    // armor and computes the digest. The seed lookup happens between
+    // ingest and `open_with_digest`.
     let mut state = SealedHandoffState::new(intent, None);
     state.context_id = config.vta_context.clone();
 
@@ -205,7 +242,7 @@ async fn phase2_apply(
     // write-side). In the headless phase-2 path we never call that,
     // so reading `state.nonce` would give the zero default. Sync
     // `state.nonce` from the bundle so downstream logs and the seed
-    // filename stay consistent.
+    // lookup key stay consistent.
     let bundle_id = state
         .bundle
         .as_ref()
@@ -213,17 +250,25 @@ async fn phase2_apply(
         .bundle_id;
     state.nonce = bundle_id;
     let bundle_id_hex = hex_lower(&bundle_id);
-    let seed_path = locate_seed(bundle_path, &bundle_id_hex)?;
-    let seed_bytes = load_seed(&seed_path)?;
+
+    let seed_bytes = store
+        .load_bootstrap_seed(&bundle_id_hex)
+        .await
+        .map_err(|e| anyhow::anyhow!("read ephemeral seed from '{backend_url}': {e}"))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not locate the ephemeral seed for bundle id {bundle_id_hex} in backend \
+                 '{backend_url}'. Run phase 1 of `mediator-setup --from <recipe>` against the \
+                 same backend before supplying `--bundle`."
+            )
+        })?;
     state.recipient_secret = *vta_sdk::sealed_transfer::ed25519_seed_to_x25519_secret(&seed_bytes);
-    state.seed_path = Some(seed_path.clone());
 
     crate::sealed_handoff::open_with_digest(&mut state, digest.unwrap_or("")).map_err(|e| {
         anyhow::anyhow!(
             "could not open sealed bundle: {e}. \
              Verify the digest matches what the VTA admin printed, and \
-             that the bundle belongs to this setup's request (seed: {})",
-            seed_path.display()
+             that the bundle belongs to this setup's request (bundle id: {bundle_id_hex})."
         )
     })?;
 
@@ -231,50 +276,46 @@ async fn phase2_apply(
         anyhow::anyhow!("open_with_digest reported success but produced no session")
     })?;
 
+    // Seed has served its purpose. Best-effort delete so the index
+    // doesn't carry stale entries. Failure here doesn't abort phase 2
+    // — the mediator boot config is already valid at this point and
+    // the sweeper will eventually reap the entry on a future run.
+    if let Err(e) = store.delete_bootstrap_seed(&bundle_id_hex).await {
+        warn!(
+            bundle_id = %bundle_id_hex,
+            backend = %backend_url,
+            error = %e,
+            "phase-2 seed delete failed; the sweeper will retry later",
+        );
+    }
+
     // Probe the bundle_id-keyed request filename next to the bundle.
     // Best-effort — we only use this to clean up after a successful
-    // apply. If we can't find it, the seed-file cleanup still
-    // happens.
+    // apply.
     let request_path = probe_request_path(bundle_path, &config.vta_mode);
 
     info!(
         bundle_id = %bundle_id_hex,
         admin_did = %session.admin_did(),
         integration_did = session.integration_did().unwrap_or("(none)"),
-        "Sealed-handoff phase 2 complete — bundle applied"
+        backend = %backend_url,
+        "Sealed-handoff phase 2 complete — bundle applied, seed removed"
     );
 
     Ok(HeadlessOutcome::Applied {
         session,
-        artifacts: BootstrapArtifacts {
-            request_path,
-            seed_path: Some(seed_path),
-        },
+        artifacts: BootstrapArtifacts { request_path },
     })
 }
 
-/// Remove the request JSON, the ephemeral seed file, and the
-/// `bootstrap-secrets/` directory if it's now empty. Called from
-/// both the non-interactive path (phase 2 success) and the TUI path
-/// (post-Complete). Best-effort — any I/O failure logs a warning
-/// but doesn't abort the caller; the mediator config is already
-/// written at this point, and the operator can clean up manually.
+/// Remove the request JSON. Called from both the non-interactive path
+/// (phase 2 success) and the TUI path (post-Complete). Best-effort —
+/// any I/O failure logs a warning but doesn't abort the caller; the
+/// mediator config is already written at this point.
+///
+/// The ephemeral HPKE seed is no longer a file — it's removed
+/// directly from the secret backend at the end of `phase2_apply`.
 pub fn cleanup_artifacts(artifacts: &BootstrapArtifacts) {
-    if let Some(ref p) = artifacts.seed_path {
-        remove_best_effort(p, "ephemeral seed");
-        // Try to remove the parent `bootstrap-secrets/` directory if
-        // empty — leaves the operator's CWD tidy. Non-empty dir is
-        // left alone (other in-flight rounds may still be present).
-        if let Some(parent) = p.parent()
-            && parent.file_name().is_some_and(|n| n == "bootstrap-secrets")
-            && parent
-                .read_dir()
-                .map(|mut d| d.next().is_none())
-                .unwrap_or(false)
-        {
-            remove_dir_best_effort(parent);
-        }
-    }
     if let Some(ref p) = artifacts.request_path {
         remove_best_effort(p, "bootstrap request");
     }
@@ -310,45 +351,6 @@ fn default_request_filename(vta_mode: &str) -> &'static str {
     }
 }
 
-/// Locate the ephemeral seed for a bundle. Looks next to the bundle
-/// file first (most common operator layout) and falls back to CWD.
-fn locate_seed(bundle_path: &Path, bundle_id_hex: &str) -> anyhow::Result<PathBuf> {
-    let candidates = [
-        bundle_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("bootstrap-secrets")
-            .join(format!("{bundle_id_hex}.key")),
-        Path::new(".")
-            .join("bootstrap-secrets")
-            .join(format!("{bundle_id_hex}.key")),
-    ];
-    for c in &candidates {
-        if c.is_file() {
-            return Ok(c.clone());
-        }
-    }
-    anyhow::bail!(
-        "could not locate the ephemeral seed for bundle id {bundle_id_hex} — \
-         expected one of:\n  - {}\n  - {}\n\
-         The seed is written by `mediator-setup --from <recipe>` during phase 1 \
-         (bootstrap request emission). Run phase 1 on the same host as phase 2.",
-        candidates[0].display(),
-        candidates[1].display(),
-    )
-}
-
-fn load_seed(path: &Path) -> anyhow::Result<[u8; 32]> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| anyhow::anyhow!("could not read seed '{}': {e}", path.display()))?;
-    bytes.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "seed file '{}' must be exactly 32 bytes (got a different length)",
-            path.display()
-        )
-    })
-}
-
 fn probe_request_path(bundle_path: &Path, vta_mode: &str) -> Option<PathBuf> {
     let filename = default_request_filename(vta_mode);
     let candidates = [
@@ -369,18 +371,6 @@ fn remove_best_effort(path: &Path, what: &str) {
             path = %path.display(),
             error = %e,
             "Setup cleanup: could not remove {what} (continuing)",
-        ),
-    }
-}
-
-fn remove_dir_best_effort(path: &Path) {
-    match std::fs::remove_dir(path) {
-        Ok(()) => info!(path = %path.display(), "Setup cleanup: removed empty dir"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => warn!(
-            path = %path.display(),
-            error = %e,
-            "Setup cleanup: could not remove dir (continuing)",
         ),
     }
 }
@@ -430,46 +420,16 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_removes_seed_and_dir_and_request() {
+    fn cleanup_removes_request_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let secrets = tmp.path().join("bootstrap-secrets");
-        std::fs::create_dir_all(&secrets).unwrap();
-        let seed = secrets.join("abcd1234.key");
-        std::fs::write(&seed, [0u8; 32]).unwrap();
         let req = tmp.path().join("bootstrap-request.json");
         std::fs::write(&req, b"{}").unwrap();
 
         cleanup_artifacts(&BootstrapArtifacts {
             request_path: Some(req.clone()),
-            seed_path: Some(seed.clone()),
         });
 
-        assert!(!seed.exists(), "seed should be removed");
         assert!(!req.exists(), "request file should be removed");
-        assert!(
-            !secrets.exists(),
-            "empty bootstrap-secrets dir should be removed"
-        );
-    }
-
-    #[test]
-    fn cleanup_leaves_non_empty_secrets_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let secrets = tmp.path().join("bootstrap-secrets");
-        std::fs::create_dir_all(&secrets).unwrap();
-        let our_seed = secrets.join("ours.key");
-        let other_seed = secrets.join("other-in-flight.key");
-        std::fs::write(&our_seed, [0u8; 32]).unwrap();
-        std::fs::write(&other_seed, [0u8; 32]).unwrap();
-
-        cleanup_artifacts(&BootstrapArtifacts {
-            request_path: None,
-            seed_path: Some(our_seed.clone()),
-        });
-
-        assert!(!our_seed.exists());
-        assert!(other_seed.exists(), "other in-flight seed must survive");
-        assert!(secrets.exists(), "non-empty dir must survive");
     }
 
     #[test]
@@ -480,7 +440,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         cleanup_artifacts(&BootstrapArtifacts {
             request_path: Some(tmp.path().join("does-not-exist.json")),
-            seed_path: Some(tmp.path().join("also-missing.key")),
         });
     }
 
@@ -523,21 +482,29 @@ mod tests {
         }
     }
 
-    fn sealed_export_config(context: &str) -> crate::app::WizardConfig {
+    /// Wire the config up with a per-test `file://` backend rooted in
+    /// the CWD tempdir so phase-1/phase-2 exercise the real
+    /// `MediatorSecrets` path without hitting a cloud backend. `dir`
+    /// must be the same tempdir `CwdGuard` pins.
+    fn sealed_export_config(context: &str, dir: &std::path::Path) -> crate::app::WizardConfig {
+        let secrets_path = dir.join("secrets.json");
         crate::app::WizardConfig {
             use_vta: true,
             vta_mode: VTA_MODE_SEALED_EXPORT.into(),
             vta_context: context.into(),
+            secret_storage: crate::consts::STORAGE_FILE.into(),
+            secret_file_path: secrets_path.to_string_lossy().into_owned(),
+            secret_file_encrypted: false,
             ..crate::app::WizardConfig::default()
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial_test::serial]
-    async fn phase1_sealed_export_writes_request_and_seed() {
+    async fn phase1_sealed_export_writes_request_and_stores_seed_in_backend() {
         let cwd = CwdGuard::new();
         let dir = cwd.dir().to_path_buf();
-        let config = sealed_export_config("prod-mediator");
+        let config = sealed_export_config("prod-mediator", &dir);
         let outcome = dispatch(&config, None, None)
             .await
             .expect("phase 1 dispatch");
@@ -558,19 +525,30 @@ mod tests {
             producer_command.contains("--id prod-mediator"),
             "context id must propagate into the command: {producer_command}"
         );
-        let seed = dir
-            .join("bootstrap-secrets")
-            .join(format!("{bundle_id_hex}.key"));
-        assert!(seed.is_file(), "seed file must exist at {}", seed.display());
-        let meta = std::fs::metadata(&seed).unwrap();
-        assert_eq!(meta.len(), 32, "seed file is 32 bytes (raw Ed25519 seed)");
+
+        // Seed must be reachable via the backend, not via any
+        // `bootstrap-secrets/*.key` file.
+        let backend_url = crate::config_writer::build_backend_url(&config);
+        let store =
+            affinidi_messaging_mediator_common::MediatorSecrets::from_url(&backend_url).unwrap();
+        let loaded = store
+            .load_bootstrap_seed(&bundle_id_hex)
+            .await
+            .expect("read seed from backend")
+            .expect("seed must exist after phase 1");
+        assert_eq!(loaded.len(), 32, "seed is 32 bytes (raw Ed25519 seed)");
+
+        let index = store.bootstrap_seed_index().await.unwrap();
+        assert_eq!(index.entries.len(), 1);
+        assert_eq!(index.entries[0].bundle_id_hex, bundle_id_hex);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial_test::serial]
-    async fn phase1_refuses_double_run_while_seed_exists() {
-        let _cwd = CwdGuard::new();
-        let config = sealed_export_config("prod-mediator");
+    async fn phase1_refuses_double_run_while_index_has_a_seed() {
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let config = sealed_export_config("prod-mediator", &dir);
         let first = dispatch(&config, None, None).await;
         assert!(first.is_ok(), "first phase-1 run must succeed");
 
@@ -591,19 +569,19 @@ mod tests {
             "error must point at finalisation path: {err}"
         );
         assert!(
-            err.contains("rm -rf"),
+            err.contains("--force-reprovision"),
             "error must name the restart path: {err}"
         );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial_test::serial]
-    async fn phase2_errors_when_no_matching_seed() {
+    async fn phase2_errors_when_no_matching_seed_in_backend() {
         // Write a syntactically-valid armored bundle (single chunk,
         // produced by the sealed-transfer producer side of vta-sdk)
-        // and point phase 2 at it without any matching seed on disk.
-        // Should fail with the specific "could not locate the
-        // ephemeral seed" error.
+        // and point phase 2 at it without any matching seed in the
+        // backend. Should fail with the "could not locate the
+        // ephemeral seed" error that names the bundle id.
         use vta_sdk::credentials::CredentialBundle;
         use vta_sdk::sealed_transfer::{
             AssertionProof, InMemoryNonceStore, ProducerAssertion, SealedPayloadV1, armor,
@@ -636,7 +614,7 @@ mod tests {
         let bundle_path = dir.join("bundle.armor");
         std::fs::write(&bundle_path, armored).unwrap();
 
-        let config = sealed_export_config("prod-mediator");
+        let config = sealed_export_config("prod-mediator", &dir);
         let err = match dispatch(&config, Some(&bundle_path), None).await {
             Err(e) => e.to_string(),
             Ok(_) => panic!("phase 2 must fail when no seed is present"),
@@ -645,9 +623,9 @@ mod tests {
             err.contains("could not locate the ephemeral seed"),
             "unexpected error: {err}"
         );
-        // And it tells the operator where it looked — seed-id in
-        // the message narrows the diagnosis to "I ran phase 1 from
-        // a different CWD" vs "I wiped the seed dir".
+        // And it tells the operator the bundle id it searched for —
+        // narrows the diagnosis to "I ran phase 1 against a different
+        // backend" vs "the backend was wiped".
         assert!(
             err.contains("aaaaaaaa"),
             "error should name the bundle id it searched for: {err}"

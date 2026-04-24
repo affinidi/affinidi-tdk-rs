@@ -550,7 +550,6 @@ impl WizardApp {
                 self.tui_bootstrap_artifacts =
                     Some(crate::bootstrap_headless::BootstrapArtifacts {
                         request_path: state.request_path.take(),
-                        seed_path: state.seed_path.take(),
                     });
                 self.vta_session = state.session.take();
                 self.sealed_handoff = None;

@@ -467,6 +467,15 @@ impl MediatorSecrets {
         Ok(())
     }
 
+    /// Snapshot of currently-tracked bootstrap seeds. Consumed by the
+    /// wizard's "don't clobber an in-flight bundle" check in phase 1
+    /// and by tooling that wants to surface pending bundle ids to the
+    /// operator. Returns an empty index rather than `None` when the
+    /// index entry is absent — simpler at call sites.
+    pub async fn bootstrap_seed_index(&self) -> Result<BootstrapSeedIndex> {
+        self.load_seed_index().await
+    }
+
     /// Delete any bootstrap-seed entries older than `max_age`. Returns
     /// the bundle ids that were removed. Best-effort: if a per-entry
     /// delete fails the index entry stays (so a later sweep retries)

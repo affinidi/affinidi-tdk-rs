@@ -125,6 +125,14 @@ pub struct SealedHandoffState {
     /// dropped when the sub-flow exits. Zeroed until the inputs phases
     /// complete and `finalize_request` runs.
     pub recipient_secret: [u8; 32],
+    /// Raw 32-byte Ed25519 seed the X25519 secret is derived from. The
+    /// non-interactive driver persists this into the configured secret
+    /// backend so phase 2 (a separate process invocation) can recover
+    /// `recipient_secret` without the operator fishing it out by hand.
+    /// Zeroed until `finalize_request` runs; unused by the TUI, which
+    /// stays single-process and relies on the in-memory
+    /// `recipient_secret` directly.
+    pub seed_bytes: [u8; 32],
     /// Raw 16-byte nonce that anchors the bundle (must round-trip
     /// through the VTA admin's reply). Zeroed until `finalize_request`.
     pub nonce: [u8; 16],
@@ -216,6 +224,7 @@ impl SealedHandoffState {
             mediator_url: String::new(),
             webvh_server: String::new(),
             recipient_secret: [0u8; 32],
+            seed_bytes: [0u8; 32],
             nonce: [0u8; 16],
             request_json: String::new(),
             request_path: None,
@@ -350,6 +359,7 @@ impl SealedHandoffState {
         let seed_path = persist_ephemeral_seed(persisted.as_deref(), &nonce, &seed_bytes);
 
         self.recipient_secret = sk;
+        self.seed_bytes = seed_bytes;
         self.nonce = nonce;
         self.request_json = request_json;
         self.request_path = persisted;
