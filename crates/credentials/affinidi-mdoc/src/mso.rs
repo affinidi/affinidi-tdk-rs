@@ -77,6 +77,48 @@ pub struct ValidityInfo {
     pub valid_until: String,
 }
 
+impl ValidityInfo {
+    /// Check that `now` falls within `[validFrom, validUntil]`.
+    ///
+    /// ISO/IEC 18013-5 §9.3.1 requires the mdoc reader to verify the
+    /// `ValidityInfo` structure before accepting any disclosed elements.
+    /// Verifiers MUST call this (typically on the MSO returned from
+    /// [`crate::IssuerSigned::verify_issuer_auth`]) — signature and digest
+    /// checks alone do not establish that the credential is currently valid.
+    ///
+    /// Returns [`MdocError::Expired`] if `now` is outside the window, or
+    /// [`MdocError::InvalidMso`] if either timestamp does not parse as
+    /// RFC 3339.
+    pub fn check(&self, now: time::OffsetDateTime) -> Result<()> {
+        use time::format_description::well_known::Rfc3339;
+
+        let valid_from = time::OffsetDateTime::parse(&self.valid_from, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("validFrom not RFC 3339: {e}")))?;
+        let valid_until = time::OffsetDateTime::parse(&self.valid_until, &Rfc3339)
+            .map_err(|e| MdocError::InvalidMso(format!("validUntil not RFC 3339: {e}")))?;
+
+        if now < valid_from {
+            return Err(MdocError::Expired(format!(
+                "not yet valid (validFrom = {})",
+                self.valid_from
+            )));
+        }
+        if now > valid_until {
+            return Err(MdocError::Expired(format!(
+                "expired (validUntil = {})",
+                self.valid_until
+            )));
+        }
+        Ok(())
+    }
+
+    /// Convenience wrapper for [`ValidityInfo::check`] using the current
+    /// system time.
+    pub fn check_now(&self) -> Result<()> {
+        self.check(time::OffsetDateTime::now_utc())
+    }
+}
+
 impl MobileSecurityObject {
     /// Create an MSO from IssuerSignedItems organized by namespace.
     ///
@@ -348,5 +390,51 @@ mod tests {
 
         let item = IssuerSignedItem::new(0, "x", ciborium::Value::Integer(1.into()));
         assert!(mso.verify_item_digest("unknown", &item).is_err());
+    }
+
+    #[test]
+    fn validity_info_check_within_window() {
+        let v = test_validity();
+        let mid = time::OffsetDateTime::parse(
+            "2024-06-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        v.check(mid).expect("mid-window must be valid");
+    }
+
+    #[test]
+    fn validity_info_check_expired() {
+        let v = test_validity();
+        let after = time::OffsetDateTime::parse(
+            "2025-06-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(matches!(v.check(after), Err(MdocError::Expired(_))));
+    }
+
+    #[test]
+    fn validity_info_check_not_yet_valid() {
+        let v = test_validity();
+        let before = time::OffsetDateTime::parse(
+            "2023-06-01T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        assert!(matches!(v.check(before), Err(MdocError::Expired(_))));
+    }
+
+    #[test]
+    fn validity_info_check_malformed() {
+        let v = ValidityInfo {
+            signed: "2024-01-01T00:00:00Z".into(),
+            valid_from: "not-a-date".into(),
+            valid_until: "2025-01-01T00:00:00Z".into(),
+        };
+        assert!(matches!(
+            v.check(time::OffsetDateTime::now_utc()),
+            Err(MdocError::InvalidMso(_))
+        ));
     }
 }

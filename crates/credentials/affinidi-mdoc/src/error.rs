@@ -27,9 +27,9 @@ pub enum MdocError {
     #[error("Digest mismatch: {0}")]
     DigestMismatch(String),
 
-    /// The document has expired.
-    #[error("Document expired")]
-    Expired,
+    /// The document is outside its validity window (`validFrom`..`validUntil`).
+    #[error("Document outside validity window: {0}")]
+    Expired(String),
 
     /// A required field is missing.
     #[error("Missing field: {0}")]
