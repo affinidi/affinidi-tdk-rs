@@ -29,6 +29,7 @@
 //! to the outer recipe driver.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use affinidi_messaging_mediator_common::MediatorSecrets;
 use tracing::{info, warn};
@@ -90,9 +91,85 @@ pub async fn dispatch(
     bundle_path: Option<&Path>,
     digest: Option<&str>,
 ) -> anyhow::Result<HeadlessOutcome> {
+    // Sweep any stranded phase-1 seeds before branching. This
+    // piggybacks on the backend handle the phase-1/phase-2 code
+    // would open anyway, but runs BEFORE the "don't clobber" check
+    // in phase-1 so recently-expired entries don't spuriously block
+    // a fresh run. Best-effort — a sweep failure (e.g. backend
+    // briefly unreachable) is logged and the flow proceeds; the
+    // phase code will surface a richer error if the backend stays
+    // down.
+    sweep_stale_bootstrap_seeds(config).await;
+
     match bundle_path {
         Some(path) => phase2_apply(config, path, digest).await,
         None => phase1_emit_request(config).await,
+    }
+}
+
+/// Env var the sealed-handoff sweeper consults for its TTL. Accepts
+/// any `humantime`-parseable duration (`"30m"`, `"6h"`, `"7d"`).
+/// Absent or unparseable → [`DEFAULT_BOOTSTRAP_SEED_TTL`].
+const BOOTSTRAP_SEED_TTL_ENV: &str = "MEDIATOR_BOOTSTRAP_SEED_TTL";
+
+/// Default age beyond which a phase-1 seed is considered abandoned
+/// and swept on the next wizard run. 24h matches the spec's
+/// "Resolved design decisions" §4 and the hint surfaced in the
+/// "bootstrap is already in progress" error.
+const DEFAULT_BOOTSTRAP_SEED_TTL: Duration = Duration::from_secs(24 * 3600);
+
+fn resolve_bootstrap_seed_ttl() -> Duration {
+    match std::env::var(BOOTSTRAP_SEED_TTL_ENV) {
+        Ok(s) if !s.is_empty() => match humantime::parse_duration(&s) {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    env = BOOTSTRAP_SEED_TTL_ENV,
+                    value = %s,
+                    error = %e,
+                    "could not parse bootstrap seed TTL override; using the 24h default",
+                );
+                DEFAULT_BOOTSTRAP_SEED_TTL
+            }
+        },
+        _ => DEFAULT_BOOTSTRAP_SEED_TTL,
+    }
+}
+
+/// Open the configured backend and sweep bootstrap seeds older than
+/// the resolved TTL. Best-effort: if the backend can't be opened,
+/// probed, or the sweep itself errors, we log and move on. The
+/// phase-specific code that runs immediately after will surface a
+/// more actionable error if the backend is actually broken.
+async fn sweep_stale_bootstrap_seeds(config: &crate::app::WizardConfig) {
+    let backend_url = crate::config_writer::build_backend_url(config);
+    let store = match MediatorSecrets::from_url(&backend_url) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                backend = %backend_url,
+                error = %e,
+                "could not open backend for bootstrap-seed sweep; skipping",
+            );
+            return;
+        }
+    };
+    let ttl = resolve_bootstrap_seed_ttl();
+    match store.sweep_bootstrap_seeds(ttl).await {
+        Ok(swept) if !swept.is_empty() => {
+            info!(
+                backend = %backend_url,
+                ttl_s = ttl.as_secs(),
+                swept = ?swept,
+                "swept stale bootstrap seeds before dispatch",
+            );
+        }
+        Ok(_) => {}
+        Err(e) => warn!(
+            backend = %backend_url,
+            error = %e,
+            "bootstrap-seed sweep failed; phase-specific code will re-surface if fatal",
+        ),
     }
 }
 
@@ -571,6 +648,118 @@ mod tests {
         assert!(
             err.contains("--force-reprovision"),
             "error must name the restart path: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_bootstrap_seed_ttl_defaults_to_24h() {
+        // SAFETY: whole-process env var mutation; `serial_test` is
+        // relied on globally by the other CWD-mutating tests.
+        // Reading + unsetting here under unsafe is the standard rust
+        // 2024-edition shape.
+        unsafe {
+            std::env::remove_var(BOOTSTRAP_SEED_TTL_ENV);
+        }
+        assert_eq!(resolve_bootstrap_seed_ttl(), DEFAULT_BOOTSTRAP_SEED_TTL);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_bootstrap_seed_ttl_parses_humantime_override() {
+        unsafe {
+            std::env::set_var(BOOTSTRAP_SEED_TTL_ENV, "2h");
+        }
+        assert_eq!(resolve_bootstrap_seed_ttl(), Duration::from_secs(2 * 3600));
+        unsafe {
+            std::env::remove_var(BOOTSTRAP_SEED_TTL_ENV);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_bootstrap_seed_ttl_falls_back_on_unparseable_input() {
+        unsafe {
+            std::env::set_var(BOOTSTRAP_SEED_TTL_ENV, "carrier-pigeon");
+        }
+        assert_eq!(resolve_bootstrap_seed_ttl(), DEFAULT_BOOTSTRAP_SEED_TTL);
+        unsafe {
+            std::env::remove_var(BOOTSTRAP_SEED_TTL_ENV);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn dispatch_sweeps_aged_seed_before_phase1() {
+        // Pre-seed the backend with an in-flight entry whose
+        // timestamp we manually backdate past the 24h cutoff. A
+        // follow-up phase-1 dispatch should see an EMPTY index and
+        // succeed (rather than bailing on the don't-clobber check).
+        use affinidi_messaging_mediator_common::MediatorSecrets;
+
+        unsafe {
+            std::env::remove_var(BOOTSTRAP_SEED_TTL_ENV);
+        }
+
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let config = sealed_export_config("prod-mediator", &dir);
+
+        // Seed the backend with an aged entry directly — we don't
+        // care about the bundle contents, just that the index has
+        // one entry older than the TTL so the sweeper is exercised.
+        let backend_url = crate::config_writer::build_backend_url(&config);
+        let store = MediatorSecrets::from_url(&backend_url).unwrap();
+        let aged_id = "deadbeefdeadbeefdeadbeefdeadbeef";
+        store
+            .store_bootstrap_seed(aged_id, &[9u8; 32])
+            .await
+            .unwrap();
+
+        // Reach around and backdate the index entry so the sweeper
+        // decides to delete it. `bootstrap_seed_index` is the only
+        // public read; for the write we exploit the generic
+        // `store_entry` accessor which exists on `MediatorSecrets`.
+        let mut index = store.bootstrap_seed_index().await.unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        for entry in index.entries.iter_mut() {
+            entry.created_at = now.saturating_sub(48 * 3600);
+        }
+        store
+            .store_entry(
+                affinidi_messaging_mediator_common::BOOTSTRAP_SEED_INDEX,
+                "bootstrap-seed-index",
+                &index,
+            )
+            .await
+            .unwrap();
+
+        // Dispatch: phase-1 (no --bundle). The sweeper should clean
+        // the aged entry, leaving the index empty before the
+        // "don't clobber" check runs — so phase-1 succeeds.
+        let outcome = dispatch(&config, None, None)
+            .await
+            .expect("dispatch must succeed once sweeper clears the aged entry");
+        assert!(matches!(outcome, HeadlessOutcome::RequestEmitted { .. }));
+
+        // Verify through a FRESH backend handle — the file-backend
+        // cache is per-instance, so the `store` we used for setup
+        // still holds the pre-sweep bytes in memory.
+        let verify = MediatorSecrets::from_url(&backend_url).unwrap();
+        let loaded = verify.load_bootstrap_seed(aged_id).await.unwrap();
+        assert!(
+            loaded.is_none(),
+            "aged seed must be gone after dispatch's sweep",
+        );
+        let index_after = verify.bootstrap_seed_index().await.unwrap();
+        assert!(
+            !index_after
+                .entries
+                .iter()
+                .any(|e| e.bundle_id_hex == aged_id),
+            "aged entry must be removed from the sweep index",
         );
     }
 

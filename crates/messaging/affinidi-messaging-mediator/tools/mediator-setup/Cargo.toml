@@ -122,6 +122,9 @@ thiserror = "2"
 ## `chrono::Duration` is the freshness-window type on VP-signed
 ## `provision-integration` bootstrap requests.
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+## Parses `MEDIATOR_BOOTSTRAP_SEED_TTL` env var ("24h", "7d", etc.)
+## for the sealed-handoff sweeper.
+humantime = "2"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 tracing = "0.1"
