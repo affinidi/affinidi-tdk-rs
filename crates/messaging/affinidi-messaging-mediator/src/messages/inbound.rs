@@ -178,6 +178,28 @@ async fn handle_inbound_didcomm(
                         ));
                     }
 
+                    // The mediator cannot decrypt a direct-delivery envelope, so the
+                    // claimed sender (JWE `skid` header) is unverified. When
+                    // session/sender matching is enforced, bind it to the
+                    // authenticated session DID before it is trusted for ACL checks.
+                    if state.config.security.force_session_did_match
+                        && envelope.from_did.as_deref() != Some(session.did.as_str())
+                    {
+                        let claimed = envelope.from_did.as_deref().unwrap_or("anonymous");
+                        return Err(MediatorError::problem_with_log(
+                            52,
+                            &session.session_id,
+                            None,
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "authorization.did.session_mismatch",
+                            "Sender DID ({1}) doesn't match session DID",
+                            vec![claimed.to_string()],
+                            StatusCode::BAD_REQUEST,
+                            format!("Direct-delivery envelope sender ({claimed}) doesn't match session DID"),
+                        ));
+                    }
+
                     let from_hash = envelope.from_did.as_ref().map(digest);
                     // Check if the message will pass ACL Checks
                     if let Some(from) = &envelope.from_did {
