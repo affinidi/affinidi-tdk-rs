@@ -234,10 +234,10 @@ Storage step.
 
 See:
 
+- [docs/setup-guide.md](docs/setup-guide.md) — operator walkthrough
+  for the three setup modes (Online / Sealed-mint / Sealed-export).
 - [docs/secrets-backend.md](docs/secrets-backend.md) — well-known key
   schemas, HA topology, and the migration path from the legacy schema.
-- [docs/vta-setup-guide.md](docs/vta-setup-guide.md) — VTA-specific
-  setup walkthrough.
 
 ### Re-running the wizard / tearing down
 
