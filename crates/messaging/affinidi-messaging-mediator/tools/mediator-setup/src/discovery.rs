@@ -180,17 +180,36 @@ pub fn spawn(req: DiscoveryRequest, tx: UnboundedSender<DiscoveryEvent>) {
     });
 }
 
-/// Group keys by their slash-prefix (everything up to and including the
-/// last `/`). Skips entries without `/` — those are flat secrets that
-/// don't define a namespace.
+/// Project AWS secret names onto candidate prefix strings the operator
+/// can pick on the AwsPrefix screen. AWS Secrets Manager allows any
+/// `[A-Za-z0-9_/+=.@-]` in a name — both slash-pathed (`prod/mediator/
+/// admin_did`) and flat (`mediator_admin_did`) layouts are common in
+/// the wild, so an earlier filter that *only* kept slash-derived
+/// prefixes silently hid a large chunk of real accounts' inventory.
+///
+/// Now: slash-pathed names collapse to the dirname (everything up to
+/// and including the last `/`); flat names pass through verbatim. The
+/// merged list is sorted + deduplicated. Picking a slash-derived
+/// prefix lands cleanly into the wizard's `secret_aws_prefix`; picking
+/// a flat name puts the literal name into the field — useful for
+/// "namespace already in use, don't reuse" awareness even if the
+/// operator then edits the field rather than confirming as-is.
 fn derive_slash_prefixes(raw: &[String]) -> Vec<String> {
-    let mut prefixes: Vec<String> = raw
+    let mut items: Vec<String> = raw
         .iter()
-        .filter_map(|name| name.rfind('/').map(|i| name[..=i].to_string()))
+        .map(|name| match name.rfind('/') {
+            // Everything up to and including the last `/` — the
+            // namespace dirname.
+            Some(i) => name[..=i].to_string(),
+            // Flat name (no `/`) — show as-is so the operator sees the
+            // full account inventory rather than only the slash-shaped
+            // subset.
+            None => name.clone(),
+        })
         .collect();
-    prefixes.sort();
-    prefixes.dedup();
-    prefixes
+    items.sort();
+    items.dedup();
+    items
 }
 
 /// Vault's `kv2::list` returns leaves and "folders" (entries ending
@@ -236,12 +255,37 @@ mod tests {
     }
 
     #[test]
-    fn slash_prefixes_skips_flat_keys() {
-        // GCP-style flat names (no '/') don't define a slash-prefix,
-        // so they're filtered out — the wizard renders an empty list
-        // rather than dropping these into the prefix field as-is.
-        let raw = vec!["flat_one".to_string(), "flat_two".to_string()];
-        assert!(derive_slash_prefixes(&raw).is_empty());
+    fn slash_prefixes_keeps_flat_names_verbatim() {
+        // Regression test for the "F5 only shows some secrets"
+        // bug — flat AWS secret names (no `/`) used to be silently
+        // dropped by `filter_map`. They now pass through as-is so the
+        // operator sees the full account inventory; otherwise mixed
+        // accounts (slash + flat) hid the flat half from F5 even
+        // though `aws secretsmanager list-secrets` showed them.
+        let raw = vec!["mediator_admin_did".to_string(), "flat_two".to_string()];
+        assert_eq!(
+            derive_slash_prefixes(&raw),
+            vec!["flat_two", "mediator_admin_did"]
+        );
+    }
+
+    #[test]
+    fn slash_prefixes_mixed_shapes_merge_into_one_sorted_list() {
+        // Real AWS accounts mix slash-pathed and flat names. Both
+        // shapes survive into the output, deduped + sorted together.
+        // The slash-derived `prod/mediator/` collapses every key
+        // under that prefix into one entry; flat names appear once
+        // each under their own row.
+        let raw = vec![
+            "prod/mediator/admin_did".to_string(),
+            "prod/mediator/jwt_secret".to_string(),
+            "mediator_admin_did".to_string(),
+            "ci_temp".to_string(),
+        ];
+        assert_eq!(
+            derive_slash_prefixes(&raw),
+            vec!["ci_temp", "mediator_admin_did", "prod/mediator/"]
+        );
     }
 
     #[test]
