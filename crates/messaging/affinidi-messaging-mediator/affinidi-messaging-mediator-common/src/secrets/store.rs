@@ -46,6 +46,27 @@ pub trait SecretStore: Send + Sync {
     /// [`SecretStore::get`] first if you need to distinguish.
     async fn delete(&self, key: &str) -> Result<()>;
 
+    /// Enumerate every secret reachable in the backend's *namespace* — the
+    /// region / project / vault / mount the URL points at, NOT just the
+    /// keys under the configured per-deployment prefix. Setup tooling
+    /// uses this to help operators discover existing prefixes (and pick
+    /// an existing deployment) without having to remember exact names.
+    ///
+    /// Returns the FULL secret names as the backend stores them (with
+    /// any prefix the backend appends). Implementations that lack an
+    /// efficient list operation — keyring (per-OS), file (single blob) —
+    /// return [`SecretStoreError::BackendUnavailable`] so callers can
+    /// distinguish "this backend has no entries" from "this backend
+    /// can't enumerate" and fall back to manual entry.
+    ///
+    /// Default impl returns `BackendUnavailable`; cloud backends override.
+    async fn list_namespace(&self) -> Result<Vec<String>> {
+        Err(SecretStoreError::BackendUnavailable {
+            backend: self.backend(),
+            reason: "this backend does not support enumeration".into(),
+        })
+    }
+
     /// End-to-end health check: write a sentinel under a namespaced UUID
     /// key, read it back, delete it. Returns `Err` if any step fails
     /// (unreachable backend, permission issue, read/write mismatch).

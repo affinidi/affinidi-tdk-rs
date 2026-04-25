@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod discovery;
 pub mod info_box;
 pub mod instructions;
 pub mod progress;
@@ -101,22 +102,42 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
         height: help_height,
     };
 
-    // Render help bar
-    let help_text = match app.mode {
-        InputMode::TextInput => "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  F10 Quit",
-        InputMode::Confirming => "Enter Confirm  Esc Back  F10 Quit",
-        _ => match app.focus {
-            crate::app::FocusPanel::Content => {
-                if app.current_step.is_multi_select() {
-                    "\u{2191}\u{2193} Navigate  Space Toggle  Enter Continue  \u{2190} Steps  Esc Back  F10 Quit"
-                } else {
-                    "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  F10 Quit"
+    // Render help bar — surfacing the F5 hotkey on discoverable
+    // cloud-backend phases so operators don't have to read the
+    // prompt's hint text to find it. Discovery overlay states get
+    // their own bar so the keys actually available there
+    // (\u{2191}/\u{2193} scroll, Enter pick, Esc dismiss) are visible
+    // without scanning the (now hidden) usual key map.
+    let discovery_help = "\u{2191}\u{2193}/PgUp/PgDn Scroll  Enter Pick  Esc Cancel  F10 Quit";
+    let help_text = if app.in_discovery_overlay() {
+        discovery_help
+    } else if matches!(
+        app.key_storage_phase,
+        Some(crate::app::KeyStoragePhase::AwsPrefix)
+            | Some(crate::app::KeyStoragePhase::GcpPrefix)
+            | Some(crate::app::KeyStoragePhase::AzureVault)
+            | Some(crate::app::KeyStoragePhase::VaultMount)
+    ) {
+        "F5 Discover existing  Enter Confirm  Esc Cancel  F10 Quit"
+    } else {
+        match app.mode {
+            InputMode::TextInput => {
+                "\u{2191}\u{2193} Navigate  Enter Confirm  Esc Cancel  F10 Quit"
+            }
+            InputMode::Confirming => "Enter Confirm  Esc Back  F10 Quit",
+            _ => match app.focus {
+                crate::app::FocusPanel::Content => {
+                    if app.current_step.is_multi_select() {
+                        "\u{2191}\u{2193} Navigate  Space Toggle  Enter Continue  \u{2190} Steps  Esc Back  F10 Quit"
+                    } else {
+                        "\u{2191}\u{2193} Navigate  Enter Select  \u{2190} Steps  Esc Back  F10 Quit"
+                    }
                 }
-            }
-            crate::app::FocusPanel::Progress => {
-                "\u{2191}\u{2193} Navigate  Enter Jump  \u{2192} Options  Esc Back  F10 Quit"
-            }
-        },
+                crate::app::FocusPanel::Progress => {
+                    "\u{2191}\u{2193} Navigate  Enter Jump  \u{2192} Options  Esc Back  F10 Quit"
+                }
+            },
+        }
     };
     let help = Paragraph::new(Line::from(Span::styled(
         format!("  {help_text}"),
@@ -154,6 +175,16 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
 
     // Right: current step content
     render_step_content(frame, chunks[1], app);
+
+    // Discovery overlay sits on top of everything when active. Drawn
+    // after `render_step_content` so it occludes the prompt rather
+    // than being painted under it. Centred over the right (content)
+    // panel rather than the whole screen so the progress sidebar
+    // stays visible — the overlay is a sub-modal, not a full-screen
+    // takeover.
+    if let Some(state) = app.discovery.as_ref() {
+        crate::ui::discovery::render_overlay(frame, chunks[1], state);
+    }
 }
 
 /// Render the current step's content in the right panel.
@@ -659,7 +690,56 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                         crate::consts::DEFAULT_AWS_SECRET_PREFIX,
                         "Every secret written goes under this prefix — makes \
                          it easy to grant IAM access or clean up if you \
-                         tear the mediator down.",
+                         tear the mediator down. F5 lists prefixes already \
+                         in use (requires AWS creds in the environment).",
+                    ),
+                    KeyStoragePhase::GcpProject => (
+                        "GCP project ID",
+                        "Project hosting the mediator's secrets.",
+                        "my-project-id",
+                        "Uses Application Default Credentials \
+                         (`GOOGLE_APPLICATION_CREDENTIALS` env var, \
+                         `gcloud auth application-default login`, GKE \
+                         workload identity, …). The project ID — not \
+                         project number — goes here.",
+                    ),
+                    KeyStoragePhase::GcpPrefix => (
+                        "Secret name prefix",
+                        "Key namespace for this mediator's entries (may be empty).",
+                        crate::consts::DEFAULT_GCP_SECRET_PREFIX,
+                        "Every secret written goes under this prefix. F5 lists \
+                         existing GCP secrets in the project so you can match \
+                         an existing prefix or pick a new one.",
+                    ),
+                    KeyStoragePhase::AzureVault => (
+                        "Azure Key Vault",
+                        "Vault name (commercial cloud), sovereign-cloud DNS, or full URL.",
+                        "my-vault",
+                        "Bare names expand to `https://<name>.vault.azure.net` \
+                         (Azure Commercial). For sovereign clouds (Government, \
+                         China, Germany), type the full DNS — e.g. \
+                         `my-vault.vault.usgovcloudapi.net`. Auth uses Azure \
+                         CLI / azd creds (`az login`). F5 verifies access by \
+                         listing the vault's secret names.",
+                    ),
+                    KeyStoragePhase::VaultEndpoint => (
+                        "Vault endpoint",
+                        "HashiCorp Vault server `host[:port]` (defaults to https://).",
+                        "vault.internal:8200",
+                        "Token auth via `VAULT_TOKEN` env var — set it before \
+                         running the wizard. KV v2 is the only supported \
+                         secrets engine; it must already be mounted on the \
+                         server.",
+                    ),
+                    KeyStoragePhase::VaultMount => (
+                        "KV v2 mount + prefix",
+                        "First segment is the mount; rest is the per-key prefix.",
+                        crate::consts::DEFAULT_VAULT_MOUNT,
+                        "`secret` alone uses the KV v2 mount with no prefix. \
+                         `secret/mediator` mounts at `secret` and prefixes \
+                         each key with `mediator/`. F5 lists keys already \
+                         under the mount root so you can match an existing \
+                         layout.",
                     ),
                 };
                 prompt::render_prompt(
@@ -700,10 +780,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 );
                 return;
             }
-            // DidPhase::EnterCustomUrl / EnterMnemonic render as their
-            // own compact prompts. SelectWebvhHost is a Selecting-mode
-            // phase, not TextInput — handled by the selection branch
-            // further below.
+            // DidPhase::EnterCustomUrl renders as its own compact prompt.
+            // SelectWebvhHost is a Selecting-mode phase, not TextInput —
+            // handled by the selection branch further below.
             if let Some(phase) = app.did_phase {
                 use crate::app::DidPhase;
                 let (title, desc, placeholder, hint) = match phase {
@@ -714,14 +793,6 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                         "Path is stripped automatically — webvh resolves to \
                          `<url>/.well-known/did.jsonl`, so only scheme+host \
                          (plus optional port) matter.",
-                    ),
-                    DidPhase::EnterMnemonic => (
-                        "Mnemonic",
-                        "URL path segment for this DID on the chosen webvh server.",
-                        "(blank — VTA auto-assigns)",
-                        "Optional. Leave blank to let the VTA generate a \
-                         unique path; type a value for a memorable / stable \
-                         URL like `/mediator`.",
                     ),
                     DidPhase::SelectWebvhHost => {
                         unreachable!("SelectWebvhHost runs in Selecting mode, not TextInput")

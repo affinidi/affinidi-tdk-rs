@@ -45,7 +45,9 @@ pub struct VtaSession {
     pub rest_url: Option<String>,
     /// DIDComm mediator DID advertised by the VTA. Captured so a
     /// DIDComm-backed `VtaClient` can be reopened without
-    /// re-resolving the VTA DID document.
+    /// re-resolving the VTA DID document. No current consumer reads
+    /// this — preserved as plumbing for the future reopen path.
+    #[allow(dead_code)]
     pub mediator_did: Option<String>,
     /// Unified reply — either a full template-bootstrap result or an
     /// admin-credential-only reply. See [`VtaReply`].

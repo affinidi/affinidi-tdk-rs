@@ -278,6 +278,32 @@ impl SecretStore for VaultStore {
             }),
         }
     }
+
+    /// List the keys directly under the configured mount root (a single
+    /// LIST call — no recursion). Folders end with `/`; leaves don't.
+    /// The caller (wizard discovery) decides whether to present folders
+    /// as candidate prefixes or to recurse manually.
+    ///
+    /// Vault's `kv2::list` returns `404` when the path holds no entries
+    /// (a fresh mount, or one whose only previous keys were deleted +
+    /// purged). We translate that to an empty list so the discovery
+    /// hotkey shows "no entries" rather than an error banner.
+    async fn list_namespace(&self) -> Result<Vec<String>> {
+        let client = self.client().await?;
+        let label = format!("kv2::list({}/)", self.mount);
+        let result = with_retry(&label, &VaultRetryPolicy, || async move {
+            kv2::list(client, &self.mount, "").await
+        })
+        .await;
+        match result {
+            Ok(keys) => Ok(keys),
+            Err(err) if matches!(api_status(&err), Some(404)) => Ok(Vec::new()),
+            Err(err) => Err(SecretStoreError::Unreachable {
+                backend: BACKEND_LABEL,
+                reason: format!("kv2::list({}/) failed: {err}", self.mount),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]

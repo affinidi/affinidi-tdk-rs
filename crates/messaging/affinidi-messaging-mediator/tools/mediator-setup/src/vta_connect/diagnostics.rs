@@ -54,8 +54,11 @@ pub struct DiagEntry {
 }
 
 /// Which authentication path the runner actually completed with. Surfaced to
-/// the operator so they know which transport is active.
+/// the operator so they know which transport is active. The runner only
+/// emits `DidComm` today — `Rest` is preserved so the `label()` switch and
+/// downstream UI handle the transport gracefully when REST-only auth lands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Protocol {
     DidComm,
     Rest,

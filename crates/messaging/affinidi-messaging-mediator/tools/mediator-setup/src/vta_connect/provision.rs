@@ -136,8 +136,8 @@ impl ProvisionAsk {
 
     /// Disable admin-DID rollover — the VC subject stays the setup
     /// DID, and no second DID is minted. Rarely what the wizard
-    /// wants; exposed for tests and recipe-driven flows that need the
-    /// legacy shape.
+    /// wants; exposed for tests that pin the legacy shape.
+    #[cfg(test)]
     pub fn without_admin_rollover(mut self) -> Self {
         self.admin_template = None;
         self.admin_template_vars.clear();
@@ -180,7 +180,13 @@ impl ProvisionAsk {
 /// `Clone` (that'd be a cross-crate API change). We carry the same
 /// fields and implement `From<ProvisionSummary>` so callers that
 /// receive the SDK type can drop it into wizard state without care.
+//
+// Several fields aren't read by current consumers (only `admin_did`,
+// `admin_rolled_over`, `integration_did`, `webvh_server_id` are used
+// today) — the rest stay so the mirror remains complete for audit logs
+// / future UI surfacing without re-mapping the upstream type.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProvisionSummaryLocal {
     /// Ephemeral DID that signed the VP and opens the sealed bundle.
     pub client_did: String,
@@ -239,6 +245,7 @@ impl From<ProvisionSummary> for ProvisionSummaryLocal {
 /// underlying [`TemplateBootstrapPayload`] zeroizes on drop — clones
 /// hold their own copies but carry the same contract.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // `bundle_id_hex` / `digest` are wire-level metadata kept for audit logging; no current consumer.
 pub struct ProvisionResult {
     /// Hex-encoded `bundle_id` (16 bytes). Matches the nonce embedded
     /// in the original VP — useful for cross-checking audit logs.
@@ -360,16 +367,19 @@ impl ProvisionResult {
             })
     }
 
-    /// REST URL for the VTA. `None` means the integration does not
-    /// make outbound REST calls to this VTA (DIDComm-only deployment).
-    pub fn vta_url(&self) -> Option<&str> {
-        self.payload.config.vta_url.as_deref()
-    }
-
     /// The authorization VC. Opaque JSON; archive for audit or feed to
     /// an `affinidi-vc` verifier if stronger checks are desired.
     pub fn authorization_vc(&self) -> &Value {
         &self.payload.authorization
+    }
+
+    /// REST URL for the VTA. `None` means the integration does not
+    /// make outbound REST calls to this VTA (DIDComm-only deployment).
+    /// Test-only accessor — production callers read the URL off the
+    /// VTA session / persisted admin credential instead.
+    #[cfg(test)]
+    pub fn vta_url(&self) -> Option<&str> {
+        self.payload.config.vta_url.as_deref()
     }
 }
 
@@ -615,7 +625,6 @@ pub(crate) fn test_sample_result(rolled_over: bool) -> ProvisionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vta_sdk::provision_integration::payload::KeyPair;
 
     #[test]
     fn ask_mediator_defaults_include_admin_rollover_and_url_var() {
@@ -665,14 +674,6 @@ mod tests {
         );
         assert_eq!(inner.note.as_deref(), Some("wizard run"));
         assert_eq!(vp.label.as_deref(), Some("wizard run"));
-    }
-
-    fn sample_key(did: &str, fragment: &str) -> KeyPair {
-        KeyPair {
-            key_id: format!("{did}#{fragment}"),
-            public_key_multibase: "z6MkSample".into(),
-            private_key_multibase: "zPrivateSample".into(),
-        }
     }
 
     fn sample_result(rolled_over: bool) -> ProvisionResult {

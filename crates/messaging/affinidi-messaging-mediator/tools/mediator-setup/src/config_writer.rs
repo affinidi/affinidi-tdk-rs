@@ -192,9 +192,15 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
             "aws_secrets://{}/{}",
             config.secret_aws_region, config.secret_aws_prefix
         ),
-        STORAGE_GCP => "gcp_secrets://PROJECT/PREFIX".into(),
-        STORAGE_AZURE => "azure_keyvault://VAULT".into(),
-        STORAGE_VAULT => "vault://HOST/PATH".into(),
+        STORAGE_GCP => format!(
+            "gcp_secrets://{}/{}",
+            config.secret_gcp_project, config.secret_gcp_prefix
+        ),
+        STORAGE_AZURE => format!("azure_keyvault://{}", config.secret_azure_vault),
+        STORAGE_VAULT => format!(
+            "vault://{}/{}",
+            config.secret_vault_endpoint, config.secret_vault_mount
+        ),
         // string:// is no longer supported by the mediator's SecretStore
         // URL parser; fall back to a keyring default and warn in stdout
         // during `generate_and_write`.

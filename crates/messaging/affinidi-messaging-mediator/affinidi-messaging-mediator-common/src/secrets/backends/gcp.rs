@@ -329,6 +329,65 @@ impl SecretStore for GcpStore {
             }),
         }
     }
+
+    /// Walks `ListSecrets` pages until exhausted and returns the resource
+    /// names *with the `projects/<project>/secrets/` prefix stripped* —
+    /// the `Secret.name` field uses the full resource path, but the
+    /// caller's discovery flow wants to compare against the stored
+    /// per-secret IDs. Each page is its own `with_retry` so a transient
+    /// failure mid-walk doesn't lose the earlier batches.
+    async fn list_namespace(&self) -> Result<Vec<String>> {
+        let parent = self.parent();
+        let client = self.client().await?.clone();
+        let mut names: Vec<String> = Vec::new();
+        let mut page_token: String = String::new();
+        let resource_prefix = format!("{parent}/secrets/");
+        loop {
+            let token_for_label = if page_token.is_empty() {
+                "first".into()
+            } else {
+                format!("...{}", &page_token[page_token.len().saturating_sub(8)..])
+            };
+            let label = format!("ListSecrets({token_for_label})");
+            let response = with_retry(&label, &GcpRetryPolicy, || {
+                let client = client.clone();
+                let parent = parent.clone();
+                let token = page_token.clone();
+                async move {
+                    client
+                        .list_secrets()
+                        .set_parent(&parent)
+                        .set_page_token(token)
+                        .send()
+                        .await
+                }
+            })
+            .await
+            .map_err(|err| SecretStoreError::Unreachable {
+                backend: BACKEND_LABEL,
+                reason: format!("ListSecrets({parent}) failed: {err}"),
+            })?;
+
+            for secret in response.secrets {
+                // `secret.name` is a fully-qualified resource path; strip
+                // the parent so callers see just the per-secret id (the
+                // shape they'd type if they were configuring a prefix).
+                let id = secret
+                    .name
+                    .strip_prefix(&resource_prefix)
+                    .unwrap_or(&secret.name)
+                    .to_string();
+                if !id.is_empty() {
+                    names.push(id);
+                }
+            }
+            if response.next_page_token.is_empty() {
+                break;
+            }
+            page_token = response.next_page_token;
+        }
+        Ok(names)
+    }
 }
 
 #[cfg(test)]

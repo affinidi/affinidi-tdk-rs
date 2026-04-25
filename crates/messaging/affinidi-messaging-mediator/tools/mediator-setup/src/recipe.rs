@@ -400,36 +400,12 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         config.public_url = url.clone();
     }
 
-    // Secrets — `string://` and `vta://` are rejected. `string://` was
-    // dropped (inline secrets in TOML are unsafe even for CI; use `file://`
-    // with `MEDIATOR_SECRETS_BACKEND` env override). `vta://` was never a
-    // store — the VTA is a key *source*; pick a real backend (keyring,
-    // file, AWS, …) for the unified secret store.
-    config.secret_storage = match recipe.secrets.storage.as_str() {
-        s @ (STORAGE_FILE | STORAGE_KEYRING | STORAGE_AWS | STORAGE_GCP | STORAGE_AZURE
-        | STORAGE_VAULT) => s.to_string(),
-        STORAGE_STRING => anyhow::bail!(
-            "secrets.storage '{}' is no longer supported — use '{}' (with optional encryption) instead",
-            STORAGE_STRING,
-            STORAGE_FILE
-        ),
-        STORAGE_VTA => anyhow::bail!(
-            "secrets.storage '{}' is no longer supported — VTA is a key source, not a backend; choose a real store ({}, {}, …)",
-            STORAGE_VTA,
-            STORAGE_KEYRING,
-            STORAGE_AWS
-        ),
-        other => anyhow::bail!(
-            "Invalid secrets.storage '{}': expected one of {}, {}, {}, {}, {}, {}",
-            other,
-            STORAGE_FILE,
-            STORAGE_KEYRING,
-            STORAGE_AWS,
-            STORAGE_GCP,
-            STORAGE_AZURE,
-            STORAGE_VAULT
-        ),
-    };
+    // Secrets — accept either the bare scheme (backward compat with
+    // pre-cloud-config recipes) or a fully-formed URL. A full URL gets
+    // parsed into per-backend fields so re-running the wizard from a
+    // recipe restores region / project / vault / endpoint without the
+    // operator re-typing them. `string://` and `vta://` are rejected.
+    apply_secrets_storage(&recipe.secrets.storage, &mut config)?;
 
     // Security
     config.ssl_mode = match recipe.security.ssl.as_str() {
@@ -587,9 +563,14 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     }
     out.push('\n');
 
-    // Secrets
+    // Secrets — emit the fully-assembled backend URL so a recipe replay
+    // restores per-backend config (region / project / vault / endpoint)
+    // without the operator re-typing them. The URL is constructed by
+    // `build_backend_url`, the same routine the wizard writes into the
+    // mediator's `[secrets].backend` field.
     out.push_str("[secrets]\n");
-    out.push_str(&format!("storage = \"{}\"\n\n", config.secret_storage));
+    let storage_url = crate::config_writer::build_backend_url(config);
+    out.push_str(&format!("storage = \"{storage_url}\"\n\n"));
 
     // Security
     out.push_str("[security]\n");
@@ -639,6 +620,108 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     out.push_str("enabled = false\n");
 
     out
+}
+
+/// Apply a recipe's `secrets.storage` value to a [`WizardConfig`].
+///
+/// Accepts both the bare scheme (backward compat with pre-cloud-config
+/// recipes — e.g. `aws_secrets://` with no body) and a fully-formed URL
+/// (`aws_secrets://us-east-1/mediator/`). Full URLs are parsed via
+/// `mediator-common`'s [`affinidi_messaging_mediator_common::parse_url`]
+/// and the per-backend fields (region / project / vault / endpoint /
+/// mount) are populated so a recipe replay restores the operator's full
+/// choice without re-prompting.
+///
+/// Deprecated schemes (`string://`, `vta://`) error with a pointer to
+/// the supported alternative.
+fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result<()> {
+    // Bare scheme (no body) — preserve the pre-cloud-config behaviour:
+    // set `secret_storage` to the scheme, leave per-backend fields at
+    // their wizard defaults. Operators upgrading from older recipes
+    // see no surprise change.
+    let bare_schemes = [
+        STORAGE_FILE,
+        STORAGE_KEYRING,
+        STORAGE_AWS,
+        STORAGE_GCP,
+        STORAGE_AZURE,
+        STORAGE_VAULT,
+    ];
+    if let Some(&scheme) = bare_schemes.iter().find(|&&s| raw == s) {
+        config.secret_storage = scheme.into();
+        return Ok(());
+    }
+
+    // Deprecated schemes — match before parse_url so the operator-facing
+    // message points at the right replacement rather than a generic
+    // parse error.
+    if raw.starts_with(STORAGE_STRING) {
+        anyhow::bail!(
+            "secrets.storage '{}' is no longer supported — use '{}' (with optional encryption) instead",
+            raw,
+            STORAGE_FILE
+        );
+    }
+    if raw.starts_with(STORAGE_VTA) {
+        anyhow::bail!(
+            "secrets.storage '{}' is no longer supported — VTA is a key source, not a backend; choose a real store ({}, {}, …)",
+            raw,
+            STORAGE_KEYRING,
+            STORAGE_AWS
+        );
+    }
+
+    // Full URL — let the shared parser handle each scheme's body and
+    // surface its diagnostics verbatim. Splitting per-backend fields
+    // here mirrors the wizard's own `enter_key_storage_phase` chain.
+    use affinidi_messaging_mediator_common::secrets::{BackendUrl, parse_url};
+    let parsed = parse_url(raw).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid secrets.storage '{}': {} (expected one of {}, {}, {}, {}, {}, {})",
+            raw,
+            e,
+            STORAGE_FILE,
+            STORAGE_KEYRING,
+            STORAGE_AWS,
+            STORAGE_GCP,
+            STORAGE_AZURE,
+            STORAGE_VAULT,
+        )
+    })?;
+    match parsed {
+        BackendUrl::File { path, encrypted } => {
+            config.secret_storage = STORAGE_FILE.into();
+            config.secret_file_path = path;
+            config.secret_file_encrypted = encrypted;
+        }
+        BackendUrl::Keyring { service } => {
+            config.secret_storage = STORAGE_KEYRING.into();
+            config.secret_keyring_service = service;
+        }
+        BackendUrl::Aws { region, prefix } => {
+            config.secret_storage = STORAGE_AWS.into();
+            config.secret_aws_region = region;
+            config.secret_aws_prefix = prefix;
+        }
+        BackendUrl::Gcp { project, prefix } => {
+            config.secret_storage = STORAGE_GCP.into();
+            config.secret_gcp_project = project;
+            config.secret_gcp_prefix = prefix;
+        }
+        BackendUrl::Azure { vault } => {
+            config.secret_storage = STORAGE_AZURE.into();
+            // The mediator-common parser canonicalises bare names to
+            // `https://<name>.vault.azure.net`. Round-tripping the full
+            // URL is fine — it stays canonical when re-parsed.
+            config.secret_azure_vault = vault;
+        }
+        BackendUrl::Vault { endpoint, path } => {
+            config.secret_storage = STORAGE_VAULT.into();
+            config.secret_vault_endpoint = endpoint;
+            config.secret_vault_mount = path;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -842,6 +925,56 @@ mod tests {
         let mut recipe = minimal_recipe();
         recipe.secrets.storage = "dropbox://".into();
         assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn test_full_url_round_trip_for_each_cloud_backend() {
+        // A full URL in `secrets.storage` populates the per-backend
+        // fields so a recipe replay restores region / project / vault /
+        // endpoint without re-prompting the operator. Mirrors the
+        // wizard's own `enter_key_storage_phase` chain.
+        let mut recipe = minimal_recipe();
+        recipe.secrets.storage = "aws_secrets://eu-west-2/prod/mediator/".into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.secret_storage, STORAGE_AWS);
+        assert_eq!(config.secret_aws_region, "eu-west-2");
+        assert_eq!(config.secret_aws_prefix, "prod/mediator/");
+
+        recipe.secrets.storage = "gcp_secrets://my-prod-proj/svc-".into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.secret_storage, STORAGE_GCP);
+        assert_eq!(config.secret_gcp_project, "my-prod-proj");
+        assert_eq!(config.secret_gcp_prefix, "svc-");
+
+        recipe.secrets.storage = "azure_keyvault://my-prod-vault".into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.secret_storage, STORAGE_AZURE);
+        // Bare names canonicalise to the full URL via mediator-common's
+        // parser — round-tripping through the recipe preserves the
+        // canonical form.
+        assert_eq!(
+            config.secret_azure_vault,
+            "https://my-prod-vault.vault.azure.net"
+        );
+
+        recipe.secrets.storage = "vault://vault.internal:8200/secret/prod-mediator".into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.secret_storage, STORAGE_VAULT);
+        assert_eq!(config.secret_vault_endpoint, "vault.internal:8200");
+        assert_eq!(config.secret_vault_mount, "secret/prod-mediator");
+    }
+
+    #[test]
+    fn test_bare_scheme_keeps_defaults_for_backward_compat() {
+        // Pre-cloud-config recipes wrote just the bare scheme. Loading
+        // those still works — the per-backend fields keep their
+        // wizard defaults rather than failing the parse.
+        let mut recipe = minimal_recipe();
+        recipe.secrets.storage = STORAGE_GCP.into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.secret_storage, STORAGE_GCP);
+        assert_eq!(config.secret_gcp_project, DEFAULT_GCP_PROJECT);
+        assert_eq!(config.secret_gcp_prefix, DEFAULT_GCP_SECRET_PREFIX);
     }
 
     #[test]

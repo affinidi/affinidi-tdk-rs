@@ -1,6 +1,8 @@
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tui_input::{Input, InputRequest};
 
 use crate::consts::*;
+use crate::discovery::{DiscoveryEvent, DiscoveryMode, DiscoveryRequest, DiscoveryState};
 use crate::sealed_handoff::SealedHandoffState;
 use crate::ui::selection::SelectionOption;
 use crate::vta_connect::{
@@ -207,6 +209,19 @@ pub enum KeyStoragePhase {
     AwsRegion,
     /// `aws_secrets://` — second prompt: secret name prefix.
     AwsPrefix,
+    /// `gcp_secrets://` — first prompt: GCP project ID.
+    GcpProject,
+    /// `gcp_secrets://` — second prompt: secret name prefix.
+    GcpPrefix,
+    /// `azure_keyvault://` — vault name (commercial cloud), sovereign-
+    /// cloud DNS name, or full URL. Single field — Azure Key Vault
+    /// secrets share the vault namespace; the URL parser canonicalises.
+    AzureVault,
+    /// `vault://` — first prompt: server endpoint (`host[:port]`).
+    VaultEndpoint,
+    /// `vault://` — second prompt: KV v2 mount + optional per-key
+    /// prefix glued (e.g. `secret/mediator`).
+    VaultMount,
 }
 
 /// Literal phrase the operator must type to clear the `file://` hard-gate.
@@ -229,9 +244,6 @@ pub enum DidPhase {
     SelectWebvhHost,
     /// Text input for a different self-host base URL.
     EnterCustomUrl,
-    /// Text input for the optional mnemonic (URL path segment) when
-    /// a VTA-hosted server was picked. Empty = server auto-assigns.
-    EnterMnemonic,
 }
 
 /// Sub-phases of the `Security` step. The SSL portion (selection list +
@@ -273,6 +285,9 @@ impl KeyStoragePhase {
             STORAGE_FILE => Some(Self::FileGate),
             STORAGE_KEYRING => Some(Self::KeyringService),
             STORAGE_AWS => Some(Self::AwsRegion),
+            STORAGE_GCP => Some(Self::GcpProject),
+            STORAGE_AZURE => Some(Self::AzureVault),
+            STORAGE_VAULT => Some(Self::VaultEndpoint),
             _ => None,
         }
     }
@@ -307,6 +322,23 @@ pub struct WizardConfig {
     pub secret_keyring_service: String,
     pub secret_aws_region: String,
     pub secret_aws_prefix: String,
+    /// GCP project ID hosting the mediator's secrets. Used together
+    /// with [`Self::secret_gcp_prefix`] to build `gcp_secrets://`.
+    pub secret_gcp_project: String,
+    /// Per-secret name prefix on GCP. Empty is allowed — GCP secret
+    /// names accept the bare well-known keys verbatim.
+    pub secret_gcp_prefix: String,
+    /// Bare vault name (`my-vault`), sovereign-cloud DNS name
+    /// (`my-vault.vault.usgovcloudapi.net`), or full URL — the URL
+    /// parser canonicalises all three shapes.
+    pub secret_azure_vault: String,
+    /// Vault server endpoint (`host[:port]`). May omit the scheme;
+    /// the backend defaults to `https://` when none is given.
+    pub secret_vault_endpoint: String,
+    /// KV v2 mount + optional per-key prefix glued together
+    /// (`secret/mediator`). The backend splits the first segment off
+    /// as the mount and uses the rest as the prefix.
+    pub secret_vault_mount: String,
     /// `true` when the operator chose `file://?encrypt=1`. Influences
     /// the backend URL written to `mediator.toml` and whether the
     /// wizard prompts for a passphrase.
@@ -361,6 +393,11 @@ impl Default for WizardConfig {
             secret_keyring_service: DEFAULT_KEYRING_SERVICE.into(),
             secret_aws_region: DEFAULT_AWS_REGION.into(),
             secret_aws_prefix: DEFAULT_AWS_SECRET_PREFIX.into(),
+            secret_gcp_project: DEFAULT_GCP_PROJECT.into(),
+            secret_gcp_prefix: DEFAULT_GCP_SECRET_PREFIX.into(),
+            secret_azure_vault: DEFAULT_AZURE_VAULT.into(),
+            secret_vault_endpoint: DEFAULT_VAULT_ENDPOINT.into(),
+            secret_vault_mount: DEFAULT_VAULT_MOUNT.into(),
             secret_file_encrypted: false,
             ssl_mode: String::new(),
             ssl_cert_path: String::new(),
@@ -440,6 +477,16 @@ pub struct WizardApp {
     /// adapter isn't implemented yet. Cleared on the next
     /// transition.
     pub vta_stub_notice: Option<String>,
+    /// Active discovery overlay — `Some` while the operator triggered F5
+    /// on a cloud-backend prefix screen and either the background
+    /// `list_namespace` task is in flight (`Loading`), the result is
+    /// being browsed (`Loaded`), or the failure is being read (`Failed`).
+    /// Cleared on Enter (apply pick) or Esc (dismiss).
+    pub discovery: Option<DiscoveryState>,
+    /// Receiver side of the discovery channel. Set when a discovery is
+    /// kicked off; drained on each tick by [`Self::drain_discovery_events`]
+    /// and dropped when the result lands or the operator dismisses.
+    pub discovery_rx: Option<UnboundedReceiver<DiscoveryEvent>>,
 }
 
 impl WizardApp {
@@ -469,6 +516,8 @@ impl WizardApp {
             vta_step_phase: VtaStepPhase::SelectIntent,
             vta_intent_choice: None,
             vta_stub_notice: None,
+            discovery: None,
+            discovery_rx: None,
         }
     }
 
@@ -1617,15 +1666,15 @@ impl WizardApp {
                     ),
                     SelectionOption::new(
                         "Google Cloud Secret Manager (gcp_secrets://)",
-                        "GCP cloud production — coming soon",
+                        "GCP cloud production",
                     ),
                     SelectionOption::new(
                         "Azure Key Vault (azure_keyvault://)",
-                        "Azure cloud production — coming soon",
+                        "Azure cloud production",
                     ),
                     SelectionOption::new(
                         "HashiCorp Vault (vault://)",
-                        "Enterprise / multi-cloud — coming soon",
+                        "Enterprise / multi-cloud (KV v2 only)",
                     ),
                     SelectionOption::new(
                         "Local file (file://)",
@@ -1795,9 +1844,9 @@ impl WizardApp {
             WizardStep::KeyStorage => match self.selection_index {
                 0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
                 1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                2 => "Store secrets in Google Cloud Secret Manager. Coming soon.".into(),
-                3 => "Store secrets in Azure Key Vault. Coming soon.".into(),
-                4 => "Store secrets in HashiCorp Vault. Coming soon.".into(),
+                2 => "Store secrets in Google Cloud Secret Manager. Auth via Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / `gcloud auth application-default login` / GKE workload identity).".into(),
+                3 => "Store secrets in Azure Key Vault. Auth via Azure CLI / azd developer credentials (`az login`). Sovereign clouds supported via full DNS in the vault field.".into(),
+                4 => "Store secrets in HashiCorp Vault (KV v2). Token auth via VAULT_TOKEN env var. The mount point must already exist on the server.".into(),
                 5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
                 _ => String::new(),
             },
@@ -2157,6 +2206,11 @@ impl WizardApp {
             KeyStoragePhase::KeyringService => self.config.secret_keyring_service.clone(),
             KeyStoragePhase::AwsRegion => self.config.secret_aws_region.clone(),
             KeyStoragePhase::AwsPrefix => self.config.secret_aws_prefix.clone(),
+            KeyStoragePhase::GcpProject => self.config.secret_gcp_project.clone(),
+            KeyStoragePhase::GcpPrefix => self.config.secret_gcp_prefix.clone(),
+            KeyStoragePhase::AzureVault => self.config.secret_azure_vault.clone(),
+            KeyStoragePhase::VaultEndpoint => self.config.secret_vault_endpoint.clone(),
+            KeyStoragePhase::VaultMount => self.config.secret_vault_mount.clone(),
             // Encrypt choice doesn't take text input — render uses
             // selection mode. Short-circuit before touching the input
             // widget so we don't flip mode unexpectedly.
@@ -2250,12 +2304,60 @@ impl WizardApp {
                 self.exit_key_storage_subflow();
                 self.advance();
             }
+            KeyStoragePhase::GcpProject => {
+                if value.is_empty() {
+                    // GCP project IDs aren't optional — there's no
+                    // sensible default. Reject and keep the operator on
+                    // the prompt rather than write `gcp_secrets:///…`
+                    // and explode at backend-open time.
+                    return;
+                }
+                self.config.secret_gcp_project = value;
+                self.enter_key_storage_phase(KeyStoragePhase::GcpPrefix);
+            }
+            KeyStoragePhase::GcpPrefix => {
+                // Empty prefix is allowed — GCP secret names accept the
+                // bare well-known keys verbatim.
+                self.config.secret_gcp_prefix = value;
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+            KeyStoragePhase::AzureVault => {
+                if value.is_empty() {
+                    // No default — sovereign-cloud + commercial-cloud
+                    // share no host pattern. Force a typed answer
+                    // rather than silently writing `azure_keyvault://`.
+                    return;
+                }
+                self.config.secret_azure_vault = value;
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
+            KeyStoragePhase::VaultEndpoint => {
+                if value.is_empty() {
+                    // Vault endpoints are deployment-specific (the
+                    // `vault server` listen address is environment-
+                    // dependent). No sensible default — force a typed
+                    // answer.
+                    return;
+                }
+                self.config.secret_vault_endpoint = value;
+                self.enter_key_storage_phase(KeyStoragePhase::VaultMount);
+            }
+            KeyStoragePhase::VaultMount => {
+                if !value.is_empty() {
+                    self.config.secret_vault_mount = value;
+                }
+                self.exit_key_storage_subflow();
+                self.advance();
+            }
         }
     }
 
-    /// Back-nav within the KeyStorage sub-flow. AWS has two phases; the
-    /// simpler backends have one, so "back" from their prompt returns to
-    /// the scheme selection list.
+    /// Back-nav within the KeyStorage sub-flow. AWS / GCP / Vault each
+    /// chain two phases; back from the second returns to the first.
+    /// Single-phase backends (keyring, file gate, Azure vault) drop
+    /// straight back to the scheme selection list.
     fn key_storage_back(&mut self) {
         let Some(phase) = self.key_storage_phase else {
             return;
@@ -2263,6 +2365,12 @@ impl WizardApp {
         match phase {
             KeyStoragePhase::AwsPrefix => {
                 self.enter_key_storage_phase(KeyStoragePhase::AwsRegion);
+            }
+            KeyStoragePhase::GcpPrefix => {
+                self.enter_key_storage_phase(KeyStoragePhase::GcpProject);
+            }
+            KeyStoragePhase::VaultMount => {
+                self.enter_key_storage_phase(KeyStoragePhase::VaultEndpoint);
             }
             _ => {
                 self.exit_key_storage_subflow();
@@ -2274,6 +2382,222 @@ impl WizardApp {
         self.key_storage_phase = None;
         self.mode = InputMode::Selecting;
         self.text_input = Input::default();
+    }
+
+    /// `true` while the discovery overlay (loading spinner, results
+    /// list, or error banner) is on screen. The main input handler
+    /// short-circuits to [`Self::handle_discovery_key`] in this state
+    /// so normal text-input keys don't leak through.
+    pub fn in_discovery_overlay(&self) -> bool {
+        self.discovery.is_some()
+    }
+
+    /// Build a [`DiscoveryRequest`] for the current key-storage phase
+    /// and the wizard's accumulated config, or return `None` when the
+    /// phase isn't discoverable (or required upstream config is
+    /// missing — e.g. F5 on `AwsPrefix` before `AwsRegion` was filled).
+    fn discovery_request_for_phase(&self) -> Option<DiscoveryRequest> {
+        let phase = self.key_storage_phase?;
+        match phase {
+            KeyStoragePhase::AwsPrefix => {
+                let region = self.config.secret_aws_region.trim();
+                if region.is_empty() {
+                    return None;
+                }
+                Some(DiscoveryRequest::Aws {
+                    region: region.to_string(),
+                })
+            }
+            KeyStoragePhase::GcpPrefix => {
+                let project = self.config.secret_gcp_project.trim();
+                if project.is_empty() {
+                    return None;
+                }
+                Some(DiscoveryRequest::Gcp {
+                    project: project.to_string(),
+                })
+            }
+            KeyStoragePhase::AzureVault => {
+                // The vault name is the *current* text input — the
+                // operator hasn't confirmed it yet. Treat F5 as a
+                // sanity check on what they've typed so far.
+                let vault = self.text_input.value().trim();
+                if vault.is_empty() {
+                    return None;
+                }
+                Some(DiscoveryRequest::Azure {
+                    vault: vault.to_string(),
+                })
+            }
+            KeyStoragePhase::VaultMount => {
+                let endpoint = self.config.secret_vault_endpoint.trim();
+                if endpoint.is_empty() {
+                    return None;
+                }
+                // Use the operator's currently-typed mount value as the
+                // discovery target. Empty / unset → fall back to the
+                // wizard default so F5 still works on a fresh entry.
+                let raw_mount = self.text_input.value().trim();
+                let mount = if raw_mount.is_empty() {
+                    DEFAULT_VAULT_MOUNT.to_string()
+                } else {
+                    raw_mount.to_string()
+                };
+                Some(DiscoveryRequest::Vault {
+                    endpoint: endpoint.to_string(),
+                    mount,
+                })
+            }
+            // Other key-storage phases are local-only (file path,
+            // keyring service, AWS region, GCP project, Vault
+            // endpoint, file gate, encrypt choice, file passphrase) —
+            // no remote namespace to enumerate.
+            _ => None,
+        }
+    }
+
+    /// Kick off discovery for the current key-storage phase. Sets the
+    /// overlay to `Loading` and spawns a background task that resolves
+    /// to a `DiscoveryEvent` on the channel. No-op (silent) when the
+    /// current phase isn't discoverable or upstream config is missing —
+    /// the F5 hint footer makes the requirements visible.
+    pub fn kick_off_discovery(&mut self) {
+        if self.discovery.is_some() {
+            // Already in flight or being browsed — F5 is idempotent.
+            return;
+        }
+        let Some(req) = self.discovery_request_for_phase() else {
+            return;
+        };
+        let (tx, rx) = unbounded_channel();
+        self.discovery = Some(DiscoveryState::Loading);
+        self.discovery_rx = Some(rx);
+        crate::discovery::spawn(req, tx);
+    }
+
+    /// Drain any discovery events queued since the last tick into the
+    /// overlay state. Called from the main loop's ticker so the UI
+    /// reflects the result without waiting for a keypress.
+    pub fn drain_discovery_events(&mut self) {
+        let Some(rx) = self.discovery_rx.as_mut() else {
+            return;
+        };
+        // Best-effort drain — `try_recv` doesn't block. We only handle
+        // one event per tick because the channel only ever carries one
+        // (Loaded or Failed) before we drop the receiver.
+        if let Ok(event) = rx.try_recv() {
+            self.discovery = Some(match event {
+                DiscoveryEvent::Loaded { mode, items, total } => DiscoveryState::Loaded {
+                    mode,
+                    items,
+                    total,
+                    cursor: 0,
+                    scroll: 0,
+                },
+                DiscoveryEvent::Failed(message) => DiscoveryState::Failed { message },
+            });
+            self.discovery_rx = None;
+        }
+    }
+
+    /// Handle keypresses while the discovery overlay is on screen.
+    /// Returns `true` when the key was consumed by the overlay so the
+    /// caller skips the usual text-input dispatch.
+    pub fn handle_discovery_key(&mut self, code: crossterm::event::KeyCode) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(state) = self.discovery.as_mut() else {
+            return false;
+        };
+        match state {
+            DiscoveryState::Loading => {
+                // Esc cancels (drops the channel — the spawned task
+                // can finish; its send goes to a dropped receiver).
+                // Any other key is swallowed silently.
+                if matches!(code, KeyCode::Esc) {
+                    self.discovery = None;
+                    self.discovery_rx = None;
+                }
+            }
+            DiscoveryState::Failed { .. } => {
+                // Any key dismisses the error banner.
+                self.discovery = None;
+                self.discovery_rx = None;
+            }
+            DiscoveryState::Loaded {
+                mode,
+                items,
+                cursor,
+                scroll,
+                ..
+            } => {
+                if items.is_empty() {
+                    // Empty list — only Esc / Enter dismiss.
+                    if matches!(code, KeyCode::Esc | KeyCode::Enter) {
+                        self.discovery = None;
+                    }
+                    return true;
+                }
+                let max = items.len() - 1;
+                match code {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if *cursor > 0 {
+                            *cursor -= 1;
+                            // Keep cursor visible — scroll up if we
+                            // walked past the top of the viewport.
+                            if *cursor < *scroll {
+                                *scroll = *cursor;
+                            }
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if *cursor < max {
+                            *cursor += 1;
+                            // Viewport height is rendered-side knowledge;
+                            // we approximate with a generous 10-row
+                            // window. Worst case the renderer clips a
+                            // row — better than constraining input
+                            // logic to a magic-number height.
+                            if *cursor >= *scroll + 10 {
+                                *scroll = cursor.saturating_sub(9);
+                            }
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        *cursor = cursor.saturating_sub(10);
+                        *scroll = scroll.saturating_sub(10);
+                    }
+                    KeyCode::PageDown => {
+                        *cursor = (*cursor + 10).min(max);
+                        if *cursor >= *scroll + 10 {
+                            *scroll = cursor.saturating_sub(9);
+                        }
+                    }
+                    KeyCode::Home => {
+                        *cursor = 0;
+                        *scroll = 0;
+                    }
+                    KeyCode::End => {
+                        *cursor = max;
+                        *scroll = max.saturating_sub(9);
+                    }
+                    KeyCode::Enter => {
+                        // Pick mode applies the selection; Confirm
+                        // mode just dismisses (the list was an info
+                        // display, not a chooser).
+                        if matches!(mode, DiscoveryMode::Pick) {
+                            let picked = items[*cursor].clone();
+                            self.text_input = Input::new(picked);
+                        }
+                        self.discovery = None;
+                    }
+                    KeyCode::Esc => {
+                        self.discovery = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        true
     }
 
     /// Enter the JWT-mode sub-phase of the Security step. Called once SSL
@@ -2303,21 +2627,6 @@ impl WizardApp {
             }
             Err(_) => raw.to_string(),
         }
-    }
-
-    /// Enter the webvh-host selection phase. Called after the Did
-    /// step's DID_VTA path collects the mediator URL — before
-    /// advancing to Security.
-    fn enter_webvh_host_phase(&mut self) {
-        self.did_phase = Some(DidPhase::SelectWebvhHost);
-        self.mode = InputMode::Selecting;
-        // Default self-host URL is the mediator URL with the path
-        // stripped. Operator can still pick "self-host elsewhere"
-        // and type a different one.
-        if self.config.vta_webvh_self_host_url.is_empty() {
-            self.config.vta_webvh_self_host_url = Self::strip_url_path(&self.config.public_url);
-        }
-        self.selection_index = 0;
     }
 
     /// Number of entries in the webvh-host selection list — kept as
@@ -2404,14 +2713,6 @@ impl WizardApp {
                         }
                         self.config.vta_webvh_server_id = None;
                         self.config.vta_webvh_mnemonic = None;
-                        self.did_phase = None;
-                        self.mode = InputMode::Selecting;
-                        self.advance();
-                        return;
-                    }
-                    Some(DidPhase::EnterMnemonic) => {
-                        let v = self.text_input.value().trim().to_string();
-                        self.config.vta_webvh_mnemonic = if v.is_empty() { None } else { Some(v) };
                         self.did_phase = None;
                         self.mode = InputMode::Selecting;
                         self.advance();
@@ -2710,7 +3011,7 @@ impl WizardApp {
             // SelectWebvhHost → exit the sub-flow entirely and fall
             // back to the mediator URL prompt.
             match self.did_phase {
-                Some(DidPhase::EnterCustomUrl) | Some(DidPhase::EnterMnemonic) => {
+                Some(DidPhase::EnterCustomUrl) => {
                     self.did_phase = Some(DidPhase::SelectWebvhHost);
                     self.mode = InputMode::Selecting;
                     self.selection_index = 0;
@@ -3471,17 +3772,245 @@ mod tests {
     }
 
     #[test]
-    fn keystorage_placeholder_cloud_backend_skips_sub_flow() {
-        // GCP/Azure/Vault are placeholder backends — no config to gather
-        // yet. They fall through to `advance()` immediately. (Previously
-        // this test covered string://, which is no longer a valid choice.)
+    fn keystorage_gcp_enters_project_then_prefix_subflow() {
+        // GCP backend has two text-input phases: project then prefix.
+        // The project field is required (no sensible default — GCP
+        // project IDs are tenant-scoped); empty input on that screen
+        // is rejected and the operator stays on the prompt.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
         app.selection_index = 2; // GCP
         app.select_current();
         assert_eq!(app.config.secret_storage, STORAGE_GCP);
-        assert!(app.key_storage_phase.is_none());
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::GcpProject));
+
+        app.text_input = Input::new("my-prod-project".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_gcp_project, "my-prod-project");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::GcpPrefix));
+
+        app.text_input = Input::new("mediator-".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_gcp_prefix, "mediator-");
+        assert!(!app.in_key_storage_subflow());
         assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_azure_enters_single_vault_subflow() {
+        // Azure has one text-input phase: the vault name (or full URL).
+        // Empty input is rejected — there's no sensible default that
+        // covers both commercial and sovereign clouds.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 3; // Azure
+        app.select_current();
+        assert_eq!(app.config.secret_storage, STORAGE_AZURE);
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AzureVault));
+
+        app.text_input = Input::new("my-vault".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_azure_vault, "my-vault");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn keystorage_vault_enters_endpoint_then_mount_subflow() {
+        // HashiCorp Vault has two phases: endpoint then mount + prefix.
+        // The endpoint field is required (deployment-specific); the
+        // mount has a default (`secret/mediator`) so empty input on
+        // the mount screen keeps the default.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 4; // Vault
+        app.select_current();
+        assert_eq!(app.config.secret_storage, STORAGE_VAULT);
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultEndpoint));
+
+        app.text_input = Input::new("vault.internal:8200".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_vault_endpoint, "vault.internal:8200");
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::VaultMount));
+
+        app.text_input = Input::new("kv/prod-mediator".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.secret_vault_mount, "kv/prod-mediator");
+        assert!(!app.in_key_storage_subflow());
+        assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    // ── Discovery overlay (F5) state-machine tests ───────────────────
+
+    #[test]
+    fn discovery_request_for_aws_prefix_requires_region() {
+        // F5 on AwsPrefix without a region is a no-op (returns None);
+        // once the region is set, the request carries it through.
+        let mut app = WizardApp::new("test.toml".into());
+        app.key_storage_phase = Some(KeyStoragePhase::AwsPrefix);
+        app.config.secret_aws_region = String::new();
+        assert!(app.discovery_request_for_phase().is_none());
+        app.config.secret_aws_region = "eu-west-2".into();
+        match app.discovery_request_for_phase() {
+            Some(crate::discovery::DiscoveryRequest::Aws { region }) => {
+                assert_eq!(region, "eu-west-2");
+            }
+            other => panic!("expected Aws request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discovery_request_for_azure_uses_current_text_input() {
+        // Azure's vault is the field the operator is editing — the
+        // request reads from `text_input`, not from the saved config
+        // field, so F5 verifies what's typed *now* rather than the
+        // last confirmed value.
+        let mut app = WizardApp::new("test.toml".into());
+        app.key_storage_phase = Some(KeyStoragePhase::AzureVault);
+        app.text_input = Input::new("partial-vault-name".into());
+        match app.discovery_request_for_phase() {
+            Some(crate::discovery::DiscoveryRequest::Azure { vault }) => {
+                assert_eq!(vault, "partial-vault-name");
+            }
+            other => panic!("expected Azure request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discovery_request_for_vault_mount_falls_back_to_default() {
+        // F5 with empty mount input falls back to the wizard default
+        // so the operator can hit it on a fresh entry to see what's
+        // already at `secret/mediator`.
+        let mut app = WizardApp::new("test.toml".into());
+        app.key_storage_phase = Some(KeyStoragePhase::VaultMount);
+        app.config.secret_vault_endpoint = "vault.internal:8200".into();
+        app.text_input = Input::new(String::new());
+        match app.discovery_request_for_phase() {
+            Some(crate::discovery::DiscoveryRequest::Vault { endpoint, mount }) => {
+                assert_eq!(endpoint, "vault.internal:8200");
+                assert_eq!(mount, DEFAULT_VAULT_MOUNT);
+            }
+            other => panic!("expected Vault request, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn discovery_request_none_for_non_discoverable_phases() {
+        // Region / project / endpoint screens are upstream of the
+        // discoverable namespace — F5 is a no-op there. Same for the
+        // file:// / keyring sub-flow.
+        let mut app = WizardApp::new("test.toml".into());
+        for phase in [
+            KeyStoragePhase::AwsRegion,
+            KeyStoragePhase::GcpProject,
+            KeyStoragePhase::VaultEndpoint,
+            KeyStoragePhase::FilePath,
+            KeyStoragePhase::KeyringService,
+        ] {
+            app.key_storage_phase = Some(phase);
+            assert!(
+                app.discovery_request_for_phase().is_none(),
+                "expected no discovery request for {phase:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_discovery_key_navigates_loaded_list() {
+        use crate::discovery::{DiscoveryMode, DiscoveryState};
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        app.discovery = Some(DiscoveryState::Loaded {
+            mode: DiscoveryMode::Pick,
+            items: vec!["a/".into(), "b/".into(), "c/".into()],
+            total: 6,
+            cursor: 0,
+            scroll: 0,
+        });
+        // Down moves cursor to 1, then End jumps to last.
+        assert!(app.handle_discovery_key(KeyCode::Down));
+        match &app.discovery {
+            Some(DiscoveryState::Loaded { cursor, .. }) => assert_eq!(*cursor, 1),
+            _ => panic!("expected Loaded state with cursor=1"),
+        }
+        assert!(app.handle_discovery_key(KeyCode::End));
+        match &app.discovery {
+            Some(DiscoveryState::Loaded { cursor, .. }) => assert_eq!(*cursor, 2),
+            _ => panic!("expected Loaded state with cursor=2"),
+        }
+        // Home returns to top.
+        assert!(app.handle_discovery_key(KeyCode::Home));
+        match &app.discovery {
+            Some(DiscoveryState::Loaded { cursor, .. }) => assert_eq!(*cursor, 0),
+            _ => panic!("expected Loaded state with cursor=0"),
+        }
+    }
+
+    #[test]
+    fn handle_discovery_key_pick_applies_selection_and_dismisses() {
+        use crate::discovery::{DiscoveryMode, DiscoveryState};
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        app.discovery = Some(DiscoveryState::Loaded {
+            mode: DiscoveryMode::Pick,
+            items: vec!["alpha/".into(), "beta/".into()],
+            total: 4,
+            cursor: 1,
+            scroll: 0,
+        });
+        assert!(app.handle_discovery_key(KeyCode::Enter));
+        // Pick mode wrote the selection into the text input.
+        assert_eq!(app.text_input.value(), "beta/");
+        // …and dismissed the overlay.
+        assert!(app.discovery.is_none());
+    }
+
+    #[test]
+    fn handle_discovery_key_confirm_dismisses_without_pick() {
+        use crate::discovery::{DiscoveryMode, DiscoveryState};
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        // Operator was editing the AzureVault field — that's the
+        // current text_input value. Confirm mode must NOT overwrite it
+        // with a discovered secret name.
+        app.text_input = Input::new("operator-typed-vault".into());
+        app.discovery = Some(DiscoveryState::Loaded {
+            mode: DiscoveryMode::Confirm,
+            items: vec!["existing-secret".into()],
+            total: 1,
+            cursor: 0,
+            scroll: 0,
+        });
+        assert!(app.handle_discovery_key(KeyCode::Enter));
+        assert_eq!(app.text_input.value(), "operator-typed-vault");
+        assert!(app.discovery.is_none());
+    }
+
+    #[test]
+    fn handle_discovery_key_failed_dismisses_on_any_key() {
+        use crate::discovery::DiscoveryState;
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        app.discovery = Some(DiscoveryState::Failed {
+            message: "credentials missing".into(),
+        });
+        // Any key dismisses — pick something arbitrary.
+        assert!(app.handle_discovery_key(KeyCode::Char('x')));
+        assert!(app.discovery.is_none());
+    }
+
+    #[test]
+    fn handle_discovery_key_loading_only_dismisses_on_esc() {
+        use crate::discovery::DiscoveryState;
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        app.discovery = Some(DiscoveryState::Loading);
+        // Random key swallowed — wizard stays in Loading.
+        assert!(app.handle_discovery_key(KeyCode::Char('x')));
+        assert!(matches!(app.discovery, Some(DiscoveryState::Loading)));
+        // Esc cancels.
+        assert!(app.handle_discovery_key(KeyCode::Esc));
+        assert!(app.discovery.is_none());
     }
 
     // ── Security JWT sub-phase tests ─────────────────────────────────

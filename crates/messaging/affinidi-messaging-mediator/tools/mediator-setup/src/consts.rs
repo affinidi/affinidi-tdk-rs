@@ -114,3 +114,19 @@ pub const DEFAULT_SECRET_FILE_PATH: &str = "conf/secrets.json";
 pub const DEFAULT_KEYRING_SERVICE: &str = "affinidi-mediator";
 pub const DEFAULT_AWS_REGION: &str = "us-east-1";
 pub const DEFAULT_AWS_SECRET_PREFIX: &str = "mediator/";
+/// GCP Secret Manager defaults — empty project so the operator must type
+/// theirs (no sensible global default — GCP IDs are tenant-scoped). The
+/// `mediator-` prefix matches AWS's convention so a single deployment can
+/// share naming patterns across clouds.
+pub const DEFAULT_GCP_PROJECT: &str = "";
+pub const DEFAULT_GCP_SECRET_PREFIX: &str = "mediator-";
+/// Azure Key Vault default — empty so the operator types either a bare
+/// vault name (commercial cloud) or a sovereign-cloud DNS name. The URL
+/// parser handles both shapes.
+pub const DEFAULT_AZURE_VAULT: &str = "";
+/// HashiCorp Vault defaults — empty endpoint forces a typed answer (the
+/// operator's `vault server` listen address is environment-specific). The
+/// `secret/mediator` mount+prefix matches the default KV v2 mount Vault
+/// ships with `vault server -dev`.
+pub const DEFAULT_VAULT_ENDPOINT: &str = "";
+pub const DEFAULT_VAULT_MOUNT: &str = "secret/mediator";

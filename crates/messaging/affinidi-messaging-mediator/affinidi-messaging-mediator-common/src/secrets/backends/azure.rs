@@ -275,6 +275,51 @@ impl SecretStore for AzureStore {
             }),
         }
     }
+
+    /// Iterate the Azure pager and return every secret name in the vault.
+    ///
+    /// The SDK pager yields per-secret `SecretProperties` records whose
+    /// `id` field is a fully-qualified URL
+    /// (`https://<vault>.vault.azure.net/secrets/<name>`). The name is
+    /// extracted via the SDK's [`ResourceExt::resource_id`] helper so
+    /// future URL-shape changes don't require re-parsing.
+    ///
+    /// Pager iteration is *not* wrapped in `with_retry`: the SDK's
+    /// pipeline performs per-page retries internally, and a stream
+    /// that's already mid-flight can't be re-issued from the start
+    /// without losing pages.
+    async fn list_namespace(&self) -> Result<Vec<String>> {
+        use azure_security_keyvault_secrets::ResourceExt;
+        use futures_util::TryStreamExt;
+        let client = self.client().await?;
+        let mut pager =
+            client
+                .list_secret_properties(None)
+                .map_err(|err| SecretStoreError::Unreachable {
+                    backend: BACKEND_LABEL,
+                    reason: format!("ListSecretProperties pager init failed: {err}"),
+                })?;
+        let mut names = Vec::new();
+        while let Some(props) =
+            pager
+                .try_next()
+                .await
+                .map_err(|err| SecretStoreError::Unreachable {
+                    backend: BACKEND_LABEL,
+                    reason: format!("ListSecretProperties page fetch failed: {err}"),
+                })?
+        {
+            // Skip records that lack an `id` or whose URL parse fails —
+            // we'd rather under-report than crash the whole listing on a
+            // single malformed entry.
+            if let Ok(rid) = props.resource_id()
+                && !rid.name.is_empty()
+            {
+                names.push(rid.name);
+            }
+        }
+        Ok(names)
+    }
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ secrets-azure = [
   "dep:azure_security_keyvault_secrets",
   "dep:azure_identity",
   "dep:azure_core",
+  "dep:futures-util",
 ]
 secrets-vault = ["dep:vaultrs"]
 
@@ -77,6 +78,10 @@ google-cloud-gax = { version = "1.9", optional = true }
 azure_security_keyvault_secrets = { version = "0.14", optional = true }
 azure_identity = { version = "0.35", optional = true }
 azure_core = { version = "0.35", optional = true }
+## Pager iteration over Azure's `list_secret_properties` Stream — only the
+## `TryStreamExt::try_next` adapter is used. Default features off so we
+## don't pull in the full futures executor stack.
+futures-util = { version = "0.3", default-features = false, optional = true }
 ## HashiCorp Vault KV v2 (rustify-based async REST client). Token auth
 ## via VAULT_TOKEN env. Default features bring in the rustls HTTP
 ## stack; pin to `0.8` so future breaking bumps don't land silently.

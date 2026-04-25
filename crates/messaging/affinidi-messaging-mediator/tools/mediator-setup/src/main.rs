@@ -3,6 +3,7 @@ mod bootstrap_headless;
 mod cli;
 mod config_writer;
 mod consts;
+mod discovery;
 mod docker;
 mod generators;
 mod recipe;
@@ -457,6 +458,10 @@ async fn run_event_loop(
                 // the diagnostic checklist updates without waiting on a
                 // keypress.
                 app.drain_vta_events();
+                // Same idea for the F5-triggered cloud-backend
+                // discovery: result lands on a tokio mpsc and the
+                // wizard transitions Loading → Loaded / Failed.
+                app.drain_discovery_events();
             }
             maybe_event = crossterm_events.next() => match maybe_event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
@@ -488,6 +493,27 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         || (code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL))
     {
         app.should_quit = true;
+        return;
+    }
+
+    // Discovery overlay (cloud-backend prefix discovery via F5) takes
+    // every key while it's on screen — Loading swallows everything
+    // except Esc, Loaded scrolls / picks / cancels, Failed dismisses.
+    // Placed before mode dispatch so normal text-input keys don't leak
+    // into the input widget while the overlay is active.
+    if app.in_discovery_overlay() {
+        app.handle_discovery_key(code);
+        return;
+    }
+
+    // F5 on a discoverable key-storage phase kicks off the async
+    // `list_namespace` call. Discoverable phases are AwsPrefix /
+    // GcpPrefix / AzureVault / VaultMount; F5 anywhere else is a
+    // no-op so the keystroke isn't actively misleading. The hint
+    // footer on each prompt advertises the requirement (e.g. AWS
+    // creds in the environment).
+    if code == KeyCode::F(5) {
+        app.kick_off_discovery();
         return;
     }
 
@@ -625,67 +651,6 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
             KeyCode::Esc => app.go_back(),
             _ => {}
         },
-    }
-}
-
-/// Normalise an operator-typed URL to the base webvh host. webvh
-/// resolves `did:webvh:<scid>:example.com` to
-/// `https://example.com/.well-known/did.jsonl`, so the VTA's `url`
-/// field wants the base `<scheme>://<host>[:port]` — any path the
-/// operator typed (often the mediator's API prefix like
-/// `/mediator/v1`) would land the DID document somewhere the webvh
-/// resolver won't look. Strip it.
-///
-/// Malformed / relative URLs fall back to the caller's input verbatim
-/// so the VTA's validation surfaces a useful error rather than the
-/// wizard masking it.
-fn strip_path_from_url(raw: &str) -> String {
-    match url::Url::parse(raw) {
-        Ok(mut u) => {
-            u.set_path("");
-            // `Url::to_string` trailing slash is harmless for webvh,
-            // but trim it so self-host display matches the typical
-            // `https://mediator.example.com` shape.
-            u.to_string().trim_end_matches('/').to_string()
-        }
-        Err(_) => raw.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod strip_path_tests {
-    use super::strip_path_from_url;
-
-    #[test]
-    fn strips_path_from_mediator_url() {
-        assert_eq!(
-            strip_path_from_url("https://mediator.example.com/mediator/v1"),
-            "https://mediator.example.com"
-        );
-    }
-
-    #[test]
-    fn preserves_port() {
-        assert_eq!(
-            strip_path_from_url("https://mediator.example.com:8443/mediator/v1"),
-            "https://mediator.example.com:8443"
-        );
-    }
-
-    #[test]
-    fn no_trailing_slash_on_host_only_url() {
-        assert_eq!(
-            strip_path_from_url("https://mediator.example.com/"),
-            "https://mediator.example.com"
-        );
-    }
-
-    #[test]
-    fn unparseable_url_returns_input_unchanged() {
-        // Not a URL — the VTA will reject it with its own validation
-        // error, which is more actionable than the wizard's best
-        // guess.
-        assert_eq!(strip_path_from_url("not a url"), "not a url");
     }
 }
 

@@ -255,6 +255,55 @@ impl SecretStore for AwsStore {
             }),
         }
     }
+
+    /// Walks `ListSecrets` pages until exhausted and returns the full
+    /// secret names (region-wide — the configured `prefix` is *not*
+    /// applied as a server-side filter, because the wizard's discovery
+    /// flow wants to surface every prefix already in use, not just the
+    /// one the operator pre-typed). Each retry batch is its own
+    /// `with_retry` invocation so a transient throttle on page N
+    /// doesn't lose pages 1..N-1.
+    async fn list_namespace(&self) -> Result<Vec<String>> {
+        let client = self.client().await;
+        let mut names: Vec<String> = Vec::new();
+        let mut next_token: Option<String> = None;
+        loop {
+            let token_for_label = next_token
+                .as_deref()
+                .map(|t| format!("...{}", &t[t.len().saturating_sub(8)..]))
+                .unwrap_or_else(|| "first".into());
+            let label = format!("ListSecrets({token_for_label})");
+            let response = with_retry(&label, &AwsRetryPolicy, || {
+                let client = client.clone();
+                let token = next_token.clone();
+                async move {
+                    let mut req = client.list_secrets();
+                    if let Some(t) = token {
+                        req = req.next_token(t);
+                    }
+                    req.send().await
+                }
+            })
+            .await
+            .map_err(|err| SecretStoreError::Unreachable {
+                backend: BACKEND_LABEL,
+                reason: format!("ListSecrets failed: {err}"),
+            })?;
+
+            if let Some(entries) = response.secret_list {
+                for entry in entries {
+                    if let Some(name) = entry.name {
+                        names.push(name);
+                    }
+                }
+            }
+            match response.next_token {
+                Some(t) if !t.is_empty() => next_token = Some(t),
+                _ => break,
+            }
+        }
+        Ok(names)
+    }
 }
 
 #[cfg(test)]

@@ -5,18 +5,13 @@
 use vta_sdk::session::{VtaEndpoint, resolve_vta_endpoint};
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // `vta_did` mirrors upstream `VtaEndpoint`; kept for symmetry / future audit display.
 pub struct ResolvedVta {
     pub vta_did: String,
     /// DIDComm mediator DID advertised in the VTA document, if any.
     pub mediator_did: Option<String>,
     /// REST URL advertised via the `#vta-rest` service, if any.
     pub rest_url: Option<String>,
-}
-
-impl ResolvedVta {
-    pub fn has_didcomm(&self) -> bool {
-        self.mediator_did.is_some()
-    }
 }
 
 /// Resolve a VTA DID and extract its transport endpoints.
