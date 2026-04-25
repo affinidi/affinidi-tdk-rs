@@ -144,8 +144,9 @@ mod tests {
         // - 2 verification methods (`#key-1`, `#key-2`), both `Multikey`
         // - assertionMethod + authentication -> `#key-1`
         // - keyAgreement -> `#key-2`
-        // - one DIDCommMessaging service with a single serviceEndpoint
+        // - DIDCommMessaging service (`#didcomm`) with a single serviceEndpoint
         //   object carrying `uri`, `accept`, `routingKeys`
+        // - Authentication service (`#auth`) pointing at `{URL}/authenticate`
         let vms = doc["verificationMethod"].as_array().unwrap();
         assert_eq!(vms.len(), 2);
         assert!(vms.iter().all(|vm| vm["type"] == "Multikey"));
@@ -157,8 +158,9 @@ mod tests {
         assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
 
         let services = doc["service"].as_array().unwrap();
-        assert_eq!(services.len(), 1);
+        assert_eq!(services.len(), 2);
         assert_eq!(services[0]["type"], "DIDCommMessaging");
+        assert!(services[0]["id"].as_str().unwrap().ends_with("#didcomm"));
         let endpoint = &services[0]["serviceEndpoint"];
         assert_eq!(
             endpoint["uri"].as_str().unwrap(),
@@ -167,6 +169,13 @@ mod tests {
         let accept = endpoint["accept"].as_array().unwrap();
         assert_eq!(accept.len(), 1);
         assert_eq!(accept[0], "didcomm/v2");
+
+        assert_eq!(services[1]["type"], "Authentication");
+        assert!(services[1]["id"].as_str().unwrap().ends_with("#auth"));
+        assert_eq!(
+            services[1]["serviceEndpoint"].as_str().unwrap(),
+            "https://mediator.example.com/mediator/v1/authenticate"
+        );
     }
 
     #[tokio::test]
