@@ -690,8 +690,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                         crate::consts::DEFAULT_AWS_SECRET_PREFIX,
                         "Every secret written goes under this prefix — makes \
                          it easy to grant IAM access or clean up if you \
-                         tear the mediator down. F5 lists prefixes already \
-                         in use (requires AWS creds in the environment).",
+                         tear the mediator down.\n\n\
+                         [F5] lists prefixes already in use (requires AWS \
+                         creds in the environment).",
                     ),
                     KeyStoragePhase::GcpProject => (
                         "GCP project ID",
@@ -707,9 +708,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                         "Secret name prefix",
                         "Key namespace for this mediator's entries (may be empty).",
                         crate::consts::DEFAULT_GCP_SECRET_PREFIX,
-                        "Every secret written goes under this prefix. F5 lists \
-                         existing GCP secrets in the project so you can match \
-                         an existing prefix or pick a new one.",
+                        "Every secret written goes under this prefix.\n\n\
+                         [F5] lists existing GCP secrets in the project so \
+                         you can match an existing prefix or pick a new one.",
                     ),
                     KeyStoragePhase::AzureVault => (
                         "Azure Key Vault",
@@ -719,8 +720,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          (Azure Commercial). For sovereign clouds (Government, \
                          China, Germany), type the full DNS — e.g. \
                          `my-vault.vault.usgovcloudapi.net`. Auth uses Azure \
-                         CLI / azd creds (`az login`). F5 verifies access by \
-                         listing the vault's secret names.",
+                         CLI / azd creds (`az login`).\n\n\
+                         [F5] verifies access by listing the vault's secret \
+                         names.",
                     ),
                     KeyStoragePhase::VaultEndpoint => (
                         "Vault endpoint",
@@ -737,9 +739,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                         crate::consts::DEFAULT_VAULT_MOUNT,
                         "`secret` alone uses the KV v2 mount with no prefix. \
                          `secret/mediator` mounts at `secret` and prefixes \
-                         each key with `mediator/`. F5 lists keys already \
-                         under the mount root so you can match an existing \
-                         layout.",
+                         each key with `mediator/`.\n\n\
+                         [F5] lists keys already under the mount root so you \
+                         can match an existing layout.",
                     ),
                 };
                 prompt::render_prompt(

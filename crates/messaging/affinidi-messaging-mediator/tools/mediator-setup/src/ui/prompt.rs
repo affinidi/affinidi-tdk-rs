@@ -118,18 +118,124 @@ pub fn render_prompt(
     // rendered as one clipped line. Each segment becomes its own
     // `Line` with the same dim style and `  ` indent; long lines
     // wrap within the hint's row budget via `Wrap { trim: true }`.
+    //
+    // Inside each segment, function-key tokens (`[F5]`, `[F10]`, …)
+    // are styled with the accent colour so a hint that calls out a
+    // hotkey reads the same as the cheatsheets in `instructions.rs`
+    // (which use the bracketed `[c]` convention with the same
+    // accent). The match is intentionally narrow — `[F<digits>]`
+    // only — so other bracketed tokens like the `host[:port]` cue
+    // on the Vault endpoint hint don't get mis-styled.
     if !hint.is_empty() {
-        let style = theme::dim_style();
-        let lines: Vec<Line> = hint
-            .split('\n')
-            .map(|segment| {
-                if segment.is_empty() {
-                    Line::from("")
-                } else {
-                    Line::from(Span::styled(format!("  {segment}"), style))
-                }
-            })
-            .collect();
+        let lines: Vec<Line> = hint.split('\n').map(render_hint_segment).collect();
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), chunks[6]);
+    }
+}
+
+/// Render one hint line: dim text with `[F\d+]` tokens swapped out
+/// for accent-styled spans. `  ` indent matches the prompt line above.
+fn render_hint_segment(segment: &str) -> Line<'static> {
+    let indent = "  ";
+    let dim = theme::dim_style();
+    let key = ratatui::style::Style::default().fg(theme::ACCENT);
+    if segment.is_empty() {
+        return Line::from("");
+    }
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(indent.to_string())];
+    let bytes = segment.as_bytes();
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'[' && i + 2 < bytes.len() && bytes[i + 1] == b'F' {
+            // Walk the digit run after `F`. A function-key token must
+            // have at least one digit and end with `]`.
+            let mut k = i + 2;
+            while k < bytes.len() && bytes[k].is_ascii_digit() {
+                k += 1;
+            }
+            if k > i + 2 && k < bytes.len() && bytes[k] == b']' {
+                if i > cursor {
+                    spans.push(Span::styled(segment[cursor..i].to_string(), dim));
+                }
+                spans.push(Span::styled(segment[i..=k].to_string(), key));
+                cursor = k + 1;
+                i = k + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if cursor < segment.len() {
+        spans.push(Span::styled(segment[cursor..].to_string(), dim));
+    }
+    Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Assert that a `[F<digits>]` token is split into its own accent-
+    /// styled span and the surrounding text keeps the dim hint style.
+    #[test]
+    fn hint_segment_styles_function_key_tokens() {
+        let line = render_hint_segment("press [F5] to discover existing prefixes.");
+        // 4 spans: indent, dim prefix ("press "), accent ("[F5]"),
+        // dim suffix (" to discover existing prefixes.").
+        assert_eq!(line.spans.len(), 4);
+        assert_eq!(line.spans[0].content, "  ");
+        assert_eq!(line.spans[1].content, "press ");
+        assert_eq!(line.spans[2].content, "[F5]");
+        assert_eq!(line.spans[2].style.fg, Some(theme::ACCENT));
+        assert_eq!(line.spans[3].content, " to discover existing prefixes.");
+    }
+
+    /// Brackets that aren't function-key tokens (e.g. the `[:port]`
+    /// cue on the Vault endpoint hint) must stay in the dim hint
+    /// style so we don't accidentally highlight non-keys.
+    #[test]
+    fn hint_segment_leaves_non_function_brackets_alone() {
+        let line = render_hint_segment("server `host[:port]` defaults to https://.");
+        // No accent span — the whole hint is rendered as indent + dim.
+        assert_eq!(line.spans.len(), 2);
+        assert_eq!(line.spans[0].content, "  ");
+        assert!(
+            !line.spans.iter().any(|s| s.style.fg == Some(theme::ACCENT)),
+            "expected no accent-styled spans in {:?}",
+            line.spans,
+        );
+    }
+
+    /// Multi-digit function keys (`[F10]`) must match too — the
+    /// global F10 quit shortcut would benefit if a future hint
+    /// surfaces it inline.
+    #[test]
+    fn hint_segment_matches_multi_digit_function_keys() {
+        let line = render_hint_segment("press [F10] to quit at any time.");
+        assert!(
+            line.spans
+                .iter()
+                .any(|s| s.content == "[F10]" && s.style.fg == Some(theme::ACCENT)),
+            "[F10] should be accent-styled, got {:?}",
+            line.spans,
+        );
+    }
+
+    /// An empty segment renders an empty line — preserves the
+    /// behaviour callers depend on when they want a blank-line gap
+    /// between paragraphs (`\n\n`). `Line::from("")` carries no
+    /// spans (ratatui treats the empty `&str` as zero content), so
+    /// the assertion checks the rendered string is empty rather
+    /// than asserting a span count.
+    #[test]
+    fn hint_segment_empty_segment_renders_blank() {
+        let line = render_hint_segment("");
+        let rendered: String = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<&str>>()
+            .concat();
+        assert!(rendered.is_empty(), "expected blank line, got {rendered:?}");
     }
 }
