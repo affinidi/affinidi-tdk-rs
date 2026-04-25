@@ -20,6 +20,7 @@ use crate::handler::DIDCommHandler;
 use listener::ConnectionHandle;
 
 const EVENT_CHANNEL_CAPACITY: usize = 64;
+const SHUTDOWN_TASK_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Lifecycle events emitted by listeners.
 #[derive(Debug, Clone, PartialEq)]
@@ -152,11 +153,23 @@ impl DIDCommService {
         Ok(())
     }
 
+    /// Cancels the service-wide shutdown token and awaits each listener
+    /// task's `JoinHandle` so callers know all per-listener work has
+    /// actually returned (not merely been signalled to stop).
+    ///
+    /// Each task is awaited with a bounded outer timeout so a misbehaving
+    /// listener can't deadlock shutdown — if the timeout fires, the task is
+    /// detached and the runtime drops it on process exit.
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
-        let listeners = self.listeners.write().await;
-        for (_, handle) in listeners.iter() {
-            let _ = handle.token.cancelled().await;
+        // Drain the map under the write lock so we can join tasks without
+        // holding it (joining requires owning the JoinHandle).
+        let handles: Vec<JoinHandle<()>> = {
+            let mut listeners = self.listeners.write().await;
+            listeners.drain().map(|(_, h)| h.task).collect()
+        };
+        for task in handles {
+            let _ = tokio::time::timeout(SHUTDOWN_TASK_JOIN_TIMEOUT, task).await;
         }
     }
 
@@ -189,11 +202,28 @@ impl DIDCommService {
     }
 
     /// Waits until the specified listener has established a connection to
-    /// its mediator, or until the timeout expires.
+    /// its mediator, or until the timeout expires. Also returns early with
+    /// `NotConnected` if the service's internal shutdown token is
+    /// cancelled while waiting — keeps callers from being parked through
+    /// the full timeout window during process shutdown.
     pub async fn wait_connected(
         &self,
         listener_id: &str,
         timeout: Duration,
+    ) -> Result<(), DIDCommServiceError> {
+        self.wait_connected_with_cancel(listener_id, timeout, &self.shutdown)
+            .await
+    }
+
+    /// Like [`wait_connected`](Self::wait_connected) but races the wait
+    /// against a caller-supplied [`CancellationToken`] in addition to the
+    /// timeout. Returns `NotConnected` if the token fires before the
+    /// connection is established.
+    pub async fn wait_connected_with_cancel(
+        &self,
+        listener_id: &str,
+        timeout: Duration,
+        cancel: &CancellationToken,
     ) -> Result<(), DIDCommServiceError> {
         let listeners = self.listeners.read().await;
         let handle = listeners
@@ -202,12 +232,14 @@ impl DIDCommService {
         let mut rx = handle.connection_rx.clone();
         drop(listeners);
 
-        tokio::time::timeout(timeout, rx.wait_for(|v| v.is_some()))
-            .await
-            .map_err(DIDCommServiceError::Timeout)?
-            .map_err(|_| DIDCommServiceError::NotConnected(listener_id.to_string()))?;
-
-        Ok(())
+        tokio::select! {
+            res = tokio::time::timeout(timeout, rx.wait_for(|v| v.is_some())) => {
+                res.map_err(DIDCommServiceError::Timeout)?
+                    .map_err(|_| DIDCommServiceError::NotConnected(listener_id.to_string()))?;
+                Ok(())
+            }
+            _ = cancel.cancelled() => Err(DIDCommServiceError::NotConnected(listener_id.to_string())),
+        }
     }
 
     /// Send a proactive DIDComm message through an existing listener's
@@ -445,6 +477,58 @@ mod tests {
                 } if did == "did:example:alice" && existing_listener == "listener-1"
             ),
             "expected DuplicateDid, got: {err}"
+        );
+    }
+
+    /// Regression for the 30s shutdown hang: `wait_connected` must observe
+    /// the service's internal shutdown token and return promptly when
+    /// `shutdown()` is called, rather than parking the caller for the full
+    /// timeout window.
+    #[tokio::test]
+    async fn wait_connected_aborts_when_service_shutdown() {
+        let service = make_service();
+
+        // Listener handle whose connection_rx never publishes Some — i.e. a
+        // listener whose mediator is unreachable.
+        let (_tx, rx) = watch::channel::<Option<ConnectionHandle>>(None);
+        let listener_token = service.shutdown.child_token();
+        let task = tokio::spawn({
+            let token = listener_token.clone();
+            async move { token.cancelled().await }
+        });
+        let handle = ListenerHandle {
+            id: "stuck".to_string(),
+            did: "did:example:stuck".to_string(),
+            task,
+            token: listener_token,
+            started_at: Instant::now(),
+            restart_count: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            connection_rx: rx,
+        };
+        service
+            .listeners
+            .write()
+            .await
+            .insert("stuck".to_string(), handle);
+
+        let svc = service.clone();
+        let waiter =
+            tokio::spawn(async move { svc.wait_connected("stuck", Duration::from_secs(60)).await });
+
+        // Simulate Ctrl-C arriving 100ms after wait_connected starts.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let shutdown_started = tokio::time::Instant::now();
+        service.shutdown().await;
+        let shutdown_elapsed = shutdown_started.elapsed();
+
+        let waiter_result = waiter.await.expect("waiter task panicked");
+        assert!(
+            matches!(waiter_result, Err(DIDCommServiceError::NotConnected(ref id)) if id == "stuck"),
+            "wait_connected should return NotConnected on shutdown, got: {waiter_result:?}"
+        );
+        assert!(
+            shutdown_elapsed < Duration::from_secs(1),
+            "shutdown() should return promptly, took: {shutdown_elapsed:?}"
         );
     }
 
