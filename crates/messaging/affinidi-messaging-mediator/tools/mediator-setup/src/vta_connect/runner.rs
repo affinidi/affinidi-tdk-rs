@@ -76,6 +76,12 @@ pub(super) fn select_initial_transport(resolved: &ResolvedVta) -> InitialChoice 
 /// failure (transport / handshake / ACL miss) is worth retrying over
 /// REST, while a post-auth failure (template error, etc.) means the
 /// VTA accepted us and a different wire will reproduce the rejection.
+// `PreflightOk` is the largest variant (Vec<WebvhServerRecord> +
+// two Strings) while `Connected(VtaReply)` and the failure variants
+// are stack-friendly. Boxing PreflightOk would shave bytes per
+// match arm but the channel passes one outcome per attempt, so the
+// cost is negligible — clarity wins.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum AttemptOutcome {
     /// Attempt produced a final reply with no further preflight
@@ -99,17 +105,23 @@ pub(super) enum AttemptOutcome {
     /// the orchestrator emits it verbatim as [`VtaEvent::Failed`].
     PreAuthFailure(String),
     /// Failure after auth completed but before the protocol's
-    /// natural endpoint. Reserved for Slice 1's REST FullSetup
-    /// path; the DIDComm attempt has no post-auth failure mode in
-    /// this scope (`list_webvh_servers` errors are non-fatal and
-    /// downstream `provision_integration` lives in
-    /// `run_provision_flight`).
-    #[allow(dead_code)]
+    /// natural endpoint. Produced by the REST FullSetup path when
+    /// `provision_integration` returns an error after the auth
+    /// handshake succeeded. The DIDComm attempt has no post-auth
+    /// failure mode in this scope — `list_webvh_servers` errors
+    /// are non-fatal, and downstream `provision_integration` lives
+    /// in `run_provision_flight`.
     PostAuthFailure(String),
 }
 
 /// Single event emitted by the runner. The consumer applies it to the
 /// diagnostics list and/or transitions the sub-flow phase.
+//
+// Same rationale as `AttemptOutcome`: `PreflightDone` and `Connected`
+// dwarf the small variants (`CheckStart`, `Failed(String)`), but the
+// channel sees a handful of events per run — boxing for per-byte
+// savings isn't worth the syntactic noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum VtaEvent {
     CheckStart(DiagCheck),

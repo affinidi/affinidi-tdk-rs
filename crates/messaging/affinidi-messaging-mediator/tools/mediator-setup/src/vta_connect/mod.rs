@@ -1,14 +1,25 @@
 //! Online VTA connection flow.
 //!
-//! Scope (this iteration): establish an authenticated connection to a running
-//! VTA. The operator supplies the VTA DID; the wizard resolves its service
-//! endpoints, generates an ephemeral `did:key`, and displays a ready-to-paste
-//! `pnm acl create` command. Once the operator has registered the ACL entry,
-//! the wizard authenticates via DIDComm (primary) or REST (fallback).
+//! Scope: establish an authenticated connection to a running VTA. The
+//! operator supplies the VTA DID; the wizard resolves its service
+//! endpoints, generates an ephemeral `did:key`, and displays a
+//! ready-to-paste `pnm acl create` command. Once the operator has
+//! registered the ACL entry, the wizard authenticates over DIDComm
+//! by default, with REST as an automatic fallback when the VTA
+//! advertises both transports and DIDComm fails pre-auth. REST-only
+//! VTAs go straight to the REST path.
 //!
-//! Out of scope here: mediator DID generation, admin DID provisioning, secret
-//! persistence, context bootstrap. Those attach to the authenticated session
-//! in later iterations.
+//! Phase machine:
+//!   `EnterDid` → `EnterContext` → (FullSetup) `EnterMediatorUrl` →
+//!   `AwaitingAcl` → `Testing` → either `Connected`, the
+//!   `TransportFallbackPrompt` (interactive [F]/[R]/[O]/[B] choice
+//!   when the alternate transport is still viable), or the
+//!   `RecoveryPrompt` (post-auth failure, exhausted attempts, or
+//!   no advertised transport).
+//!
+//! `[O] Offline` from either prompt drops the operator into the
+//! sealed-handoff sub-flow with `vta_did` / `context_id` /
+//! `mediator_url` carried over.
 
 pub mod cli;
 pub mod diagnostics;
@@ -861,5 +872,70 @@ mod tests {
         });
         st.apply_event(VtaEvent::Failed("REST 401".into()));
         assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
+    }
+
+    // ─── AttemptLog edge cases (Slice 5 task 5.2) ──────────────────
+
+    #[test]
+    fn attempt_log_overwrites_with_most_recent_outcome() {
+        // The same transport can be retried — a successful
+        // re-attempt after a failed one should overwrite the
+        // failure record so retry_options returns the right answer.
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::PreAuthFailure("first try".into()),
+        });
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::Connected,
+        });
+        let entry = st.attempted.didcomm.as_ref().unwrap();
+        assert!(matches!(entry.outcome, AttemptResultKind::Connected));
+    }
+
+    #[test]
+    fn attempt_log_independently_tracks_each_transport() {
+        // DIDComm and REST entries are independent — recording one
+        // doesn't shift the other.
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::PreAuthFailure("didcomm reason".into()),
+        });
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::Rest,
+            outcome: AttemptResultKind::PostAuthFailure("rest reason".into()),
+        });
+        assert!(matches!(
+            st.attempted.didcomm.as_ref().unwrap().outcome,
+            AttemptResultKind::PreAuthFailure(_)
+        ));
+        assert!(matches!(
+            st.attempted.rest.as_ref().unwrap().outcome,
+            AttemptResultKind::PostAuthFailure(_)
+        ));
+    }
+
+    #[test]
+    fn fallback_eligible_when_didcomm_pre_auth_then_didcomm_succeeds() {
+        // Edge case: DIDComm fails pre-auth, operator picks [F]
+        // fallback to REST, REST also fails pre-auth, operator
+        // picks [R] retry DIDComm, DIDComm now succeeds. After
+        // success, neither prompt should suggest retry actions
+        // (success is a final state).
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        let r = resolved(Some("did:webvh:m"), Some("https://vta.test"));
+        st.resolved = Some(r.clone());
+        st.attempted.didcomm = Some(pre_auth());
+        st.attempted.rest = Some(pre_auth());
+        // Now DIDComm retry succeeds.
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::Connected,
+        });
+        let opts = st.recovery_options(&r);
+        assert!(!opts.retry_didcomm, "Connected — no retry");
+        assert!(opts.retry_rest, "REST is still pre-auth-failed");
     }
 }

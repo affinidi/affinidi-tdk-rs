@@ -65,12 +65,11 @@ pub struct DiagEntry {
     pub status: DiagStatus,
 }
 
-/// Which authentication path the runner actually completed with. Surfaced to
-/// the operator so they know which transport is active. The runner only
-/// emits `DidComm` today — `Rest` is preserved so the `label()` switch and
-/// downstream UI handle the transport gracefully when REST-only auth lands.
+/// Which authentication path the runner actually completed with.
+/// Surfaced to the operator so they know which transport carried
+/// the round-trip; also used to key the per-transport state in
+/// [`crate::vta_connect::AttemptLog`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Protocol {
     DidComm,
     Rest,

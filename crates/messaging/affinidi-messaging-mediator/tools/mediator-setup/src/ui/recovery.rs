@@ -78,15 +78,15 @@ pub fn render_recovery_prompt(
 fn build_attempt_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
 
-    if let Some(result) = state.attempted.didcomm.as_ref() {
-        if let Some(line) = format_attempt_line("DIDComm", result) {
-            lines.push(line);
-        }
+    if let Some(result) = state.attempted.didcomm.as_ref()
+        && let Some(line) = format_attempt_line("DIDComm", result)
+    {
+        lines.push(line);
     }
-    if let Some(result) = state.attempted.rest.as_ref() {
-        if let Some(line) = format_attempt_line("REST", result) {
-            lines.push(line);
-        }
+    if let Some(result) = state.attempted.rest.as_ref()
+        && let Some(line) = format_attempt_line("REST", result)
+    {
+        lines.push(line);
     }
 
     if lines.is_empty() {
