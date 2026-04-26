@@ -96,6 +96,19 @@ pub struct Args {
 
     /// Phase 2: read an ephemeral did:key from the given file and use it to
     /// authenticate against the VTA. Requires `--vta-did`.
+    ///
+    /// Auto-falls between DIDComm and REST when both transports are
+    /// advertised — pre-auth failures on one wire trigger a retry on
+    /// the other without prompting. Post-auth failures (VTA accepted
+    /// the handshake then rejected the request body) terminate
+    /// immediately — a different wire reproduces the rejection.
+    ///
+    /// Exit codes:
+    ///   0  — success
+    ///   2  — no transport worked (neither advertised, or every
+    ///        advertised transport failed pre-auth)
+    ///   3  — VTA accepted the auth handshake but rejected the
+    ///        request body afterwards
     #[arg(long, value_name = "PATH")]
     pub setup_key_file: Option<PathBuf>,
 

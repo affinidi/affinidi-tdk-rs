@@ -72,14 +72,32 @@ async fn main() -> anyhow::Result<()> {
                  didcomm-mediator template renders the mediator DID using this URL."
             )
         })?;
-        return vta_connect::cli::run_phase2_connect(
+        // Phase 2's headless flow returns a structured failure
+        // shape (transport-by-transport reasons + a kind) so we
+        // can map cleanly to documented exit codes:
+        //   0 → success
+        //   2 → no transport worked (NoTransport)
+        //   3 → VTA accepted the auth handshake but rejected the
+        //        request body (PostAuthFailed)
+        match vta_connect::cli::run_phase2_connect(
             path,
             vta_did,
             args.vta_context.as_deref(),
             mediator_url,
             args.wait_for_acl,
         )
-        .await;
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!("\n{err}");
+                let code = match err.kind {
+                    vta_connect::cli::HeadlessFailureKind::NoTransport => 2,
+                    vta_connect::cli::HeadlessFailureKind::PostAuthFailed => 3,
+                };
+                std::process::exit(code);
+            }
+        }
     }
 
     if let Some(ref recipe_path) = args.from {
