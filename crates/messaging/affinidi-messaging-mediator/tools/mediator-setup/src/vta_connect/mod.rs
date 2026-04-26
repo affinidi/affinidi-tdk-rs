@@ -525,18 +525,21 @@ impl VtaConnectState {
         }
     }
 
-    /// Copy the rendered `pnm acl create` command to the system clipboard
-    /// via `arboard`. Result is recorded in `clipboard_status` so the
-    /// renderer can surface "Copied!" or the specific error on the next
-    /// frame. No-op if the setup key isn't generated yet.
+    /// Copy the rendered `pnm acl create` command to the operator's
+    /// clipboard via [`crate::clipboard::copy_to_clipboard`]. The
+    /// helper picks OSC 52 (SSH-friendly) or `arboard` based on the
+    /// environment; `clipboard_status` surfaces the method that
+    /// succeeded so operators can tell which path took. No-op if
+    /// the setup key isn't generated yet.
     pub fn copy_acl_command_to_clipboard(&mut self) {
         let Some(cmd) = self.acl_command() else {
             self.clipboard_status = Some("Setup key not yet generated".into());
             return;
         };
-        match arboard::Clipboard::new().and_then(|mut c| c.set_text(cmd)) {
-            Ok(()) => {
-                self.clipboard_status = Some("Copied pnm acl command".into());
+        match crate::clipboard::copy_to_clipboard(&cmd) {
+            Ok(method) => {
+                self.clipboard_status =
+                    Some(format!("Copied pnm acl command via {}", method.label()));
             }
             Err(e) => {
                 self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));

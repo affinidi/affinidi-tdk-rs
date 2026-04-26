@@ -33,12 +33,6 @@
 //! library means we could not even attempt that path. Operators
 //! confirm by pasting.
 
-// Slice 1 of the copy-friendly feature wires this module into the
-// existing `[F5]` hotkey paths; Slice 2 spreads it onto more
-// surfaces. Until those land, the module is intentionally unused
-// outside its own tests.
-#![allow(dead_code)]
-
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use std::io::Write;

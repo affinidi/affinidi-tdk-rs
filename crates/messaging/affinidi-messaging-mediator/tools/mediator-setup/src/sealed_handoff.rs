@@ -527,9 +527,9 @@ impl SealedHandoffState {
     }
 
     fn set_clipboard(&mut self, text: String, label: &str) {
-        match arboard::Clipboard::new().and_then(|mut c| c.set_text(text)) {
-            Ok(()) => {
-                self.clipboard_status = Some(format!("Copied {label}"));
+        match crate::clipboard::copy_to_clipboard(&text) {
+            Ok(method) => {
+                self.clipboard_status = Some(format!("Copied {label} via {}", method.label()));
             }
             Err(e) => {
                 self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));
