@@ -38,10 +38,13 @@ use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
 /// VTA accepted us and a different wire will reproduce the rejection.
 #[derive(Debug)]
 pub(super) enum AttemptOutcome {
-    /// AdminOnly success — the operator's setup DID is ACL-enrolled
-    /// and the wizard has the credential it needs. The orchestrator
-    /// emits this directly as a [`VtaEvent::Connected`].
-    ConnectedAdmin(VtaReply),
+    /// Attempt produced a final reply with no further preflight
+    /// needed. Carries either a [`VtaReply::AdminOnly`] (for the
+    /// AdminOnly intent on either transport) or a [`VtaReply::Full`]
+    /// (for FullSetup over REST, which doesn't preflight a webvh
+    /// catalogue). The orchestrator emits this directly as a
+    /// [`VtaEvent::Connected`].
+    Connected(VtaReply),
     /// FullSetup preflight success. The orchestrator emits a
     /// [`VtaEvent::PreflightDone`]; the main loop then either
     /// auto-picks a webvh server (0/1 catalogue entries) or shows
@@ -222,7 +225,7 @@ pub async fn run_connection_test(
     .await;
 
     match outcome {
-        AttemptOutcome::ConnectedAdmin(reply) => {
+        AttemptOutcome::Connected(reply) => {
             let _ = tx.send(VtaEvent::Connected {
                 protocol: Protocol::DidComm,
                 rest_url,
@@ -399,7 +402,7 @@ async fn run_didcomm_attempt(
                                 .into(),
                         ),
                     ));
-                    AttemptOutcome::ConnectedAdmin(VtaReply::AdminOnly(AdminCredentialReply {
+                    AttemptOutcome::Connected(VtaReply::AdminOnly(AdminCredentialReply {
                         admin_did: setup_did,
                         admin_private_key_mb: setup_privkey_mb,
                     }))

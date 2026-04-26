@@ -48,7 +48,7 @@ use vta_sdk::error::VtaError;
 use vta_sdk::provision_integration::{
     ProvisionIntegrationError, ProvisionRequestBuilder,
     didcomm::provision_integration_didcomm,
-    http::ProvisionSummary,
+    http::{ProvisionIntegrationResponse, ProvisionSummary},
     payload::{DidKeyMaterial, TemplateBootstrapPayload, TemplateOutput},
 };
 use vta_sdk::sealed_transfer::{SealedPayloadV1, SealedTransferError, armor, open_bundle};
@@ -469,6 +469,24 @@ pub async fn provision_mediator_integration(
     let response =
         provision_integration_didcomm(&session, vp, ask.context.clone(), None, None).await?;
 
+    response_to_result(&seed, nonce, response)
+}
+
+/// Translate a [`ProvisionIntegrationResponse`] (from either DIDComm
+/// or REST) into a [`ProvisionResult`]. Decodes the armored sealed
+/// bundle, verifies the bundle id matches the originating VP nonce
+/// (so a swapped bundle is rejected), opens the payload with the
+/// setup key's X25519 secret, and lifts the template-bootstrap
+/// payload into the wizard's result shape.
+///
+/// Shared by [`provision_mediator_integration`] (DIDComm) and
+/// [`crate::vta_connect::runner_rest::run_rest_attempt_full_setup`]
+/// (REST) — the wire payload is identical across transports.
+pub(crate) fn response_to_result(
+    seed: &[u8; 32],
+    vp_nonce: [u8; 16],
+    response: ProvisionIntegrationResponse,
+) -> Result<ProvisionResult, ProvisionError> {
     let bundles =
         armor::decode(&response.bundle).map_err(|e| ProvisionError::Armor(e.to_string()))?;
     if bundles.len() != 1 {
@@ -478,13 +496,13 @@ pub async fn provision_mediator_integration(
         )));
     }
     let bundle = &bundles[0];
-    if bundle.bundle_id != nonce {
+    if bundle.bundle_id != vp_nonce {
         return Err(ProvisionError::Armor(
             "returned bundle_id does not match the VP nonce".into(),
         ));
     }
 
-    let x_secret = vta_sdk::sealed_transfer::ed25519_seed_to_x25519_secret(&seed);
+    let x_secret = vta_sdk::sealed_transfer::ed25519_seed_to_x25519_secret(seed);
     let opened = open_bundle(&x_secret, bundle, Some(&response.digest))?;
 
     let payload = match opened.payload {
