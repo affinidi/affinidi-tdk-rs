@@ -526,20 +526,78 @@ impl VtaConnectState {
     }
 
     /// Copy the rendered `pnm acl create` command to the operator's
-    /// clipboard via [`crate::clipboard::copy_to_clipboard`]. The
-    /// helper picks OSC 52 (SSH-friendly) or `arboard` based on the
-    /// environment; `clipboard_status` surfaces the method that
-    /// succeeded so operators can tell which path took. No-op if
-    /// the setup key isn't generated yet.
+    /// clipboard. No-op if the setup key isn't generated yet.
     pub fn copy_acl_command_to_clipboard(&mut self) {
         let Some(cmd) = self.acl_command() else {
             self.clipboard_status = Some("Setup key not yet generated".into());
             return;
         };
-        match crate::clipboard::copy_to_clipboard(&cmd) {
+        self.copy_text_to_clipboard(&cmd, "pnm acl command");
+    }
+
+    /// Copy the operator-supplied VTA DID to the clipboard. Hotkey
+    /// `[v]` on the `Connected` phase. Status line surfaces the
+    /// method (OSC 52 / system clipboard).
+    pub fn copy_vta_did_to_clipboard(&mut self) {
+        if self.vta_did.is_empty() {
+            self.clipboard_status = Some("VTA DID not yet entered".into());
+            return;
+        }
+        let did = self.vta_did.clone();
+        self.copy_text_to_clipboard(&did, "VTA DID");
+    }
+
+    /// Copy the VTA-minted (or VTA-exported) mediator integration
+    /// DID to the clipboard. Hotkey `[m]` on the `Connected` phase.
+    /// AdminOnly runs have no VTA-minted mediator DID — the
+    /// operator brought their own — so we surface a friendly
+    /// status rather than silently doing nothing.
+    pub fn copy_mediator_did_to_clipboard(&mut self) {
+        let Some(conn) = self.connection.as_ref() else {
+            self.clipboard_status = Some("No connection yet".into());
+            return;
+        };
+        let did = match &conn.reply {
+            VtaReply::Full(p) => p.integration_did().to_string(),
+            VtaReply::ContextExport(b) => match b.did.as_ref() {
+                Some(d) => d.id.clone(),
+                None => {
+                    self.clipboard_status = Some("Context bundle has no mediator DID".into());
+                    return;
+                }
+            },
+            VtaReply::AdminOnly(_) => {
+                self.clipboard_status = Some("AdminOnly mode — no VTA-minted mediator DID".into());
+                return;
+            }
+        };
+        self.copy_text_to_clipboard(&did, "mediator DID");
+    }
+
+    /// Copy the long-term admin DID to the clipboard. Hotkey `[a]`
+    /// on the `Connected` phase. Available for all reply variants
+    /// (every successful run has an admin credential).
+    pub fn copy_admin_did_to_clipboard(&mut self) {
+        let Some(conn) = self.connection.as_ref() else {
+            self.clipboard_status = Some("No connection yet".into());
+            return;
+        };
+        let did = match &conn.reply {
+            VtaReply::Full(p) => p.admin_did().to_string(),
+            VtaReply::AdminOnly(a) => a.admin_did.clone(),
+            VtaReply::ContextExport(b) => b.admin_did.clone(),
+        };
+        self.copy_text_to_clipboard(&did, "admin DID");
+    }
+
+    /// Shared clipboard-write helper. Goes through
+    /// [`crate::clipboard::copy_to_clipboard`] (SSH-aware OSC 52 +
+    /// arboard fallback) and renders the operator-facing status
+    /// line on `clipboard_status`.
+    fn copy_text_to_clipboard(&mut self, text: &str, label: &str) {
+        match crate::clipboard::copy_to_clipboard(text) {
             Ok(method) => {
-                self.clipboard_status =
-                    Some(format!("Copied pnm acl command via {}", method.label()));
+                self.clipboard_status = Some(format!("Copied {label} via {}", method.label()));
             }
             Err(e) => {
                 self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));

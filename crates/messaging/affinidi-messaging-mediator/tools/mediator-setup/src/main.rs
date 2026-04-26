@@ -536,6 +536,19 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         return;
     }
 
+    // F2 on the sealed-handoff DigestVerify phase copies the
+    // wizard-computed digest to the clipboard. F2 (not a bare
+    // letter) because the panel has an active text input for the
+    // operator's OOB-shared digest — letters would land in the
+    // field. Routes through the SSH-aware copy helper.
+    if code == KeyCode::F(2)
+        && let Some(state) = app.sealed_handoff.as_mut()
+        && state.phase == crate::sealed_handoff::SealedPhase::DigestVerify
+    {
+        state.copy_digest_to_clipboard();
+        return;
+    }
+
     // Bare `c` / `v` / `p` on the sealed-handoff RequestGenerated screen
     // copy one of: the bootstrap request JSON, the `vta bootstrap seal`
     // command, or the `pnm-cli bootstrap seal` command to the system
@@ -613,6 +626,63 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         if let Some(state) = app.vta_connect.as_mut() {
             if state.phase == crate::vta_connect::ConnectPhase::AwaitingAcl {
                 state.copy_acl_command_to_clipboard();
+                return;
+            }
+        }
+    }
+
+    // Bare `c` / `b` on the wizard's final Summary screen copy the
+    // config-file path and the resolved backend URL respectively.
+    // Step-scoped so they don't interfere with the same letters
+    // used elsewhere (e.g. `c` on AwaitingAcl).
+    if !modifiers.contains(KeyModifiers::CONTROL)
+        && app.current_step == app::WizardStep::Summary
+        && matches!(
+            code,
+            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Char('b') | KeyCode::Char('B')
+        )
+    {
+        match code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                app.copy_config_path_to_clipboard();
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                app.copy_backend_url_to_clipboard();
+            }
+            _ => unreachable!("outer matches! guards the code space"),
+        }
+        return;
+    }
+
+    // Bare `v` / `m` / `a` on the online-VTA Connected screen copy
+    // the VTA / mediator / admin DIDs to the clipboard. Phase-scoped
+    // to Connected so the same letter keys can be used for unrelated
+    // actions on other phases without ambiguity.
+    if !modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(
+            code,
+            KeyCode::Char('v')
+                | KeyCode::Char('V')
+                | KeyCode::Char('m')
+                | KeyCode::Char('M')
+                | KeyCode::Char('a')
+                | KeyCode::Char('A')
+        )
+    {
+        if let Some(state) = app.vta_connect.as_mut() {
+            if state.phase == crate::vta_connect::ConnectPhase::Connected {
+                match code {
+                    KeyCode::Char('v') | KeyCode::Char('V') => {
+                        state.copy_vta_did_to_clipboard();
+                    }
+                    KeyCode::Char('m') | KeyCode::Char('M') => {
+                        state.copy_mediator_did_to_clipboard();
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                        state.copy_admin_did_to_clipboard();
+                    }
+                    _ => unreachable!("outer matches! guards the code space"),
+                }
                 return;
             }
         }

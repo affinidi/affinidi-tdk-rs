@@ -487,6 +487,13 @@ pub struct WizardApp {
     /// kicked off; drained on each tick by [`Self::drain_discovery_events`]
     /// and dropped when the result lands or the operator dismisses.
     pub discovery_rx: Option<UnboundedReceiver<DiscoveryEvent>>,
+    /// Last clipboard outcome rendered on the Summary panel —
+    /// "Copied {label} via {method}" on success or
+    /// "Clipboard unavailable: …" on failure. Phase-scoped state
+    /// for the `[c]` / `[b]` Summary hotkeys; the sub-flow phases
+    /// (vta_connect / sealed_handoff) carry their own equivalent
+    /// fields. Reset on phase transitions away from Summary.
+    pub clipboard_status: Option<String>,
 }
 
 impl WizardApp {
@@ -518,6 +525,35 @@ impl WizardApp {
             vta_stub_notice: None,
             discovery: None,
             discovery_rx: None,
+            clipboard_status: None,
+        }
+    }
+
+    /// Copy the mediator config-file path to the operator's
+    /// clipboard. Hotkey `[c]` on the Summary panel.
+    pub fn copy_config_path_to_clipboard(&mut self) {
+        let path = self.config.config_path.clone();
+        self.copy_text_to_clipboard(&path, "config path");
+    }
+
+    /// Copy the resolved secret-backend URL (the same string the
+    /// Summary panel renders next to "Key Storage") to the
+    /// clipboard. Hotkey `[b]` on the Summary panel.
+    pub fn copy_backend_url_to_clipboard(&mut self) {
+        let url = crate::config_writer::build_backend_url(&self.config);
+        self.copy_text_to_clipboard(&url, "backend URL");
+    }
+
+    /// Shared clipboard-write helper for the Summary panel. Mirrors
+    /// the helpers on `VtaConnectState` / `SealedHandoffState`.
+    fn copy_text_to_clipboard(&mut self, text: &str, label: &str) {
+        match crate::clipboard::copy_to_clipboard(text) {
+            Ok(method) => {
+                self.clipboard_status = Some(format!("Copied {label} via {}", method.label()));
+            }
+            Err(e) => {
+                self.clipboard_status = Some(format!("Clipboard unavailable: {e}"));
+            }
         }
     }
 

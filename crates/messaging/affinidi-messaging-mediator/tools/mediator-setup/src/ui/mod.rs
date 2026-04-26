@@ -154,6 +154,7 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
             &app.config,
             app.vta_session.as_ref(),
             app.mode == InputMode::Confirming,
+            app.clipboard_status.as_deref(),
         );
         return;
     }
@@ -387,11 +388,15 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 let desc = "Type the SHA-256 digest your VTA admin showed you. Leave blank to \
                             skip the OOB check.";
                 let placeholder = "sha256 hex (or blank to skip)";
-                let hint_default = format!(
+                let mut hint_default = format!(
                     "Computed digest of the parsed bundle:\n  {computed}\n\nIf the producer \
                      told you a different digest, do NOT continue — abort and re-request the \
-                     bundle."
+                     bundle.\n\nPress [F2] to copy the computed digest to your clipboard."
                 );
+                if let Some(status) = state.clipboard_status.as_deref() {
+                    hint_default.push_str("\n\n");
+                    hint_default.push_str(status);
+                }
                 let hint = state.last_error.clone().unwrap_or(hint_default);
                 prompt::render_prompt(
                     frame,

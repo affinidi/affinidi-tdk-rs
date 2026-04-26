@@ -17,6 +17,7 @@ pub fn render_summary(
     config: &WizardConfig,
     vta_session: Option<&VtaSession>,
     confirm_selected: bool,
+    clipboard_status: Option<&str>,
 ) {
     let block = Block::default()
         .title(" Summary — Review Configuration ")
@@ -179,6 +180,16 @@ pub fn render_summary(
         "Press Enter to write, Esc to go back",
         theme::muted_style(),
     )));
+    lines.push(Line::from(Span::styled(
+        "  [c] copy config path  [b] copy backend URL",
+        theme::muted_style(),
+    )));
+    if let Some(status) = clipboard_status {
+        lines.push(Line::from(Span::styled(
+            format!("  {status}"),
+            theme::muted_style(),
+        )));
+    }
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
     frame.render_widget(paragraph, inner);

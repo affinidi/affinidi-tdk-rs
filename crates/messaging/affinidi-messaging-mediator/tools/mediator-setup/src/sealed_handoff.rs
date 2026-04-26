@@ -423,6 +423,19 @@ impl SealedHandoffState {
         }
     }
 
+    /// Copy the wizard-computed bundle digest to the clipboard.
+    /// Hotkey `[F2]` on the `DigestVerify` panel — `F2` instead of
+    /// a letter key because the panel has an active text input
+    /// for the operator to type the OOB digest, and bare letters
+    /// would land in the field instead of triggering a copy.
+    pub fn copy_digest_to_clipboard(&mut self) {
+        let Some(digest) = self.computed_digest.clone() else {
+            self.clipboard_status = Some("No digest computed yet".into());
+            return;
+        };
+        self.set_clipboard(digest, "computed digest");
+    }
+
     /// Primary producer command for the current intent.
     ///
     /// **AdminOnly** — `pnm contexts bootstrap --id <ctx> --name

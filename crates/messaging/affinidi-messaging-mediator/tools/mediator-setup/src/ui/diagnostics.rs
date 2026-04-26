@@ -84,7 +84,7 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
             // admin DID (integration DID came from the earlier Did
             // step, not the VTA).
             use crate::vta_connect::VtaReply;
-            match &conn.reply {
+            let mut rows = match &conn.reply {
                 VtaReply::Full(provision) => vec![
                     Line::from(Span::styled(
                         format!("  Connected via {}.", conn.protocol.label()),
@@ -141,7 +141,28 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
                     }
                     rows
                 }
+            };
+            // Hotkey hint: which letters copy what. `[m]` is hidden
+            // for AdminOnly because there's no VTA-minted mediator
+            // DID to copy.
+            let has_mediator_did =
+                matches!(&conn.reply, VtaReply::Full(_) | VtaReply::ContextExport(_));
+            let hint = if has_mediator_did {
+                "  [v] copy VTA DID  [m] copy mediator DID  [a] copy admin DID"
+            } else {
+                "  [v] copy VTA DID  [a] copy admin DID"
+            };
+            rows.push(Line::from(Span::styled(hint, theme::muted_style())));
+            // Surface the most-recent clipboard result so the
+            // operator can see whether the last copy actually
+            // attempted (and via which path).
+            if let Some(status) = state.clipboard_status.as_deref() {
+                rows.push(Line::from(Span::styled(
+                    format!("  {status}"),
+                    theme::muted_style(),
+                )));
             }
+            rows
         }
         ConnectPhase::Testing => {
             if state.event_rx.is_some() {
