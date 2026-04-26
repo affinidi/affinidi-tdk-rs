@@ -10,6 +10,11 @@ pub struct SelectionOption {
     pub label: String,
     #[allow(dead_code)] // stored per-option, info text rendered via current_info_text()
     pub info: String,
+    /// `false` renders the option dimmed and signals the keyboard
+    /// handler to skip it. Defaults to `true`. Used by the recovery
+    /// prompt to show retry options for transports the VTA doesn't
+    /// advertise without removing them from the visual list.
+    pub enabled: bool,
 }
 
 impl SelectionOption {
@@ -17,7 +22,15 @@ impl SelectionOption {
         Self {
             label: label.into(),
             info: info.into(),
+            enabled: true,
         }
+    }
+
+    /// Mark an option disabled — renders dimmed, ignored by the
+    /// keyboard handler.
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
+        self
     }
 }
 

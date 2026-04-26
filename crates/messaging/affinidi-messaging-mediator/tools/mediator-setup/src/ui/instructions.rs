@@ -205,9 +205,11 @@ pub(crate) fn render_action_box(
         )));
     }
     for (i, opt) in options.iter().enumerate() {
-        let selected = i == selection_index && focused;
+        let selected = i == selection_index && focused && opt.enabled;
         let marker = if selected { "\u{203A} " } else { "  " };
-        let label_style = if selected {
+        let label_style = if !opt.enabled {
+            theme::muted_style()
+        } else if selected {
             theme::selected_style()
         } else {
             theme::normal_style()

@@ -1513,6 +1513,51 @@ impl WizardApp {
                             }
                             opts
                         }
+                        ConnectPhase::RecoveryPrompt => {
+                            // Option order is fixed so the keyboard
+                            // shortcuts ([R] / [E] / [O] / [B]) and
+                            // selection-index handling stay stable
+                            // across renders. Disabled options stay
+                            // present but render dimmed; Slice 2.3
+                            // wires the selection logic to skip
+                            // them.
+                            let recovery_opts = match st.resolved.as_ref() {
+                                Some(resolved) => st.recovery_options(resolved),
+                                None => crate::vta_connect::RecoveryOptions {
+                                    retry_didcomm: false,
+                                    retry_rest: false,
+                                    offline_available: true,
+                                },
+                            };
+                            let retry_didcomm = SelectionOption::new(
+                                "[R] Retry DIDComm",
+                                "Re-run the DIDComm attempt from scratch.",
+                            );
+                            let retry_rest = SelectionOption::new(
+                                "[E] Retry REST",
+                                "Re-run the REST attempt from scratch.",
+                            );
+                            vec![
+                                if recovery_opts.retry_didcomm {
+                                    retry_didcomm
+                                } else {
+                                    retry_didcomm.disabled()
+                                },
+                                if recovery_opts.retry_rest {
+                                    retry_rest
+                                } else {
+                                    retry_rest.disabled()
+                                },
+                                SelectionOption::new(
+                                    "[O] Offline sealed-handoff",
+                                    "Switch to the offline flow: bundle a request file for the VTA admin, decode their reply locally.",
+                                ),
+                                SelectionOption::new(
+                                    "[B] Back",
+                                    "Return to the previous step in the wizard.",
+                                ),
+                            ]
+                        }
                         _ => vec![],
                     };
                 }

@@ -4,6 +4,7 @@ pub mod info_box;
 pub mod instructions;
 pub mod progress;
 pub mod prompt;
+pub mod recovery;
 pub mod selection;
 pub mod summary;
 pub mod text_input;
@@ -565,12 +566,25 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 info_box::render_info_box(frame, chunks[1], "Info", &info_text);
                 return;
             }
-            // RecoveryPrompt shares the diagnostics layout for now —
-            // Slice 2 task 2.2 lands a dedicated panel with retry /
-            // offline / back options.
-            ConnectPhase::Testing | ConnectPhase::Connected | ConnectPhase::RecoveryPrompt => {
+            ConnectPhase::Testing | ConnectPhase::Connected => {
                 let options = app.current_options();
                 diagnostics::render_diagnostics(
+                    frame,
+                    chunks[0],
+                    &step_data.title,
+                    &step_data.description,
+                    state,
+                    &options,
+                    app.selection_index,
+                    content_focused,
+                );
+                let info_text = app.current_info_text();
+                info_box::render_info_box(frame, chunks[1], "Info", &info_text);
+                return;
+            }
+            ConnectPhase::RecoveryPrompt => {
+                let options = app.current_options();
+                recovery::render_recovery_prompt(
                     frame,
                     chunks[0],
                     &step_data.title,
