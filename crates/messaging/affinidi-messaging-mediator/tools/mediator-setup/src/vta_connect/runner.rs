@@ -23,6 +23,48 @@ use crate::vta_connect::provision::{ProvisionAsk, provision_mediator_integration
 use crate::vta_connect::resolve::resolve_vta;
 use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
 
+/// Outcome of a single transport's auth attempt.
+///
+/// Returned by [`run_didcomm_attempt`] (and, in Slice 1, the REST
+/// equivalent). The orchestrator translates this into the
+/// transport-agnostic [`VtaEvent::Connected`] /
+/// [`VtaEvent::PreflightDone`] / [`VtaEvent::Failed`] event that the
+/// wizard's main loop already understands.
+///
+/// The pre-auth / post-auth distinction matters for fallback. Slice 3
+/// uses it to decide whether to try a different transport — a pre-auth
+/// failure (transport / handshake / ACL miss) is worth retrying over
+/// REST, while a post-auth failure (template error, etc.) means the
+/// VTA accepted us and a different wire will reproduce the rejection.
+#[derive(Debug)]
+enum AttemptOutcome {
+    /// AdminOnly success — the operator's setup DID is ACL-enrolled
+    /// and the wizard has the credential it needs. The orchestrator
+    /// emits this directly as a [`VtaEvent::Connected`].
+    ConnectedAdmin(VtaReply),
+    /// FullSetup preflight success. The orchestrator emits a
+    /// [`VtaEvent::PreflightDone`]; the main loop then either
+    /// auto-picks a webvh server (0/1 catalogue entries) or shows
+    /// the picker (2+) before spawning the provision flight.
+    PreflightOk {
+        rest_url: Option<String>,
+        mediator_did: String,
+        servers: Vec<WebvhServerRecord>,
+    },
+    /// Failure before auth completed (transport / handshake / ACL
+    /// miss). The string is the operator-facing failure message —
+    /// the orchestrator emits it verbatim as [`VtaEvent::Failed`].
+    PreAuthFailure(String),
+    /// Failure after auth completed but before the protocol's
+    /// natural endpoint. Reserved for Slice 1's REST FullSetup
+    /// path; the DIDComm attempt has no post-auth failure mode in
+    /// this scope (`list_webvh_servers` errors are non-fatal and
+    /// downstream `provision_integration` lives in
+    /// `run_provision_flight`).
+    #[allow(dead_code)]
+    PostAuthFailure(String),
+}
+
 /// Single event emitted by the runner. The consumer applies it to the
 /// diagnostics list and/or transitions the sub-flow phase.
 #[derive(Debug)]
@@ -163,24 +205,81 @@ pub async fn run_connection_test(
         DiagStatus::Skipped("DIDComm-only VTA".into()),
     ));
 
-    // ── 3. Authenticate (+ provision, for FullSetup) ─────────────────
+    // ── 3. DIDComm attempt ───────────────────────────────────────────
     //
-    // Both intents open a DIDComm session as the setup DID. For
-    // `FullSetup` the session then carries the VP round-trip;
-    // `AdminOnly` stops after the session opens — the fact that the
-    // authcrypt handshake completes is sufficient proof that the
-    // operator's out-of-band `pnm acl create` worked.
+    // The attempt fn handles its own diagnostic rows; we translate
+    // the outcome into the final transport-agnostic event the
+    // wizard's main loop expects.
+    let outcome = run_didcomm_attempt(
+        intent,
+        vta_did,
+        mediator_did.clone(),
+        rest_url.clone(),
+        setup_did,
+        setup_privkey_mb,
+        &tx,
+    )
+    .await;
+
+    match outcome {
+        AttemptOutcome::ConnectedAdmin(reply) => {
+            let _ = tx.send(VtaEvent::Connected {
+                protocol: Protocol::DidComm,
+                rest_url,
+                mediator_did: Some(mediator_did),
+                reply,
+            });
+        }
+        AttemptOutcome::PreflightOk {
+            rest_url,
+            mediator_did,
+            servers,
+        } => {
+            let _ = tx.send(VtaEvent::PreflightDone {
+                rest_url,
+                mediator_did,
+                servers,
+            });
+        }
+        AttemptOutcome::PreAuthFailure(reason) | AttemptOutcome::PostAuthFailure(reason) => {
+            let _ = tx.send(VtaEvent::Failed(reason));
+        }
+    }
+}
+
+/// Run the DIDComm leg of the auth check.
+///
+/// Emits diagnostic rows ([`DiagCheck::AuthenticateDIDComm`],
+/// [`DiagCheck::ListWebvhServers`], [`DiagCheck::ProvisionIntegration`])
+/// through `tx` as the attempt progresses. Returns an
+/// [`AttemptOutcome`] capturing whether the attempt reached its
+/// natural endpoint, failed pre-auth, or failed post-auth — the
+/// orchestrator translates the outcome into the final
+/// transport-agnostic [`VtaEvent`].
+///
+/// Pre-auth boundary: any failure before [`DIDCommSession::connect`]
+/// resolves `Ok` is pre-auth. The DIDComm attempt today has no
+/// post-auth failure mode in this scope — `list_webvh_servers`
+/// errors are non-fatal (we continue serverless) and downstream
+/// `provision_integration` runs in [`run_provision_flight`]. Slice 1
+/// extends the boundary for the REST attempt.
+async fn run_didcomm_attempt(
+    intent: VtaIntent,
+    vta_did: String,
+    mediator_did: String,
+    rest_url: Option<String>,
+    setup_did: String,
+    setup_privkey_mb: String,
+    tx: &UnboundedSender<VtaEvent>,
+) -> AttemptOutcome {
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::AuthenticateDIDComm));
 
     match intent {
         VtaIntent::FullSetup => {
             // FullSetup preflight: open the session (auth check), then
-            // list the VTA's registered webvh servers. Emit
-            // `PreflightDone` so the main loop can either auto-pick
-            // (0 or 1 server) or show a picker (2+) before spawning
-            // the provision flight. Keeping list + provision in
-            // separate flights lets the operator change their mind on
-            // the webvh pick without wasting a VP nonce.
+            // list the VTA's registered webvh servers. Keeping list +
+            // provision in separate flights lets the operator change
+            // their mind on the webvh pick without wasting a VP nonce.
             use vta_sdk::didcomm_session::DIDCommSession;
             use vta_sdk::protocols::did_management::servers::ListWebvhServersResultBody;
             use vta_sdk::protocols::did_management::{
@@ -216,13 +315,12 @@ pub async fn run_connection_test(
                         DiagCheck::ProvisionIntegration,
                         DiagStatus::Skipped("session did not open".into()),
                     ));
-                    let _ = tx.send(VtaEvent::Failed(format!(
+                    return AttemptOutcome::PreAuthFailure(format!(
                         "Could not open an authenticated DIDComm session to the VTA. \
-                             Confirm the `pnm acl create` command ran successfully for \
-                             this setup DID and that the VTA's mediator service is \
-                             reachable. ({msg})"
-                    )));
-                    return;
+                         Confirm the `pnm acl create` command ran successfully for \
+                         this setup DID and that the VTA's mediator service is \
+                         reachable. ({msg})"
+                    ));
                 }
             };
 
@@ -264,11 +362,11 @@ pub async fn run_connection_test(
                 }
             };
 
-            let _ = tx.send(VtaEvent::PreflightDone {
+            AttemptOutcome::PreflightOk {
                 rest_url,
                 mediator_did,
                 servers,
-            });
+            }
         }
         VtaIntent::AdminOnly => {
             // AdminOnly: open a DIDComm session as the setup DID and
@@ -301,15 +399,10 @@ pub async fn run_connection_test(
                                 .into(),
                         ),
                     ));
-                    let _ = tx.send(VtaEvent::Connected {
-                        protocol: Protocol::DidComm,
-                        rest_url,
-                        mediator_did: Some(mediator_did),
-                        reply: VtaReply::AdminOnly(AdminCredentialReply {
-                            admin_did: setup_did.clone(),
-                            admin_private_key_mb: setup_privkey_mb.clone(),
-                        }),
-                    });
+                    AttemptOutcome::ConnectedAdmin(VtaReply::AdminOnly(AdminCredentialReply {
+                        admin_did: setup_did,
+                        admin_private_key_mb: setup_privkey_mb,
+                    }))
                 }
                 Err(e) => {
                     let msg = e.to_string();
@@ -325,12 +418,12 @@ pub async fn run_connection_test(
                         DiagCheck::ProvisionIntegration,
                         DiagStatus::Skipped("session did not open".into()),
                     ));
-                    let _ = tx.send(VtaEvent::Failed(format!(
+                    AttemptOutcome::PreAuthFailure(format!(
                         "Could not open an authenticated DIDComm session to the VTA. \
                          Confirm the `pnm acl create` command ran successfully for \
                          this DID and that the VTA's mediator service is reachable. \
                          ({msg})"
-                    )));
+                    ))
                 }
             }
         }
@@ -340,18 +433,18 @@ pub async fn run_connection_test(
             // sub-flow without ever spawning the runner. Reaching
             // here would mean a wiring bug (e.g. someone added an
             // online entry for OfflineExport without the matching
-            // request shape). Emit a Failed event so the operator
-            // sees the misconfiguration rather than a silent hang.
+            // request shape). Surface the misconfiguration rather
+            // than hanging silently.
             let _ = tx.send(VtaEvent::CheckDone(
                 DiagCheck::AuthenticateDIDComm,
                 DiagStatus::Skipped("OfflineExport has no online transport".into()),
             ));
-            let _ = tx.send(VtaEvent::Failed(
+            AttemptOutcome::PreAuthFailure(
                 "OfflineExport intent has no online runner — \
                  use the sealed-handoff sub-flow instead. This is a wizard \
                  wiring bug; please report."
                     .into(),
-            ));
+            )
         }
     }
 }
