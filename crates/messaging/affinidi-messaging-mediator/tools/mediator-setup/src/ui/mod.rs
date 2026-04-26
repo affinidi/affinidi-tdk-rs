@@ -229,6 +229,13 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                      the same VTA."
                         .into()
                 });
+                // Surface the transition-from-online banner above
+                // the regular hint so the operator sees why the
+                // wizard switched into this flow.
+                let hint = match state.offline_transition_banner.as_deref() {
+                    Some(banner) => format!("{banner}\n\n{hint}"),
+                    None => hint,
+                };
                 prompt::render_prompt(
                     frame,
                     chunks[0],

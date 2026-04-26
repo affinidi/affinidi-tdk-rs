@@ -193,6 +193,13 @@ pub struct SealedHandoffState {
     /// transitions so a later re-entry (e.g. operator backtracks)
     /// starts at the top.
     pub request_scroll: u16,
+    /// Banner shown above the intro panel when the wizard
+    /// transitioned into the sealed-handoff sub-flow from the
+    /// recovery prompt rather than via the operator's primary
+    /// `OfflineExport` choice. `None` for the direct entry path
+    /// (intro screen renders without the banner). Populated by
+    /// [`crate::app::WizardApp::transition_to_sealed_handoff`].
+    pub offline_transition_banner: Option<String>,
 }
 
 impl SealedHandoffState {
@@ -228,6 +235,7 @@ impl SealedHandoffState {
             producer_assertion: None,
             assertion_warning: None,
             request_scroll: 0,
+            offline_transition_banner: None,
         }
     }
 

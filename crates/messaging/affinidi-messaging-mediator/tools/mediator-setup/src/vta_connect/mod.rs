@@ -65,6 +65,44 @@ pub struct RecoveryOptions {
     pub offline_available: bool,
 }
 
+/// Why the wizard transitioned from the online flow into the
+/// offline sealed-handoff sub-flow. Carried into
+/// [`crate::sealed_handoff::SealedHandoffState`] so the intro
+/// screen can show the operator a one-line banner explaining
+/// what happened and what to do next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OfflineReason {
+    /// Both transports failed (or only one was available and it
+    /// failed). Pre- and post-auth alike — the operator chose to
+    /// switch wires rather than keep trying online.
+    BothFailed,
+    /// The VTA's DID document advertised neither DIDComm nor REST.
+    /// No online transport was ever attempted.
+    NoTransportAvailable,
+    /// Operator pressed `[O]` from the recovery prompt as a
+    /// proactive choice — not because online attempts were
+    /// exhausted. Reserved for a future "force offline" hotkey;
+    /// the current recovery prompt always falls into one of the
+    /// other two.
+    #[allow(dead_code)]
+    OperatorChoice,
+}
+
+impl OfflineReason {
+    /// Operator-facing one-line banner. Stored on the sealed-handoff
+    /// state and rendered above its intro to make the transition
+    /// reason explicit.
+    pub fn banner(&self) -> &'static str {
+        match self {
+            Self::BothFailed => "Online attempts failed — switching to offline sealed-handoff.",
+            Self::NoTransportAvailable => {
+                "VTA advertises no online transport — using offline sealed-handoff instead."
+            }
+            Self::OperatorChoice => "Switched to offline sealed-handoff at operator request.",
+        }
+    }
+}
+
 /// A completed VTA interaction — retained on `WizardApp` after the
 /// sub-flow exits so downstream steps (Did, Summary, secret-writing) can
 /// use the resulting credential material.
@@ -460,9 +498,12 @@ impl VtaConnectState {
             VtaEvent::Failed(reason) => {
                 self.last_error = Some(reason);
                 self.event_rx = None;
-                // Stay on Testing so the checklist remains visible. The UI
-                // layer exposes Retry / Back options when
-                // `last_error.is_some()`.
+                // Slice 2 routes failures into the recovery prompt
+                // so the operator picks retry / offline / back.
+                // Slice 3 will refine this — pre-auth failures with
+                // an unattempted alternate transport advertised will
+                // route into the FallbackPrompt phase first.
+                self.phase = ConnectPhase::RecoveryPrompt;
             }
             VtaEvent::Resolved(resolved) => {
                 self.resolved = Some(resolved);

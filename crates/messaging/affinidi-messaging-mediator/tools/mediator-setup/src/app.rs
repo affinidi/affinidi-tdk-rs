@@ -554,6 +554,42 @@ impl WizardApp {
         self.current_step == WizardStep::Vta && self.sealed_handoff.is_some()
     }
 
+    /// Transition out of the online VTA-connect sub-flow and into
+    /// the offline sealed-handoff sub-flow. Carries `vta_did`,
+    /// `context_id`, and (FullSetup only) `mediator_url` over so
+    /// the operator doesn't re-type them on the sealed-handoff
+    /// intro. The setup key is regenerated at `finalize_request`
+    /// time inside the sealed flow — the online setup key stays
+    /// inside `vta_connect`, never leaks into the sealed bundle.
+    ///
+    /// `reason` becomes the operator-facing banner on the
+    /// sealed-handoff intro screen, so the operator sees why the
+    /// wizard switched flows.
+    pub fn transition_to_sealed_handoff(&mut self, reason: crate::vta_connect::OfflineReason) {
+        let Some(vta) = self.vta_connect.as_ref() else {
+            return;
+        };
+        let intent = vta.intent;
+        let context_id = vta.context_id.clone();
+        let mediator_url = vta.mediator_url.clone();
+
+        let mut state = crate::sealed_handoff::SealedHandoffState::new(
+            intent,
+            Some(format!("mediator/{}", self.config.config_path)),
+        );
+        state.context_id = context_id.clone();
+        if intent == VtaIntent::FullSetup && !mediator_url.is_empty() {
+            state = state.with_mediator_url(mediator_url);
+        }
+        state.offline_transition_banner = Some(reason.banner().to_string());
+
+        self.text_input = Input::new(context_id);
+        self.mode = InputMode::TextInput;
+        self.sealed_handoff = Some(state);
+        self.vta_connect = None;
+        self.selection_index = 0;
+    }
+
     /// Drive the sealed sub-flow forward. The phases are linear and
     /// each "select" advances by one — the actual ingest/open work
     /// happens on the text-input confirmation path.
@@ -910,6 +946,61 @@ impl WizardApp {
                 self.mode = InputMode::Selecting;
                 self.advance();
             }
+            ConnectPhase::RecoveryPrompt => {
+                // Recovery options layout (mirrors current_options):
+                //   0 = [R] Retry DIDComm
+                //   1 = [E] Retry REST
+                //   2 = [O] Offline sealed-handoff
+                //   3 = [B] Back to AwaitingAcl
+                // Disabled options are silently ignored — the keyboard
+                // handler skips them on arrow keys (see move_up /
+                // move_down) but a stray Enter on a disabled option is
+                // a no-op rather than an error.
+                let opts = self.current_options();
+                let opt = match opts.get(self.selection_index) {
+                    Some(o) if o.enabled => o,
+                    _ => return,
+                };
+                let _ = opt;
+                match self.selection_index {
+                    0 | 1 => {
+                        // Re-spawn the runner. The orchestrator picks
+                        // the same transport that just failed pre-auth
+                        // (no [R]/[E]-specific routing yet — Slice 3's
+                        // FallbackPrompt and explicit transport pick
+                        // refines this).
+                        self.start_vta_test();
+                    }
+                    2 => {
+                        // [O] Offline sealed-handoff. Reason is
+                        // BothFailed when an attempt actually ran;
+                        // NoTransportAvailable when the recovery
+                        // prompt fired because the VTA advertised
+                        // neither transport.
+                        let reason = match self.vta_connect.as_ref() {
+                            Some(st)
+                                if st.attempted.didcomm.is_some()
+                                    || st.attempted.rest.is_some() =>
+                            {
+                                crate::vta_connect::OfflineReason::BothFailed
+                            }
+                            _ => crate::vta_connect::OfflineReason::NoTransportAvailable,
+                        };
+                        self.transition_to_sealed_handoff(reason);
+                    }
+                    3 => {
+                        // [B] Back to AwaitingAcl so the operator can
+                        // re-run the `pnm acl create` step or change
+                        // the setup key.
+                        if let Some(st) = self.vta_connect.as_mut() {
+                            st.phase = ConnectPhase::AwaitingAcl;
+                            st.last_error = None;
+                            self.selection_index = 0;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -1011,6 +1102,11 @@ impl WizardApp {
     /// Drain any pending events from the runner and apply them to the
     /// sub-flow state. Called from the main event loop on every tick.
     pub fn drain_vta_events(&mut self) {
+        // Snapshot phase pre-drain so we can detect transitions
+        // (e.g. into RecoveryPrompt) and reset selection_index to
+        // a sensible default for the new options layout.
+        let pre_phase = self.vta_connect.as_ref().map(|s| s.phase.clone());
+
         // Drain any pending runner events. Both the early-exit
         // (no sub-flow / no channel) and the normal drain path fall
         // through to the webvh auto-dispatch below, which also runs
@@ -1045,6 +1141,18 @@ impl WizardApp {
             }
         } else {
             return;
+        }
+
+        // If apply_event transitioned us into RecoveryPrompt, the
+        // previous selection_index almost certainly maps to a
+        // disabled retry row. Snap to the first enabled option so
+        // the operator's first Enter doesn't no-op on a dimmed row.
+        let post_phase = self.vta_connect.as_ref().map(|s| s.phase.clone());
+        if pre_phase != post_phase && matches!(post_phase, Some(ConnectPhase::RecoveryPrompt)) {
+            let opts = self.current_options();
+            if let Some(idx) = opts.iter().position(|o| o.enabled) {
+                self.selection_index = idx;
+            }
         }
 
         // Post-drain dispatch: if we just landed on PickWebvhServer
@@ -3157,15 +3265,31 @@ impl WizardApp {
     }
 
     pub fn move_up(&mut self) {
-        if self.selection_index > 0 {
-            self.selection_index -= 1;
+        let opts = self.current_options();
+        let mut i = self.selection_index;
+        while i > 0 {
+            i -= 1;
+            // The `enabled` flag is only false on the recovery
+            // prompt's dimmed retry rows today; every other phase's
+            // options are uniformly enabled, so the skip behaves
+            // exactly like the old "decrement once" for them.
+            if opts.get(i).map(|o| o.enabled).unwrap_or(true) {
+                self.selection_index = i;
+                return;
+            }
         }
     }
 
     pub fn move_down(&mut self) {
-        let max = self.current_options().len().saturating_sub(1);
-        if self.selection_index < max {
-            self.selection_index += 1;
+        let opts = self.current_options();
+        let max = opts.len().saturating_sub(1);
+        let mut i = self.selection_index;
+        while i < max {
+            i += 1;
+            if opts.get(i).map(|o| o.enabled).unwrap_or(true) {
+                self.selection_index = i;
+                return;
+            }
         }
     }
 
@@ -4332,7 +4456,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vta_subflow_testing_failure_allows_retry() {
+    async fn vta_subflow_failure_routes_to_recovery_prompt() {
         use crate::vta_connect::VtaEvent;
 
         let mut app = WizardApp::new("test.toml".into());
@@ -4345,24 +4469,93 @@ mod tests {
         app.confirm_text_input();
         app.select_current(); // → Testing
 
-        // Simulate runner failure.
+        // Simulate runner failure. Slice 2 routes Failed → RecoveryPrompt
+        // so the operator picks a path forward (retry / offline / back).
         let st = app.vta_connect.as_mut().unwrap();
         st.event_rx = None;
         st.apply_event(VtaEvent::Failed("ACL not found".into()));
-        assert_eq!(app.vta_phase(), Some(&ConnectPhase::Testing));
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::RecoveryPrompt));
         assert!(app.vta_connect.as_ref().unwrap().last_error.is_some());
 
-        // The Retry option should now be offered.
+        // RecoveryPrompt offers four options ([R] / [E] / [O] / [B]).
         let opts = app.current_options();
-        assert_eq!(opts.len(), 1);
-        assert_eq!(opts[0].label, "Retry");
+        assert_eq!(opts.len(), 4);
+        assert!(opts[0].label.contains("Retry DIDComm"));
+        assert!(opts[2].label.contains("Offline"));
+        assert!(opts[3].label.contains("Back"));
+    }
 
-        // Enter re-kicks the runner.
+    #[tokio::test]
+    async fn recovery_back_returns_to_awaiting_acl() {
+        use crate::vta_connect::VtaEvent;
+
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        pick_full_setup_online(&mut app);
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
         app.select_current();
-        let st = app.vta_connect.as_ref().unwrap();
-        assert_eq!(st.phase, ConnectPhase::Testing);
-        assert!(st.event_rx.is_some());
-        assert!(st.last_error.is_none());
+
+        let st = app.vta_connect.as_mut().unwrap();
+        st.event_rx = None;
+        st.apply_event(VtaEvent::Failed("ACL not found".into()));
+
+        // Select [B] Back (index 3).
+        app.selection_index = 3;
+        app.select_current();
+        assert_eq!(app.vta_phase(), Some(&ConnectPhase::AwaitingAcl));
+        assert!(
+            app.vta_connect.as_ref().unwrap().last_error.is_none(),
+            "going back clears the failure so AwaitingAcl renders cleanly"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_offline_transitions_to_sealed_handoff_with_carry_over() {
+        use crate::vta_connect::VtaEvent;
+
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to(&mut app, WizardStep::Vta);
+        pick_full_setup_online(&mut app);
+        app.text_input = tui_input::Input::new("did:webvh:vta.example.com".into());
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("mediator-prod".into());
+        app.confirm_text_input();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+        app.select_current();
+
+        // Mark a DIDComm pre-auth attempt so [R] is enabled and the
+        // BothFailed reason fires (rather than NoTransportAvailable).
+        let st = app.vta_connect.as_mut().unwrap();
+        st.attempted.didcomm = Some(crate::vta_connect::AttemptResult {
+            outcome: crate::vta_connect::AttemptResultKind::PreAuthFailure(
+                "ACL not found".into(),
+            ),
+            at: std::time::Instant::now(),
+        });
+        st.event_rx = None;
+        st.apply_event(VtaEvent::Failed("ACL not found".into()));
+
+        // Select [O] Offline (index 2).
+        app.selection_index = 2;
+        app.select_current();
+        assert!(
+            app.in_sealed_handoff_subflow(),
+            "[O] should drop the operator into sealed-handoff"
+        );
+        assert!(app.vta_connect.is_none());
+
+        let sealed = app.sealed_handoff.as_ref().unwrap();
+        assert_eq!(sealed.context_id, "mediator-prod");
+        assert_eq!(sealed.mediator_url, "https://mediator.example.com");
+        assert!(
+            sealed.offline_transition_banner.is_some(),
+            "the banner explains why the wizard switched flows"
+        );
     }
 
     #[test]
