@@ -862,7 +862,8 @@ impl WizardApp {
         };
         match st.phase {
             ConnectPhase::AwaitingAcl => {
-                self.start_vta_test();
+                // Initial attempt — let the orchestrator auto-pick.
+                self.start_vta_test(None);
             }
             ConnectPhase::Testing => {
                 // Only meaningful after the runner has finished with a
@@ -870,7 +871,7 @@ impl WizardApp {
                 // in flight `event_rx` is still `Some` and we ignore Enter.
                 let st = self.vta_connect.as_ref().expect("subflow");
                 if st.event_rx.is_none() && st.last_error.is_some() {
-                    self.start_vta_test();
+                    self.start_vta_test(None);
                 }
             }
             ConnectPhase::PickWebvhServer => {
@@ -963,13 +964,16 @@ impl WizardApp {
                 };
                 let _ = opt;
                 match self.selection_index {
-                    0 | 1 => {
-                        // Re-spawn the runner. The orchestrator picks
-                        // the same transport that just failed pre-auth
-                        // (no [R]/[E]-specific routing yet — Slice 3's
-                        // FallbackPrompt and explicit transport pick
-                        // refines this).
-                        self.start_vta_test();
+                    0 => {
+                        // [R] Retry DIDComm — force the DIDComm path
+                        // even on a both-advertised VTA so the
+                        // orchestrator doesn't auto-pick BothAvailable
+                        // and silently fall through to REST.
+                        self.start_vta_test(Some(crate::vta_connect::Protocol::DidComm));
+                    }
+                    1 => {
+                        // [E] Retry REST — force the REST path.
+                        self.start_vta_test(Some(crate::vta_connect::Protocol::Rest));
                     }
                     2 => {
                         // [O] Offline sealed-handoff. Reason is
@@ -1001,13 +1005,58 @@ impl WizardApp {
                     _ => {}
                 }
             }
+            ConnectPhase::TransportFallbackPrompt => {
+                // Layout: [F] / [R] / [O] / [B]
+                let opts = self.current_options();
+                let opt = match opts.get(self.selection_index) {
+                    Some(o) if o.enabled => o,
+                    _ => return,
+                };
+                let _ = opt;
+                match self.selection_index {
+                    0 => {
+                        // [F] Fall back to REST.
+                        self.start_vta_test(Some(crate::vta_connect::Protocol::Rest));
+                    }
+                    1 => {
+                        // [R] Retry DIDComm — useful if the operator
+                        // just fixed the underlying issue (ACL row,
+                        // network) without giving up on DIDComm.
+                        self.start_vta_test(Some(crate::vta_connect::Protocol::DidComm));
+                    }
+                    2 => {
+                        // [O] Offline sealed-handoff with the
+                        // BothFailed reason — at least one transport
+                        // attempt is recorded by definition (we're
+                        // here because of a Failed event).
+                        self.transition_to_sealed_handoff(
+                            crate::vta_connect::OfflineReason::BothFailed,
+                        );
+                    }
+                    3 => {
+                        // [B] Back — same as the recovery prompt.
+                        if let Some(st) = self.vta_connect.as_mut() {
+                            st.phase = ConnectPhase::AwaitingAcl;
+                            st.last_error = None;
+                            self.selection_index = 0;
+                        }
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
 
-    /// Kick off (or re-kick) the diagnostic + auth run. Resets the checklist,
-    /// creates a fresh channel, and spawns the runner.
-    fn start_vta_test(&mut self) {
+    /// Kick off (or re-kick) the diagnostic + auth run. Resets the
+    /// checklist, creates a fresh channel, and spawns the runner.
+    ///
+    /// `force_transport`: `None` lets the orchestrator auto-pick
+    /// from advertised endpoints. `Some(Protocol::Rest)` forces the
+    /// REST path (used by `[F] Fall back to REST` and `[E] Retry
+    /// REST`). `Some(Protocol::DidComm)` forces DIDComm (used by
+    /// `[R] Retry DIDComm`).
+    fn start_vta_test(&mut self, force_transport: Option<crate::vta_connect::Protocol>) {
         let Some(st) = self.vta_connect.as_mut() else {
             return;
         };
@@ -1028,6 +1077,17 @@ impl WizardApp {
         st.last_error = None;
         st.clipboard_status = None;
         st.phase = ConnectPhase::Testing;
+        // Clear the prior attempt outcome(s) for the transport(s)
+        // about to be retried so the recovery / fallback prompts
+        // don't see stale "already attempted" data.
+        match force_transport {
+            Some(crate::vta_connect::Protocol::DidComm) => st.attempted.didcomm = None,
+            Some(crate::vta_connect::Protocol::Rest) => st.attempted.rest = None,
+            None => {
+                st.attempted.didcomm = None;
+                st.attempted.rest = None;
+            }
+        }
         self.selection_index = 0;
 
         tokio::spawn(async move {
@@ -1038,6 +1098,7 @@ impl WizardApp {
                 setup_privkey_mb,
                 context_id,
                 mediator_url,
+                force_transport,
                 tx,
             )
             .await;
@@ -1143,12 +1204,17 @@ impl WizardApp {
             return;
         }
 
-        // If apply_event transitioned us into RecoveryPrompt, the
-        // previous selection_index almost certainly maps to a
-        // disabled retry row. Snap to the first enabled option so
-        // the operator's first Enter doesn't no-op on a dimmed row.
+        // If apply_event transitioned us into a recovery / fallback
+        // prompt, the previous selection_index almost certainly maps
+        // to a disabled row. Snap to the first enabled option so the
+        // operator's first Enter doesn't no-op on a dimmed row.
         let post_phase = self.vta_connect.as_ref().map(|s| s.phase.clone());
-        if pre_phase != post_phase && matches!(post_phase, Some(ConnectPhase::RecoveryPrompt)) {
+        if pre_phase != post_phase
+            && matches!(
+                post_phase,
+                Some(ConnectPhase::RecoveryPrompt) | Some(ConnectPhase::TransportFallbackPrompt)
+            )
+        {
             let opts = self.current_options();
             if let Some(idx) = opts.iter().position(|o| o.enabled) {
                 self.selection_index = idx;
@@ -1527,6 +1593,10 @@ impl WizardApp {
                     "Recover",
                     "Online attempts exhausted — retry a transport or switch to offline sealed-handoff.",
                 ),
+                ConnectPhase::TransportFallbackPrompt => (
+                    "Transport fallback",
+                    "DIDComm pre-auth failed — fall back to REST, retry DIDComm, or switch to offline.",
+                ),
             };
             return StepData {
                 title: format!("Step {num}/{total}: VTA Integration — {suffix}"),
@@ -1620,6 +1690,47 @@ impl WizardApp {
                                 ));
                             }
                             opts
+                        }
+                        ConnectPhase::TransportFallbackPrompt => {
+                            // Slice 3 routes pre-auth failures here
+                            // when the alternate transport is
+                            // advertised + unattempted.
+                            let opts = match st.resolved.as_ref() {
+                                Some(resolved) => st.fallback_options(resolved),
+                                None => crate::vta_connect::FallbackOptions {
+                                    fall_back_to_rest: false,
+                                    retry_didcomm: false,
+                                    offline_available: true,
+                                },
+                            };
+                            let fall_back = SelectionOption::new(
+                                "[F] Fall back to REST",
+                                "Re-run the attempt over the REST endpoint the VTA advertises.",
+                            );
+                            let retry = SelectionOption::new(
+                                "[R] Retry DIDComm",
+                                "Re-run the DIDComm attempt — useful if the operator just fixed the underlying issue (ACL row, network).",
+                            );
+                            return vec![
+                                if opts.fall_back_to_rest {
+                                    fall_back
+                                } else {
+                                    fall_back.disabled()
+                                },
+                                if opts.retry_didcomm {
+                                    retry
+                                } else {
+                                    retry.disabled()
+                                },
+                                SelectionOption::new(
+                                    "[O] Offline sealed-handoff",
+                                    "Switch to the offline flow: bundle a request file for the VTA admin, decode their reply locally.",
+                                ),
+                                SelectionOption::new(
+                                    "[B] Back",
+                                    "Return to the previous step in the wizard.",
+                                ),
+                            ];
                         }
                         ConnectPhase::RecoveryPrompt => {
                             // Option order is fixed so the keyboard
@@ -1963,6 +2074,9 @@ impl WizardApp {
                         }
                         ConnectPhase::RecoveryPrompt => {
                             "Online attempts have been exhausted. Retry a transport whose last attempt failed pre-auth, or switch to the offline sealed-handoff flow.".into()
+                        }
+                        ConnectPhase::TransportFallbackPrompt => {
+                            "DIDComm failed pre-auth and the VTA also advertises REST. Fall back to REST without restarting, retry DIDComm if you fixed the underlying issue, or switch to offline sealed-handoff.".into()
                         }
                     };
                 }
@@ -4532,9 +4646,7 @@ mod tests {
         // BothFailed reason fires (rather than NoTransportAvailable).
         let st = app.vta_connect.as_mut().unwrap();
         st.attempted.didcomm = Some(crate::vta_connect::AttemptResult {
-            outcome: crate::vta_connect::AttemptResultKind::PreAuthFailure(
-                "ACL not found".into(),
-            ),
+            outcome: crate::vta_connect::AttemptResultKind::PreAuthFailure("ACL not found".into()),
             at: std::time::Instant::now(),
         });
         st.event_rx = None;

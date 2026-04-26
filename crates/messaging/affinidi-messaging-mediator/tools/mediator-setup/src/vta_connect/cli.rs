@@ -120,6 +120,7 @@ pub async fn run_phase2_connect(
                 privkey_mb,
                 ctx_owned,
                 mediator_url_owned,
+                None, // CLI auto-picks transport based on advertised endpoints
                 tx,
             )
             .await;

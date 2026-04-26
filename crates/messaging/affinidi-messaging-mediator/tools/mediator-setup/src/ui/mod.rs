@@ -589,7 +589,10 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 info_box::render_info_box(frame, chunks[1], "Info", &info_text);
                 return;
             }
-            ConnectPhase::RecoveryPrompt => {
+            // Both prompts share the recovery renderer — same
+            // failure-history panel + action box, only the option
+            // labels differ (built by current_options() per phase).
+            ConnectPhase::RecoveryPrompt | ConnectPhase::TransportFallbackPrompt => {
                 let options = app.current_options();
                 recovery::render_recovery_prompt(
                     frame,

@@ -168,6 +168,13 @@ pub enum VtaEvent {
 ///
 /// `context`, `mediator_url`, `label` are captured up-front from the
 /// wizard's earlier phases and fed into the VP's `TemplateBootstrapAsk`.
+/// `force_transport`: `Some(Protocol::Rest)` forces the REST path
+/// — used by `[F] Fall back to REST` and `[E] Retry REST`.
+/// `Some(Protocol::DidComm)` forces DIDComm. `None` lets
+/// [`select_initial_transport`] auto-pick from advertised
+/// endpoints. The forced choice is honoured only when the
+/// requested transport is actually advertised; otherwise the
+/// runner quietly falls back to auto-pick.
 pub async fn run_connection_test(
     intent: VtaIntent,
     vta_did: String,
@@ -175,6 +182,7 @@ pub async fn run_connection_test(
     setup_privkey_mb: String,
     context_id: String,
     mediator_url: String,
+    force_transport: Option<Protocol>,
     tx: UnboundedSender<VtaEvent>,
 ) {
     // OfflineExport never has an online transport — the entry path
@@ -236,7 +244,22 @@ pub async fn run_connection_test(
             "no"
         },
     );
-    let choice = select_initial_transport(&resolved);
+    let auto_choice = select_initial_transport(&resolved);
+    // Honour `force_transport` when the requested transport is
+    // advertised; otherwise fall back to auto-pick. A REST-only
+    // VTA + a force=DIDComm request quietly auto-picks RestOnly
+    // rather than producing a confusing "no DIDComm endpoint"
+    // failure.
+    let choice = match force_transport {
+        Some(Protocol::Rest) if resolved.rest_url.is_some() => InitialChoice::RestOnly,
+        Some(Protocol::DidComm) if resolved.mediator_did.is_some() => {
+            // Treat as DIDComm-only on this run so the orchestrator
+            // doesn't auto-fall-back to REST mid-attempt — the
+            // operator explicitly asked for DIDComm.
+            InitialChoice::DIDCommOnly
+        }
+        _ => auto_choice,
+    };
 
     if matches!(choice, InitialChoice::Neither) {
         // No advertised transport — wizard cannot proceed online.

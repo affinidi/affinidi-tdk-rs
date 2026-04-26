@@ -65,6 +65,19 @@ pub struct RecoveryOptions {
     pub offline_available: bool,
 }
 
+/// Whether each fallback action is available on the
+/// `TransportFallbackPrompt` panel. Slice 3 fires this panel only
+/// when an attempt failed pre-auth and the alternate transport is
+/// advertised but not yet attempted — the prompt offers the
+/// operator an interactive choice between falling back, retrying
+/// the same wire, or switching to offline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FallbackOptions {
+    pub fall_back_to_rest: bool,
+    pub retry_didcomm: bool,
+    pub offline_available: bool,
+}
+
 /// Why the wizard transitioned from the online flow into the
 /// offline sealed-handoff sub-flow. Carried into
 /// [`crate::sealed_handoff::SealedHandoffState`] so the intro
@@ -370,6 +383,12 @@ pub enum ConnectPhase {
     /// back to a previous phase. UI rendering lands in Slice 2
     /// task 2.2; the offline transition lands in 2.3.
     RecoveryPrompt,
+    /// Pre-auth failure with an unattempted alternate transport
+    /// available. The prompt offers `[F]` to fall back, `[R]` to
+    /// retry the same wire, `[O]` to go offline, or `[B]` to
+    /// back out. Slice 3 routes pre-auth failures here when
+    /// `fallback_options.fall_back_to_rest` is true.
+    TransportFallbackPrompt,
     Connected,
 }
 
@@ -428,6 +447,70 @@ impl VtaConnectState {
                     Some(AttemptResultKind::PreAuthFailure(_))
                 ),
             offline_available: true,
+        }
+    }
+
+    /// Compute the action availability for the
+    /// `TransportFallbackPrompt` panel.
+    ///
+    /// `fall_back_to_rest` is true iff REST is advertised AND has
+    /// not been attempted yet — falling back to a transport that
+    /// already failed is not actually a fallback. `retry_didcomm`
+    /// follows the same pre-auth rule as `recovery_options`.
+    pub fn fallback_options(&self, resolved: &ResolvedVta) -> FallbackOptions {
+        FallbackOptions {
+            fall_back_to_rest: resolved.rest_url.is_some() && self.attempted.rest.is_none(),
+            retry_didcomm: resolved.mediator_did.is_some()
+                && matches!(
+                    self.attempted.didcomm.as_ref().map(|r| &r.outcome),
+                    Some(AttemptResultKind::PreAuthFailure(_))
+                ),
+            offline_available: true,
+        }
+    }
+
+    /// Identify the most recently completed attempt and which
+    /// transport ran it. Used by [`apply_event`] to decide between
+    /// `TransportFallbackPrompt` (recent attempt was pre-auth) and
+    /// `RecoveryPrompt` (post-auth, or no fallback target).
+    pub fn last_attempt(&self) -> Option<(Protocol, &AttemptResult)> {
+        match (&self.attempted.didcomm, &self.attempted.rest) {
+            (Some(d), Some(r)) if d.at >= r.at => Some((Protocol::DidComm, d)),
+            (Some(_), Some(r)) => Some((Protocol::Rest, r)),
+            (Some(d), None) => Some((Protocol::DidComm, d)),
+            (None, Some(r)) => Some((Protocol::Rest, r)),
+            (None, None) => None,
+        }
+    }
+
+    /// Decide whether a `Failed` event should land on the
+    /// `TransportFallbackPrompt` rather than the broader
+    /// `RecoveryPrompt`. The answer is yes iff:
+    ///   1. We've recorded an attempt outcome (so we know which
+    ///      transport just ran).
+    ///   2. That attempt failed pre-auth — post-auth means the
+    ///      VTA accepted us; a different wire would reproduce the
+    ///      rejection.
+    ///   3. The alternate transport is advertised in the resolved
+    ///      DID document.
+    ///   4. The alternate transport hasn't been tried yet on this
+    ///      run — falling back to a wire that already failed isn't
+    ///      a fallback.
+    fn should_route_to_fallback(&self) -> bool {
+        let resolved = match self.resolved.as_ref() {
+            Some(r) => r,
+            None => return false,
+        };
+        let (protocol, result) = match self.last_attempt() {
+            Some(pair) => pair,
+            None => return false,
+        };
+        if !matches!(result.outcome, AttemptResultKind::PreAuthFailure(_)) {
+            return false;
+        }
+        match protocol {
+            Protocol::DidComm => resolved.rest_url.is_some() && self.attempted.rest.is_none(),
+            Protocol::Rest => resolved.mediator_did.is_some() && self.attempted.didcomm.is_none(),
         }
     }
 
@@ -498,12 +581,18 @@ impl VtaConnectState {
             VtaEvent::Failed(reason) => {
                 self.last_error = Some(reason);
                 self.event_rx = None;
-                // Slice 2 routes failures into the recovery prompt
-                // so the operator picks retry / offline / back.
-                // Slice 3 will refine this — pre-auth failures with
-                // an unattempted alternate transport advertised will
-                // route into the FallbackPrompt phase first.
-                self.phase = ConnectPhase::RecoveryPrompt;
+                // Slice 3 routing: a pre-auth failure with an
+                // unattempted alternate transport routes to the
+                // FallbackPrompt; everything else routes to the
+                // RecoveryPrompt. Post-auth failures (VTA accepted
+                // us but rejected the request body) always go to
+                // recovery — a different wire reproduces the
+                // rejection.
+                self.phase = if self.should_route_to_fallback() {
+                    ConnectPhase::TransportFallbackPrompt
+                } else {
+                    ConnectPhase::RecoveryPrompt
+                };
             }
             VtaEvent::Resolved(resolved) => {
                 self.resolved = Some(resolved);
@@ -642,5 +731,135 @@ mod tests {
             !opts.retry_rest,
             "connected attempt is a final state, not retryable"
         );
+    }
+
+    // ─── fallback_options ──────────────────────────────────────────
+
+    #[test]
+    fn fallback_offers_rest_after_didcomm_pre_auth() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(pre_auth());
+        let opts = st.fallback_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        assert!(opts.fall_back_to_rest);
+        assert!(opts.retry_didcomm);
+        assert!(opts.offline_available);
+    }
+
+    #[test]
+    fn fallback_disables_rest_when_not_advertised() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(pre_auth());
+        let opts = st.fallback_options(&resolved(Some("did:webvh:m"), None));
+        assert!(!opts.fall_back_to_rest);
+        assert!(opts.retry_didcomm);
+    }
+
+    #[test]
+    fn fallback_disables_rest_when_already_attempted() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(pre_auth());
+        // REST has already been tried (and failed). Falling back is
+        // not actually a fallback.
+        st.attempted.rest = Some(pre_auth());
+        let opts = st.fallback_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        assert!(!opts.fall_back_to_rest);
+    }
+
+    #[test]
+    fn fallback_disables_retry_after_post_auth_didcomm() {
+        // Post-auth means the VTA accepted the DIDComm session and
+        // rejected the request body. Retrying the same wire just
+        // reproduces the rejection. Note: the recovery prompt
+        // (not this prompt) is the right destination after a
+        // post-auth failure — the routing logic ensures we never
+        // *land* on FallbackPrompt with this state, but the
+        // option-availability computation must still be honest.
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(post_auth());
+        let opts = st.fallback_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        assert!(!opts.retry_didcomm);
+    }
+
+    // ─── last_attempt ──────────────────────────────────────────────
+
+    #[test]
+    fn last_attempt_picks_most_recent() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        let earlier = AttemptResult {
+            outcome: AttemptResultKind::PreAuthFailure("first".into()),
+            at: Instant::now(),
+        };
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let later = AttemptResult {
+            outcome: AttemptResultKind::PreAuthFailure("second".into()),
+            at: Instant::now(),
+        };
+        st.attempted.didcomm = Some(earlier);
+        st.attempted.rest = Some(later);
+        let (protocol, _) = st.last_attempt().expect("two attempts recorded");
+        assert_eq!(protocol, Protocol::Rest);
+    }
+
+    #[test]
+    fn last_attempt_none_without_attempts() {
+        let st = VtaConnectState::new(VtaIntent::FullSetup);
+        assert!(st.last_attempt().is_none());
+    }
+
+    // ─── apply_event routing (Slice 3) ─────────────────────────────
+
+    #[test]
+    fn pre_auth_didcomm_with_rest_advertised_routes_to_fallback_prompt() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.resolved = Some(resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::PreAuthFailure("ACL not found".into()),
+        });
+        st.apply_event(VtaEvent::Failed("ACL not found".into()));
+        assert_eq!(st.phase, ConnectPhase::TransportFallbackPrompt);
+    }
+
+    #[test]
+    fn pre_auth_didcomm_without_rest_routes_to_recovery_prompt() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.resolved = Some(resolved(Some("did:webvh:m"), None));
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::PreAuthFailure("ACL not found".into()),
+        });
+        st.apply_event(VtaEvent::Failed("ACL not found".into()));
+        // No fallback target → straight to recovery.
+        assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
+    }
+
+    #[test]
+    fn post_auth_failure_always_routes_to_recovery_prompt() {
+        // VTA accepted us mid-flow then rejected the request body.
+        // A different wire would reproduce the rejection — no
+        // fallback offered even though REST is advertised.
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.resolved = Some(resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::DidComm,
+            outcome: AttemptResultKind::PostAuthFailure("template render rejected".into()),
+        });
+        st.apply_event(VtaEvent::Failed("template render rejected".into()));
+        assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
+    }
+
+    #[test]
+    fn rest_pre_auth_after_didcomm_failure_routes_to_recovery_prompt() {
+        // Operator already fell back to REST and that failed too.
+        // No alternate transport remains unattempted → recovery.
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.resolved = Some(resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        st.attempted.didcomm = Some(pre_auth());
+        st.apply_event(VtaEvent::AttemptCompleted {
+            protocol: Protocol::Rest,
+            outcome: AttemptResultKind::PreAuthFailure("REST 401".into()),
+        });
+        st.apply_event(VtaEvent::Failed("REST 401".into()));
+        assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
     }
 }
