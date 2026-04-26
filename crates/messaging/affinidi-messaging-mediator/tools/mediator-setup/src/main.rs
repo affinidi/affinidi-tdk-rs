@@ -1,6 +1,7 @@
 mod app;
 mod bootstrap_headless;
 mod cli;
+mod clipboard;
 mod config_writer;
 mod consts;
 mod discovery;
