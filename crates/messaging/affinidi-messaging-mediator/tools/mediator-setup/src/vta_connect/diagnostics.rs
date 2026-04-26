@@ -6,7 +6,17 @@
 pub enum DiagCheck {
     ResolveDid,
     EnumerateServices,
-    Authenticate,
+    /// DIDComm-leg of the auth check. The runner emits `Running` /
+    /// `Ok` / `Failed` on this row when the configured transport is
+    /// DIDComm. When DIDComm isn't advertised by the VTA, this row
+    /// stays `Skipped`.
+    AuthenticateDIDComm,
+    /// REST-leg of the auth check. Emitted when the runner falls
+    /// back to REST after a DIDComm failure, when the VTA advertises
+    /// only REST, or as a `Skipped` placeholder when the DIDComm
+    /// path completed without needing a fallback. Slice 0 only emits
+    /// `Skipped`; live REST emissions land in Slice 1.
+    AuthenticateREST,
     /// FullSetup-only: fetches the VTA's registered webvh-hosting-server
     /// catalogue so the wizard can either auto-pick (0/1 entries) or
     /// prompt the operator (2+). Skipped on AdminOnly.
@@ -19,7 +29,8 @@ impl DiagCheck {
         match self {
             Self::ResolveDid => "Resolve VTA DID",
             Self::EnumerateServices => "Enumerate service endpoints",
-            Self::Authenticate => "Open authenticated DIDComm session",
+            Self::AuthenticateDIDComm => "Authenticate via DIDComm",
+            Self::AuthenticateREST => "Authenticate via REST",
             Self::ListWebvhServers => "List webvh hosting servers",
             Self::ProvisionIntegration => "Provision mediator DID + admin credential",
         }
@@ -31,7 +42,8 @@ impl DiagCheck {
         &[
             Self::ResolveDid,
             Self::EnumerateServices,
-            Self::Authenticate,
+            Self::AuthenticateDIDComm,
+            Self::AuthenticateREST,
             Self::ListWebvhServers,
             Self::ProvisionIntegration,
         ]
@@ -150,5 +162,30 @@ mod tests {
         let resolved = &list[0];
         assert_eq!(resolved.check, DiagCheck::ResolveDid);
         assert!(matches!(resolved.status, DiagStatus::Ok(_)));
+    }
+
+    #[test]
+    fn all_lists_split_authenticate_rows_in_order() {
+        let all = DiagCheck::all();
+        assert_eq!(
+            all,
+            &[
+                DiagCheck::ResolveDid,
+                DiagCheck::EnumerateServices,
+                DiagCheck::AuthenticateDIDComm,
+                DiagCheck::AuthenticateREST,
+                DiagCheck::ListWebvhServers,
+                DiagCheck::ProvisionIntegration,
+            ]
+        );
+    }
+
+    #[test]
+    fn authenticate_rows_have_distinct_labels() {
+        assert_eq!(
+            DiagCheck::AuthenticateDIDComm.label(),
+            "Authenticate via DIDComm"
+        );
+        assert_eq!(DiagCheck::AuthenticateREST.label(), "Authenticate via REST");
     }
 }

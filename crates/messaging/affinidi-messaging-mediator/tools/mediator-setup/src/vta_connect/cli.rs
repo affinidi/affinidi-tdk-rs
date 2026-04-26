@@ -238,7 +238,10 @@ mod tests {
         assert!(ok.contains("[OK]"));
         assert!(ok.contains("Resolve VTA DID"));
 
-        let failed = format_check_line(DiagCheck::Authenticate, &DiagStatus::Failed("boom".into()));
+        let failed = format_check_line(
+            DiagCheck::AuthenticateDIDComm,
+            &DiagStatus::Failed("boom".into()),
+        );
         assert!(failed.contains("[!!]"));
     }
 

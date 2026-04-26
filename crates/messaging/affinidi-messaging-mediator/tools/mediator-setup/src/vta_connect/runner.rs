@@ -126,8 +126,12 @@ pub async fn run_connection_test(
             DiagStatus::Failed(enum_detail),
         ));
         let _ = tx.send(VtaEvent::CheckDone(
-            DiagCheck::Authenticate,
+            DiagCheck::AuthenticateDIDComm,
             DiagStatus::Skipped("no DIDComm endpoint".into()),
+        ));
+        let _ = tx.send(VtaEvent::CheckDone(
+            DiagCheck::AuthenticateREST,
+            DiagStatus::Skipped("REST runner not yet implemented".into()),
         ));
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::ListWebvhServers,
@@ -149,6 +153,15 @@ pub async fn run_connection_test(
         DiagCheck::EnumerateServices,
         DiagStatus::Ok(enum_detail),
     ));
+    // DIDComm path is taken on this run. The REST row stays
+    // `Skipped` to keep the checklist honest about which transports
+    // were exercised; Slice 1 replaces this with a live REST attempt
+    // when the operator falls back or REST is the only advertised
+    // transport.
+    let _ = tx.send(VtaEvent::CheckDone(
+        DiagCheck::AuthenticateREST,
+        DiagStatus::Skipped("DIDComm-only VTA".into()),
+    ));
 
     // ── 3. Authenticate (+ provision, for FullSetup) ─────────────────
     //
@@ -157,7 +170,7 @@ pub async fn run_connection_test(
     // `AdminOnly` stops after the session opens — the fact that the
     // authcrypt handshake completes is sufficient proof that the
     // operator's out-of-band `pnm acl create` worked.
-    let _ = tx.send(VtaEvent::CheckStart(DiagCheck::Authenticate));
+    let _ = tx.send(VtaEvent::CheckStart(DiagCheck::AuthenticateDIDComm));
 
     match intent {
         VtaIntent::FullSetup => {
@@ -184,7 +197,7 @@ pub async fn run_connection_test(
             {
                 Ok(s) => {
                     let _ = tx.send(VtaEvent::CheckDone(
-                        DiagCheck::Authenticate,
+                        DiagCheck::AuthenticateDIDComm,
                         DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
                     ));
                     s
@@ -192,7 +205,7 @@ pub async fn run_connection_test(
                 Err(e) => {
                     let msg = e.to_string();
                     let _ = tx.send(VtaEvent::CheckDone(
-                        DiagCheck::Authenticate,
+                        DiagCheck::AuthenticateDIDComm,
                         DiagStatus::Failed(msg.clone()),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
@@ -271,7 +284,7 @@ pub async fn run_connection_test(
             {
                 Ok(_session) => {
                     let _ = tx.send(VtaEvent::CheckDone(
-                        DiagCheck::Authenticate,
+                        DiagCheck::AuthenticateDIDComm,
                         DiagStatus::Ok(format!("DIDComm session as {setup_did}")),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
@@ -301,7 +314,7 @@ pub async fn run_connection_test(
                 Err(e) => {
                     let msg = e.to_string();
                     let _ = tx.send(VtaEvent::CheckDone(
-                        DiagCheck::Authenticate,
+                        DiagCheck::AuthenticateDIDComm,
                         DiagStatus::Failed(msg.clone()),
                     ));
                     let _ = tx.send(VtaEvent::CheckDone(
@@ -330,7 +343,7 @@ pub async fn run_connection_test(
             // request shape). Emit a Failed event so the operator
             // sees the misconfiguration rather than a silent hang.
             let _ = tx.send(VtaEvent::CheckDone(
-                DiagCheck::Authenticate,
+                DiagCheck::AuthenticateDIDComm,
                 DiagStatus::Skipped("OfflineExport has no online transport".into()),
             ));
             let _ = tx.send(VtaEvent::Failed(

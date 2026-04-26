@@ -4250,7 +4250,7 @@ mod tests {
         let st = app.vta_connect.as_mut().unwrap();
         st.event_rx = None; // pretend the runner completed
         st.apply_event(VtaEvent::CheckDone(
-            crate::vta_connect::DiagCheck::Authenticate,
+            crate::vta_connect::DiagCheck::AuthenticateDIDComm,
             DiagStatus::Ok("ok".into()),
         ));
         st.apply_event(VtaEvent::Connected {
@@ -4734,7 +4734,7 @@ mod tests {
         let st = app.vta_connect.as_mut().unwrap();
         st.event_rx = None;
         st.apply_event(VtaEvent::CheckDone(
-            crate::vta_connect::DiagCheck::Authenticate,
+            crate::vta_connect::DiagCheck::AuthenticateDIDComm,
             DiagStatus::Ok("ok".into()),
         ));
         st.apply_event(VtaEvent::Connected {
