@@ -24,7 +24,7 @@ use crate::vta_connect::diagnostics::{DiagCheck, DiagStatus, Protocol};
 use crate::vta_connect::provision::{ProvisionAsk, provision_mediator_integration};
 use crate::vta_connect::resolve::{ResolvedVta, resolve_vta};
 use crate::vta_connect::runner_rest::{run_rest_attempt_admin_only, run_rest_attempt_full_setup};
-use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
+use crate::vta_connect::{AdminCredentialReply, AttemptResultKind, VtaIntent, VtaReply};
 
 /// Which transport(s) the VTA advertises and how the orchestrator
 /// should treat them on this run.
@@ -114,6 +114,22 @@ pub(super) enum AttemptOutcome {
 pub enum VtaEvent {
     CheckStart(DiagCheck),
     CheckDone(DiagCheck, DiagStatus),
+    /// Emitted once the VTA's DID document has been resolved. Lets
+    /// the wizard stash the advertised-transport info on state so
+    /// downstream UI (recovery prompt, Slice 3 fallback prompt)
+    /// can dim options the VTA doesn't actually support.
+    Resolved(ResolvedVta),
+    /// Emitted once a transport attempt resolves — either to a
+    /// terminal `Connected`, or to a pre-auth / post-auth failure.
+    /// Drives the wizard's `AttemptLog` so the recovery prompt
+    /// knows which retries are still meaningful. Not emitted for
+    /// `PreflightOk`: the FullSetup DIDComm preflight is mid-attempt
+    /// (the `run_provision_flight` follow-up emits its own
+    /// completion).
+    AttemptCompleted {
+        protocol: Protocol,
+        outcome: AttemptResultKind,
+    },
     /// Emitted by the preflight flight on FullSetup when the auth
     /// check has succeeded and the webvh-server catalogue has been
     /// fetched. The main loop inspects `servers` to decide whether
@@ -188,6 +204,10 @@ pub async fn run_connection_test(
                 DiagCheck::ResolveDid,
                 DiagStatus::Ok(detail),
             ));
+            // Stash advertised endpoints on the wizard's state so the
+            // recovery prompt (Slice 2) and fallback prompt (Slice 3)
+            // can dim unavailable options.
+            let _ = tx.send(VtaEvent::Resolved(r.clone()));
             r
         }
         Err(e) => {
@@ -281,6 +301,10 @@ pub async fn run_connection_test(
 
             match outcome {
                 AttemptOutcome::Connected(reply) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::DidComm,
+                        outcome: AttemptResultKind::Connected,
+                    });
                     let _ = tx.send(VtaEvent::Connected {
                         protocol: Protocol::DidComm,
                         rest_url,
@@ -293,14 +317,27 @@ pub async fn run_connection_test(
                     mediator_did,
                     servers,
                 } => {
+                    // No AttemptCompleted yet — preflight is mid-attempt.
+                    // The follow-up `run_provision_flight` emits its
+                    // own completion event.
                     let _ = tx.send(VtaEvent::PreflightDone {
                         rest_url,
                         mediator_did,
                         servers,
                     });
                 }
-                AttemptOutcome::PreAuthFailure(reason)
-                | AttemptOutcome::PostAuthFailure(reason) => {
+                AttemptOutcome::PreAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::DidComm,
+                        outcome: AttemptResultKind::PreAuthFailure(reason.clone()),
+                    });
+                    let _ = tx.send(VtaEvent::Failed(reason));
+                }
+                AttemptOutcome::PostAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::DidComm,
+                        outcome: AttemptResultKind::PostAuthFailure(reason.clone()),
+                    });
                     let _ = tx.send(VtaEvent::Failed(reason));
                 }
             }
@@ -347,6 +384,10 @@ pub async fn run_connection_test(
 
             match outcome {
                 AttemptOutcome::Connected(reply) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::Rest,
+                        outcome: AttemptResultKind::Connected,
+                    });
                     let _ = tx.send(VtaEvent::Connected {
                         protocol: Protocol::Rest,
                         rest_url,
@@ -364,8 +405,18 @@ pub async fn run_connection_test(
                             .into(),
                     ));
                 }
-                AttemptOutcome::PreAuthFailure(reason)
-                | AttemptOutcome::PostAuthFailure(reason) => {
+                AttemptOutcome::PreAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::Rest,
+                        outcome: AttemptResultKind::PreAuthFailure(reason.clone()),
+                    });
+                    let _ = tx.send(VtaEvent::Failed(reason));
+                }
+                AttemptOutcome::PostAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::AttemptCompleted {
+                        protocol: Protocol::Rest,
+                        outcome: AttemptResultKind::PostAuthFailure(reason.clone()),
+                    });
                     let _ = tx.send(VtaEvent::Failed(reason));
                 }
             }

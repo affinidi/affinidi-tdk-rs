@@ -1415,6 +1415,10 @@ impl WizardApp {
                     "Connected",
                     "Mediator DID minted by the VTA — advancing to the next step.",
                 ),
+                ConnectPhase::RecoveryPrompt => (
+                    "Recover",
+                    "Online attempts exhausted — retry a transport or switch to offline sealed-handoff.",
+                ),
             };
             return StepData {
                 title: format!("Step {num}/{total}: VTA Integration — {suffix}"),
@@ -1803,6 +1807,9 @@ impl WizardApp {
                         }
                         ConnectPhase::Connected => {
                             "VTA-minted mediator DID received. Advancing to the next step.".into()
+                        }
+                        ConnectPhase::RecoveryPrompt => {
+                            "Online attempts have been exhausted. Retry a transport whose last attempt failed pre-auth, or switch to the offline sealed-handoff flow.".into()
                         }
                     };
                 }

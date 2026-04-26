@@ -20,12 +20,50 @@ pub(crate) mod runner_rest;
 pub mod setup_key;
 
 pub use diagnostics::{
-    ConnectedInfo, DiagCheck, DiagEntry, DiagStatus, apply_update, pending_list,
+    ConnectedInfo, DiagCheck, DiagEntry, DiagStatus, Protocol, apply_update, pending_list,
 };
 pub use intent::{AdminCredentialReply, VtaIntent, VtaReply, VtaTransport};
+use std::time::Instant;
 use vta_sdk::context_provision::ContextProvisionBundle;
 
 use crate::vta_connect::provision::ProvisionResult;
+use crate::vta_connect::resolve::ResolvedVta;
+
+/// Recorded outcome of a single transport attempt. Lives in
+/// [`AttemptLog`] so the recovery prompt can decide which retry
+/// options to offer.
+#[derive(Clone, Debug)]
+pub struct AttemptResult {
+    pub outcome: AttemptResultKind,
+    pub at: Instant,
+}
+
+/// Stable shape of an attempt outcome. Carries the operator-facing
+/// failure reason for the failure variants — already wrapped with
+/// retry-friendly prose by the runner.
+#[derive(Clone, Debug)]
+pub enum AttemptResultKind {
+    Connected,
+    PreAuthFailure(String),
+    PostAuthFailure(String),
+}
+
+/// Per-transport history of attempts on this run. Both fields are
+/// `None` until the corresponding transport runs at least once.
+#[derive(Clone, Debug, Default)]
+pub struct AttemptLog {
+    pub didcomm: Option<AttemptResult>,
+    pub rest: Option<AttemptResult>,
+}
+
+/// Whether each retry / offline option is available on the recovery
+/// prompt. The prompt dims unavailable options.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryOptions {
+    pub retry_didcomm: bool,
+    pub retry_rest: bool,
+    pub offline_available: bool,
+}
 
 /// A completed VTA interaction — retained on `WizardApp` after the
 /// sub-flow exits so downstream steps (Did, Summary, secret-writing) can
@@ -246,6 +284,16 @@ pub struct VtaConnectState {
     /// success, the arboard error on failure. Cleared on phase change
     /// so it doesn't leak onto the Testing / Connected screens.
     pub clipboard_status: Option<String>,
+    /// VTA endpoints resolved from the DID document during the
+    /// runner's resolve step. Populated via [`VtaEvent::Resolved`].
+    /// Read by [`recovery_options`](Self::recovery_options) to know
+    /// which transports the VTA actually advertises.
+    pub resolved: Option<ResolvedVta>,
+    /// Per-transport attempt history populated via
+    /// [`VtaEvent::AttemptCompleted`]. Drives the recovery prompt's
+    /// option-availability rules — a retry is only offered for a
+    /// transport whose last attempt failed pre-auth.
+    pub attempted: AttemptLog,
 }
 
 /// Linear progression through the online-VTA sub-flow. The UI layer reads this
@@ -278,6 +326,12 @@ pub enum ConnectPhase {
     /// Blank input = server auto-assigns. Skipped on the serverless
     /// branch since there's no server to request a URI from.
     EnterWebvhPath,
+    /// All online attempts exhausted (or no transport advertised).
+    /// The prompt offers retry of any pre-auth-failed transport,
+    /// transition to the offline sealed-handoff sub-flow, or going
+    /// back to a previous phase. UI rendering lands in Slice 2
+    /// task 2.2; the offline transition lands in 2.3.
+    RecoveryPrompt,
     Connected,
 }
 
@@ -306,6 +360,36 @@ impl VtaConnectState {
             webvh_path: None,
             preflight_mediator_did: None,
             preflight_rest_url: None,
+            resolved: None,
+            attempted: AttemptLog::default(),
+        }
+    }
+
+    /// Compute which actions the recovery prompt should offer.
+    ///
+    /// `retry_*` is true iff the transport is advertised in the
+    /// resolved DID document AND its last attempt was a pre-auth
+    /// failure. A post-auth failure means the VTA accepted us and
+    /// rejected the request body; retrying the same wire reproduces
+    /// the rejection. A transport never attempted on this run also
+    /// has no retry offer — the operator's path back to it is
+    /// "go back" + re-trigger, not the recovery prompt.
+    ///
+    /// `offline_available` is always true: sealed-handoff is the
+    /// universal escape hatch.
+    pub fn recovery_options(&self, resolved: &ResolvedVta) -> RecoveryOptions {
+        RecoveryOptions {
+            retry_didcomm: resolved.mediator_did.is_some()
+                && matches!(
+                    self.attempted.didcomm.as_ref().map(|r| &r.outcome),
+                    Some(AttemptResultKind::PreAuthFailure(_))
+                ),
+            retry_rest: resolved.rest_url.is_some()
+                && matches!(
+                    self.attempted.rest.as_ref().map(|r| &r.outcome),
+                    Some(AttemptResultKind::PreAuthFailure(_))
+                ),
+            offline_available: true,
         }
     }
 
@@ -380,6 +464,19 @@ impl VtaConnectState {
                 // layer exposes Retry / Back options when
                 // `last_error.is_some()`.
             }
+            VtaEvent::Resolved(resolved) => {
+                self.resolved = Some(resolved);
+            }
+            VtaEvent::AttemptCompleted { protocol, outcome } => {
+                let result = AttemptResult {
+                    outcome,
+                    at: Instant::now(),
+                };
+                match protocol {
+                    Protocol::DidComm => self.attempted.didcomm = Some(result),
+                    Protocol::Rest => self.attempted.rest = Some(result),
+                }
+            }
         }
     }
 
@@ -423,5 +520,86 @@ mod tests {
     fn default_context_is_mediator() {
         let st = VtaConnectState::new(VtaIntent::FullSetup);
         assert_eq!(st.context_id, DEFAULT_VTA_CONTEXT);
+    }
+
+    fn resolved(mediator_did: Option<&str>, rest_url: Option<&str>) -> ResolvedVta {
+        ResolvedVta {
+            vta_did: "did:webvh:vta.test".into(),
+            mediator_did: mediator_did.map(str::to_string),
+            rest_url: rest_url.map(str::to_string),
+        }
+    }
+
+    fn pre_auth() -> AttemptResult {
+        AttemptResult {
+            outcome: AttemptResultKind::PreAuthFailure("ACL not found".into()),
+            at: Instant::now(),
+        }
+    }
+
+    fn post_auth() -> AttemptResult {
+        AttemptResult {
+            outcome: AttemptResultKind::PostAuthFailure("template render rejected".into()),
+            at: Instant::now(),
+        }
+    }
+
+    fn connected() -> AttemptResult {
+        AttemptResult {
+            outcome: AttemptResultKind::Connected,
+            at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn recovery_offers_retry_after_pre_auth_failure() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(pre_auth());
+        let opts = st.recovery_options(&resolved(Some("did:webvh:m"), None));
+        assert!(opts.retry_didcomm, "pre-auth failure should be retryable");
+        assert!(!opts.retry_rest);
+        assert!(opts.offline_available);
+    }
+
+    #[test]
+    fn recovery_does_not_offer_retry_after_post_auth_failure() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.didcomm = Some(post_auth());
+        let opts = st.recovery_options(&resolved(Some("did:webvh:m"), None));
+        assert!(
+            !opts.retry_didcomm,
+            "post-auth failure means VTA accepted us — no retry"
+        );
+        assert!(opts.offline_available);
+    }
+
+    #[test]
+    fn recovery_dims_retry_when_transport_not_advertised() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        // Pre-auth failure recorded, but the resolved DID doc says
+        // DIDComm isn't advertised. The offer should still be off.
+        st.attempted.didcomm = Some(pre_auth());
+        let opts = st.recovery_options(&resolved(None, Some("https://vta.test")));
+        assert!(!opts.retry_didcomm);
+    }
+
+    #[test]
+    fn recovery_dims_retry_when_never_attempted() {
+        let st = VtaConnectState::new(VtaIntent::FullSetup);
+        let opts = st.recovery_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
+        assert!(!opts.retry_didcomm, "no attempt → no retry offer");
+        assert!(!opts.retry_rest);
+        assert!(opts.offline_available);
+    }
+
+    #[test]
+    fn recovery_does_not_offer_retry_after_successful_connection() {
+        let mut st = VtaConnectState::new(VtaIntent::FullSetup);
+        st.attempted.rest = Some(connected());
+        let opts = st.recovery_options(&resolved(None, Some("https://vta.test")));
+        assert!(
+            !opts.retry_rest,
+            "connected attempt is a final state, not retryable"
+        );
     }
 }

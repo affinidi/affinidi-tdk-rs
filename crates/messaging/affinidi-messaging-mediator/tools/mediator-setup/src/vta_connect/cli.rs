@@ -145,6 +145,11 @@ pub async fn run_phase2_connect(
                     // defensively rather than panic if a future
                     // runner change breaks that invariant.
                 }
+                VtaEvent::Resolved(_) | VtaEvent::AttemptCompleted { .. } => {
+                    // CLI doesn't render the recovery prompt — it
+                    // reports failure via stderr and exits non-zero.
+                    // These events drive interactive state only.
+                }
                 VtaEvent::Failed(reason) => {
                     last_failure = Some(reason);
                 }

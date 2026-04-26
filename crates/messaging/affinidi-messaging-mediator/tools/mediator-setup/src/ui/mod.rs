@@ -565,7 +565,10 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 info_box::render_info_box(frame, chunks[1], "Info", &info_text);
                 return;
             }
-            ConnectPhase::Testing | ConnectPhase::Connected => {
+            // RecoveryPrompt shares the diagnostics layout for now —
+            // Slice 2 task 2.2 lands a dedicated panel with retry /
+            // offline / back options.
+            ConnectPhase::Testing | ConnectPhase::Connected | ConnectPhase::RecoveryPrompt => {
                 let options = app.current_options();
                 diagnostics::render_diagnostics(
                     frame,
