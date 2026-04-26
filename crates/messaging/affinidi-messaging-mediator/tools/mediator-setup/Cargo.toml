@@ -122,8 +122,9 @@ thiserror = "2"
 
 # ── Date / Time ──────────────────────────────────────────────────────────
 ## `chrono::Duration` is the freshness-window type on VP-signed
-## `provision-integration` bootstrap requests.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+## `provision-integration` bootstrap requests. `clock` adds
+## `Utc::now()` for the print-on-exit recap's ISO-8601 timestamp.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 ## Parses `MEDIATOR_BOOTSTRAP_SEED_TTL` env var ("24h", "7d", etc.)
 ## for the sealed-handoff sweeper.
 humantime = "2"

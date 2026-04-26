@@ -6,6 +6,7 @@ mod config_writer;
 mod consts;
 mod discovery;
 mod docker;
+mod exit_recap;
 mod generators;
 mod recipe;
 mod reprovision;
@@ -186,6 +187,15 @@ async fn main() -> anyhow::Result<()> {
                             bootstrap_headless::cleanup_artifacts(artefacts);
                         }
                         offer_build_and_guidance(&app.config);
+                        // Print the structured recap to normal stdout
+                        // (alt-screen has been left by `restore_terminal`
+                        // above) so the operator can scroll back and
+                        // mouse-select DIDs / paths / commands. Suppressed
+                        // for `--non-interactive` / `--from <recipe>` runs
+                        // — those have their own structured stdout that
+                        // CI scripts parse, and a recap would corrupt
+                        // the format.
+                        exit_recap::print_exit_recap(&app.config, app.vta_session.as_ref());
                     }
                     Err(e) => {
                         eprintln!("\n\x1b[31mError: {e}\x1b[0m");
