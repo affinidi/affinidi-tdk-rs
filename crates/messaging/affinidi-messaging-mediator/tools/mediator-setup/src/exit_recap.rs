@@ -183,11 +183,12 @@ mod tests {
     const TS: &str = "2026-04-26T12:00:00+00:00";
 
     fn config_minimal() -> WizardConfig {
-        let mut c = WizardConfig::default();
-        c.config_path = "/etc/mediator/mediator.toml".into();
-        c.public_url = "https://mediator.example.com".into();
-        c.listen_address = "0.0.0.0:7037".into();
-        c
+        WizardConfig {
+            config_path: "/etc/mediator/mediator.toml".into(),
+            public_url: "https://mediator.example.com".into(),
+            listen_address: "0.0.0.0:7037".into(),
+            ..WizardConfig::default()
+        }
     }
 
     fn admin_only_session() -> VtaSession {
