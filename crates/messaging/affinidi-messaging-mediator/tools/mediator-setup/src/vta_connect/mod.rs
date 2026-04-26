@@ -16,6 +16,7 @@ pub mod intent;
 pub mod provision;
 pub mod resolve;
 pub mod runner;
+pub(crate) mod runner_rest;
 pub mod setup_key;
 
 pub use diagnostics::{

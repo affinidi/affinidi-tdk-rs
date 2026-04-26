@@ -143,6 +143,10 @@ serial_test = "3"
 ## Sealed-handoff tests construct `ProducerAssertion` values with
 ## `producer_did` as a did:key — uses the `affinidi-crypto` dep
 ## already declared in `[dependencies]`.
+## In-process HTTP mock for the REST attempt unit tests — stubs the
+## VTA's `/auth/challenge` and `/auth/` endpoints so we can verify
+## the wrapper returns the right `AttemptOutcome` without a live VTA.
+wiremock = "0.6"
 
 [lints]
 workspace = true

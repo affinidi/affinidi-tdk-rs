@@ -37,7 +37,7 @@ use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
 /// REST, while a post-auth failure (template error, etc.) means the
 /// VTA accepted us and a different wire will reproduce the rejection.
 #[derive(Debug)]
-enum AttemptOutcome {
+pub(super) enum AttemptOutcome {
     /// AdminOnly success — the operator's setup DID is ACL-enrolled
     /// and the wizard has the credential it needs. The orchestrator
     /// emits this directly as a [`VtaEvent::Connected`].
