@@ -41,7 +41,6 @@ use crate::vta_connect::{AdminCredentialReply, VtaReply};
 /// path: `AuthenticateREST` runs, `ListWebvhServers` and
 /// `ProvisionIntegration` are `Skipped` with the same operator
 /// rationale. AdminOnly has no post-auth phase.
-#[allow(dead_code)] // Wired into the orchestrator in Slice 1 Task 1.3.
 pub(super) async fn run_rest_attempt_admin_only(
     rest_url: &str,
     vta_did: &str,
@@ -115,7 +114,6 @@ pub(super) async fn run_rest_attempt_admin_only(
 /// signing, nonce decode, or sealed-bundle opening is
 /// [`AttemptOutcome::PostAuthFailure`] — the VTA accepted us, so a
 /// different transport will reproduce the same outcome.
-#[allow(dead_code)] // Wired into the orchestrator in Slice 1 Task 1.3.
 pub(super) async fn run_rest_attempt_full_setup(
     rest_url: &str,
     vta_did: &str,

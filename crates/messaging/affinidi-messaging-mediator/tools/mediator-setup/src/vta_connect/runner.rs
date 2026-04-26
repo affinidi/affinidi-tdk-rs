@@ -1,8 +1,8 @@
 //! Background provisioning driver.
 //!
 //! Runs the diagnostic checklist against a running VTA and drives the
-//! `provision-integration` round-trip — resolve, enumerate, open
-//! DIDComm session as the setup DID, send a VP asking for a
+//! `provision-integration` round-trip — resolve, enumerate, open an
+//! authenticated session as the setup DID, send a VP asking for a
 //! `didcomm-mediator` template render + `vta-admin` admin rollover,
 //! receive the sealed bundle, open locally.
 //!
@@ -10,18 +10,58 @@
 //! unbounded channel; the wizard event loop drains events on its
 //! regular tick. The runner is spawned as a detached tokio task.
 //!
-//! Provision-integration is DIDComm-only on the wizard side (the
-//! file-path escape hatch lives on the VTA host). If the VTA DID
-//! document doesn't advertise a DIDComm endpoint, the runner hard-
-//! fails with a hint to use the offline sealed-handoff flow instead.
+//! [`select_initial_transport`] picks DIDComm or REST based on the
+//! VTA's advertised endpoints. The DIDComm attempt lives in
+//! [`run_didcomm_attempt`]; the REST attempts (one per intent) live
+//! in [`super::runner_rest`]. If the VTA advertises neither
+//! transport the runner emits a `Failed` event pointing at the
+//! offline sealed-handoff flow.
 
 use tokio::sync::mpsc::UnboundedSender;
 use vta_sdk::webvh::WebvhServerRecord;
 
 use crate::vta_connect::diagnostics::{DiagCheck, DiagStatus, Protocol};
 use crate::vta_connect::provision::{ProvisionAsk, provision_mediator_integration};
-use crate::vta_connect::resolve::resolve_vta;
+use crate::vta_connect::resolve::{ResolvedVta, resolve_vta};
+use crate::vta_connect::runner_rest::{run_rest_attempt_admin_only, run_rest_attempt_full_setup};
 use crate::vta_connect::{AdminCredentialReply, VtaIntent, VtaReply};
+
+/// Which transport(s) the VTA advertises and how the orchestrator
+/// should treat them on this run.
+///
+/// Computed by [`select_initial_transport`] from the resolved VTA
+/// DID document. Slice 3 extends the meaning of `BothAvailable` —
+/// today both branches start with DIDComm; in Slice 3 a pre-auth
+/// failure can fall back to REST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InitialChoice {
+    /// Both DIDComm and REST endpoints advertised. Start with
+    /// DIDComm; the REST row stays `Skipped` until Slice 3 wires
+    /// fallback.
+    BothAvailable,
+    /// Only `#DIDCommMessaging` advertised. The REST row stays
+    /// `Skipped("DIDComm-only VTA")`.
+    DIDCommOnly,
+    /// Only `vta-rest` advertised. The DIDComm row stays
+    /// `Skipped("REST-only VTA")` and the runner takes the REST
+    /// path directly.
+    RestOnly,
+    /// Neither transport is advertised — wizard cannot proceed
+    /// online. Slice 2 replaces the hard-fail with a recovery
+    /// prompt that lets the operator switch to sealed-handoff.
+    Neither,
+}
+
+/// Decide the initial transport based on what the VTA's DID
+/// document advertises. Pure function — no I/O.
+pub(super) fn select_initial_transport(resolved: &ResolvedVta) -> InitialChoice {
+    match (resolved.mediator_did.is_some(), resolved.rest_url.is_some()) {
+        (true, true) => InitialChoice::BothAvailable,
+        (true, false) => InitialChoice::DIDCommOnly,
+        (false, true) => InitialChoice::RestOnly,
+        (false, false) => InitialChoice::Neither,
+    }
+}
 
 /// Outcome of a single transport's auth attempt.
 ///
@@ -117,8 +157,24 @@ pub async fn run_connection_test(
     vta_did: String,
     setup_did: String,
     setup_privkey_mb: String,
+    context_id: String,
+    mediator_url: String,
     tx: UnboundedSender<VtaEvent>,
 ) {
+    // OfflineExport never has an online transport — the entry path
+    // in `app.rs` routes it straight to the sealed-handoff sub-flow.
+    // Reaching this fn with OfflineExport is a wiring bug; surface
+    // it rather than running the resolve/enumerate dance.
+    if matches!(intent, VtaIntent::OfflineExport) {
+        let _ = tx.send(VtaEvent::Failed(
+            "OfflineExport intent has no online runner — \
+             use the sealed-handoff sub-flow instead. This is a wizard \
+             wiring bug; please report."
+                .into(),
+        ));
+        return;
+    }
+
     // ── 1. Resolve ────────────────────────────────────────────────────
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::ResolveDid));
     let resolved = match resolve_vta(&vta_did).await {
@@ -148,11 +204,6 @@ pub async fn run_connection_test(
     };
 
     // ── 2. Enumerate ──────────────────────────────────────────────────
-    //
-    // Provision-integration is DIDComm-only. A VTA that doesn't
-    // advertise a `#DIDCommMessaging` service cannot be provisioned via
-    // this wizard path — the operator needs to use the offline
-    // sealed-handoff flow instead.
     let _ = tx.send(VtaEvent::CheckStart(DiagCheck::EnumerateServices));
     let rest_url = resolved.rest_url.clone();
     let mediator_did_opt = resolved.mediator_did.clone();
@@ -165,7 +216,11 @@ pub async fn run_connection_test(
             "no"
         },
     );
-    let Some(mediator_did) = mediator_did_opt.clone() else {
+    let choice = select_initial_transport(&resolved);
+
+    if matches!(choice, InitialChoice::Neither) {
+        // No advertised transport — wizard cannot proceed online.
+        // Slice 2 replaces the hard-fail with a recovery prompt.
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::EnumerateServices,
             DiagStatus::Failed(enum_detail),
@@ -176,77 +231,146 @@ pub async fn run_connection_test(
         ));
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::AuthenticateREST,
-            DiagStatus::Skipped("REST runner not yet implemented".into()),
+            DiagStatus::Skipped("no REST endpoint".into()),
         ));
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::ListWebvhServers,
-            DiagStatus::Skipped("no DIDComm endpoint".into()),
+            DiagStatus::Skipped("no transport".into()),
         ));
         let _ = tx.send(VtaEvent::CheckDone(
             DiagCheck::ProvisionIntegration,
-            DiagStatus::Skipped("no DIDComm endpoint".into()),
+            DiagStatus::Skipped("no transport".into()),
         ));
         let _ = tx.send(VtaEvent::Failed(
-            "VTA DID document does not advertise a DIDComm mediator endpoint. \
-             Provision-integration requires DIDComm — use the offline \
-             sealed-handoff flow for VTAs that are DIDComm-less or unreachable."
+            "VTA DID document advertises neither a DIDComm mediator endpoint \
+             nor a REST endpoint. Use the offline sealed-handoff flow."
                 .into(),
         ));
         return;
-    };
+    }
     let _ = tx.send(VtaEvent::CheckDone(
         DiagCheck::EnumerateServices,
         DiagStatus::Ok(enum_detail),
     ));
-    // DIDComm path is taken on this run. The REST row stays
-    // `Skipped` to keep the checklist honest about which transports
-    // were exercised; Slice 1 replaces this with a live REST attempt
-    // when the operator falls back or REST is the only advertised
-    // transport.
-    let _ = tx.send(VtaEvent::CheckDone(
-        DiagCheck::AuthenticateREST,
-        DiagStatus::Skipped("DIDComm-only VTA".into()),
-    ));
 
-    // ── 3. DIDComm attempt ───────────────────────────────────────────
-    //
-    // The attempt fn handles its own diagnostic rows; we translate
-    // the outcome into the final transport-agnostic event the
-    // wizard's main loop expects.
-    let outcome = run_didcomm_attempt(
-        intent,
-        vta_did,
-        mediator_did.clone(),
-        rest_url.clone(),
-        setup_did,
-        setup_privkey_mb,
-        &tx,
-    )
-    .await;
+    // ── 3. Dispatch by transport choice ──────────────────────────────
+    match choice {
+        InitialChoice::BothAvailable | InitialChoice::DIDCommOnly => {
+            // mediator_did is guaranteed present by the choice.
+            let mediator_did = mediator_did_opt.expect("DIDComm path requires mediator_did");
+            let rest_skip_msg = if matches!(choice, InitialChoice::BothAvailable) {
+                "DIDComm-first VTA — REST fallback wires in Slice 3"
+            } else {
+                "DIDComm-only VTA"
+            };
+            let _ = tx.send(VtaEvent::CheckDone(
+                DiagCheck::AuthenticateREST,
+                DiagStatus::Skipped(rest_skip_msg.into()),
+            ));
 
-    match outcome {
-        AttemptOutcome::Connected(reply) => {
-            let _ = tx.send(VtaEvent::Connected {
-                protocol: Protocol::DidComm,
-                rest_url,
-                mediator_did: Some(mediator_did),
-                reply,
-            });
+            let outcome = run_didcomm_attempt(
+                intent,
+                vta_did,
+                mediator_did.clone(),
+                rest_url.clone(),
+                setup_did,
+                setup_privkey_mb,
+                &tx,
+            )
+            .await;
+
+            match outcome {
+                AttemptOutcome::Connected(reply) => {
+                    let _ = tx.send(VtaEvent::Connected {
+                        protocol: Protocol::DidComm,
+                        rest_url,
+                        mediator_did: Some(mediator_did),
+                        reply,
+                    });
+                }
+                AttemptOutcome::PreflightOk {
+                    rest_url,
+                    mediator_did,
+                    servers,
+                } => {
+                    let _ = tx.send(VtaEvent::PreflightDone {
+                        rest_url,
+                        mediator_did,
+                        servers,
+                    });
+                }
+                AttemptOutcome::PreAuthFailure(reason)
+                | AttemptOutcome::PostAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::Failed(reason));
+                }
+            }
         }
-        AttemptOutcome::PreflightOk {
-            rest_url,
-            mediator_did,
-            servers,
-        } => {
-            let _ = tx.send(VtaEvent::PreflightDone {
-                rest_url,
-                mediator_did,
-                servers,
-            });
+        InitialChoice::RestOnly => {
+            // rest_url is guaranteed present by the choice.
+            let rest_url_str = rest_url.clone().expect("REST path requires rest_url");
+            let _ = tx.send(VtaEvent::CheckDone(
+                DiagCheck::AuthenticateDIDComm,
+                DiagStatus::Skipped("REST-only VTA".into()),
+            ));
+
+            let outcome = match intent {
+                VtaIntent::AdminOnly => {
+                    run_rest_attempt_admin_only(
+                        &rest_url_str,
+                        &vta_did,
+                        setup_did,
+                        setup_privkey_mb,
+                        &tx,
+                    )
+                    .await
+                }
+                VtaIntent::FullSetup => {
+                    // Single-flight REST FullSetup — no webvh picker
+                    // preflight. Operator-supplied template vars
+                    // would go on `ProvisionAsk.mediator_template_vars`
+                    // upstream; Slice 1 sticks with the default
+                    // (serverless self-host).
+                    let ask = ProvisionAsk::mediator(context_id.clone(), mediator_url.clone())
+                        .with_label(format!("mediator setup — {context_id}"));
+                    run_rest_attempt_full_setup(
+                        &rest_url_str,
+                        &vta_did,
+                        setup_did,
+                        setup_privkey_mb,
+                        ask,
+                        &tx,
+                    )
+                    .await
+                }
+                VtaIntent::OfflineExport => unreachable!("handled at top of fn"),
+            };
+
+            match outcome {
+                AttemptOutcome::Connected(reply) => {
+                    let _ = tx.send(VtaEvent::Connected {
+                        protocol: Protocol::Rest,
+                        rest_url,
+                        mediator_did: None,
+                        reply,
+                    });
+                }
+                AttemptOutcome::PreflightOk { .. } => {
+                    // The REST attempt fns don't emit PreflightOk
+                    // in Slice 1 (no webvh picker on REST). Reaching
+                    // here would be a runner_rest bug.
+                    let _ = tx.send(VtaEvent::Failed(
+                        "REST attempt produced an unexpected PreflightOk outcome — \
+                         this is a wizard wiring bug; please report."
+                            .into(),
+                    ));
+                }
+                AttemptOutcome::PreAuthFailure(reason)
+                | AttemptOutcome::PostAuthFailure(reason) => {
+                    let _ = tx.send(VtaEvent::Failed(reason));
+                }
+            }
         }
-        AttemptOutcome::PreAuthFailure(reason) | AttemptOutcome::PostAuthFailure(reason) => {
-            let _ = tx.send(VtaEvent::Failed(reason));
-        }
+        InitialChoice::Neither => unreachable!("handled above"),
     }
 }
 
@@ -431,21 +555,16 @@ async fn run_didcomm_attempt(
             }
         }
         VtaIntent::OfflineExport => {
-            // OfflineExport has no online transport — the entry path
-            // in `app.rs` routes straight to the sealed-handoff
-            // sub-flow without ever spawning the runner. Reaching
-            // here would mean a wiring bug (e.g. someone added an
-            // online entry for OfflineExport without the matching
-            // request shape). Surface the misconfiguration rather
-            // than hanging silently.
+            // Defensive: OfflineExport is short-circuited at the top
+            // of `run_connection_test`; reaching this arm would be a
+            // wiring bug. Surface it so the operator sees the
+            // misconfiguration rather than hanging silently.
             let _ = tx.send(VtaEvent::CheckDone(
                 DiagCheck::AuthenticateDIDComm,
                 DiagStatus::Skipped("OfflineExport has no online transport".into()),
             ));
             AttemptOutcome::PreAuthFailure(
-                "OfflineExport intent has no online runner — \
-                 use the sealed-handoff sub-flow instead. This is a wizard \
-                 wiring bug; please report."
+                "OfflineExport intent reached the DIDComm attempt — wiring bug; please report."
                     .into(),
             )
         }
@@ -560,5 +679,42 @@ pub async fn run_provision_flight(
             };
             let _ = tx.send(VtaEvent::Failed(hint));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn resolved(mediator_did: Option<&str>, rest_url: Option<&str>) -> ResolvedVta {
+        ResolvedVta {
+            vta_did: "did:webvh:vta.test".into(),
+            mediator_did: mediator_did.map(str::to_string),
+            rest_url: rest_url.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn select_returns_both_when_both_advertised() {
+        let r = resolved(Some("did:webvh:mediator.test"), Some("https://vta.test"));
+        assert_eq!(select_initial_transport(&r), InitialChoice::BothAvailable);
+    }
+
+    #[test]
+    fn select_returns_didcomm_only_when_only_didcomm_advertised() {
+        let r = resolved(Some("did:webvh:mediator.test"), None);
+        assert_eq!(select_initial_transport(&r), InitialChoice::DIDCommOnly);
+    }
+
+    #[test]
+    fn select_returns_rest_only_when_only_rest_advertised() {
+        let r = resolved(None, Some("https://vta.test"));
+        assert_eq!(select_initial_transport(&r), InitialChoice::RestOnly);
+    }
+
+    #[test]
+    fn select_returns_neither_when_no_transport_advertised() {
+        let r = resolved(None, None);
+        assert_eq!(select_initial_transport(&r), InitialChoice::Neither);
     }
 }

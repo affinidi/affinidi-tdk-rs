@@ -101,11 +101,8 @@ pub async fn run_phase2_connect(
         let vta_did_owned = vta_did.to_string();
         let setup_did = key.did.clone();
         let privkey_mb = key.private_key_multibase().to_string();
-        // `ctx` / `mediator_url` are captured only for the CLI
-        // operator message below; AdminOnly doesn't use them in the
-        // runner.
-        let _ = ctx;
-        let _ = mediator_url;
+        let ctx_owned = ctx.to_string();
+        let mediator_url_owned = mediator_url.to_string();
 
         let runner = tokio::spawn(async move {
             // CLI phase-2 is AdminOnly — the interactive
@@ -121,6 +118,8 @@ pub async fn run_phase2_connect(
                 vta_did_owned,
                 setup_did,
                 privkey_mb,
+                ctx_owned,
+                mediator_url_owned,
                 tx,
             )
             .await;

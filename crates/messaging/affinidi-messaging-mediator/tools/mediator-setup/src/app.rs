@@ -928,6 +928,8 @@ impl WizardApp {
         let vta_did = st.vta_did.clone();
         let setup_did = key.did.clone();
         let setup_privkey_mb = key.private_key_multibase().to_string();
+        let context_id = st.context_id.clone();
+        let mediator_url = st.mediator_url.clone();
 
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         st.diagnostics = pending_list();
@@ -938,7 +940,16 @@ impl WizardApp {
         self.selection_index = 0;
 
         tokio::spawn(async move {
-            run_connection_test(intent, vta_did, setup_did, setup_privkey_mb, tx).await;
+            run_connection_test(
+                intent,
+                vta_did,
+                setup_did,
+                setup_privkey_mb,
+                context_id,
+                mediator_url,
+                tx,
+            )
+            .await;
         });
     }
 
