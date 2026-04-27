@@ -1,7 +1,7 @@
 //! GCP Secret Manager backend (feature `secrets-gcp`).
 //!
 //! Every mediator secret is stored as a GCP Secret named
-//! `<prefix><key>` under the configured project. The secret itself is
+//! `<namespace><key>` under the configured project. The secret itself is
 //! the persistent container; each [`SecretStore::put`] appends a new
 //! `SecretVersion` and `get` reads the `latest` version. This matches
 //! GCP's data-model (versions are additive, immutable, and the "live"
@@ -48,14 +48,14 @@ const BACKEND_LABEL: &str = "gcp_secrets";
 
 #[cfg(feature = "secrets-gcp")]
 pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
-    let BackendUrl::Gcp { project, prefix } = url else {
+    let BackendUrl::Gcp { project, namespace } = url else {
         return Err(SecretStoreError::Other(
             "internal error: gcp backend received non-gcp URL".into(),
         ));
     };
     Ok(std::sync::Arc::new(GcpStore {
         project,
-        prefix,
+        namespace,
         client: OnceCell::new(),
     }))
 }
@@ -73,7 +73,7 @@ pub(crate) fn open(_url: BackendUrl) -> Result<DynSecretStore> {
 #[cfg(feature = "secrets-gcp")]
 pub struct GcpStore {
     project: String,
-    prefix: String,
+    namespace: String,
     /// Lazily-constructed SDK client. GCP's `build()` is async and does
     /// credential discovery; caching avoids re-running the full ADC
     /// chain on every `get`/`put`/`delete`.
@@ -83,9 +83,12 @@ pub struct GcpStore {
 #[cfg(feature = "secrets-gcp")]
 impl GcpStore {
     /// Build the resource name used across all SDK calls. Shape:
-    /// `projects/<project>/secrets/<prefix><key>`.
+    /// `projects/<project>/secrets/<namespace><key>`.
     fn secret_name(&self, key: &str) -> String {
-        format!("projects/{}/secrets/{}{}", self.project, self.prefix, key)
+        format!(
+            "projects/{}/secrets/{}{}",
+            self.project, self.namespace, key
+        )
     }
 
     /// Parent for `create_secret` / `list_secrets`:
@@ -248,7 +251,7 @@ impl SecretStore for GcpStore {
                 ) =>
             {
                 let parent = self.parent();
-                let secret_id = format!("{}{}", self.prefix, key);
+                let secret_id = format!("{}{}", self.namespace, key);
                 let create_label = format!("CreateSecret({secret_name})");
                 with_retry(&create_label, &GcpRetryPolicy, || {
                     let client = client.clone();
@@ -371,7 +374,7 @@ impl SecretStore for GcpStore {
             for secret in response.secrets {
                 // `secret.name` is a fully-qualified resource path; strip
                 // the parent so callers see just the per-secret id (the
-                // shape they'd type if they were configuring a prefix).
+                // shape they'd type if they were configuring a namespace).
                 let id = secret
                     .name
                     .strip_prefix(&resource_prefix)
@@ -399,13 +402,13 @@ mod tests {
     fn sample_store() -> GcpStore {
         GcpStore {
             project: "my-proj".into(),
-            prefix: "test_".into(),
+            namespace: "test_".into(),
             client: OnceCell::new(),
         }
     }
 
     #[test]
-    fn secret_name_assembles_project_and_prefix() {
+    fn secret_name_assembles_project_and_namespace() {
         let store = sample_store();
         assert_eq!(
             store.secret_name("mediator_admin_credential"),
@@ -448,7 +451,7 @@ mod tests {
     }
 
     /// Opt-in live-backend test. Requires a real GCP project reachable
-    /// via Application Default Credentials and a prefix under which
+    /// via Application Default Credentials and a namespace under which
     /// throwaway secrets may be created + deleted.
     ///
     /// Run with:

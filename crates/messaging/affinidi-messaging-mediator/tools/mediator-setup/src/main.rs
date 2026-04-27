@@ -525,19 +525,20 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         return;
     }
 
-    // Discovery overlay (cloud-backend prefix discovery via F5) takes
+    // Discovery overlay (cloud-backend secrets list via F5) takes
     // every key while it's on screen — Loading swallows everything
-    // except Esc, Loaded scrolls / picks / cancels, Failed dismisses.
-    // Placed before mode dispatch so normal text-input keys don't leak
-    // into the input widget while the overlay is active.
+    // except Esc, Loaded scrolls and dismisses on Enter/Esc, Failed
+    // dismisses on any key. Placed before mode dispatch so normal
+    // text-input keys don't leak into the input widget while the
+    // overlay is active.
     if app.in_discovery_overlay() {
         app.handle_discovery_key(code);
         return;
     }
 
     // F5 on a discoverable key-storage phase kicks off the async
-    // `list_namespace` call. Discoverable phases are AwsPrefix /
-    // GcpPrefix / AzureVault / VaultMount; F5 anywhere else is a
+    // `list_namespace` call. Discoverable phases are AwsNamespace /
+    // GcpNamespace / AzureVault / VaultMount; F5 anywhere else is a
     // no-op so the keystroke isn't actively misleading. The hint
     // footer on each prompt advertises the requirement (e.g. AWS
     // creds in the environment).

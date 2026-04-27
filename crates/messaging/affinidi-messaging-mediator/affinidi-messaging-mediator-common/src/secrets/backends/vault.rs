@@ -5,12 +5,12 @@
 //! existing v1 data. Operators who still use v1 should migrate to v2
 //! first; Vault provides an in-place upgrade path.
 //!
-//! URL shape: `vault://<host[:port]>/<mount>[/<prefix>…]`.
+//! URL shape: `vault://<host[:port]>/<mount>[/<namespace>…]`.
 //! The first path segment is the KV v2 mount point; anything
-//! remaining becomes a prefix glued to each stored key. Examples:
-//!   - `vault://vault.internal/secret` → mount `secret`, no prefix.
+//! remaining becomes a namespace glued to each stored key. Examples:
+//!   - `vault://vault.internal/secret` → mount `secret`, no namespace.
 //!   - `vault://vault.internal/secret/mediator` → mount `secret`,
-//!     prefix `mediator/`.
+//!     namespace `mediator/`.
 //!
 //! Transport: always HTTPS against the configured endpoint. Local-
 //! dev operators running Vault without TLS should front it with a
@@ -67,10 +67,10 @@ pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
             "internal error: vault backend received non-vault URL".into(),
         ));
     };
-    // Split the URL path into KV v2 mount + per-key prefix. First
-    // segment is the mount; everything else is the prefix glued to
+    // Split the URL path into KV v2 mount + per-key namespace. First
+    // segment is the mount; everything else is the namespace glued to
     // each stored key name.
-    let (mount, prefix) = match path.split_once('/') {
+    let (mount, namespace) = match path.split_once('/') {
         Some((m, rest)) => (m.to_string(), format!("{rest}/")),
         None => (path, String::new()),
     };
@@ -88,7 +88,7 @@ pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
     Ok(std::sync::Arc::new(VaultStore {
         address,
         mount,
-        prefix,
+        namespace,
         client: OnceCell::new(),
     }))
 }
@@ -109,8 +109,8 @@ pub struct VaultStore {
     address: String,
     /// KV v2 mount name.
     mount: String,
-    /// Per-key path prefix (always ends with `/` when non-empty).
-    prefix: String,
+    /// Per-key namespace path (always ends with `/` when non-empty).
+    namespace: String,
     /// Lazily-constructed client. Token discovery happens on first
     /// use so a wizard run that never touches the backend doesn't
     /// complain about a missing `VAULT_TOKEN`.
@@ -120,7 +120,7 @@ pub struct VaultStore {
 #[cfg(feature = "secrets-vault")]
 impl VaultStore {
     fn secret_path(&self, key: &str) -> String {
-        format!("{}{key}", self.prefix)
+        format!("{}{key}", self.namespace)
     }
 
     async fn client(&self) -> Result<&VaultClient> {
@@ -281,8 +281,8 @@ impl SecretStore for VaultStore {
 
     /// List the keys directly under the configured mount root (a single
     /// LIST call — no recursion). Folders end with `/`; leaves don't.
-    /// The caller (wizard discovery) decides whether to present folders
-    /// as candidate prefixes or to recurse manually.
+    /// The caller (wizard discovery) decides whether to recurse or
+    /// present the raw entries.
     ///
     /// Vault's `kv2::list` returns `404` when the path holds no entries
     /// (a fresh mount, or one whose only previous keys were deleted +
@@ -316,7 +316,7 @@ mod tests {
         VaultStore {
             address: format!("https://{endpoint}"),
             mount: path.split_once('/').map(|(m, _)| m).unwrap_or(path).into(),
-            prefix: path
+            namespace: path
                 .split_once('/')
                 .map(|(_, rest)| format!("{rest}/"))
                 .unwrap_or_default(),
@@ -325,26 +325,26 @@ mod tests {
     }
 
     #[test]
-    fn secret_path_glues_prefix_and_key() {
-        let with_prefix = store_from("vault.internal", "secret/mediator");
-        assert_eq!(with_prefix.mount, "secret");
-        assert_eq!(with_prefix.prefix, "mediator/");
+    fn secret_path_glues_namespace_and_key() {
+        let with_namespace = store_from("vault.internal", "secret/mediator");
+        assert_eq!(with_namespace.mount, "secret");
+        assert_eq!(with_namespace.namespace, "mediator/");
         assert_eq!(
-            with_prefix.secret_path("mediator_admin_credential"),
+            with_namespace.secret_path("mediator_admin_credential"),
             "mediator/mediator_admin_credential"
         );
 
-        let no_prefix = store_from("vault.internal", "secret");
-        assert_eq!(no_prefix.mount, "secret");
-        assert_eq!(no_prefix.prefix, "");
+        let no_namespace = store_from("vault.internal", "secret");
+        assert_eq!(no_namespace.mount, "secret");
+        assert_eq!(no_namespace.namespace, "");
         assert_eq!(
-            no_prefix.secret_path("mediator_admin_credential"),
+            no_namespace.secret_path("mediator_admin_credential"),
             "mediator_admin_credential"
         );
     }
 
     #[test]
-    fn open_splits_mount_and_prefix() {
+    fn open_splits_mount_and_namespace() {
         let url = parse_url("vault://vault.internal/secret/prod/mediator").unwrap();
         let store = open(url).expect("open vault backend");
         assert_eq!(store.backend(), BACKEND_LABEL);

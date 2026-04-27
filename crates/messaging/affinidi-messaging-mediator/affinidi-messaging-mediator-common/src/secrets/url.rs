@@ -6,8 +6,8 @@
 //! |------------------|---------------------------------------------|--------------------------------------------|
 //! | `keyring://`     | `keyring://<service>`                       | `keyring://affinidi-mediator`              |
 //! | `file://`        | `file:///<absolute-path>[?encrypt=1]`       | `file:///var/lib/mediator/secrets.json`    |
-//! | `aws_secrets://` | `aws_secrets://<region>/<prefix>`           | `aws_secrets://us-east-1/prod/mediator/`   |
-//! | `gcp_secrets://` | `gcp_secrets://<project>/<prefix>`          | `gcp_secrets://my-proj/mediator-`          |
+//! | `aws_secrets://` | `aws_secrets://<region>/<namespace>`        | `aws_secrets://us-east-1/prod/mediator/`   |
+//! | `gcp_secrets://` | `gcp_secrets://<project>/<namespace>`       | `gcp_secrets://my-proj/mediator-`          |
 //! | `azure_keyvault://` | `azure_keyvault://<vault-name-or-url>`   | `azure_keyvault://my-vault`                |
 //! | `vault://`       | `vault://<host[:port]>/<kv-path>`           | `vault://vault.internal/secret/mediator`   |
 //!
@@ -24,8 +24,8 @@ use crate::secrets::error::{Result, SecretStoreError};
 pub enum BackendUrl {
     Keyring { service: String },
     File { path: String, encrypted: bool },
-    Aws { region: String, prefix: String },
-    Gcp { project: String, prefix: String },
+    Aws { region: String, namespace: String },
+    Gcp { project: String, namespace: String },
     Azure { vault: String },
     Vault { endpoint: String, path: String },
 }
@@ -129,9 +129,9 @@ fn parse_file(raw: &str) -> Result<BackendUrl> {
 }
 
 fn parse_aws(rest: &str, raw: &str) -> Result<BackendUrl> {
-    let (region, prefix) = rest.split_once('/').ok_or_else(|| SecretStoreError::InvalidUrl {
+    let (region, namespace) = rest.split_once('/').ok_or_else(|| SecretStoreError::InvalidUrl {
         url: raw.to_string(),
-        reason: "aws_secrets:// requires '<region>/<prefix>', e.g. aws_secrets://us-east-1/mediator/"
+        reason: "aws_secrets:// requires '<region>/<namespace>', e.g. aws_secrets://us-east-1/mediator/"
             .into(),
     })?;
     if region.is_empty() {
@@ -142,17 +142,17 @@ fn parse_aws(rest: &str, raw: &str) -> Result<BackendUrl> {
     }
     Ok(BackendUrl::Aws {
         region: region.to_string(),
-        prefix: prefix.to_string(),
+        namespace: namespace.to_string(),
     })
 }
 
 fn parse_gcp(rest: &str, raw: &str) -> Result<BackendUrl> {
-    let (project, prefix) = rest
-        .split_once('/')
-        .ok_or_else(|| SecretStoreError::InvalidUrl {
-            url: raw.to_string(),
-            reason: "gcp_secrets:// requires '<project>/<prefix>'".into(),
-        })?;
+    let (project, namespace) =
+        rest.split_once('/')
+            .ok_or_else(|| SecretStoreError::InvalidUrl {
+                url: raw.to_string(),
+                reason: "gcp_secrets:// requires '<project>/<namespace>'".into(),
+            })?;
     if project.is_empty() {
         return Err(SecretStoreError::InvalidUrl {
             url: raw.to_string(),
@@ -161,7 +161,7 @@ fn parse_gcp(rest: &str, raw: &str) -> Result<BackendUrl> {
     }
     Ok(BackendUrl::Gcp {
         project: project.to_string(),
-        prefix: prefix.to_string(),
+        namespace: namespace.to_string(),
     })
 }
 
@@ -274,7 +274,7 @@ mod tests {
             parse_url("aws_secrets://us-east-1/prod/mediator/").unwrap(),
             BackendUrl::Aws {
                 region: "us-east-1".into(),
-                prefix: "prod/mediator/".into(),
+                namespace: "prod/mediator/".into(),
             }
         );
     }
@@ -290,7 +290,7 @@ mod tests {
             parse_url("gcp_secrets://my-proj/mediator-").unwrap(),
             BackendUrl::Gcp {
                 project: "my-proj".into(),
-                prefix: "mediator-".into(),
+                namespace: "mediator-".into(),
             }
         );
     }

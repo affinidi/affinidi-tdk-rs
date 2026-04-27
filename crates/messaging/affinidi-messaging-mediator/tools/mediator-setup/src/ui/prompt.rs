@@ -179,15 +179,15 @@ mod tests {
     /// styled span and the surrounding text keeps the dim hint style.
     #[test]
     fn hint_segment_styles_function_key_tokens() {
-        let line = render_hint_segment("press [F5] to discover existing prefixes.");
+        let line = render_hint_segment("press [F5] to list existing secrets.");
         // 4 spans: indent, dim prefix ("press "), accent ("[F5]"),
-        // dim suffix (" to discover existing prefixes.").
+        // dim suffix (" to list existing secrets.").
         assert_eq!(line.spans.len(), 4);
         assert_eq!(line.spans[0].content, "  ");
         assert_eq!(line.spans[1].content, "press ");
         assert_eq!(line.spans[2].content, "[F5]");
         assert_eq!(line.spans[2].style.fg, Some(theme::ACCENT));
-        assert_eq!(line.spans[3].content, " to discover existing prefixes.");
+        assert_eq!(line.spans[3].content, " to list existing secrets.");
     }
 
     /// Brackets that aren't function-key tokens (e.g. the `[:port]`

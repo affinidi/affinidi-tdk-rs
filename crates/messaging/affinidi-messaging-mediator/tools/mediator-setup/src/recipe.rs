@@ -698,15 +698,15 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
             config.secret_storage = STORAGE_KEYRING.into();
             config.secret_keyring_service = service;
         }
-        BackendUrl::Aws { region, prefix } => {
+        BackendUrl::Aws { region, namespace } => {
             config.secret_storage = STORAGE_AWS.into();
             config.secret_aws_region = region;
-            config.secret_aws_prefix = prefix;
+            config.secret_aws_namespace = namespace;
         }
-        BackendUrl::Gcp { project, prefix } => {
+        BackendUrl::Gcp { project, namespace } => {
             config.secret_storage = STORAGE_GCP.into();
             config.secret_gcp_project = project;
-            config.secret_gcp_prefix = prefix;
+            config.secret_gcp_namespace = namespace;
         }
         BackendUrl::Azure { vault } => {
             config.secret_storage = STORAGE_AZURE.into();
@@ -938,13 +938,13 @@ mod tests {
         let config = to_wizard_config(&recipe).unwrap();
         assert_eq!(config.secret_storage, STORAGE_AWS);
         assert_eq!(config.secret_aws_region, "eu-west-2");
-        assert_eq!(config.secret_aws_prefix, "prod/mediator/");
+        assert_eq!(config.secret_aws_namespace, "prod/mediator/");
 
         recipe.secrets.storage = "gcp_secrets://my-prod-proj/svc-".into();
         let config = to_wizard_config(&recipe).unwrap();
         assert_eq!(config.secret_storage, STORAGE_GCP);
         assert_eq!(config.secret_gcp_project, "my-prod-proj");
-        assert_eq!(config.secret_gcp_prefix, "svc-");
+        assert_eq!(config.secret_gcp_namespace, "svc-");
 
         recipe.secrets.storage = "azure_keyvault://my-prod-vault".into();
         let config = to_wizard_config(&recipe).unwrap();
@@ -974,7 +974,7 @@ mod tests {
         let config = to_wizard_config(&recipe).unwrap();
         assert_eq!(config.secret_storage, STORAGE_GCP);
         assert_eq!(config.secret_gcp_project, DEFAULT_GCP_PROJECT);
-        assert_eq!(config.secret_gcp_prefix, DEFAULT_GCP_SECRET_PREFIX);
+        assert_eq!(config.secret_gcp_namespace, DEFAULT_GCP_SECRET_NAMESPACE);
     }
 
     #[test]

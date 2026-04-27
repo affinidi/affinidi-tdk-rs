@@ -1,7 +1,7 @@
 //! AWS Secrets Manager backend (feature `secrets-aws`).
 //!
 //! Every secret `key` is stored as an AWS secret named
-//! `<prefix><key>`. Both binary and string-form secrets live in the
+//! `<namespace><key>`. Both binary and string-form secrets live in the
 //! `SecretString` field (base64url encoded) so everything round-trips
 //! identically across backends.
 //!
@@ -26,12 +26,12 @@ const BACKEND_LABEL: &str = "aws_secrets";
 
 #[cfg(feature = "secrets-aws")]
 pub(crate) fn open(url: BackendUrl) -> Result<DynSecretStore> {
-    let BackendUrl::Aws { region, prefix } = url else {
+    let BackendUrl::Aws { region, namespace } = url else {
         return Err(SecretStoreError::Other(
             "internal error: aws backend received non-aws URL".into(),
         ));
     };
-    Ok(std::sync::Arc::new(AwsStore { region, prefix }))
+    Ok(std::sync::Arc::new(AwsStore { region, namespace }))
 }
 
 #[cfg(not(feature = "secrets-aws"))]
@@ -47,13 +47,13 @@ pub(crate) fn open(_url: BackendUrl) -> Result<DynSecretStore> {
 #[cfg(feature = "secrets-aws")]
 pub struct AwsStore {
     region: String,
-    prefix: String,
+    namespace: String,
 }
 
 #[cfg(feature = "secrets-aws")]
 impl AwsStore {
     fn secret_name(&self, key: &str) -> String {
-        format!("{}{}", self.prefix, key)
+        format!("{}{}", self.namespace, key)
     }
 
     async fn client(&self) -> aws_sdk_secretsmanager::Client {
@@ -257,12 +257,12 @@ impl SecretStore for AwsStore {
     }
 
     /// Walks `ListSecrets` pages until exhausted and returns the full
-    /// secret names (region-wide — the configured `prefix` is *not*
+    /// secret names (region-wide — the configured `namespace` is *not*
     /// applied as a server-side filter, because the wizard's discovery
-    /// flow wants to surface every prefix already in use, not just the
-    /// one the operator pre-typed). Each retry batch is its own
-    /// `with_retry` invocation so a transient throttle on page N
-    /// doesn't lose pages 1..N-1.
+    /// flow wants to surface every name already in use, not just the
+    /// ones inside the operator's chosen namespace). Each retry batch
+    /// is its own `with_retry` invocation so a transient throttle on
+    /// page N doesn't lose pages 1..N-1.
     async fn list_namespace(&self) -> Result<Vec<String>> {
         let client = self.client().await;
         let mut names: Vec<String> = Vec::new();

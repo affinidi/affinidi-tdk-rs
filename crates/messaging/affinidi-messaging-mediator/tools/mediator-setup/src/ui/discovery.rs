@@ -5,8 +5,11 @@
 //! is `Some`. Three sub-states:
 //!
 //! - **Loading** — single-line spinner row centred in the overlay.
-//! - **Loaded** — scrollable list of discovered prefixes / names.
+//! - **Loaded** — scrollable list of discovered secret names.
 //! - **Failed** — error message with a dismiss hint.
+//!
+//! The overlay is informational. Esc and Enter both dismiss it; the
+//! operator types the namespace into the prompt themselves.
 //!
 //! The overlay borrows the `Clear` widget pattern from ratatui examples
 //! to blank the underlying panels before drawing — without it the
@@ -18,7 +21,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
-use crate::discovery::{DiscoveryMode, DiscoveryState};
+use crate::discovery::DiscoveryState;
 use crate::ui::theme;
 
 /// Render the discovery overlay over `area`. Caller is responsible for
@@ -37,12 +40,10 @@ pub fn render_overlay(frame: &mut Frame, area: Rect, state: &DiscoveryState) {
         DiscoveryState::Loading => render_loading(frame, overlay),
         DiscoveryState::Failed { message } => render_failed(frame, overlay, message),
         DiscoveryState::Loaded {
-            mode,
             items,
-            total,
             cursor,
             scroll,
-        } => render_loaded(frame, overlay, *mode, items, *total, *cursor, *scroll),
+        } => render_loaded(frame, overlay, items, *cursor, *scroll),
     }
 }
 
@@ -106,21 +107,9 @@ fn render_failed(frame: &mut Frame, area: Rect, message: &str) {
     frame.render_widget(p, area);
 }
 
-fn render_loaded(
-    frame: &mut Frame,
-    area: Rect,
-    mode: DiscoveryMode,
-    items: &[String],
-    total: usize,
-    cursor: usize,
-    scroll: usize,
-) {
-    let title = match mode {
-        DiscoveryMode::Pick => " Discovered prefixes — Enter to pick, Esc to cancel ",
-        DiscoveryMode::Confirm => " Discovered secrets — Esc to dismiss ",
-    };
+fn render_loaded(frame: &mut Frame, area: Rect, items: &[String], cursor: usize, scroll: usize) {
     let block = Block::default()
-        .title(title)
+        .title(" Discovered secrets — Esc to dismiss ")
         .title_style(theme::info_style())
         .borders(Borders::ALL)
         .border_style(theme::border_style());
@@ -136,13 +125,8 @@ fn render_loaded(
             )),
             Line::from(""),
             Line::from(Span::styled(
-                match mode {
-                    DiscoveryMode::Pick => "Type a prefix yourself and press Enter on the prompt.",
-                    DiscoveryMode::Confirm => {
-                        "The vault exists but holds no secrets yet — that's \
-                         fine for a fresh deployment."
-                    }
-                },
+                "That's fine for a fresh deployment — type your namespace \
+                 in the prompt and press Enter.",
                 theme::muted_style(),
             )),
             Line::from(""),
@@ -189,19 +173,11 @@ fn render_loaded(
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
     if footer_area.height > 0 {
-        let footer_text = match mode {
-            DiscoveryMode::Pick => format!(
-                "  {n} prefix{plural} (derived from {total} secrets) — \u{2191}\u{2193}/PgUp/PgDn scroll  Enter pick  Esc cancel",
-                n = items.len(),
-                plural = if items.len() == 1 { "" } else { "es" },
-                total = total,
-            ),
-            DiscoveryMode::Confirm => format!(
-                "  {n} secret{plural} — \u{2191}\u{2193}/PgUp/PgDn scroll  Esc dismiss",
-                n = items.len(),
-                plural = if items.len() == 1 { "" } else { "s" },
-            ),
-        };
+        let footer_text = format!(
+            "  {n} secret{plural} — \u{2191}\u{2193}/PgUp/PgDn scroll  Esc dismiss",
+            n = items.len(),
+            plural = if items.len() == 1 { "" } else { "s" },
+        );
         let footer = Paragraph::new(Line::from(Span::styled(footer_text, theme::muted_style())));
         frame.render_widget(footer, footer_area);
     }

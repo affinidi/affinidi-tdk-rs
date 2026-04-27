@@ -2,7 +2,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tui_input::{Input, InputRequest};
 
 use crate::consts::*;
-use crate::discovery::{DiscoveryEvent, DiscoveryMode, DiscoveryRequest, DiscoveryState};
+use crate::discovery::{DiscoveryEvent, DiscoveryRequest, DiscoveryState};
 use crate::sealed_handoff::SealedHandoffState;
 use crate::ui::selection::SelectionOption;
 use crate::vta_connect::{
@@ -207,12 +207,12 @@ pub enum KeyStoragePhase {
     KeyringService,
     /// `aws_secrets://` — first prompt: AWS region.
     AwsRegion,
-    /// `aws_secrets://` — second prompt: secret name prefix.
-    AwsPrefix,
+    /// `aws_secrets://` — second prompt: secret namespace.
+    AwsNamespace,
     /// `gcp_secrets://` — first prompt: GCP project ID.
     GcpProject,
-    /// `gcp_secrets://` — second prompt: secret name prefix.
-    GcpPrefix,
+    /// `gcp_secrets://` — second prompt: secret namespace.
+    GcpNamespace,
     /// `azure_keyvault://` — vault name (commercial cloud), sovereign-
     /// cloud DNS name, or full URL. Single field — Azure Key Vault
     /// secrets share the vault namespace; the URL parser canonicalises.
@@ -220,7 +220,7 @@ pub enum KeyStoragePhase {
     /// `vault://` — first prompt: server endpoint (`host[:port]`).
     VaultEndpoint,
     /// `vault://` — second prompt: KV v2 mount + optional per-key
-    /// prefix glued (e.g. `secret/mediator`).
+    /// namespace glued (e.g. `secret/mediator`).
     VaultMount,
 }
 
@@ -321,13 +321,13 @@ pub struct WizardConfig {
     pub secret_file_path: String,
     pub secret_keyring_service: String,
     pub secret_aws_region: String,
-    pub secret_aws_prefix: String,
+    pub secret_aws_namespace: String,
     /// GCP project ID hosting the mediator's secrets. Used together
-    /// with [`Self::secret_gcp_prefix`] to build `gcp_secrets://`.
+    /// with [`Self::secret_gcp_namespace`] to build `gcp_secrets://`.
     pub secret_gcp_project: String,
-    /// Per-secret name prefix on GCP. Empty is allowed — GCP secret
+    /// Per-secret namespace on GCP. Empty is allowed — GCP secret
     /// names accept the bare well-known keys verbatim.
-    pub secret_gcp_prefix: String,
+    pub secret_gcp_namespace: String,
     /// Bare vault name (`my-vault`), sovereign-cloud DNS name
     /// (`my-vault.vault.usgovcloudapi.net`), or full URL — the URL
     /// parser canonicalises all three shapes.
@@ -335,9 +335,9 @@ pub struct WizardConfig {
     /// Vault server endpoint (`host[:port]`). May omit the scheme;
     /// the backend defaults to `https://` when none is given.
     pub secret_vault_endpoint: String,
-    /// KV v2 mount + optional per-key prefix glued together
+    /// KV v2 mount + optional per-key namespace glued together
     /// (`secret/mediator`). The backend splits the first segment off
-    /// as the mount and uses the rest as the prefix.
+    /// as the mount and uses the rest as the namespace.
     pub secret_vault_mount: String,
     /// `true` when the operator chose `file://?encrypt=1`. Influences
     /// the backend URL written to `mediator.toml` and whether the
@@ -392,9 +392,9 @@ impl Default for WizardConfig {
             secret_file_path: DEFAULT_SECRET_FILE_PATH.into(),
             secret_keyring_service: DEFAULT_KEYRING_SERVICE.into(),
             secret_aws_region: DEFAULT_AWS_REGION.into(),
-            secret_aws_prefix: DEFAULT_AWS_SECRET_PREFIX.into(),
+            secret_aws_namespace: DEFAULT_AWS_SECRET_NAMESPACE.into(),
             secret_gcp_project: DEFAULT_GCP_PROJECT.into(),
-            secret_gcp_prefix: DEFAULT_GCP_SECRET_PREFIX.into(),
+            secret_gcp_namespace: DEFAULT_GCP_SECRET_NAMESPACE.into(),
             secret_azure_vault: DEFAULT_AZURE_VAULT.into(),
             secret_vault_endpoint: DEFAULT_VAULT_ENDPOINT.into(),
             secret_vault_mount: DEFAULT_VAULT_MOUNT.into(),
@@ -478,10 +478,10 @@ pub struct WizardApp {
     /// transition.
     pub vta_stub_notice: Option<String>,
     /// Active discovery overlay — `Some` while the operator triggered F5
-    /// on a cloud-backend prefix screen and either the background
+    /// on a cloud-backend namespace screen and either the background
     /// `list_namespace` task is in flight (`Loading`), the result is
     /// being browsed (`Loaded`), or the failure is being read (`Failed`).
-    /// Cleared on Enter (apply pick) or Esc (dismiss).
+    /// Cleared on Enter or Esc — the overlay is informational only.
     pub discovery: Option<DiscoveryState>,
     /// Receiver side of the discovery channel. Set when a discovery is
     /// kicked off; drained on each tick by [`Self::drain_discovery_events`]
@@ -2526,9 +2526,9 @@ impl WizardApp {
             KeyStoragePhase::FilePath => self.config.secret_file_path.clone(),
             KeyStoragePhase::KeyringService => self.config.secret_keyring_service.clone(),
             KeyStoragePhase::AwsRegion => self.config.secret_aws_region.clone(),
-            KeyStoragePhase::AwsPrefix => self.config.secret_aws_prefix.clone(),
+            KeyStoragePhase::AwsNamespace => self.config.secret_aws_namespace.clone(),
             KeyStoragePhase::GcpProject => self.config.secret_gcp_project.clone(),
-            KeyStoragePhase::GcpPrefix => self.config.secret_gcp_prefix.clone(),
+            KeyStoragePhase::GcpNamespace => self.config.secret_gcp_namespace.clone(),
             KeyStoragePhase::AzureVault => self.config.secret_azure_vault.clone(),
             KeyStoragePhase::VaultEndpoint => self.config.secret_vault_endpoint.clone(),
             KeyStoragePhase::VaultMount => self.config.secret_vault_mount.clone(),
@@ -2616,11 +2616,11 @@ impl WizardApp {
                 if !value.is_empty() {
                     self.config.secret_aws_region = value;
                 }
-                self.enter_key_storage_phase(KeyStoragePhase::AwsPrefix);
+                self.enter_key_storage_phase(KeyStoragePhase::AwsNamespace);
             }
-            KeyStoragePhase::AwsPrefix => {
+            KeyStoragePhase::AwsNamespace => {
                 if !value.is_empty() {
-                    self.config.secret_aws_prefix = value;
+                    self.config.secret_aws_namespace = value;
                 }
                 self.exit_key_storage_subflow();
                 self.advance();
@@ -2634,12 +2634,12 @@ impl WizardApp {
                     return;
                 }
                 self.config.secret_gcp_project = value;
-                self.enter_key_storage_phase(KeyStoragePhase::GcpPrefix);
+                self.enter_key_storage_phase(KeyStoragePhase::GcpNamespace);
             }
-            KeyStoragePhase::GcpPrefix => {
-                // Empty prefix is allowed — GCP secret names accept the
-                // bare well-known keys verbatim.
-                self.config.secret_gcp_prefix = value;
+            KeyStoragePhase::GcpNamespace => {
+                // Empty namespace is allowed — GCP secret names accept
+                // the bare well-known keys verbatim.
+                self.config.secret_gcp_namespace = value;
                 self.exit_key_storage_subflow();
                 self.advance();
             }
@@ -2684,10 +2684,10 @@ impl WizardApp {
             return;
         };
         match phase {
-            KeyStoragePhase::AwsPrefix => {
+            KeyStoragePhase::AwsNamespace => {
                 self.enter_key_storage_phase(KeyStoragePhase::AwsRegion);
             }
-            KeyStoragePhase::GcpPrefix => {
+            KeyStoragePhase::GcpNamespace => {
                 self.enter_key_storage_phase(KeyStoragePhase::GcpProject);
             }
             KeyStoragePhase::VaultMount => {
@@ -2716,11 +2716,11 @@ impl WizardApp {
     /// Build a [`DiscoveryRequest`] for the current key-storage phase
     /// and the wizard's accumulated config, or return `None` when the
     /// phase isn't discoverable (or required upstream config is
-    /// missing — e.g. F5 on `AwsPrefix` before `AwsRegion` was filled).
+    /// missing — e.g. F5 on `AwsNamespace` before `AwsRegion` was filled).
     fn discovery_request_for_phase(&self) -> Option<DiscoveryRequest> {
         let phase = self.key_storage_phase?;
         match phase {
-            KeyStoragePhase::AwsPrefix => {
+            KeyStoragePhase::AwsNamespace => {
                 let region = self.config.secret_aws_region.trim();
                 if region.is_empty() {
                     return None;
@@ -2729,7 +2729,7 @@ impl WizardApp {
                     region: region.to_string(),
                 })
             }
-            KeyStoragePhase::GcpPrefix => {
+            KeyStoragePhase::GcpNamespace => {
                 let project = self.config.secret_gcp_project.trim();
                 if project.is_empty() {
                     return None;
@@ -2808,10 +2808,8 @@ impl WizardApp {
         // (Loaded or Failed) before we drop the receiver.
         if let Ok(event) = rx.try_recv() {
             self.discovery = Some(match event {
-                DiscoveryEvent::Loaded { mode, items, total } => DiscoveryState::Loaded {
-                    mode,
+                DiscoveryEvent::Loaded { items } => DiscoveryState::Loaded {
                     items,
-                    total,
                     cursor: 0,
                     scroll: 0,
                 },
@@ -2845,11 +2843,9 @@ impl WizardApp {
                 self.discovery_rx = None;
             }
             DiscoveryState::Loaded {
-                mode,
                 items,
                 cursor,
                 scroll,
-                ..
             } => {
                 if items.is_empty() {
                     // Empty list — only Esc / Enter dismiss.
@@ -2901,17 +2897,10 @@ impl WizardApp {
                         *cursor = max;
                         *scroll = max.saturating_sub(9);
                     }
-                    KeyCode::Enter => {
-                        // Pick mode applies the selection; Confirm
-                        // mode just dismisses (the list was an info
-                        // display, not a chooser).
-                        if matches!(mode, DiscoveryMode::Pick) {
-                            let picked = items[*cursor].clone();
-                            self.text_input = Input::new(picked);
-                        }
-                        self.discovery = None;
-                    }
-                    KeyCode::Esc => {
+                    KeyCode::Enter | KeyCode::Esc => {
+                        // The overlay is informational — neither key
+                        // copies the selection back into the prompt.
+                        // The operator types the namespace themselves.
                         self.discovery = None;
                     }
                     _ => {}
@@ -4089,7 +4078,7 @@ mod tests {
     }
 
     #[test]
-    fn keystorage_aws_backend_walks_region_then_prefix() {
+    fn keystorage_aws_backend_walks_region_then_namespace() {
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::KeyStorage;
         app.selection_index = 1; // AWS (renumbered: vta:// removed)
@@ -4099,18 +4088,18 @@ mod tests {
         app.text_input = Input::new("eu-west-2".into());
         app.confirm_text_input();
         assert_eq!(app.config.secret_aws_region, "eu-west-2");
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsPrefix));
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsNamespace));
 
         app.text_input = Input::new("prod/mediator/".into());
         app.confirm_text_input();
-        assert_eq!(app.config.secret_aws_prefix, "prod/mediator/");
+        assert_eq!(app.config.secret_aws_namespace, "prod/mediator/");
         assert!(!app.in_key_storage_subflow());
         assert_eq!(app.current_step, WizardStep::Vta);
     }
 
     #[test]
-    fn keystorage_gcp_enters_project_then_prefix_subflow() {
-        // GCP backend has two text-input phases: project then prefix.
+    fn keystorage_gcp_enters_project_then_namespace_subflow() {
+        // GCP backend has two text-input phases: project then namespace.
         // The project field is required (no sensible default — GCP
         // project IDs are tenant-scoped); empty input on that screen
         // is rejected and the operator stays on the prompt.
@@ -4124,11 +4113,11 @@ mod tests {
         app.text_input = Input::new("my-prod-project".into());
         app.confirm_text_input();
         assert_eq!(app.config.secret_gcp_project, "my-prod-project");
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::GcpPrefix));
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::GcpNamespace));
 
         app.text_input = Input::new("mediator-".into());
         app.confirm_text_input();
-        assert_eq!(app.config.secret_gcp_prefix, "mediator-");
+        assert_eq!(app.config.secret_gcp_namespace, "mediator-");
         assert!(!app.in_key_storage_subflow());
         assert_eq!(app.current_step, WizardStep::Vta);
     }
@@ -4154,7 +4143,7 @@ mod tests {
 
     #[test]
     fn keystorage_vault_enters_endpoint_then_mount_subflow() {
-        // HashiCorp Vault has two phases: endpoint then mount + prefix.
+        // HashiCorp Vault has two phases: endpoint then mount + namespace.
         // The endpoint field is required (deployment-specific); the
         // mount has a default (`secret/mediator`) so empty input on
         // the mount screen keeps the default.
@@ -4180,11 +4169,11 @@ mod tests {
     // ── Discovery overlay (F5) state-machine tests ───────────────────
 
     #[test]
-    fn discovery_request_for_aws_prefix_requires_region() {
-        // F5 on AwsPrefix without a region is a no-op (returns None);
+    fn discovery_request_for_aws_namespace_requires_region() {
+        // F5 on AwsNamespace without a region is a no-op (returns None);
         // once the region is set, the request carries it through.
         let mut app = WizardApp::new("test.toml".into());
-        app.key_storage_phase = Some(KeyStoragePhase::AwsPrefix);
+        app.key_storage_phase = Some(KeyStoragePhase::AwsNamespace);
         app.config.secret_aws_region = String::new();
         assert!(app.discovery_request_for_phase().is_none());
         app.config.secret_aws_region = "eu-west-2".into();
@@ -4254,13 +4243,11 @@ mod tests {
 
     #[test]
     fn handle_discovery_key_navigates_loaded_list() {
-        use crate::discovery::{DiscoveryMode, DiscoveryState};
+        use crate::discovery::DiscoveryState;
         use crossterm::event::KeyCode;
         let mut app = WizardApp::new("test.toml".into());
         app.discovery = Some(DiscoveryState::Loaded {
-            mode: DiscoveryMode::Pick,
             items: vec!["a/".into(), "b/".into(), "c/".into()],
-            total: 6,
             cursor: 0,
             scroll: 0,
         });
@@ -4284,42 +4271,26 @@ mod tests {
     }
 
     #[test]
-    fn handle_discovery_key_pick_applies_selection_and_dismisses() {
-        use crate::discovery::{DiscoveryMode, DiscoveryState};
+    fn handle_discovery_key_enter_dismisses_without_writing_input() {
+        // Enter is informational-only now — neither Enter nor Esc copies
+        // the selection back into the text input. The earlier behaviour
+        // was a footgun: an operator who picked a deeply-nested key
+        // (e.g. `prod/mediator/mediator_admin_credential`) ended up with
+        // that path as their namespace, and the runtime would then
+        // double-prepend on every well-known key.
+        use crate::discovery::DiscoveryState;
         use crossterm::event::KeyCode;
         let mut app = WizardApp::new("test.toml".into());
+        app.text_input = Input::new("operator-typed-namespace".into());
         app.discovery = Some(DiscoveryState::Loaded {
-            mode: DiscoveryMode::Pick,
             items: vec!["alpha/".into(), "beta/".into()],
-            total: 4,
             cursor: 1,
             scroll: 0,
         });
         assert!(app.handle_discovery_key(KeyCode::Enter));
-        // Pick mode wrote the selection into the text input.
-        assert_eq!(app.text_input.value(), "beta/");
-        // …and dismissed the overlay.
-        assert!(app.discovery.is_none());
-    }
-
-    #[test]
-    fn handle_discovery_key_confirm_dismisses_without_pick() {
-        use crate::discovery::{DiscoveryMode, DiscoveryState};
-        use crossterm::event::KeyCode;
-        let mut app = WizardApp::new("test.toml".into());
-        // Operator was editing the AzureVault field — that's the
-        // current text_input value. Confirm mode must NOT overwrite it
-        // with a discovered secret name.
-        app.text_input = Input::new("operator-typed-vault".into());
-        app.discovery = Some(DiscoveryState::Loaded {
-            mode: DiscoveryMode::Confirm,
-            items: vec!["existing-secret".into()],
-            total: 1,
-            cursor: 0,
-            scroll: 0,
-        });
-        assert!(app.handle_discovery_key(KeyCode::Enter));
-        assert_eq!(app.text_input.value(), "operator-typed-vault");
+        // Text input is untouched.
+        assert_eq!(app.text_input.value(), "operator-typed-namespace");
+        // Overlay dismissed.
         assert!(app.discovery.is_none());
     }
 
@@ -4414,8 +4385,8 @@ mod tests {
         app.current_step = WizardStep::KeyStorage;
         app.selection_index = 1; // AWS
         app.select_current();
-        app.confirm_text_input(); // AwsRegion → AwsPrefix
-        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsPrefix));
+        app.confirm_text_input(); // AwsRegion → AwsNamespace
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsNamespace));
 
         app.go_back();
         assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::AwsRegion));

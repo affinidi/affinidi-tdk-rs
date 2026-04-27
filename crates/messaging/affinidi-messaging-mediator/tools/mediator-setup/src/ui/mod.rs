@@ -107,19 +107,19 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
     // cloud-backend phases so operators don't have to read the
     // prompt's hint text to find it. Discovery overlay states get
     // their own bar so the keys actually available there
-    // (\u{2191}/\u{2193} scroll, Enter pick, Esc dismiss) are visible
-    // without scanning the (now hidden) usual key map.
-    let discovery_help = "\u{2191}\u{2193}/PgUp/PgDn Scroll  Enter Pick  Esc Cancel  F10 Quit";
+    // (\u{2191}/\u{2193} scroll, Esc dismiss) are visible without
+    // scanning the (now hidden) usual key map.
+    let discovery_help = "\u{2191}\u{2193}/PgUp/PgDn Scroll  Esc Dismiss  F10 Quit";
     let help_text = if app.in_discovery_overlay() {
         discovery_help
     } else if matches!(
         app.key_storage_phase,
-        Some(crate::app::KeyStoragePhase::AwsPrefix)
-            | Some(crate::app::KeyStoragePhase::GcpPrefix)
+        Some(crate::app::KeyStoragePhase::AwsNamespace)
+            | Some(crate::app::KeyStoragePhase::GcpNamespace)
             | Some(crate::app::KeyStoragePhase::AzureVault)
             | Some(crate::app::KeyStoragePhase::VaultMount)
     ) {
-        "F5 Discover existing  Enter Confirm  Esc Cancel  F10 Quit"
+        "F5 List existing  Enter Confirm  Esc Cancel  F10 Quit"
     } else {
         match app.mode {
             InputMode::TextInput => {
@@ -716,14 +716,14 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          or instance role) — make sure they're configured for \
                          the chosen region.",
                     ),
-                    KeyStoragePhase::AwsPrefix => (
-                        "Secret name prefix",
-                        "Key namespace for this mediator's entries.",
-                        crate::consts::DEFAULT_AWS_SECRET_PREFIX,
-                        "Every secret written goes under this prefix — makes \
+                    KeyStoragePhase::AwsNamespace => (
+                        "Secret namespace",
+                        "Path prepended to every secret name this mediator writes.",
+                        crate::consts::DEFAULT_AWS_SECRET_NAMESPACE,
+                        "Every secret written goes under this namespace — makes \
                          it easy to grant IAM access or clean up if you \
                          tear the mediator down.\n\n\
-                         [F5] lists prefixes already in use (requires AWS \
+                         [F5] lists existing secrets in the region (requires AWS \
                          creds in the environment).",
                     ),
                     KeyStoragePhase::GcpProject => (
@@ -736,13 +736,13 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          workload identity, …). The project ID — not \
                          project number — goes here.",
                     ),
-                    KeyStoragePhase::GcpPrefix => (
-                        "Secret name prefix",
-                        "Key namespace for this mediator's entries (may be empty).",
-                        crate::consts::DEFAULT_GCP_SECRET_PREFIX,
-                        "Every secret written goes under this prefix.\n\n\
+                    KeyStoragePhase::GcpNamespace => (
+                        "Secret namespace",
+                        "Path prepended to every secret name this mediator writes (may be empty).",
+                        crate::consts::DEFAULT_GCP_SECRET_NAMESPACE,
+                        "Every secret written goes under this namespace.\n\n\
                          [F5] lists existing GCP secrets in the project so \
-                         you can match an existing prefix or pick a new one.",
+                         you can pick a namespace that doesn't collide.",
                     ),
                     KeyStoragePhase::AzureVault => (
                         "Azure Key Vault",
@@ -766,14 +766,14 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          server.",
                     ),
                     KeyStoragePhase::VaultMount => (
-                        "KV v2 mount + prefix",
-                        "First segment is the mount; rest is the per-key prefix.",
+                        "KV v2 mount + namespace",
+                        "First segment is the mount; rest is the per-key namespace.",
                         crate::consts::DEFAULT_VAULT_MOUNT,
-                        "`secret` alone uses the KV v2 mount with no prefix. \
-                         `secret/mediator` mounts at `secret` and prefixes \
-                         each key with `mediator/`.\n\n\
+                        "`secret` alone uses the KV v2 mount with no namespace. \
+                         `secret/mediator` mounts at `secret` and prepends \
+                         `mediator/` to each key.\n\n\
                          [F5] lists keys already under the mount root so you \
-                         can match an existing layout.",
+                         can see the live layout.",
                     ),
                 };
                 prompt::render_prompt(

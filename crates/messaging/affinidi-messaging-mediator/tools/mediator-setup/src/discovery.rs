@@ -1,17 +1,16 @@
 //! Async secret-name discovery for the KeyStorage sub-flow.
 //!
-//! Operators can hit `F5` on the AwsPrefix / GcpPrefix / AzureVault /
+//! Operators can hit `F5` on the AwsNamespace / GcpNamespace / AzureVault /
 //! VaultMount screens to trigger a backend `list_namespace` call. The
-//! returned names are projected into either:
+//! returned names are shown raw (sorted + deduplicated) so the operator
+//! can see exactly what's already in the backend and pick a namespace
+//! that doesn't collide.
 //!
-//! - **Pick mode** — derived prefixes the operator can scroll and select
-//!   to populate the current text input. Used for AWS and Vault where
-//!   the URL has a clean separator (`/`) for deriving deployment-scope
-//!   namespaces.
-//! - **Confirm mode** — raw names shown as a "backend reachable" sanity
-//!   check. Used for GCP (its `[A-Za-z0-9_-]` names have no canonical
-//!   separator the wizard can derive against) and Azure Key Vault
-//!   (whose URL today carries no per-deployment prefix at all).
+//! The overlay is informational: Esc and Enter both dismiss it. The
+//! operator types the namespace into the prompt themselves rather than
+//! having the wizard derive a candidate from existing secret names —
+//! the earlier "11 prefixes from 14 secrets" projection was confusing
+//! and risked picking a deeply-nested key as a namespace.
 //!
 //! Discovery runs as a `tokio::spawn`'d task so the TUI keeps redrawing
 //! while the SDK call is in flight. Results travel back over an
@@ -31,20 +30,6 @@
 use affinidi_messaging_mediator_common::secrets::open_store;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// Whether the discovery overlay applies its selection back to the text
-/// input on Enter, or is purely informational (Esc dismisses).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiscoveryMode {
-    /// Selecting an entry replaces the current text input value with
-    /// the picked string and dismisses the overlay.
-    Pick,
-    /// Selecting an entry dismisses without changing the text input.
-    /// Used when the discovered names don't map cleanly onto the field
-    /// the operator is editing — F5 still serves as a "yes I can reach
-    /// this backend with these creds" signal.
-    Confirm,
-}
-
 /// Snapshot of the discovery sub-flow, owned by [`crate::app::WizardApp`]
 /// and drained from the channel on each tick.
 #[derive(Debug, Clone)]
@@ -52,17 +37,12 @@ pub enum DiscoveryState {
     /// Background task running. Render a one-line spinner row over the
     /// usual prompt.
     Loading,
-    /// Backend returned a list. Render scrollable selection overlay.
+    /// Backend returned a list. Render scrollable, dismissable overlay.
     Loaded {
-        mode: DiscoveryMode,
-        /// Items already projected onto the wizard's needs: candidate
-        /// prefixes for `Pick` mode, raw names for `Confirm`. Sorted +
-        /// deduplicated.
+        /// Raw secret names returned by the backend, sorted + deduped.
         items: Vec<String>,
-        /// Total raw key count returned by the backend (for the
-        /// "showing N derived from M raw secrets" footer).
-        total: usize,
         /// Operator's current selection. Always within `items.len()`.
+        /// Tracked for highlight only — selection has no side effect.
         cursor: usize,
         /// Vertical scroll offset.
         scroll: usize,
@@ -76,11 +56,7 @@ pub enum DiscoveryState {
 /// consumes it.
 #[derive(Debug)]
 pub enum DiscoveryEvent {
-    Loaded {
-        mode: DiscoveryMode,
-        items: Vec<String>,
-        total: usize,
-    },
+    Loaded { items: Vec<String> },
     Failed(String),
 }
 
@@ -89,58 +65,43 @@ pub enum DiscoveryEvent {
 /// backend without going back through the wizard for more state.
 #[derive(Debug, Clone)]
 pub enum DiscoveryRequest {
-    /// `aws_secrets://<region>/` — list every secret in the region,
-    /// derive unique slash-prefixes (the namespace the operator would
-    /// type).
+    /// `aws_secrets://<region>/` — list every secret in the region.
     Aws { region: String },
     /// `gcp_secrets://<project>/` — list every secret in the project.
-    /// Confirm mode: GCP names are flat (no `/` allowed) so there's no
-    /// canonical prefix separator — the operator reads the names and
-    /// picks a prefix manually.
     Gcp { project: String },
     /// `azure_keyvault://<vault>` — list every secret name in the vault.
-    /// Confirm mode: Azure URLs carry no prefix segment today.
     Azure { vault: String },
-    /// `vault://<endpoint>/<mount>` — list keys at the mount root,
-    /// keep the "folders" (entries ending with `/`). Each candidate
-    /// prefix is rendered as `<typed_mount>/<folder>` so picking one
-    /// gives the operator a complete mount+prefix string.
+    /// `vault://<endpoint>/<mount>` — list keys at the mount root. Both
+    /// folders (entries ending with `/`) and leaves are surfaced raw so
+    /// the operator can see the live layout.
     Vault { endpoint: String, mount: String },
 }
 
 impl DiscoveryRequest {
     /// Render the partial URL the backend factory expects. The body
     /// is intentionally minimal — only enough config to reach the
-    /// namespace, not a per-secret prefix (which is what discovery is
-    /// meant to *find*).
+    /// namespace, not a per-secret namespace (which is what discovery
+    /// is meant to *find*).
     fn url(&self) -> String {
         match self {
             // The trailing `/` after the region is a separator the AWS
             // URL parser requires. Empty body after the slash means
-            // "no operator-side prefix yet" — list_namespace ignores
-            // the prefix anyway.
+            // "no operator-side namespace yet" — list_namespace ignores
+            // the namespace anyway.
             Self::Aws { region } => format!("aws_secrets://{region}/"),
             Self::Gcp { project } => format!("gcp_secrets://{project}/"),
             Self::Azure { vault } => format!("azure_keyvault://{vault}"),
             // Vault's URL parser uses the first path segment as the
-            // KV v2 mount; everything after becomes the prefix. We
-            // pass the operator's typed value through verbatim so
-            // a partial mount like `secret` → mount=secret, no prefix.
+            // KV v2 mount; everything after becomes the namespace. We
+            // pass the operator's typed value through verbatim so a
+            // partial mount like `secret` → mount=secret, no namespace.
             Self::Vault { endpoint, mount } => format!("vault://{endpoint}/{mount}"),
-        }
-    }
-
-    /// Per-backend mode (Pick vs Confirm). See [`DiscoveryMode`].
-    fn mode(&self) -> DiscoveryMode {
-        match self {
-            Self::Aws { .. } | Self::Vault { .. } => DiscoveryMode::Pick,
-            Self::Gcp { .. } | Self::Azure { .. } => DiscoveryMode::Confirm,
         }
     }
 }
 
 /// Spawn a background task that opens the partial backend URL, calls
-/// `list_namespace`, projects the result onto the wizard-shaped
+/// `list_namespace`, sorts + dedupes the result onto a wizard-shaped
 /// [`DiscoveryEvent`], and sends it back over `tx`.
 ///
 /// The caller is responsible for setting [`DiscoveryState::Loading`]
@@ -150,7 +111,6 @@ impl DiscoveryRequest {
 pub fn spawn(req: DiscoveryRequest, tx: UnboundedSender<DiscoveryEvent>) {
     tokio::spawn(async move {
         let url = req.url();
-        let mode = req.mode();
         let store = match open_store(&url) {
             Ok(s) => s,
             Err(e) => {
@@ -165,163 +125,16 @@ pub fn spawn(req: DiscoveryRequest, tx: UnboundedSender<DiscoveryEvent>) {
                 return;
             }
         };
-        let total = raw.len();
-        let items = match &req {
-            DiscoveryRequest::Aws { .. } => derive_slash_prefixes(&raw),
-            DiscoveryRequest::Vault { mount, .. } => derive_vault_folders(&raw, mount),
-            DiscoveryRequest::Gcp { .. } | DiscoveryRequest::Azure { .. } => {
-                let mut items = raw;
-                items.sort();
-                items.dedup();
-                items
-            }
-        };
-        let _ = tx.send(DiscoveryEvent::Loaded { mode, items, total });
+        let mut items = raw;
+        items.sort();
+        items.dedup();
+        let _ = tx.send(DiscoveryEvent::Loaded { items });
     });
-}
-
-/// Project AWS secret names onto candidate prefix strings the operator
-/// can pick on the AwsPrefix screen. AWS Secrets Manager allows any
-/// `[A-Za-z0-9_/+=.@-]` in a name — both slash-pathed (`prod/mediator/
-/// admin_did`) and flat (`mediator_admin_did`) layouts are common in
-/// the wild, so an earlier filter that *only* kept slash-derived
-/// prefixes silently hid a large chunk of real accounts' inventory.
-///
-/// Now: slash-pathed names collapse to the dirname (everything up to
-/// and including the last `/`); flat names pass through verbatim. The
-/// merged list is sorted + deduplicated. Picking a slash-derived
-/// prefix lands cleanly into the wizard's `secret_aws_prefix`; picking
-/// a flat name puts the literal name into the field — useful for
-/// "namespace already in use, don't reuse" awareness even if the
-/// operator then edits the field rather than confirming as-is.
-fn derive_slash_prefixes(raw: &[String]) -> Vec<String> {
-    let mut items: Vec<String> = raw
-        .iter()
-        .map(|name| match name.rfind('/') {
-            // Everything up to and including the last `/` — the
-            // namespace dirname.
-            Some(i) => name[..=i].to_string(),
-            // Flat name (no `/`) — show as-is so the operator sees the
-            // full account inventory rather than only the slash-shaped
-            // subset.
-            None => name.clone(),
-        })
-        .collect();
-    items.sort();
-    items.dedup();
-    items
-}
-
-/// Vault's `kv2::list` returns leaves and "folders" (entries ending
-/// with `/`). Folders define the per-deployment namespace; we keep just
-/// those and prefix each with the operator's typed `mount` so picking
-/// yields a complete mount+prefix string the operator can paste back.
-fn derive_vault_folders(raw: &[String], mount: &str) -> Vec<String> {
-    // Strip an operator-typed trailing `/` so we don't end up with
-    // `secret//mediator/` after the join.
-    let mount_clean = mount.trim_end_matches('/');
-    let mut folders: Vec<String> = raw
-        .iter()
-        .filter(|n| n.ends_with('/'))
-        .map(|f| {
-            if mount_clean.is_empty() {
-                f.clone()
-            } else {
-                format!("{mount_clean}/{f}")
-            }
-        })
-        .collect();
-    folders.sort();
-    folders.dedup();
-    folders
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn slash_prefixes_dedup_and_sort() {
-        let raw = vec![
-            "prod/mediator/admin_did".to_string(),
-            "prod/mediator/jwt_secret".to_string(),
-            "staging/mediator/admin_did".to_string(),
-            "prod/other/key".to_string(),
-        ];
-        assert_eq!(
-            derive_slash_prefixes(&raw),
-            vec!["prod/mediator/", "prod/other/", "staging/mediator/",]
-        );
-    }
-
-    #[test]
-    fn slash_prefixes_keeps_flat_names_verbatim() {
-        // Regression test for the "F5 only shows some secrets"
-        // bug — flat AWS secret names (no `/`) used to be silently
-        // dropped by `filter_map`. They now pass through as-is so the
-        // operator sees the full account inventory; otherwise mixed
-        // accounts (slash + flat) hid the flat half from F5 even
-        // though `aws secretsmanager list-secrets` showed them.
-        let raw = vec!["mediator_admin_did".to_string(), "flat_two".to_string()];
-        assert_eq!(
-            derive_slash_prefixes(&raw),
-            vec!["flat_two", "mediator_admin_did"]
-        );
-    }
-
-    #[test]
-    fn slash_prefixes_mixed_shapes_merge_into_one_sorted_list() {
-        // Real AWS accounts mix slash-pathed and flat names. Both
-        // shapes survive into the output, deduped + sorted together.
-        // The slash-derived `prod/mediator/` collapses every key
-        // under that prefix into one entry; flat names appear once
-        // each under their own row.
-        let raw = vec![
-            "prod/mediator/admin_did".to_string(),
-            "prod/mediator/jwt_secret".to_string(),
-            "mediator_admin_did".to_string(),
-            "ci_temp".to_string(),
-        ];
-        assert_eq!(
-            derive_slash_prefixes(&raw),
-            vec!["ci_temp", "mediator_admin_did", "prod/mediator/"]
-        );
-    }
-
-    #[test]
-    fn vault_folders_prefixed_with_mount() {
-        let raw = vec![
-            "mediator/".to_string(),
-            "staging/".to_string(),
-            "leaf-secret".to_string(),
-        ];
-        // Operator typed `secret` → folders become `secret/<f>`.
-        assert_eq!(
-            derive_vault_folders(&raw, "secret"),
-            vec!["secret/mediator/", "secret/staging/"]
-        );
-    }
-
-    #[test]
-    fn vault_folders_strip_trailing_mount_slash() {
-        // The text input may carry a stray trailing `/` (operator
-        // habit). The derivation strips it so the joined prefix is
-        // `<mount>/<folder>`, not `<mount>//<folder>`.
-        let raw = vec!["mediator/".to_string()];
-        assert_eq!(
-            derive_vault_folders(&raw, "secret/"),
-            vec!["secret/mediator/"]
-        );
-    }
-
-    #[test]
-    fn vault_folders_empty_mount_keeps_folder_verbatim() {
-        // Edge case — operator opened the prefix screen with an empty
-        // mount value. The folder name is the candidate prefix on its
-        // own.
-        let raw = vec!["mediator/".to_string()];
-        assert_eq!(derive_vault_folders(&raw, ""), vec!["mediator/"]);
-    }
 
     #[test]
     fn request_url_shapes() {
@@ -353,38 +166,6 @@ mod tests {
             }
             .url(),
             "vault://vault.internal:8200/secret"
-        );
-    }
-
-    #[test]
-    fn request_modes_match_backend_capability() {
-        // AWS / Vault have prefix-shaped namespaces — Pick mode.
-        // GCP / Azure don't — Confirm-only.
-        assert_eq!(
-            DiscoveryRequest::Aws {
-                region: "us-east-1".into()
-            }
-            .mode(),
-            DiscoveryMode::Pick
-        );
-        assert_eq!(
-            DiscoveryRequest::Vault {
-                endpoint: "v".into(),
-                mount: "s".into()
-            }
-            .mode(),
-            DiscoveryMode::Pick
-        );
-        assert_eq!(
-            DiscoveryRequest::Gcp {
-                project: "p".into()
-            }
-            .mode(),
-            DiscoveryMode::Confirm
-        );
-        assert_eq!(
-            DiscoveryRequest::Azure { vault: "v".into() }.mode(),
-            DiscoveryMode::Confirm
         );
     }
 }

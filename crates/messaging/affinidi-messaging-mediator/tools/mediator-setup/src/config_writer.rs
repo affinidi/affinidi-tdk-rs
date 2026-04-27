@@ -190,11 +190,11 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
         STORAGE_KEYRING => format!("keyring://{}", config.secret_keyring_service),
         STORAGE_AWS => format!(
             "aws_secrets://{}/{}",
-            config.secret_aws_region, config.secret_aws_prefix
+            config.secret_aws_region, config.secret_aws_namespace
         ),
         STORAGE_GCP => format!(
             "gcp_secrets://{}/{}",
-            config.secret_gcp_project, config.secret_gcp_prefix
+            config.secret_gcp_project, config.secret_gcp_namespace
         ),
         STORAGE_AZURE => format!("azure_keyvault://{}", config.secret_azure_vault),
         STORAGE_VAULT => format!(
