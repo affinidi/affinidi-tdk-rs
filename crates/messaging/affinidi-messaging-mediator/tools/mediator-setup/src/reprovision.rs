@@ -134,7 +134,7 @@ pub fn refuse_overwrite(config_path: &Path, setup: &ExistingSetup) -> ! {
 const COMPANION_FILES: &[&str] = &[
     "atm-functions.lua",
     "secrets.json",
-    "mediator_did.json",
+    "did.jsonl",
     "mediator-build.toml",
 ];
 

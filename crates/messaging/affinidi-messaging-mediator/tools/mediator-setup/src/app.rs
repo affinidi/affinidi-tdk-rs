@@ -362,6 +362,12 @@ pub struct WizardConfig {
     pub database_url: String,
     pub admin_did_mode: String,
     pub listen_address: String,
+    /// HTTP prefix all mediator routes nest under (e.g. `/mediator/v1/`).
+    /// Written verbatim to `[server] api_prefix` and combined with
+    /// `public_url` when rendering the did:webvh service endpoints so
+    /// the DID document points at the same URLs the mediator actually
+    /// serves. Empty / `/` means "serve at host root".
+    pub api_prefix: String,
 }
 
 impl WizardConfig {
@@ -409,6 +415,7 @@ impl Default for WizardConfig {
             database_url: DEFAULT_REDIS_URL.into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
+            api_prefix: DEFAULT_API_PREFIX.into(),
         }
     }
 }

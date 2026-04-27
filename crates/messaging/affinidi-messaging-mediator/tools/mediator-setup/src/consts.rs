@@ -88,6 +88,13 @@ pub const VTA_MODE_EXPORT: &str = VTA_MODE_SEALED_EXPORT;
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
 pub const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";
 pub const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:7037";
+
+/// Default `[server] api_prefix` written to `mediator.toml`. The
+/// trailing `/` matches the example config and the mediator binary's
+/// route nesting (it strips a single trailing slash). Operators who
+/// want to serve the mediator at the host root can override via the
+/// recipe's `[output] api_prefix = ""`.
+pub const DEFAULT_API_PREFIX: &str = "/mediator/v1/";
 pub const DEFAULT_VTA_CONTEXT: &str = "mediator";
 /// Default expiry for the setup-did ACL entry granted via
 /// `pnm contexts create --admin-expires`. Gives the operator an hour to

@@ -70,28 +70,41 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
             .route("/oob", delete(oob_discovery::delete_oobid_handler));
     }
 
+    // The variable name reads inverted but the body is correct: `has_prefix == true` means
+    // there is no prefix to nest under (operator left it blank or set it to `/`), so the
+    // app routes are mounted at the router root. Otherwise the inner routes nest under
+    // the operator's `api_prefix` (e.g. `/mediator/v1`).
     let has_prefix = api_prefix.is_empty() || api_prefix == "/";
 
-    app = if shared_data.config.mediator_did_doc.is_some() {
-        let well_known_prefix = if has_prefix { "/.well-known" } else { "" };
-        app.route(
-            &format!("{}/did.json", well_known_prefix),
-            get(well_known_did_fetch::well_known_did_doc_handler),
-        )
-        .route(
-            &format!("{}/did.jsonl", well_known_prefix),
-            get(well_known_did_fetch::well_known_did_doc_handler),
-        )
-    } else {
-        app
-    };
-
-    (if has_prefix {
+    let api_router = if has_prefix {
         Router::new().merge(app)
     } else {
         Router::new().nest(api_prefix, app)
-    })
-    .with_state(shared_data.to_owned())
+    };
+
+    // `/.well-known/did.json` and `/.well-known/did.jsonl` are well-known URIs (RFC 8615);
+    // both did:web and did:webvh resolvers fetch them at the bare host root, regardless of
+    // any HTTP API prefix the service uses for its other routes. Register them on the
+    // outer router so they sit at root even when the inner app is nested under `api_prefix`.
+    let api_router = if shared_data.config.mediator_did_doc.is_some() {
+        let mut r = api_router.route(
+            "/.well-known/did.json",
+            get(well_known_did_fetch::well_known_did_json_handler),
+        );
+        // `did.jsonl` is the webvh log stream — register only when the loaded source
+        // actually was a log entry. did:web deployments don't have a log to serve.
+        if shared_data.config.mediator_did_log.is_some() {
+            r = r.route(
+                "/.well-known/did.jsonl",
+                get(well_known_did_fetch::well_known_did_jsonl_handler),
+            );
+        }
+        r
+    } else {
+        api_router
+    };
+
+    api_router.with_state(shared_data.to_owned())
 }
 
 pub async fn health_checker_handler(State(state): State<SharedData>) -> impl IntoResponse {

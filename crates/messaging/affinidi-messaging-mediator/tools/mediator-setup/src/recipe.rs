@@ -218,6 +218,13 @@ pub struct OutputSection {
     /// Listen address for the mediator (ip:port)
     #[serde(default = "default_listen_address")]
     pub listen_address: String,
+    /// HTTP prefix all mediator routes nest under (`/mediator/v1/` by
+    /// default). Combined with `identity.public_url` when rendering the
+    /// did:webvh service endpoints. Empty / `/` means "serve at host
+    /// root" — useful when fronting the mediator with a path-rewriting
+    /// reverse proxy.
+    #[serde(default = "default_api_prefix")]
+    pub api_prefix: String,
 }
 
 fn default_config_path() -> String {
@@ -228,11 +235,16 @@ fn default_listen_address() -> String {
     "0.0.0.0:7037".into()
 }
 
+fn default_api_prefix() -> String {
+    crate::consts::DEFAULT_API_PREFIX.into()
+}
+
 impl Default for OutputSection {
     fn default() -> Self {
         Self {
             config_path: default_config_path(),
             listen_address: default_listen_address(),
+            api_prefix: default_api_prefix(),
         }
     }
 }
@@ -454,6 +466,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     // Output
     config.config_path = recipe.output.config_path.clone();
     config.listen_address = recipe.output.listen_address.clone();
+    config.api_prefix = recipe.output.api_prefix.clone();
 
     Ok(config)
 }
@@ -610,10 +623,8 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
     // Output
     out.push_str("[output]\n");
     out.push_str(&format!("config_path = \"{}\"\n", config.config_path));
-    out.push_str(&format!(
-        "listen_address = \"{}\"\n\n",
-        config.listen_address
-    ));
+    out.push_str(&format!("listen_address = \"{}\"\n", config.listen_address));
+    out.push_str(&format!("api_prefix = \"{}\"\n\n", config.api_prefix));
 
     // Install (default: not enabled in recipe — user can enable manually)
     out.push_str("[install]\n");

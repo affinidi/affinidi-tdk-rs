@@ -36,15 +36,26 @@ pub struct DidWebvhResult {
 
 /// Generate a did:webvh DID for the mediator.
 ///
-/// `host` is the mediator's public URL (e.g.
-/// `https://mediator.example.com/mediator/v1`). The URL is passed verbatim
-/// to the template's `URL` variable — the shape of the service endpoint,
-/// `accept` list, and routing keys are the template's responsibility.
-pub async fn generate_did_webvh(host: &str) -> anyhow::Result<DidWebvhResult> {
-    let address = if host.starts_with("http://") || host.starts_with("https://") {
-        host.to_string()
+/// `address` is the host-only base URL (`https://mediator.example.com`)
+/// — it gets encoded into the DID identifier and is what webvh resolvers
+/// use to locate `/.well-known/did.jsonl`. Strip any HTTP path before
+/// passing it in; otherwise the DID becomes
+/// `did:webvh:<scid>:host:foo:bar` and resolves at `/foo/bar/did.jsonl`
+/// instead of `/.well-known/did.jsonl`.
+///
+/// `service_url` is what gets fed to the template's `URL` variable and
+/// becomes the service-endpoint base in the rendered DID document.
+/// Should be the mediator's full public URL including any HTTP API
+/// prefix (`https://mediator.example.com/mediator/v1`) so clients
+/// resolving the DID hit the actual mediator routes.
+pub async fn generate_did_webvh(
+    address: &str,
+    service_url: &str,
+) -> anyhow::Result<DidWebvhResult> {
+    let address = if address.starts_with("http://") || address.starts_with("https://") {
+        address.to_string()
     } else {
-        format!("https://{host}")
+        format!("https://{address}")
     };
 
     // ── Mediator keys ──────────────────────────────────────────────
@@ -65,7 +76,12 @@ pub async fn generate_did_webvh(host: &str) -> anyhow::Result<DidWebvhResult> {
     let template = load_embedded("didcomm-mediator")
         .map_err(|e| anyhow::anyhow!("Failed to load mediator template: {e}"))?;
     let mut vars = TemplateVars::new();
-    vars.insert_string("URL", &address);
+    // Service endpoints land on the operator's full URL (host + api prefix).
+    // The DID identifier itself comes from `address` via `CreateDIDConfig`
+    // below, so the two are correctly decoupled — clients resolving the
+    // DID look up `/.well-known/did.jsonl` then dial the service URLs
+    // they find inside.
+    vars.insert_string("URL", service_url);
     vars.insert_string("SIGNING_KEY_MB", &signing_mb);
     vars.insert_string("KA_KEY_MB", &ka_mb);
     // `{DID}` is a sentinel — we declare it as "provided" so the renderer
@@ -131,9 +147,12 @@ mod tests {
 
     #[tokio::test]
     async fn webvh_matches_canonical_mediator_template() {
-        let result = generate_did_webvh("https://mediator.example.com/mediator/v1")
-            .await
-            .unwrap();
+        let result = generate_did_webvh(
+            "https://mediator.example.com",
+            "https://mediator.example.com/mediator/v1",
+        )
+        .await
+        .unwrap();
         // Two runtime secrets: signing + key agreement.
         assert_eq!(result.secrets.len(), 2);
 
@@ -180,7 +199,9 @@ mod tests {
 
     #[tokio::test]
     async fn webvh_key_ids_match_final_did() {
-        let result = generate_did_webvh("mediator.example.com").await.unwrap();
+        let result = generate_did_webvh("mediator.example.com", "https://mediator.example.com")
+            .await
+            .unwrap();
         for secret in &result.secrets {
             assert!(secret.id.starts_with(&result.did));
         }

@@ -133,7 +133,17 @@ pub struct Config {
     pub listen_address: String,
     pub mediator_did: String,
     pub mediator_did_hash: String,
+    /// Extracted DID document JSON served at `/.well-known/did.json`
+    /// when self-hosting. Populated whether the on-disk source was a
+    /// raw DID Document (did:web shape) or a webvh log entry — the
+    /// loader extracts `state` from the latter so both routes serve
+    /// canonical-shape content.
     pub mediator_did_doc: Option<String>,
+    /// Raw webvh log entry stream served at `/.well-known/did.jsonl`.
+    /// `Some` only when the on-disk source parsed as a `LogEntry`
+    /// (did:webvh self-host); `None` for the did:web shape, where the
+    /// jsonl route is not registered.
+    pub mediator_did_log: Option<String>,
     pub admin_did: String,
     pub api_prefix: String,
     pub streaming_enabled: bool,
@@ -205,6 +215,7 @@ impl Config {
             mediator_did: "".into(),
             mediator_did_hash: "".into(),
             mediator_did_doc: None,
+            mediator_did_log: None,
             admin_did: "".into(),
             database: DatabaseConfig::default(),
             streaming_enabled: true,
@@ -582,11 +593,17 @@ impl TryFrom<ConfigRaw> for Config {
         if let Some(path) = raw.server.did_web_self_hosted {
             let document_json = read_document(&path, &aws_config).await?;
 
-            // Validate and parse as LogEntry (webvh format) first, then fall back to direct Document
+            // Validate and parse as LogEntry (webvh format) first, then fall back to direct
+            // Document. We split the canonical DID Document (served at `did.json`) from the
+            // raw log entry stream (served at `did.jsonl`) so each well-known route returns
+            // the correct shape — the previous version served the raw input verbatim at both
+            // routes, which meant `did.jsonl` returned a DID Document for did:web sources and
+            // `did.json` returned a log envelope for did:webvh sources.
             let parsed_document = match LogEntry::deserialize_string(&document_json, None) {
                 Ok(log_entry) => {
-                    // Extract the did_document from the log_entry
-                    let did_doc = log_entry.get_did_document().map_err(|err| {
+                    // did:webvh source — extract the DID document for `did.json`, keep the
+                    // raw log entry for `did.jsonl`.
+                    let did_doc_value = log_entry.get_did_document().map_err(|err| {
                         error!("Couldn't extract DID Document from LogEntry: {err}");
                         MediatorError::ConfigError(
                             12,
@@ -595,8 +612,24 @@ impl TryFrom<ConfigRaw> for Config {
                         )
                     })?;
 
-                    // Convert Value to Document
-                    serde_json::from_value(did_doc).map_err(|err| {
+                    // Serialise the extracted DID document for the did.json handler. The
+                    // resolver receives the typed `Document` below (parsed from the same
+                    // value) so we don't pay double parse costs at request time.
+                    let extracted_json = serde_json::to_string(&did_doc_value).map_err(|err| {
+                        error!("Couldn't serialise extracted DID Document as JSON. Reason: {err}");
+                        MediatorError::ConfigError(
+                            12,
+                            "NA".into(),
+                            format!(
+                                "Couldn't serialise extracted DID Document as JSON. Reason: {err}"
+                            ),
+                        )
+                    })?;
+
+                    config.mediator_did_doc = Some(extracted_json);
+                    config.mediator_did_log = Some(document_json);
+
+                    serde_json::from_value(did_doc_value).map_err(|err| {
                         error!("Couldn't convert DID Document value to Document struct. Reason: {err}");
                         MediatorError::ConfigError(
                             12,
@@ -606,22 +639,24 @@ impl TryFrom<ConfigRaw> for Config {
                     })?
                 }
                 Err(_log_entry_err) => {
-                    // Try parsing as a direct Document struct
-                    serde_json::from_str::<Document>(&document_json).map_err(|err| {
-                        error!("Couldn't parse content as LogEntry or Document. Reason: {err}");
-                        MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            format!(
-                                "Couldn't parse content as LogEntry or Document. Reason: {err}"
-                            ),
-                        )
-                    })?
+                    // did:web source — the raw input is the DID document; no log entry to serve.
+                    let parsed =
+                        serde_json::from_str::<Document>(&document_json).map_err(|err| {
+                            error!("Couldn't parse content as LogEntry or Document. Reason: {err}");
+                            MediatorError::ConfigError(
+                                12,
+                                "NA".into(),
+                                format!(
+                                    "Couldn't parse content as LogEntry or Document. Reason: {err}"
+                                ),
+                            )
+                        })?;
+                    config.mediator_did_doc = Some(document_json);
+                    config.mediator_did_log = None;
+                    parsed
                 }
             };
 
-            // Store the raw document string (JSON or JSONL format)
-            config.mediator_did_doc = Some(document_json);
             // Store the parsed Document for later use
             did_document = Some(parsed_document);
         }

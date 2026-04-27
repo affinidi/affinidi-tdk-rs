@@ -981,7 +981,12 @@ fn write_did_jsonl(config_path: &str, log_content: &str) {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("did.jsonl");
-    match std::fs::write(&did_jsonl_path, log_content) {
+    // Strict JSON-Lines requires each record to end with `\n`. Some upstream
+    // sources (the VTA's `provision.webvh_log()`, the local generator) include
+    // a trailing newline already, others don't — normalise to exactly one so
+    // `cat`-ing the file or appending future log entries always works.
+    let normalised = format!("{}\n", log_content.trim_end_matches('\n'));
+    match std::fs::write(&did_jsonl_path, normalised) {
         Ok(()) => println!(
             "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
             did_jsonl_path.display()
@@ -990,6 +995,38 @@ fn write_did_jsonl(config_path: &str, log_content: &str) {
             "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
             did_jsonl_path.display()
         ),
+    }
+}
+
+/// Drop any HTTP path from a URL, returning `<scheme>://<host>[:<port>]`.
+/// Used to derive the did:webvh DID identifier from the operator's full
+/// public URL (the trailing `/mediator/v1` would otherwise get baked into
+/// the DID and route the resolver away from `/.well-known/did.jsonl`).
+fn strip_url_path_owned(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut u) => {
+            u.set_path("");
+            u.to_string().trim_end_matches('/').to_string()
+        }
+        Err(_) => raw.to_string(),
+    }
+}
+
+/// Glue a base URL and an HTTP path prefix together with exactly one
+/// `/` between them and no trailing slash. Used to feed the did:webvh
+/// template's `URL` variable so service-endpoint URIs match what the
+/// mediator actually serves at runtime.
+///
+/// `combine_url_prefix("https://m.example.com", "/mediator/v1/")`
+/// → `"https://m.example.com/mediator/v1"`. An empty or `/` prefix
+/// returns the base URL unchanged.
+fn combine_url_prefix(base: &str, prefix: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}/{prefix}")
     }
 }
 
@@ -1014,12 +1051,20 @@ async fn generate_and_write(
             (did, secrets, None)
         }
         DID_WEBVH => {
-            let host = if config.public_url.is_empty() {
-                "localhost:7037/mediator/v1"
+            // The DID identifier should encode the host only (`example.com`)
+            // so the resolver fetches `<host>/.well-known/did.jsonl`. The
+            // template's URL variable, by contrast, needs the *full* URL
+            // including the operator's `api_prefix` so the rendered service
+            // endpoints (`#didcomm`, `#auth`, `#whois`) point at the routes
+            // the mediator actually serves.
+            let raw_url = if config.public_url.is_empty() {
+                "https://localhost:7037".to_string()
             } else {
-                &config.public_url
+                config.public_url.clone()
             };
-            let result = generators::did_webvh::generate_did_webvh(host).await?;
+            let address = strip_url_path_owned(&raw_url);
+            let service_url = combine_url_prefix(&address, &config.api_prefix);
+            let result = generators::did_webvh::generate_did_webvh(&address, &service_url).await?;
             (result.did, result.secrets, Some(result.did_doc))
         }
         DID_VTA => {
@@ -1050,13 +1095,6 @@ async fn generate_and_write(
                     .transpose()?
                     .unwrap_or_default();
 
-                // Write the VTA-provided did.jsonl alongside the
-                // config so the mediator (or a downstream operator)
-                // can publish / inspect the log content locally.
-                if let Some(log) = provision.webvh_log() {
-                    write_did_jsonl(&config.config_path, log);
-                }
-
                 // Archive the VTA-issued authorization VC next to
                 // the config. Short-lived (~1h validity) but useful
                 // for operator audit trails.
@@ -1077,8 +1115,14 @@ async fn generate_and_write(
                     }
                 }
 
-                let doc_string = serde_json::to_string(&provision.payload.config.did_document).ok();
-                (integration_did, secrets, doc_string)
+                // Return the webvh log entry for the unified post-match
+                // write. The VTA also exposes the inner DID document
+                // separately on `provision.payload.config.did_document`,
+                // but the wizard only needs the log entry — the
+                // mediator's loader extracts the DID document from the
+                // log envelope for `/.well-known/did.json`.
+                let log_entry = provision.webvh_log().map(str::to_string);
+                (integration_did, secrets, log_entry)
             } else if let Some(bundle) = from_export {
                 // OfflineExport path. Bundle carries the existing
                 // mediator DID + operational keys (Vec<SecretEntry>)
@@ -1097,18 +1141,12 @@ async fn generate_and_write(
 
                 let secrets = secret_entries_to_secrets(&did_view.secrets)?;
 
-                // Write the exported log entry. ContextProvision
-                // carries a single Option<String>, not a list of
-                // outputs — simpler than the TemplateBootstrap shape.
-                if let Some(log) = did_view.log_entry.as_deref() {
-                    write_did_jsonl(&config.config_path, log);
-                }
-
-                let doc_string = did_view
-                    .did_document
-                    .as_ref()
-                    .and_then(|v| serde_json::to_string(v).ok());
-                (integration_did, secrets, doc_string)
+                // Return the exported log entry for the unified post-match
+                // write. ContextProvision carries a single
+                // `Option<String>`, not a list of outputs — simpler than
+                // the TemplateBootstrap shape.
+                let log_entry = did_view.log_entry.clone();
+                (integration_did, secrets, log_entry)
             } else {
                 eprintln!(
                     "  Note: VTA-managed DID selected but no provisioned session \
@@ -1324,18 +1362,23 @@ async fn generate_and_write(
         admin_secret: admin_secret.clone(),
         ssl_cert_path,
         ssl_key_path,
+        // The post-match write below mirrors this flag — they're set
+        // off the same `did_doc` Option so `did_web_self_hosted` is
+        // wired into `mediator.toml` exactly when there's a `did.jsonl`
+        // on disk for the loader to read.
+        did_log_jsonl_written: did_doc.is_some(),
     };
 
     config_writer::write_config(config, &generated)?;
 
-    // Write DID document file for did:webvh
+    // Write the did:webvh log entry to `did.jsonl` so the mediator's
+    // `/.well-known/did.jsonl` route can serve it. Source is either the
+    // self-host generator (DID_WEBVH branch) or the VTA's
+    // `provision.webvh_log()` / `did_view.log_entry` (DID_VTA branches);
+    // both return the canonical log-entry JSON envelope.
+    // `write_did_jsonl` adds the trailing newline strict JSONL requires.
     if let Some(ref doc) = did_doc {
-        let doc_path = std::path::Path::new(&config.config_path)
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join("mediator_did.json");
-        std::fs::write(&doc_path, doc)?;
-        println!("  DID document: {}", doc_path.display());
+        write_did_jsonl(&config.config_path, doc);
     }
 
     let conf_dir = std::path::Path::new(&config.config_path)
@@ -1867,10 +1910,10 @@ fn print_final_summary(config: &app::WizardConfig) {
     }
 
     if config.did_method == DID_WEBVH {
-        let did_doc_path = config_dir.join("mediator_did.json");
+        let did_log_path = config_dir.join("did.jsonl");
         println!(
-            "    \x1b[36m{}\x1b[0m  — DID document",
-            did_doc_path.display()
+            "    \x1b[36m{}\x1b[0m  — did:webvh log entry",
+            did_log_path.display()
         );
     }
 

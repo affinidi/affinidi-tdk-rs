@@ -37,6 +37,12 @@ pub struct GeneratedValues {
     pub ssl_cert_path: Option<String>,
     /// SSL key path (if self-signed was generated)
     pub ssl_key_path: Option<String>,
+    /// `true` when the wizard wrote a `did.jsonl` next to the config —
+    /// either because `did_method = "did:webvh"` (self-hosted webvh) or
+    /// because `did_method = "vta"` returned a serverless mediator DID
+    /// whose log entry the mediator now serves itself. Drives whether
+    /// `[server].did_web_self_hosted` is written into `mediator.toml`.
+    pub did_log_jsonl_written: bool,
 }
 
 /// The default mediator.toml template, embedded at compile time.
@@ -103,6 +109,7 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     // ── [server] ───────────────────────────────────────────────────────
     if let Some(server) = doc.get_mut("server") {
         server["listen_address"] = toml_edit::value(&config.listen_address);
+        server["api_prefix"] = toml_edit::value(&config.api_prefix);
 
         if let Some(ref admin_did) = generated.admin_did {
             server["admin_did"] = toml_edit::value(format!("did://{admin_did}"));
@@ -111,9 +118,16 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
             server.as_table_like_mut().map(|t| t.remove("admin_did"));
         }
 
-        // Self-hosted DID document
-        if config.did_method == DID_WEBVH {
-            server["did_web_self_hosted"] = toml_edit::value("file://./conf/mediator_did.json");
+        // Self-hosted DID log. Triggered whenever the wizard wrote a
+        // `did.jsonl` alongside the config — covers both `did_method =
+        // "did:webvh"` (self-host generator) and the VTA-managed
+        // serverless path where the VTA returned a webvh log entry the
+        // mediator now serves itself. The mediator's loader detects the
+        // log envelope and serves both `/.well-known/did.json`
+        // (extracted DID Document) and `/.well-known/did.jsonl` (raw
+        // log) from this single file.
+        if generated.did_log_jsonl_written {
+            server["did_web_self_hosted"] = toml_edit::value("file://./conf/did.jsonl");
         } else {
             server
                 .as_table_like_mut()
@@ -221,6 +235,7 @@ mod tests {
             admin_secret: None,
             ssl_cert_path: None,
             ssl_key_path: None,
+            did_log_jsonl_written: false,
         }
     }
 
@@ -303,6 +318,7 @@ mod tests {
             admin_secret: None,
             ssl_cert_path: None,
             ssl_key_path: None,
+            did_log_jsonl_written: false,
         };
 
         let toml = generate_toml(&config, &generated).unwrap();
@@ -374,8 +390,15 @@ mod tests {
             secret_storage: STORAGE_STRING.into(),
             ..WizardConfig::default()
         };
-        let toml = generate_toml(&config, &test_generated()).unwrap();
-        assert!(toml.contains("did_web_self_hosted = \"file://./conf/mediator_did.json\""));
+        // The DID_WEBVH branch in `main.rs` always produces a log entry,
+        // so `did_log_jsonl_written` is true alongside the mediator
+        // config write. Mirror that here.
+        let generated = GeneratedValues {
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(toml.contains("did_web_self_hosted = \"file://./conf/did.jsonl\""));
     }
 
     #[test]

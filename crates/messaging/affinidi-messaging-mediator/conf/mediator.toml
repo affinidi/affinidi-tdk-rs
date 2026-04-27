@@ -75,7 +75,7 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 ###   file://<path>
 ###   aws_parameter_store://<parameter_name>
 ### When enabled, adds a did:web route at /.well-known/did.json
-did_web_self_hosted = "file://./conf/mediator_did.json"
+did_web_self_hosted = "file://./conf/did.jsonl"
 
 ### ****************************************************************************************************************************
 ### Database configuration
