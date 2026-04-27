@@ -844,6 +844,33 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 );
                 return;
             }
+            // Database step: surface the supported Redis URL shapes
+            // (auth, TLS, partitions) inline so the operator doesn't
+            // have to read the example mediator.toml. Mirrors the
+            // commentary at conf/mediator.toml `[database]`.
+            if app.current_step == crate::app::WizardStep::Database {
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Redis URL",
+                    "Connection string for the mediator's Redis-compatible database.",
+                    Some(
+                        "Production: always require auth and use rediss:// for any \
+                         non-loopback host.",
+                    ),
+                    &app.text_input,
+                    crate::consts::DEFAULT_REDIS_URL,
+                    "Examples:\n  \
+                     redis://127.0.0.1/                  local, no auth (dev only)\n  \
+                     redis://:password@host:6379/        password auth (requirepass)\n  \
+                     redis://user:password@host:6379/    ACL user + password\n  \
+                     rediss://:password@host:6379/       TLS-encrypted connection\n  \
+                     redis://127.0.0.1/1                 select database partition 1\n\n\
+                     The trailing `/<n>` picks a numbered partition (Redis SELECT). \
+                     Use partitions to isolate dev/staging/prod on a shared host.",
+                );
+                return;
+            }
             text_input::render_text_input(
                 frame,
                 chunks[0],
