@@ -27,7 +27,14 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, error, info, warn};
 
-pub async fn start() {
+/// Run the mediator HTTP server.
+///
+/// `config_path` is read at startup; the wizard, the `RotateAdmin`
+/// subcommand, and ad-hoc operator runs all share this entry point so
+/// they pick up the same `[secrets]` backend, ACLs, and TLS settings.
+/// `conf/mediator.toml` (relative to CWD) was the historical default and
+/// is what `Cli::config` falls back to when the operator omits `--config`.
+pub async fn start(config_path: &str) {
     let ansi = env::var("LOCAL").is_ok();
 
     if ansi {
@@ -61,7 +68,7 @@ pub async fn start() {
 
     println!("[Loading Affinidi Secure Messaging Mediator configuration]");
 
-    let config = init("conf/mediator.toml", ansi)
+    let config = init(config_path, ansi)
         .await
         .expect("Couldn't initialize mediator!");
 
