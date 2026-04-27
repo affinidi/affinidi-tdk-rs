@@ -102,7 +102,7 @@ fn push_next_steps(out: &mut String, config: &WizardConfig, session: Option<&Vta
     let _ = writeln!(out, "## Next steps");
     let _ = writeln!(
         out,
-        "  1. Start the mediator:  affinidi-messaging-mediator --config {}",
+        "  1. Start the mediator:  mediator --config {}",
         config.config_path
     );
     if session.is_some() {
@@ -225,7 +225,7 @@ mod tests {
         assert!(r.contains("## Mediator config"));
         assert!(r.contains("Config file:   /etc/mediator/mediator.toml"));
         assert!(r.contains("## Next steps"));
-        assert!(r.contains("affinidi-messaging-mediator --config"));
+        assert!(r.contains("mediator --config"));
         assert!(r.contains("Confirm the admin DID is registered"));
         assert!(r.contains("```toml"));
     }
