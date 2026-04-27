@@ -5,7 +5,7 @@ use crate::consts::*;
 use crate::discovery::{DiscoveryEvent, DiscoveryRequest, DiscoveryState};
 use crate::sealed_handoff::SealedHandoffState;
 use crate::ui::selection::SelectionOption;
-use crate::vta_connect::{
+use crate::vta::{
     ConnectPhase, EphemeralSetupKey, VtaConnectState, VtaIntent, VtaSession, VtaTransport,
     pending_list, run_connection_test,
 };
@@ -601,7 +601,7 @@ impl WizardApp {
     /// `reason` becomes the operator-facing banner on the
     /// sealed-handoff intro screen, so the operator sees why the
     /// wizard switched flows.
-    pub fn transition_to_sealed_handoff(&mut self, reason: crate::vta_connect::OfflineReason) {
+    pub fn transition_to_sealed_handoff(&mut self, reason: crate::vta::OfflineReason) {
         let Some(vta) = self.vta_connect.as_ref() else {
             return;
         };
@@ -976,7 +976,12 @@ impl WizardApp {
                         vta_did: state.vta_did.clone(),
                         rest_url: conn.rest_url.clone(),
                         mediator_did: conn.mediator_did.clone(),
-                        reply: conn.reply.clone(),
+                        // Lift the SDK's online 2-variant reply into
+                        // the local 3-variant `VtaReply` (offline-only
+                        // `ContextExport` lives here too — built
+                        // directly by `crate::sealed_handoff` and not
+                        // reachable from the online path).
+                        reply: conn.reply.clone().into(),
                     });
                 }
                 self.vta_connect = None;
@@ -1005,11 +1010,11 @@ impl WizardApp {
                         // even on a both-advertised VTA so the
                         // orchestrator doesn't auto-pick BothAvailable
                         // and silently fall through to REST.
-                        self.start_vta_test(Some(crate::vta_connect::Protocol::DidComm));
+                        self.start_vta_test(Some(crate::vta::Protocol::DidComm));
                     }
                     1 => {
                         // [E] Retry REST — force the REST path.
-                        self.start_vta_test(Some(crate::vta_connect::Protocol::Rest));
+                        self.start_vta_test(Some(crate::vta::Protocol::Rest));
                     }
                     2 => {
                         // [O] Offline sealed-handoff. Reason is
@@ -1022,9 +1027,9 @@ impl WizardApp {
                                 if st.attempted.didcomm.is_some()
                                     || st.attempted.rest.is_some() =>
                             {
-                                crate::vta_connect::OfflineReason::BothFailed
+                                crate::vta::OfflineReason::BothFailed
                             }
-                            _ => crate::vta_connect::OfflineReason::NoTransportAvailable,
+                            _ => crate::vta::OfflineReason::NoTransportAvailable,
                         };
                         self.transition_to_sealed_handoff(reason);
                     }
@@ -1052,22 +1057,20 @@ impl WizardApp {
                 match self.selection_index {
                     0 => {
                         // [F] Fall back to REST.
-                        self.start_vta_test(Some(crate::vta_connect::Protocol::Rest));
+                        self.start_vta_test(Some(crate::vta::Protocol::Rest));
                     }
                     1 => {
                         // [R] Retry DIDComm — useful if the operator
                         // just fixed the underlying issue (ACL row,
                         // network) without giving up on DIDComm.
-                        self.start_vta_test(Some(crate::vta_connect::Protocol::DidComm));
+                        self.start_vta_test(Some(crate::vta::Protocol::DidComm));
                     }
                     2 => {
                         // [O] Offline sealed-handoff with the
                         // BothFailed reason — at least one transport
                         // attempt is recorded by definition (we're
                         // here because of a Failed event).
-                        self.transition_to_sealed_handoff(
-                            crate::vta_connect::OfflineReason::BothFailed,
-                        );
+                        self.transition_to_sealed_handoff(crate::vta::OfflineReason::BothFailed);
                     }
                     3 => {
                         // [B] Back — same as the recovery prompt.
@@ -1092,7 +1095,7 @@ impl WizardApp {
     /// REST path (used by `[F] Fall back to REST` and `[E] Retry
     /// REST`). `Some(Protocol::DidComm)` forces DIDComm (used by
     /// `[R] Retry DIDComm`).
-    fn start_vta_test(&mut self, force_transport: Option<crate::vta_connect::Protocol>) {
+    fn start_vta_test(&mut self, force_transport: Option<crate::vta::Protocol>) {
         let Some(st) = self.vta_connect.as_mut() else {
             return;
         };
@@ -1117,8 +1120,8 @@ impl WizardApp {
         // about to be retried so the recovery / fallback prompts
         // don't see stale "already attempted" data.
         match force_transport {
-            Some(crate::vta_connect::Protocol::DidComm) => st.attempted.didcomm = None,
-            Some(crate::vta_connect::Protocol::Rest) => st.attempted.rest = None,
+            Some(crate::vta::Protocol::DidComm) => st.attempted.didcomm = None,
+            Some(crate::vta::Protocol::Rest) => st.attempted.rest = None,
             None => {
                 st.attempted.didcomm = None;
                 st.attempted.rest = None;
@@ -1179,7 +1182,7 @@ impl WizardApp {
         self.mode = InputMode::Selecting;
 
         tokio::spawn(async move {
-            crate::vta_connect::runner::run_provision_flight(
+            crate::vta::runner::run_provision_flight(
                 vta_did,
                 setup_did,
                 setup_privkey_mb,
@@ -1733,7 +1736,7 @@ impl WizardApp {
                             // advertised + unattempted.
                             let opts = match st.resolved.as_ref() {
                                 Some(resolved) => st.fallback_options(resolved),
-                                None => crate::vta_connect::FallbackOptions {
+                                None => crate::vta::FallbackOptions {
                                     fall_back_to_rest: false,
                                     retry_didcomm: false,
                                     offline_available: true,
@@ -1778,7 +1781,7 @@ impl WizardApp {
                             // them.
                             let recovery_opts = match st.resolved.as_ref() {
                                 Some(resolved) => st.recovery_options(resolved),
-                                None => crate::vta_connect::RecoveryOptions {
+                                None => crate::vta::RecoveryOptions {
                                     retry_didcomm: false,
                                     retry_rest: false,
                                     offline_available: true,
@@ -3772,7 +3775,7 @@ mod tests {
         // break `armor::decode`. Must preserve \n and \r when the
         // sealed-handoff state is on AwaitingBundle.
         use crate::sealed_handoff::{SealedHandoffState, SealedPhase};
-        use crate::vta_connect::VtaIntent;
+        use crate::vta::VtaIntent;
         let mut app = WizardApp::new("test.toml".into());
         app.mode = InputMode::TextInput;
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None);
@@ -3792,7 +3795,7 @@ mod tests {
         // Other sealed-handoff phases (CollectContext, CollectMediatorUrl,
         // etc.) are single-line prompts — paste must still collapse.
         use crate::sealed_handoff::{SealedHandoffState, SealedPhase};
-        use crate::vta_connect::VtaIntent;
+        use crate::vta::VtaIntent;
         let mut app = WizardApp::new("test.toml".into());
         app.mode = InputMode::TextInput;
         let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None);
@@ -4556,15 +4559,12 @@ mod tests {
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::Testing));
         let st = app.vta_connect.as_ref().unwrap();
         assert!(st.event_rx.is_some(), "runner channel should be open");
-        assert_eq!(
-            st.diagnostics.len(),
-            crate::vta_connect::DiagCheck::all().len()
-        );
+        assert_eq!(st.diagnostics.len(), crate::vta::DiagCheck::all().len());
     }
 
     #[tokio::test]
     async fn vta_subflow_connected_enter_advances_past_vta_step() {
-        use crate::vta_connect::{DiagStatus, VtaEvent, diagnostics::Protocol};
+        use crate::vta::{DiagStatus, Protocol, VtaEvent};
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
@@ -4580,16 +4580,16 @@ mod tests {
         let st = app.vta_connect.as_mut().unwrap();
         st.event_rx = None; // pretend the runner completed
         st.apply_event(VtaEvent::CheckDone(
-            crate::vta_connect::DiagCheck::AuthenticateDIDComm,
+            crate::vta::DiagCheck::AuthenticateDIDComm,
             DiagStatus::Ok("ok".into()),
         ));
         st.apply_event(VtaEvent::Connected {
             protocol: Protocol::DidComm,
             rest_url: Some("https://vta.example.com".into()),
             mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
-            reply: crate::vta_connect::VtaReply::Full(
-                crate::vta_connect::provision::test_sample_result(true),
-            ),
+            reply: vta_sdk::provision_client::VtaReply::Full(Box::new(
+                vta_sdk::provision_client::test_helpers::sample_provision_result(true),
+            )),
         });
         assert_eq!(app.vta_phase(), Some(&ConnectPhase::Connected));
 
@@ -4600,7 +4600,7 @@ mod tests {
 
     #[tokio::test]
     async fn vta_subflow_failure_routes_to_recovery_prompt() {
-        use crate::vta_connect::VtaEvent;
+        use crate::vta::VtaEvent;
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
@@ -4630,7 +4630,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovery_back_returns_to_awaiting_acl() {
-        use crate::vta_connect::VtaEvent;
+        use crate::vta::VtaEvent;
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
@@ -4658,7 +4658,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovery_offline_transitions_to_sealed_handoff_with_carry_over() {
-        use crate::vta_connect::VtaEvent;
+        use crate::vta::VtaEvent;
 
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
@@ -4674,8 +4674,8 @@ mod tests {
         // Mark a DIDComm pre-auth attempt so [R] is enabled and the
         // BothFailed reason fires (rather than NoTransportAvailable).
         let st = app.vta_connect.as_mut().unwrap();
-        st.attempted.didcomm = Some(crate::vta_connect::AttemptResult {
-            outcome: crate::vta_connect::AttemptResultKind::PreAuthFailure("ACL not found".into()),
+        st.attempted.didcomm = Some(crate::vta::AttemptResult {
+            outcome: crate::vta::AttemptResultKind::PreAuthFailure("ACL not found".into()),
             at: std::time::Instant::now(),
         });
         st.event_rx = None;
@@ -4923,8 +4923,7 @@ mod tests {
     /// with the supplied server catalogue. Returns the wizard ready
     /// to exercise picker dispatch.
     fn prime_full_setup_picker(servers: Vec<vta_sdk::webvh::WebvhServerRecord>) -> WizardApp {
-        use crate::vta_connect::EphemeralSetupKey;
-        use crate::vta_connect::runner::VtaEvent;
+        use crate::vta::{EphemeralSetupKey, VtaEvent};
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
         pick_full_setup_online(&mut app); // EnterDid
@@ -5118,7 +5117,7 @@ mod tests {
     /// typically immediately `select_current()` to advance past the
     /// Vta step.
     fn prime_full_setup_connected() -> WizardApp {
-        use crate::vta_connect::{DiagStatus, VtaEvent, diagnostics::Protocol};
+        use crate::vta::{DiagStatus, Protocol, VtaEvent};
         let mut app = WizardApp::new("test.toml".into());
         advance_to(&mut app, WizardStep::Vta);
         pick_full_setup_online(&mut app);
@@ -5131,16 +5130,16 @@ mod tests {
         let st = app.vta_connect.as_mut().unwrap();
         st.event_rx = None;
         st.apply_event(VtaEvent::CheckDone(
-            crate::vta_connect::DiagCheck::AuthenticateDIDComm,
+            crate::vta::DiagCheck::AuthenticateDIDComm,
             DiagStatus::Ok("ok".into()),
         ));
         st.apply_event(VtaEvent::Connected {
             protocol: Protocol::DidComm,
             rest_url: Some("https://vta.example.com".into()),
             mediator_did: Some("did:webvh:mediator.vta.example.com".into()),
-            reply: crate::vta_connect::VtaReply::Full(
-                crate::vta_connect::provision::test_sample_result(true),
-            ),
+            reply: vta_sdk::provision_client::VtaReply::Full(Box::new(
+                vta_sdk::provision_client::test_helpers::sample_provision_result(true),
+            )),
         });
         app
     }
@@ -5211,7 +5210,7 @@ mod tests {
         // Did-step auto-skip. Drive the predicate directly with a
         // synthetic VtaSession since the sealed-handoff entry flow
         // is interactive.
-        use crate::vta_connect::VtaSession;
+        use crate::vta::VtaSession;
         use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
         use vta_sdk::credentials::CredentialBundle;
         use vta_sdk::did_secrets::SecretEntry;

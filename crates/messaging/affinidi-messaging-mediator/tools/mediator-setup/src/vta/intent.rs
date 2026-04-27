@@ -1,27 +1,25 @@
-//! Shared VTA request / reply types spanning online and offline transports.
+//! Local VTA request / reply types spanning online and offline transports.
 //!
 //! The wizard's VTA integration has two orthogonal axes:
 //!
 //! - **Intent** — what the operator wants from the VTA ([`VtaIntent`]).
 //!   `FullSetup` has the VTA mint the mediator's integration DID via a
 //!   template; `AdminOnly` has the operator bring their own DID and only
-//!   asks the VTA for an admin credential.
+//!   asks the VTA for an admin credential; `OfflineExport` picks up
+//!   already-provisioned state via a sealed bundle.
 //! - **Transport** — how the request reaches the VTA ([`VtaTransport`]).
 //!   `Online` is a live network call; `Offline` is an armored sealed-bundle
 //!   handoff via a VTA administrator.
 //!
-//! Each of the four leaves produces a [`VtaReply`] that downstream wizard
-//! state ([`crate::vta_connect::VtaSession`], `config_writer`, summary
-//! rendering) consumes uniformly. The rest of the wizard doesn't need to
-//! know which adapter produced the reply.
-//!
-//! This module only defines the types. The adapters that produce a
-//! `VtaReply` live beside it (`runner.rs`, `acl_only.rs`,
-//! `sealed_handoff.rs`).
+//! The SDK ([`vta_sdk::provision_client`]) owns the online surface and so
+//! only knows `FullSetup` / `AdminOnly`. The wizard's `OfflineExport`
+//! variant + the [`VtaReply::ContextExport`] reply variant are local
+//! TUI-state extensions for the offline sealed-handoff flow.
 
 use vta_sdk::context_provision::ContextProvisionBundle;
-
-use crate::vta_connect::provision::ProvisionResult;
+use vta_sdk::provision_client::{
+    AdminCredentialReply, ProvisionResult, VtaIntent as SdkVtaIntent, VtaReply as SdkVtaReply,
+};
 
 /// What the operator wants the VTA to do during setup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +43,20 @@ pub enum VtaIntent {
     OfflineExport,
 }
 
+impl VtaIntent {
+    /// Project this intent onto the SDK's intent enum. Returns `None`
+    /// for [`VtaIntent::OfflineExport`] — that variant never reaches an
+    /// SDK call (the offline sealed-handoff flow lives entirely in
+    /// `crate::sealed_handoff`).
+    pub fn to_sdk(self) -> Option<SdkVtaIntent> {
+        match self {
+            Self::FullSetup => Some(SdkVtaIntent::FullSetup),
+            Self::AdminOnly => Some(SdkVtaIntent::AdminOnly),
+            Self::OfflineExport => None,
+        }
+    }
+}
+
 /// How the request reaches the VTA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VtaTransport {
@@ -61,14 +73,17 @@ pub enum VtaTransport {
 /// Unified reply from any of the transport-adapter combinations.
 ///
 /// Downstream consumers switch on the variant instead of branching on
-/// intent + transport separately.
+/// intent + transport separately. `Full` and `AdminOnly` mirror the
+/// SDK's [`SdkVtaReply`] shape so a successful online run can be lifted
+/// without re-shaping; `ContextExport` is the offline-only variant the
+/// SDK does not represent.
 #[derive(Clone, Debug)]
 pub enum VtaReply {
     /// Full template-bootstrap reply. The VTA minted the mediator's
     /// integration DID, (optionally) rolled over an admin DID, and
     /// returned the complete trust bundle. Produced by FullSetup
     /// (online or offline-mint).
-    Full(ProvisionResult),
+    Full(Box<ProvisionResult>),
     /// Admin-credential-only reply. The mediator keeps its own
     /// integration DID; the VTA supplied an admin identity the mediator
     /// authenticates as against the VTA's admin APIs.
@@ -77,17 +92,15 @@ pub enum VtaReply {
     /// against an existing context; the bundle carries the
     /// already-provisioned mediator DID + operational keys + admin
     /// credential. Produced exclusively by the OfflineExport intent.
-    /// Boxed because [`ContextProvisionBundle`] is the largest variant
-    /// and we want one-pointer-on-the-stack uniformity with
-    /// [`vta_sdk::sealed_transfer::SealedPayloadV1`].
+    /// Boxed because [`ContextProvisionBundle`] is the largest variant.
     ContextExport(Box<ContextProvisionBundle>),
 }
 
-/// Payload of [`VtaReply::AdminOnly`] — an admin DID and its private key.
-#[derive(Clone, Debug)]
-pub struct AdminCredentialReply {
-    /// Admin DID the mediator authenticates as.
-    pub admin_did: String,
-    /// Private key (multibase) paired with `admin_did`.
-    pub admin_private_key_mb: String,
+impl From<SdkVtaReply> for VtaReply {
+    fn from(reply: SdkVtaReply) -> Self {
+        match reply {
+            SdkVtaReply::Full(p) => Self::Full(p),
+            SdkVtaReply::AdminOnly(a) => Self::AdminOnly(a),
+        }
+    }
 }

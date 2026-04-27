@@ -23,21 +23,33 @@
 //! The UI rendering lives in `ui/sealed_handoff.rs`; this module is
 //! deliberately UI-agnostic so it can be unit-tested without ratatui.
 
+use std::collections::BTreeMap;
+
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
+use chrono::Duration;
 use rand::TryRng;
+use serde_json::Value;
 use tracing::{info, warn};
 use vta_sdk::credentials::CredentialBundle;
+use vta_sdk::provision_integration::{
+    ProvisionRequestBuilder, http::ProvisionSummary, payload::TemplateBootstrapPayload,
+};
 use vta_sdk::sealed_transfer::{
     AssertionProof, BootstrapRequest, ProducerAssertion, SealedBundle, SealedPayloadV1, armor,
     bundle_digest, ed25519_seed_to_x25519_secret, generate_ed25519_keypair, open_bundle,
 };
 
-use crate::consts::DEFAULT_VTA_CONTEXT;
-use crate::vta_connect::provision::{
-    DEFAULT_VALIDITY_OFFLINE, ProvisionAsk, ProvisionResult, decode_nonce_b64url,
-};
-use crate::vta_connect::{VtaIntent, VtaSession};
+use crate::consts::{DEFAULT_MEDIATOR_TEMPLATE, DEFAULT_VTA_ADMIN_TEMPLATE, DEFAULT_VTA_CONTEXT};
+use crate::vta::{ProvisionResult, VtaIntent, VtaSession};
+
+/// Default validity on a wizard-issued VP for the **offline** path
+/// (sealed handoff). The request file is shuttled between hosts by
+/// hand — USB sticks, scp sessions, ticket attachments — so the
+/// freshness window has to absorb realistic operator latency.
+/// 7 days mirrors the VTA-team v1 CLI convention for `vta bootstrap
+/// provision-integration` requests.
+const DEFAULT_VALIDITY_OFFLINE: Duration = Duration::days(7);
 
 /// Template variable the VTA's `didcomm-mediator` template reads to
 /// pin the webvh hosting server for the minted DID's did.jsonl log.
@@ -300,17 +312,27 @@ impl SealedHandoffState {
                     ));
                 }
                 let client_did = affinidi_crypto::did_key::ed25519_pub_to_did_key(&ed_pub);
-                let mut ask =
-                    ProvisionAsk::mediator(self.context_id.clone(), self.mediator_url.clone())
-                        .with_validity(DEFAULT_VALIDITY_OFFLINE);
+                // SDK's `ProvisionAsk::to_builder` is `pub(crate)`, so we
+                // construct the `ProvisionRequestBuilder` directly here.
+                // The builder shape mirrors `ProvisionAsk::didcomm_mediator`
+                // followed by `.with_validity(..).with_label(..)` and an
+                // injected `WEBVH_SERVER` template var — kept in sync with
+                // `vta-sdk/src/provision_client/ask.rs`.
+                let mut vars = BTreeMap::new();
+                vars.insert("URL".to_string(), Value::String(self.mediator_url.clone()));
                 if !self.webvh_server.is_empty() {
-                    ask.mediator_template_vars.insert(
+                    vars.insert(
                         WEBVH_SERVER_TEMPLATE_VAR.to_string(),
-                        serde_json::Value::String(self.webvh_server.clone()),
+                        Value::String(self.webvh_server.clone()),
                     );
                 }
+                let mut builder = ProvisionRequestBuilder::new(DEFAULT_MEDIATOR_TEMPLATE)
+                    .vars(vars)
+                    .context_hint(self.context_id.clone())
+                    .validity(DEFAULT_VALIDITY_OFFLINE)
+                    .admin_template(DEFAULT_VTA_ADMIN_TEMPLATE);
                 if let Some(ref label) = self.run_label {
-                    ask = ask.with_label(label.clone());
+                    builder = builder.label(label.clone()).note(label.clone());
                 }
                 // VP signing is async; bridge back to sync via
                 // `block_in_place`. The tokio::main runtime the
@@ -320,7 +342,6 @@ impl SealedHandoffState {
                 // — we decode it back from the rendered VP and adopt
                 // it as the bundle id (the producer will seal to the
                 // matching `bundle_id`).
-                let builder = ask.to_builder();
                 let vp = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
                         .block_on(async { builder.sign_with(&seed_bytes, &client_did).await })
@@ -787,7 +808,7 @@ pub fn open_with_digest(
             let payload = *boxed;
             let vta_did = payload.config.vta_trust.vta_did.clone();
             let vta_url = payload.config.vta_url.clone();
-            let provision = ProvisionResult::from_template_bootstrap_payload(payload);
+            let provision = provision_from_template_payload(payload);
             state.session = Some(VtaSession::full(
                 state.context_id.clone(),
                 vta_did,
@@ -823,6 +844,68 @@ pub fn open_with_digest(
 
     state.phase = SealedPhase::Complete;
     Ok(())
+}
+
+/// Decode a base64url-no-pad VP nonce string back to the 16-byte
+/// sealed-bundle id. Mirrors the SDK's `pub(crate)` helper
+/// (`vta_sdk::provision_client::result::decode_nonce_b64url`) — kept
+/// local so the offline FullSetup VP-signing path can recover the
+/// nonce the builder generated for use as the bundle id.
+fn decode_nonce_b64url(s: &str) -> Result<[u8; 16], String> {
+    let raw = B64URL
+        .decode(s)
+        .map_err(|e| format!("VP nonce base64url: {e}"))?;
+    raw.try_into()
+        .map_err(|_| "VP nonce must be 16 bytes".to_string())
+}
+
+/// Build a [`ProvisionResult`] from a sealed-handoff
+/// [`TemplateBootstrapPayload`]. The offline path opens the bundle
+/// locally and has no VTA-supplied [`ProvisionSummary`] — synthesise
+/// one from the payload itself so downstream code (which always
+/// reads through [`ProvisionResult`] accessors) stays uniform with
+/// the online path.
+///
+/// `bundle_id_hex` / `digest` are left empty: the offline path
+/// tracks both on [`SealedHandoffState`] (nonce + SHA-256 of armored
+/// ciphertext) and downstream code has no current consumer for them.
+fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> ProvisionResult {
+    let integration_did = payload
+        .config
+        .did_document
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    // Admin DID = the one key in `secrets` that isn't the integration
+    // DID. Falls back to the integration DID for the legacy no-rollover
+    // path — matches the online runner's convention.
+    let admin_did = payload
+        .secrets
+        .keys()
+        .find(|k| **k != integration_did)
+        .cloned()
+        .unwrap_or_else(|| integration_did.clone());
+    let admin_rolled_over = admin_did != integration_did;
+    let summary = ProvisionSummary {
+        client_did: admin_did.clone(),
+        admin_did,
+        admin_rolled_over,
+        integration_did,
+        template_name: payload.config.template_name.clone(),
+        template_kind: payload.config.template_kind.clone(),
+        admin_template_name: None,
+        bundle_id_hex: String::new(),
+        webvh_server_id: None,
+        secret_count: payload.secrets.len(),
+        output_count: payload.config.outputs.len(),
+    };
+    ProvisionResult {
+        bundle_id_hex: String::new(),
+        digest: String::new(),
+        summary,
+        payload,
+    }
 }
 
 #[cfg(test)]

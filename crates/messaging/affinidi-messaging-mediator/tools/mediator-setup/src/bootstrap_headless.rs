@@ -36,7 +36,7 @@ use tracing::{info, warn};
 
 use crate::consts::{VTA_MODE_ONLINE, VTA_MODE_SEALED_EXPORT, VTA_MODE_SEALED_MINT};
 use crate::sealed_handoff::{SealedHandoffState, SealedPhase};
-use crate::vta_connect::{VtaIntent, VtaSession};
+use crate::vta::{VtaIntent, VtaSession};
 
 /// Outcome of the phase dispatcher. Phase 1 exits the process after
 /// writing the request; phase 2 returns a session for the outer

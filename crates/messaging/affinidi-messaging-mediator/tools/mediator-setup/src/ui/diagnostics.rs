@@ -11,7 +11,7 @@ use ratatui::{
 
 use crate::ui::selection::SelectionOption;
 use crate::ui::theme;
-use crate::vta_connect::{ConnectPhase, DiagEntry, DiagStatus, VtaConnectState};
+use crate::vta::{ConnectPhase, DiagEntry, DiagStatus, VtaConnectState};
 
 pub fn render_diagnostics(
     frame: &mut Frame,
@@ -82,8 +82,11 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
             // reports both the rolled-over admin DID and the
             // VTA-minted integration DID; AdminOnly only has the
             // admin DID (integration DID came from the earlier Did
-            // step, not the VTA).
-            use crate::vta_connect::VtaReply;
+            // step, not the VTA). The online runner only ever
+            // produces these two variants — the offline-only
+            // `ContextExport` reply lands directly on `VtaSession`
+            // without flowing through `state.connection`.
+            use vta_sdk::provision_client::VtaReply;
             let mut rows = match &conn.reply {
                 VtaReply::Full(provision) => vec![
                     Line::from(Span::styled(
@@ -117,36 +120,11 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
                         theme::info_style(),
                     )),
                 ],
-                VtaReply::ContextExport(bundle) => {
-                    // The online runner never produces a ContextExport
-                    // reply — that path is exclusively offline. We
-                    // still need an arm for exhaustiveness; surface
-                    // the same shape as the other variants in case a
-                    // future refactor wires it up.
-                    let mut rows = vec![
-                        Line::from(Span::styled(
-                            format!("  Connected via {}.", conn.protocol.label()),
-                            theme::success_style(),
-                        )),
-                        Line::from(Span::styled(
-                            format!("  Admin DID: {} (auto-minted, exported)", bundle.admin_did),
-                            theme::info_style(),
-                        )),
-                    ];
-                    if let Some(did) = bundle.did.as_ref() {
-                        rows.push(Line::from(Span::styled(
-                            format!("  Mediator DID: {} (exported)", did.id),
-                            theme::info_style(),
-                        )));
-                    }
-                    rows
-                }
             };
             // Hotkey hint: which letters copy what. `[m]` is hidden
             // for AdminOnly because there's no VTA-minted mediator
             // DID to copy.
-            let has_mediator_did =
-                matches!(&conn.reply, VtaReply::Full(_) | VtaReply::ContextExport(_));
+            let has_mediator_did = matches!(&conn.reply, VtaReply::Full(_));
             let hint = if has_mediator_did {
                 "  [v] copy VTA DID  [m] copy mediator DID  [a] copy admin DID"
             } else {

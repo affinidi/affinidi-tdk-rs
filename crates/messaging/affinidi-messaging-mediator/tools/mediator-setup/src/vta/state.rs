@@ -1,71 +1,25 @@
-//! Online VTA connection flow.
+//! TUI state machine for the online VTA sub-flow.
 //!
-//! Scope: establish an authenticated connection to a running VTA. The
-//! operator supplies the VTA DID; the wizard resolves its service
-//! endpoints, generates an ephemeral `did:key`, and displays a
-//! ready-to-paste `pnm acl create` command. Once the operator has
-//! registered the ACL entry, the wizard authenticates over DIDComm
-//! by default, with REST as an automatic fallback when the VTA
-//! advertises both transports and DIDComm fails pre-auth. REST-only
-//! VTAs go straight to the REST path.
+//! The wizard's online VTA flow walks through a small set of phases
+//! ([`ConnectPhase`]) gathering operator input, dispatching the
+//! [`vta_sdk::provision_client`] runner, and routing terminal outcomes
+//! to a recovery / fallback prompt or the success screen.
 //!
-//! Phase machine:
-//!   `EnterDid` → `EnterContext` → (FullSetup) `EnterMediatorUrl` →
-//!   `AwaitingAcl` → `Testing` → either `Connected`, the
-//!   `TransportFallbackPrompt` (interactive [F]/[R]/[O]/[B] choice
-//!   when the alternate transport is still viable), or the
-//!   `RecoveryPrompt` (post-auth failure, exhausted attempts, or
-//!   no advertised transport).
-//!
-//! `[O] Offline` from either prompt drops the operator into the
-//! sealed-handoff sub-flow with `vta_did` / `context_id` /
-//! `mediator_url` carried over.
+//! This module owns the phase machine + per-attempt history. The wire
+//! protocol (events on a channel, sealed-bundle opening, transport
+//! selection) lives in the SDK; consuming the events is the wizard's
+//! job.
 
-pub mod cli;
-pub mod diagnostics;
-pub mod intent;
-pub mod provision;
-pub mod resolve;
-pub mod runner;
-pub(crate) mod runner_rest;
-pub mod setup_key;
-
-pub use diagnostics::{
-    ConnectedInfo, DiagCheck, DiagEntry, DiagStatus, Protocol, apply_update, pending_list,
-};
-pub use intent::{AdminCredentialReply, VtaIntent, VtaReply, VtaTransport};
 use std::time::Instant;
-use vta_sdk::context_provision::ContextProvisionBundle;
 
-use crate::vta_connect::provision::ProvisionResult;
-use crate::vta_connect::resolve::ResolvedVta;
+use vta_sdk::provision_client::{
+    AttemptLog, AttemptResult, AttemptResultKind, ConnectedInfo, DiagEntry, DiagStatus,
+    EphemeralSetupKey, Protocol, ResolvedVta, VtaEvent, VtaReply as SdkVtaReply, apply_update,
+};
+use vta_sdk::webvh::WebvhServerRecord;
 
-/// Recorded outcome of a single transport attempt. Lives in
-/// [`AttemptLog`] so the recovery prompt can decide which retry
-/// options to offer.
-#[derive(Clone, Debug)]
-pub struct AttemptResult {
-    pub outcome: AttemptResultKind,
-    pub at: Instant,
-}
-
-/// Stable shape of an attempt outcome. Carries the operator-facing
-/// failure reason for the failure variants — already wrapped with
-/// retry-friendly prose by the runner.
-#[derive(Clone, Debug)]
-pub enum AttemptResultKind {
-    Connected,
-    PreAuthFailure(String),
-    PostAuthFailure(String),
-}
-
-/// Per-transport history of attempts on this run. Both fields are
-/// `None` until the corresponding transport runs at least once.
-#[derive(Clone, Debug, Default)]
-pub struct AttemptLog {
-    pub didcomm: Option<AttemptResult>,
-    pub rest: Option<AttemptResult>,
-}
+use super::intent::VtaIntent;
+use crate::consts::{DEFAULT_VTA_CONTEXT, DEFAULT_VTA_SETUP_EXPIRY};
 
 /// Whether each retry / offline option is available on the recovery
 /// prompt. The prompt dims unavailable options.
@@ -127,162 +81,6 @@ impl OfflineReason {
     }
 }
 
-/// A completed VTA interaction — retained on `WizardApp` after the
-/// sub-flow exits so downstream steps (Did, Summary, secret-writing) can
-/// use the resulting credential material.
-///
-/// The [`reply`](Self::reply) field carries the transport-agnostic payload.
-/// Accessors below flatten the two variants into the shape downstream code
-/// actually consumes (admin DID, admin private key, optional integration
-/// DID).
-#[derive(Clone, Debug)]
-pub struct VtaSession {
-    pub context_id: String,
-    pub vta_did: String,
-    /// REST URL advertised by the VTA DID doc. `None` for a
-    /// DIDComm-only VTA or a sealed-handoff session. Persisted onto
-    /// the mediator's admin credential so its runtime code has a URL
-    /// fallback for VTA operations.
-    pub rest_url: Option<String>,
-    /// DIDComm mediator DID advertised by the VTA. Captured so a
-    /// DIDComm-backed `VtaClient` can be reopened without
-    /// re-resolving the VTA DID document. No current consumer reads
-    /// this — preserved as plumbing for the future reopen path.
-    #[allow(dead_code)]
-    pub mediator_did: Option<String>,
-    /// Unified reply — either a full template-bootstrap result or an
-    /// admin-credential-only reply. See [`VtaReply`].
-    pub reply: VtaReply,
-}
-
-impl VtaSession {
-    /// Construct a session from a full template-bootstrap reply (both
-    /// online and offline `FullSetup` adapters call this).
-    pub fn full(
-        context_id: String,
-        vta_did: String,
-        rest_url: Option<String>,
-        mediator_did: Option<String>,
-        provision: ProvisionResult,
-    ) -> Self {
-        Self {
-            context_id,
-            vta_did,
-            rest_url,
-            mediator_did,
-            reply: VtaReply::Full(provision),
-        }
-    }
-
-    /// Construct a session from an admin-credential-only reply (both
-    /// online and offline `AdminOnly` adapters call this).
-    pub fn admin_only(
-        context_id: String,
-        vta_did: String,
-        rest_url: Option<String>,
-        mediator_did: Option<String>,
-        admin_did: String,
-        admin_private_key_mb: String,
-    ) -> Self {
-        Self {
-            context_id,
-            vta_did,
-            rest_url,
-            mediator_did,
-            reply: VtaReply::AdminOnly(AdminCredentialReply {
-                admin_did,
-                admin_private_key_mb,
-            }),
-        }
-    }
-
-    /// Construct a session from a `ContextProvision` sealed bundle —
-    /// the OfflineExport adapter's reply shape. The bundle's `vta_did`
-    /// / `vta_url` may be absent (older VTA-side flows) so we
-    /// substitute empty strings to keep the session shape uniform;
-    /// downstream code that needs them treats empty as "unknown".
-    pub fn context_export(context_id: String, bundle: ContextProvisionBundle) -> Self {
-        let vta_did = bundle.vta_did.clone().unwrap_or_default();
-        let rest_url = bundle.vta_url.clone();
-        Self {
-            context_id,
-            vta_did,
-            rest_url,
-            mediator_did: None,
-            reply: VtaReply::ContextExport(Box::new(bundle)),
-        }
-    }
-
-    /// Long-term admin DID the mediator authenticates as. For a
-    /// [`VtaReply::Full`] reply this is the rolled-over DID from the
-    /// `ProvisionResult`; for `AdminOnly` it's the DID the VTA supplied
-    /// directly; for `ContextExport` it's the (auto-minted) admin DID
-    /// the VTA shipped inside the [`ContextProvisionBundle`].
-    pub fn admin_did(&self) -> &str {
-        match &self.reply {
-            VtaReply::Full(p) => p.admin_did(),
-            VtaReply::AdminOnly(a) => &a.admin_did,
-            VtaReply::ContextExport(b) => &b.admin_did,
-        }
-    }
-
-    /// Private key (multibase) matching [`Self::admin_did`]. Returns an
-    /// empty slice when a `Full` reply has no admin-key entry (the
-    /// legacy no-rollover path); callers should treat empty as "reuse
-    /// the setup key" exactly as before.
-    pub fn admin_private_key_mb(&self) -> &str {
-        match &self.reply {
-            VtaReply::Full(p) => p
-                .admin_key()
-                .map(|k| k.signing_key.private_key_multibase.as_str())
-                .unwrap_or(""),
-            VtaReply::AdminOnly(a) => &a.admin_private_key_mb,
-            VtaReply::ContextExport(b) => b.credential.private_key_multibase.as_str(),
-        }
-    }
-
-    /// Integration (mediator-service) DID the VTA rendered or
-    /// re-exported. `None` for `AdminOnly` (mediator brought its own
-    /// DID) and for any `ContextExport` whose bundle didn't include a
-    /// `did` slot (admin-only context — degenerate but possible).
-    pub fn integration_did(&self) -> Option<&str> {
-        match &self.reply {
-            VtaReply::Full(p) => Some(p.integration_did()),
-            VtaReply::AdminOnly(_) => None,
-            VtaReply::ContextExport(b) => b.did.as_ref().map(|d| d.id.as_str()),
-        }
-    }
-
-    /// Borrow the full [`ProvisionResult`] when the reply is
-    /// [`VtaReply::Full`]. Returns `None` for `AdminOnly` and
-    /// `ContextExport` — those carry their own shapes; see
-    /// [`Self::as_context_export`] for the ContextExport accessor.
-    pub fn as_full_provision(&self) -> Option<&ProvisionResult> {
-        match &self.reply {
-            VtaReply::Full(p) => Some(p),
-            VtaReply::AdminOnly(_) | VtaReply::ContextExport(_) => None,
-        }
-    }
-
-    /// Borrow the [`ContextProvisionBundle`] when the reply is
-    /// [`VtaReply::ContextExport`]. Sibling to [`Self::as_full_provision`]
-    /// — `main.rs::generate_and_write` walks both accessors when the
-    /// `did_method` is `DID_VTA` and picks whichever is present.
-    pub fn as_context_export(&self) -> Option<&ContextProvisionBundle> {
-        match &self.reply {
-            VtaReply::ContextExport(b) => Some(b),
-            VtaReply::Full(_) | VtaReply::AdminOnly(_) => None,
-        }
-    }
-}
-// `Protocol` is only used by `diagnostics.rs` and the runner internally; the
-// `ConnectedInfo` export above is enough for callers to read the active
-// protocol without a direct import.
-pub use runner::{VtaEvent, run_connection_test};
-pub use setup_key::EphemeralSetupKey;
-
-use crate::consts::{DEFAULT_VTA_CONTEXT, DEFAULT_VTA_SETUP_EXPIRY};
-
 /// Ephemeral state for the Online-VTA sub-flow.
 ///
 /// Never serialized — regenerated on every wizard run. Keeping this outside
@@ -297,12 +95,10 @@ pub struct VtaConnectState {
     pub vta_did: String,
     pub context_id: String,
     /// Mediator's public URL, captured during
-    /// [`ConnectPhase::EnterMediatorUrl`]. Passed to the
-    /// `didcomm-mediator` template as the `URL` variable when the
-    /// runner calls
-    /// [`crate::vta_connect::provision::provision_mediator_integration`].
-    /// Empty until the operator fills it in. Unused when
-    /// `intent == VtaIntent::AdminOnly`.
+    /// [`ConnectPhase::EnterMediatorUrl`]. Becomes the `URL`
+    /// template variable on the `ProvisionAsk::didcomm_mediator(..)`
+    /// the runner builds. Empty until the operator fills it in.
+    /// Unused when `intent == VtaIntent::AdminOnly`.
     pub mediator_url: String,
     pub setup_key: Option<EphemeralSetupKey>,
     pub phase: ConnectPhase,
@@ -312,7 +108,7 @@ pub struct VtaConnectState {
     /// the preflight succeeds. Drives the `PickWebvhServer` phase:
     /// 0 entries → skip (serverless auto), 1 → auto-pick silently,
     /// 2+ → present a picker.
-    pub webvh_servers: Vec<vta_sdk::webvh::WebvhServerRecord>,
+    pub webvh_servers: Vec<WebvhServerRecord>,
     /// The operator's webvh-server pick (for 2+ catalogues) or the
     /// auto-selected id (for 1-entry catalogues). `None` means
     /// serverless — DID self-hosts at `URL`.
@@ -391,14 +187,12 @@ pub enum ConnectPhase {
     /// All online attempts exhausted (or no transport advertised).
     /// The prompt offers retry of any pre-auth-failed transport,
     /// transition to the offline sealed-handoff sub-flow, or going
-    /// back to a previous phase. UI rendering lands in Slice 2
-    /// task 2.2; the offline transition lands in 2.3.
+    /// back to a previous phase.
     RecoveryPrompt,
     /// Pre-auth failure with an unattempted alternate transport
     /// available. The prompt offers `[F]` to fall back, `[R]` to
     /// retry the same wire, `[O]` to go offline, or `[B]` to
-    /// back out. Slice 3 routes pre-auth failures here when
-    /// `fallback_options.fall_back_to_rest` is true.
+    /// back out.
     TransportFallbackPrompt,
     Connected,
 }
@@ -558,15 +352,8 @@ impl VtaConnectState {
             return;
         };
         let did = match &conn.reply {
-            VtaReply::Full(p) => p.integration_did().to_string(),
-            VtaReply::ContextExport(b) => match b.did.as_ref() {
-                Some(d) => d.id.clone(),
-                None => {
-                    self.clipboard_status = Some("Context bundle has no mediator DID".into());
-                    return;
-                }
-            },
-            VtaReply::AdminOnly(_) => {
+            SdkVtaReply::Full(p) => p.integration_did().to_string(),
+            SdkVtaReply::AdminOnly(_) => {
                 self.clipboard_status = Some("AdminOnly mode — no VTA-minted mediator DID".into());
                 return;
             }
@@ -575,17 +362,16 @@ impl VtaConnectState {
     }
 
     /// Copy the long-term admin DID to the clipboard. Hotkey `[a]`
-    /// on the `Connected` phase. Available for all reply variants
-    /// (every successful run has an admin credential).
+    /// on the `Connected` phase. Available for both online reply
+    /// variants (every successful run has an admin credential).
     pub fn copy_admin_did_to_clipboard(&mut self) {
         let Some(conn) = self.connection.as_ref() else {
             self.clipboard_status = Some("No connection yet".into());
             return;
         };
         let did = match &conn.reply {
-            VtaReply::Full(p) => p.admin_did().to_string(),
-            VtaReply::AdminOnly(a) => a.admin_did.clone(),
-            VtaReply::ContextExport(b) => b.admin_did.clone(),
+            SdkVtaReply::Full(p) => p.admin_did().to_string(),
+            SdkVtaReply::AdminOnly(a) => a.admin_did.clone(),
         };
         self.copy_text_to_clipboard(&did, "admin DID");
     }
@@ -653,13 +439,12 @@ impl VtaConnectState {
             VtaEvent::Failed(reason) => {
                 self.last_error = Some(reason);
                 self.event_rx = None;
-                // Slice 3 routing: a pre-auth failure with an
-                // unattempted alternate transport routes to the
-                // FallbackPrompt; everything else routes to the
-                // RecoveryPrompt. Post-auth failures (VTA accepted
-                // us but rejected the request body) always go to
-                // recovery — a different wire reproduces the
-                // rejection.
+                // A pre-auth failure with an unattempted alternate
+                // transport routes to the FallbackPrompt; everything
+                // else routes to the RecoveryPrompt. Post-auth
+                // failures (VTA accepted us but rejected the request
+                // body) always go to recovery — a different wire
+                // reproduces the rejection.
                 self.phase = if self.should_route_to_fallback() {
                     ConnectPhase::TransportFallbackPrompt
                 } else {
@@ -778,8 +563,6 @@ mod tests {
     #[test]
     fn recovery_dims_retry_when_transport_not_advertised() {
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
-        // Pre-auth failure recorded, but the resolved DID doc says
-        // DIDComm isn't advertised. The offer should still be off.
         st.attempted.didcomm = Some(pre_auth());
         let opts = st.recovery_options(&resolved(None, Some("https://vta.test")));
         assert!(!opts.retry_didcomm);
@@ -830,8 +613,6 @@ mod tests {
     fn fallback_disables_rest_when_already_attempted() {
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.attempted.didcomm = Some(pre_auth());
-        // REST has already been tried (and failed). Falling back is
-        // not actually a fallback.
         st.attempted.rest = Some(pre_auth());
         let opts = st.fallback_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
         assert!(!opts.fall_back_to_rest);
@@ -839,13 +620,6 @@ mod tests {
 
     #[test]
     fn fallback_disables_retry_after_post_auth_didcomm() {
-        // Post-auth means the VTA accepted the DIDComm session and
-        // rejected the request body. Retrying the same wire just
-        // reproduces the rejection. Note: the recovery prompt
-        // (not this prompt) is the right destination after a
-        // post-auth failure — the routing logic ensures we never
-        // *land* on FallbackPrompt with this state, but the
-        // option-availability computation must still be honest.
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.attempted.didcomm = Some(post_auth());
         let opts = st.fallback_options(&resolved(Some("did:webvh:m"), Some("https://vta.test")));
@@ -878,7 +652,7 @@ mod tests {
         assert!(st.last_attempt().is_none());
     }
 
-    // ─── apply_event routing (Slice 3) ─────────────────────────────
+    // ─── apply_event routing ───────────────────────────────────────
 
     #[test]
     fn pre_auth_didcomm_with_rest_advertised_routes_to_fallback_prompt() {
@@ -901,15 +675,11 @@ mod tests {
             outcome: AttemptResultKind::PreAuthFailure("ACL not found".into()),
         });
         st.apply_event(VtaEvent::Failed("ACL not found".into()));
-        // No fallback target → straight to recovery.
         assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
     }
 
     #[test]
     fn post_auth_failure_always_routes_to_recovery_prompt() {
-        // VTA accepted us mid-flow then rejected the request body.
-        // A different wire would reproduce the rejection — no
-        // fallback offered even though REST is advertised.
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.resolved = Some(resolved(Some("did:webvh:m"), Some("https://vta.test")));
         st.apply_event(VtaEvent::AttemptCompleted {
@@ -922,8 +692,6 @@ mod tests {
 
     #[test]
     fn rest_pre_auth_after_didcomm_failure_routes_to_recovery_prompt() {
-        // Operator already fell back to REST and that failed too.
-        // No alternate transport remains unattempted → recovery.
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.resolved = Some(resolved(Some("did:webvh:m"), Some("https://vta.test")));
         st.attempted.didcomm = Some(pre_auth());
@@ -935,13 +703,10 @@ mod tests {
         assert_eq!(st.phase, ConnectPhase::RecoveryPrompt);
     }
 
-    // ─── AttemptLog edge cases (Slice 5 task 5.2) ──────────────────
+    // ─── AttemptLog edge cases ─────────────────────────────────────
 
     #[test]
     fn attempt_log_overwrites_with_most_recent_outcome() {
-        // The same transport can be retried — a successful
-        // re-attempt after a failed one should overwrite the
-        // failure record so retry_options returns the right answer.
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.apply_event(VtaEvent::AttemptCompleted {
             protocol: Protocol::DidComm,
@@ -957,8 +722,6 @@ mod tests {
 
     #[test]
     fn attempt_log_independently_tracks_each_transport() {
-        // DIDComm and REST entries are independent — recording one
-        // doesn't shift the other.
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         st.apply_event(VtaEvent::AttemptCompleted {
             protocol: Protocol::DidComm,
@@ -980,17 +743,11 @@ mod tests {
 
     #[test]
     fn fallback_eligible_when_didcomm_pre_auth_then_didcomm_succeeds() {
-        // Edge case: DIDComm fails pre-auth, operator picks [F]
-        // fallback to REST, REST also fails pre-auth, operator
-        // picks [R] retry DIDComm, DIDComm now succeeds. After
-        // success, neither prompt should suggest retry actions
-        // (success is a final state).
         let mut st = VtaConnectState::new(VtaIntent::FullSetup);
         let r = resolved(Some("did:webvh:m"), Some("https://vta.test"));
         st.resolved = Some(r.clone());
         st.attempted.didcomm = Some(pre_auth());
         st.attempted.rest = Some(pre_auth());
-        // Now DIDComm retry succeeds.
         st.apply_event(VtaEvent::AttemptCompleted {
             protocol: Protocol::DidComm,
             outcome: AttemptResultKind::Connected,

@@ -17,7 +17,7 @@ use ratatui::{
 
 use crate::ui::selection::SelectionOption;
 use crate::ui::theme;
-use crate::vta_connect::{AttemptResult, AttemptResultKind, VtaConnectState};
+use crate::vta::{AttemptResult, AttemptResultKind, VtaConnectState};
 
 pub fn render_recovery_prompt(
     frame: &mut Frame,

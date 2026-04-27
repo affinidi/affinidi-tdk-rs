@@ -76,16 +76,15 @@ affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator
 didwebvh-rs = "0.5"
 
 # ── VTA Integration ──────────────────────────────────────────────────────
-## client:          auth_light (REST challenge-response)
-## session:         full DIDComm challenge-response (primary auth path)
-## sealed-transfer: HPKE-encrypted bundle handoff for the air-gapped
-##                  bootstrap flow (SealedHandoff / `vta::sealed_transfer`).
-vta-sdk = { version = "0.5", features = [
-  "client",
-  "session",
-  "sealed-transfer",
-  "provision-integration",
-] }
+## provision-client: orchestration layer that drives setup-key minting,
+##                   transport selection, connection testing, and sealed-bundle
+##                   opening for first-boot integration provisioning.
+##                   Transitively pulls in `session` (which pulls `client` /
+##                   `didcomm`) and `provision-integration` (which pulls
+##                   `sealed-transfer`), so this single feature covers the
+##                   wizard's online VTA flow plus the sealed-handoff bundle
+##                   handling in `sealed_handoff.rs`.
+vta-sdk = { version = "0.5", features = ["provision-client"] }
 
 # ── DID Resolution ───────────────────────────────────────────────────────
 ## Used to resolve the VTA's DID document and extract VTARest /
@@ -133,6 +132,12 @@ humantime = "2"
 tracing = "0.1"
 
 [dev-dependencies]
+## Test fixtures from `provision_client::test_helpers` (e.g.
+## `sample_provision_result`) used by exit-recap and main.rs tests.
+## Additive — `cargo test` unions [dependencies] + [dev-dependencies]
+## features, so this lands the `test-support` flag without affecting
+## release builds.
+vta-sdk = { version = "0.5", features = ["test-support"] }
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
 ## Required by `bootstrap_headless` tests that mutate CWD via

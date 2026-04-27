@@ -7,7 +7,7 @@ use crate::{
     app::WizardConfig,
     config_writer::build_backend_url,
     ui::theme,
-    vta_connect::{VtaReply, VtaSession},
+    vta::{VtaReply, VtaSession},
 };
 
 /// Renders the summary view showing all configuration choices.

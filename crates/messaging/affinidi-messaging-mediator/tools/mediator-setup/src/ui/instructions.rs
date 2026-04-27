@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::ui::selection::SelectionOption;
 use crate::ui::theme;
-use crate::vta_connect::VtaConnectState;
+use crate::vta::VtaConnectState;
 
 /// Render the instructions + single-option selection. `area` is the full
 /// right-panel content area (the caller reserves space for the info box

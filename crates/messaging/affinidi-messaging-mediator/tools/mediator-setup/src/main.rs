@@ -12,7 +12,7 @@ mod recipe;
 mod reprovision;
 mod sealed_handoff;
 mod ui;
-mod vta_connect;
+mod vta;
 
 use std::{
     io::{self, Stdout, Write},
@@ -59,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     // point: they are self-contained and exit without touching the wizard
     // config pipeline.
     if let Some(path) = args.setup_key_out.as_ref() {
-        return vta_connect::cli::run_phase1_init(
+        return vta::cli::run_phase1_init(
             path,
             args.vta_did.as_deref(),
             args.vta_context.as_deref(),
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .await;
     }
     if let Some(path) = args.setup_key_file.as_ref() {
-        let vta_did = vta_connect::cli::validate_phase2_args(&args.vta_did)?;
+        let vta_did = vta::cli::validate_phase2_args(&args.vta_did)?;
         let mediator_url = args.mediator_url.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
                 "--mediator-url is required for --setup-key-file (Phase 2). The VTA's \
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
         //   2 → no transport worked (NoTransport)
         //   3 → VTA accepted the auth handshake but rejected the
         //        request body (PostAuthFailed)
-        match vta_connect::cli::run_phase2_connect(
+        match vta::cli::run_phase2_connect(
             path,
             vta_did,
             args.vta_context.as_deref(),
@@ -94,8 +94,8 @@ async fn main() -> anyhow::Result<()> {
             Err(err) => {
                 eprintln!("\n{err}");
                 let code = match err.kind {
-                    vta_connect::cli::HeadlessFailureKind::NoTransport => 2,
-                    vta_connect::cli::HeadlessFailureKind::PostAuthFailed => 3,
+                    vta::cli::HeadlessFailureKind::NoTransport => 2,
+                    vta::cli::HeadlessFailureKind::PostAuthFailed => 3,
                 };
                 std::process::exit(code);
             }
@@ -635,7 +635,7 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         && matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
     {
         if let Some(state) = app.vta_connect.as_mut() {
-            if state.phase == crate::vta_connect::ConnectPhase::AwaitingAcl {
+            if state.phase == crate::vta::ConnectPhase::AwaitingAcl {
                 state.copy_acl_command_to_clipboard();
                 return;
             }
@@ -681,7 +681,7 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         )
     {
         if let Some(state) = app.vta_connect.as_mut() {
-            if state.phase == crate::vta_connect::ConnectPhase::Connected {
+            if state.phase == crate::vta::ConnectPhase::Connected {
                 match code {
                     KeyCode::Char('v') | KeyCode::Char('V') => {
                         state.copy_vta_did_to_clipboard();
@@ -807,7 +807,7 @@ fn secret_entries_to_secrets(
         .collect()
 }
 
-/// Project a completed [`vta_connect::VtaSession`] onto the
+/// Project a completed [`vta::VtaSession`] onto the
 /// [`vta_sdk::did_secrets::DidSecretsBundle`] shape the mediator's
 /// runtime expects in its VTA fallback cache.
 ///
@@ -823,7 +823,7 @@ fn secret_entries_to_secrets(
 /// seed. `TemplateBootstrap` and `ContextProvision` replies both map
 /// to a bundle; their shapes differ but the target is unified.
 fn build_did_secrets_bundle(
-    session: &vta_connect::VtaSession,
+    session: &vta::VtaSession,
 ) -> Option<vta_sdk::did_secrets::DidSecretsBundle> {
     use vta_sdk::did_secrets::{DidSecretsBundle, SecretEntry};
     use vta_sdk::keys::KeyType;
@@ -871,7 +871,7 @@ fn build_did_secrets_bundle(
 #[cfg(test)]
 mod cache_bundle_tests {
     use super::build_did_secrets_bundle;
-    use crate::vta_connect::VtaSession;
+    use crate::vta::VtaSession;
     use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
     use vta_sdk::credentials::CredentialBundle;
     use vta_sdk::did_secrets::SecretEntry;
@@ -883,8 +883,9 @@ mod cache_bundle_tests {
         // pair. Must land as two SecretEntries with the correct
         // discriminants (Ed25519 for signing, X25519 for key-agreement)
         // and the raw multibase passthrough.
-        let provision =
-            crate::vta_connect::provision::test_sample_result(/*rolled_over=*/ true);
+        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result(
+            /*rolled_over=*/ true,
+        );
         let session = VtaSession::full(
             "prod-mediator".into(),
             "did:webvh:vta.example.com".into(),
@@ -894,7 +895,7 @@ mod cache_bundle_tests {
         );
 
         let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
-        assert_eq!(bundle.did, "did:webvh:mediator.example.com");
+        assert_eq!(bundle.did, "did:webvh:integration.example.com");
         assert_eq!(bundle.secrets.len(), 2);
         assert!(matches!(bundle.secrets[0].key_type, KeyType::Ed25519));
         assert!(matches!(bundle.secrets[1].key_type, KeyType::X25519));
@@ -998,7 +999,7 @@ fn write_did_jsonl(config_path: &str, log_content: &str) {
 /// avoid overwriting the input recipe.
 async fn generate_and_write(
     config: &app::WizardConfig,
-    vta_session: Option<&vta_connect::VtaSession>,
+    vta_session: Option<&vta::VtaSession>,
     save_recipe: bool,
 ) -> anyhow::Result<()> {
     // Generate mediator DID + secrets

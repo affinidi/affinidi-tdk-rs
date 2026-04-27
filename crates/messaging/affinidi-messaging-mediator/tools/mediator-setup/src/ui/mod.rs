@@ -516,7 +516,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     }
 
     if let (Some(state), Some(phase)) = (app.vta_connect.as_ref(), app.vta_phase()) {
-        use crate::vta_connect::ConnectPhase;
+        use crate::vta::ConnectPhase;
         match phase {
             ConnectPhase::EnterDid => {
                 prompt::render_prompt(
@@ -960,7 +960,7 @@ fn render_sealed_request(
         header_style,
     )));
     let (primary_header, primary_hotkey, fallback_header) = match state.intent {
-        crate::vta_connect::VtaIntent::AdminOnly => (
+        crate::vta::VtaIntent::AdminOnly => (
             "Recommended — VTA admin runs on any host with an authenticated pnm session:",
             "  [p] ",
             Some(
@@ -968,13 +968,13 @@ fn render_sealed_request(
                  AdminCredential JSON payload at <ADMIN_CREDENTIAL_JSON>:",
             ),
         ),
-        crate::vta_connect::VtaIntent::FullSetup => (
+        crate::vta::VtaIntent::FullSetup => (
             "VTA admin runs this on the VTA host (has local super-admin access to the \
              keyspace — no `pnm acl create` required):",
             "  [v] ",
             None,
         ),
-        crate::vta_connect::VtaIntent::OfflineExport => (
+        crate::vta::VtaIntent::OfflineExport => (
             "VTA admin runs this on the VTA host to export the existing context's \
              admin credential, mediator DID, and operational keys (auto-mints a \
              fresh admin identity by default — no `--admin-key` needed):",

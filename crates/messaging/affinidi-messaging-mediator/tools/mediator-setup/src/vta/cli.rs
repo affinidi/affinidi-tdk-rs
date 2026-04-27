@@ -12,15 +12,24 @@
 //!
 //! Both phases accept `--vta-did` and `--vta-context` for the inputs the TUI
 //! would otherwise collect via text fields.
+//!
+//! Built on top of [`crate::vta::runner::run_connection_test`], which in turn
+//! drives [`vta_sdk::provision_client::run_connection_test`]. The SDK's
+//! [`vta_sdk::provision_client::driver`] ships an equivalent
+//! `run_phase1_init` / `run_phase2_connect` pair, but the local wrapper here
+//! adds two pieces of behaviour the SDK driver does not: (1) auto-fallback
+//! across DIDComm ↔ REST on a pre-auth failure, and (2) `--wait-for-acl`
+//! retry-on-ACL-propagation. Both are mediator-setup-specific operator
+//! niceties — kept here rather than upstreamed.
 
 use std::fmt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::consts::DEFAULT_VTA_CONTEXT;
-use crate::vta_connect::{
-    AttemptResultKind, DiagCheck, DiagStatus, EphemeralSetupKey, Protocol, VtaEvent, VtaIntent,
-    resolve::ResolvedVta, run_connection_test,
+use crate::vta::{
+    AttemptResultKind, DiagCheck, DiagStatus, EphemeralSetupKey, Protocol, ResolvedVta, VtaEvent,
+    VtaIntent, runner::run_connection_test,
 };
 
 /// Categorises a headless terminal failure into the three exit-code
@@ -431,8 +440,8 @@ mod tests {
             Protocol::DidComm,
             &AttemptResultKind::PreAuthFailure("ACL not found".into()),
             Some(&r),
-            true,  // didcomm just attempted
-            false, // rest not yet
+            true,
+            false,
         );
         assert_eq!(target, Some(Protocol::Rest));
     }
@@ -447,8 +456,6 @@ mod tests {
             true,
             false,
         );
-        // VTA accepted us — retrying over REST won't change the
-        // outcome.
         assert_eq!(target, None);
     }
 
@@ -460,7 +467,7 @@ mod tests {
             &AttemptResultKind::PreAuthFailure("ACL not found".into()),
             Some(&r),
             true,
-            true, // rest already attempted (and presumably failed)
+            true,
         );
         assert_eq!(target, None);
     }
@@ -488,8 +495,6 @@ mod tests {
         let s = err.to_string();
         assert!(s.contains("DIDComm: ACL not found"));
         assert!(s.contains("REST: REST 401"));
-        // The recommendation block references the offline flow so
-        // operators / CI scripts can grep for it.
         assert!(s.contains("sealed-handoff"));
     }
 
@@ -526,12 +531,6 @@ mod tests {
         );
         assert!(failed.contains("[!!]"));
     }
-
-    // Phase 1 writes a file and prints stdout; we cover the file-write
-    // contract in `setup_key::tests::persist_roundtrip`. Full end-to-end
-    // phase-2 tests require a live VTA, which isn't appropriate for a unit
-    // suite — those are exercised via the local-dev integration loop
-    // described in the crate README once this branch lands.
 
     #[tokio::test]
     async fn phase1_writes_a_valid_key_file() {

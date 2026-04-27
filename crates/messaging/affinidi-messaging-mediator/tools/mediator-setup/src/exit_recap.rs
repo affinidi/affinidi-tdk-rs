@@ -21,7 +21,7 @@
 use std::fmt::Write as _;
 
 use crate::app::WizardConfig;
-use crate::vta_connect::{VtaReply, VtaSession};
+use crate::vta::{VtaReply, VtaSession};
 
 /// Print the operator-facing recap to stdout. Called from `main.rs`
 /// after the TUI has restored the terminal (alt-screen left, raw
@@ -178,7 +178,7 @@ fn push_selection_hint(out: &mut String) {
 mod tests {
     use super::*;
     use crate::app::WizardConfig;
-    use crate::vta_connect::VtaSession;
+    use crate::vta::VtaSession;
 
     const TS: &str = "2026-04-26T12:00:00+00:00";
 
@@ -208,7 +208,7 @@ mod tests {
             "did:webvh:vta.example.com".into(),
             Some("https://vta.example.com".into()),
             Some("did:webvh:mediator.vta.example.com".into()),
-            crate::vta_connect::provision::test_sample_result(true),
+            vta_sdk::provision_client::test_helpers::sample_provision_result(true),
         )
     }
 
@@ -220,7 +220,7 @@ mod tests {
         assert!(r.contains("Intent:        FullSetup"));
         assert!(r.contains("VTA DID:       did:webvh:vta.example.com"));
         assert!(r.contains("Admin DID:     did:key:z6MkAdmin"));
-        assert!(r.contains("Mediator DID:  did:webvh:mediator.example.com"));
+        assert!(r.contains("Mediator DID:  did:webvh:integration.example.com"));
         assert!(r.contains("REST URL:      https://vta.example.com"));
         assert!(r.contains("## Mediator config"));
         assert!(r.contains("Config file:   /etc/mediator/mediator.toml"));
