@@ -107,9 +107,9 @@ pub fn render(frame: &mut Frame, app: &WizardApp) {
     // cloud-backend phases so operators don't have to read the
     // prompt's hint text to find it. Discovery overlay states get
     // their own bar so the keys actually available there
-    // (\u{2191}/\u{2193} scroll, Esc dismiss) are visible without
-    // scanning the (now hidden) usual key map.
-    let discovery_help = "\u{2191}\u{2193}/PgUp/PgDn Scroll  Esc Dismiss  F10 Quit";
+    // (\u{2191}/\u{2193} scroll, Enter pick, Esc cancel) are visible
+    // without scanning the (now hidden) usual key map.
+    let discovery_help = "\u{2191}\u{2193}/PgUp/PgDn Scroll  Enter Pick  Esc Cancel  F10 Quit";
     let help_text = if app.in_discovery_overlay() {
         discovery_help
     } else if matches!(

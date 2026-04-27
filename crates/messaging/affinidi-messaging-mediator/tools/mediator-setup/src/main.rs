@@ -527,10 +527,10 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
 
     // Discovery overlay (cloud-backend secrets list via F5) takes
     // every key while it's on screen — Loading swallows everything
-    // except Esc, Loaded scrolls and dismisses on Enter/Esc, Failed
-    // dismisses on any key. Placed before mode dispatch so normal
-    // text-input keys don't leak into the input widget while the
-    // overlay is active.
+    // except Esc, Loaded scrolls / picks (Enter) / cancels (Esc),
+    // Failed dismisses on any key. Placed before mode dispatch so
+    // normal text-input keys don't leak into the input widget while
+    // the overlay is active.
     if app.in_discovery_overlay() {
         app.handle_discovery_key(code);
         return;

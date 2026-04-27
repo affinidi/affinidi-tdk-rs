@@ -109,7 +109,7 @@ fn render_failed(frame: &mut Frame, area: Rect, message: &str) {
 
 fn render_loaded(frame: &mut Frame, area: Rect, items: &[String], cursor: usize, scroll: usize) {
     let block = Block::default()
-        .title(" Discovered secrets — Esc to dismiss ")
+        .title(" Discovered secrets — Enter to pick, Esc to cancel ")
         .title_style(theme::info_style())
         .borders(Borders::ALL)
         .border_style(theme::border_style());
@@ -174,7 +174,7 @@ fn render_loaded(frame: &mut Frame, area: Rect, items: &[String], cursor: usize,
 
     if footer_area.height > 0 {
         let footer_text = format!(
-            "  {n} secret{plural} — \u{2191}\u{2193}/PgUp/PgDn scroll  Esc dismiss",
+            "  {n} secret{plural} — \u{2191}\u{2193}/PgUp/PgDn scroll  Enter pick  Esc cancel",
             n = items.len(),
             plural = if items.len() == 1 { "" } else { "s" },
         );

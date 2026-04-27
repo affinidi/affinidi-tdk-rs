@@ -6,11 +6,11 @@
 //! can see exactly what's already in the backend and pick a namespace
 //! that doesn't collide.
 //!
-//! The overlay is informational: Esc and Enter both dismiss it. The
-//! operator types the namespace into the prompt themselves rather than
-//! having the wizard derive a candidate from existing secret names —
-//! the earlier "11 prefixes from 14 secrets" projection was confusing
-//! and risked picking a deeply-nested key as a namespace.
+//! Enter copies the highlighted secret name into the prompt verbatim;
+//! Esc dismisses without changing the field. The earlier "11 prefixes
+//! from 14 secrets" projection is gone — the picker shows live data
+//! rather than a synthetic dirname rollup, and the operator trims the
+//! picked entry to the namespace portion they want.
 //!
 //! Discovery runs as a `tokio::spawn`'d task so the TUI keeps redrawing
 //! while the SDK call is in flight. Results travel back over an

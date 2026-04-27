@@ -481,7 +481,7 @@ pub struct WizardApp {
     /// on a cloud-backend namespace screen and either the background
     /// `list_namespace` task is in flight (`Loading`), the result is
     /// being browsed (`Loaded`), or the failure is being read (`Failed`).
-    /// Cleared on Enter or Esc — the overlay is informational only.
+    /// Cleared on Enter (apply pick) or Esc (dismiss).
     pub discovery: Option<DiscoveryState>,
     /// Receiver side of the discovery channel. Set when a discovery is
     /// kicked off; drained on each tick by [`Self::drain_discovery_events`]
@@ -2897,10 +2897,20 @@ impl WizardApp {
                         *cursor = max;
                         *scroll = max.saturating_sub(9);
                     }
-                    KeyCode::Enter | KeyCode::Esc => {
-                        // The overlay is informational — neither key
-                        // copies the selection back into the prompt.
-                        // The operator types the namespace themselves.
+                    KeyCode::Enter => {
+                        // Copy the selected secret name into the prompt
+                        // verbatim. The operator can then trim it to
+                        // the namespace portion they want — usually the
+                        // dirname (everything up to and including the
+                        // last `/`). We don't auto-trim because a flat
+                        // name has no separator and an operator who
+                        // really wants the full path as their namespace
+                        // shouldn't have it silently rewritten.
+                        let picked = items[*cursor].clone();
+                        self.text_input = Input::new(picked);
+                        self.discovery = None;
+                    }
+                    KeyCode::Esc => {
                         self.discovery = None;
                     }
                     _ => {}
@@ -4271,13 +4281,26 @@ mod tests {
     }
 
     #[test]
-    fn handle_discovery_key_enter_dismisses_without_writing_input() {
-        // Enter is informational-only now — neither Enter nor Esc copies
-        // the selection back into the text input. The earlier behaviour
-        // was a footgun: an operator who picked a deeply-nested key
-        // (e.g. `prod/mediator/mediator_admin_credential`) ended up with
-        // that path as their namespace, and the runtime would then
-        // double-prepend on every well-known key.
+    fn handle_discovery_key_enter_copies_selection_into_input() {
+        // Enter copies the highlighted secret name verbatim into the
+        // prompt; the operator then trims it to the namespace portion
+        // they want.
+        use crate::discovery::DiscoveryState;
+        use crossterm::event::KeyCode;
+        let mut app = WizardApp::new("test.toml".into());
+        app.text_input = Input::new("operator-typed-namespace".into());
+        app.discovery = Some(DiscoveryState::Loaded {
+            items: vec!["alpha/admin".into(), "beta/jwt".into()],
+            cursor: 1,
+            scroll: 0,
+        });
+        assert!(app.handle_discovery_key(KeyCode::Enter));
+        assert_eq!(app.text_input.value(), "beta/jwt");
+        assert!(app.discovery.is_none());
+    }
+
+    #[test]
+    fn handle_discovery_key_esc_dismisses_without_copying() {
         use crate::discovery::DiscoveryState;
         use crossterm::event::KeyCode;
         let mut app = WizardApp::new("test.toml".into());
@@ -4287,10 +4310,9 @@ mod tests {
             cursor: 1,
             scroll: 0,
         });
-        assert!(app.handle_discovery_key(KeyCode::Enter));
+        assert!(app.handle_discovery_key(KeyCode::Esc));
         // Text input is untouched.
         assert_eq!(app.text_input.value(), "operator-typed-namespace");
-        // Overlay dismissed.
         assert!(app.discovery.is_none());
     }
 
