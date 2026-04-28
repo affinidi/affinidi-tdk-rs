@@ -595,7 +595,7 @@ mod tests {
         };
         assert!(request_path.is_file(), "request JSON must be on disk");
         assert!(
-            producer_command.contains("vta context reprovision"),
+            producer_command.contains("vta contexts reprovision"),
             "operator instructions must name the VTA-side command: {producer_command}"
         );
         assert!(

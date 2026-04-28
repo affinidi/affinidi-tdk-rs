@@ -85,7 +85,7 @@ pub struct DeploymentSection {
     ///   deployments.
     /// - `"sealed-export"` — air-gapped export of state the VTA has
     ///   already provisioned (ran a prior `sealed-mint` or online
-    ///   setup). VTA admin runs `vta context reprovision` and
+    ///   setup). VTA admin runs `vta contexts reprovision` and
     ///   returns a `ContextProvision` bundle. Use for migrations
     ///   and restores.
     /// - `"sealed"` — **deprecated** alias for `"sealed-mint"`,

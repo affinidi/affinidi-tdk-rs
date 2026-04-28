@@ -297,7 +297,7 @@ impl SealedHandoffState {
                 // `sealed_transfer::BootstrapRequest` — pubkey + nonce
                 // + label, no template ask. The VTA-side command
                 // (`pnm contexts bootstrap` for AdminOnly,
-                // `vta context reprovision` for OfflineExport) decides
+                // `vta contexts reprovision` for OfflineExport) decides
                 // what payload variant ends up in the sealed bundle.
                 let request = BootstrapRequest::new(ed_pub, nonce, self.run_label.clone());
                 let json = serde_json::to_string_pretty(&request).map_err(|e| {
@@ -427,7 +427,7 @@ impl SealedHandoffState {
         let label = match self.intent {
             VtaIntent::AdminOnly => "pnm contexts bootstrap command",
             VtaIntent::FullSetup => "vta bootstrap provision-integration command",
-            VtaIntent::OfflineExport => "vta context reprovision command",
+            VtaIntent::OfflineExport => "vta contexts reprovision command",
         };
         self.set_clipboard(self.primary_command(), label);
     }
@@ -472,7 +472,7 @@ impl SealedHandoffState {
     /// seals a [`vta_sdk::sealed_transfer::SealedPayloadV1::TemplateBootstrap`]
     /// bundle.
     ///
-    /// **OfflineExport** — `vta context reprovision --id <ctx>
+    /// **OfflineExport** — `vta contexts reprovision --id <ctx>
     /// --recipient <path> --out bundle.armor`. Runs on the VTA host;
     /// retrieves *existing* mediator material (DID, operational keys,
     /// admin credential) for the named context and seals a
@@ -505,7 +505,7 @@ impl SealedHandoffState {
                 file, self.context_id,
             ),
             VtaIntent::OfflineExport => format!(
-                "vta context reprovision \
+                "vta contexts reprovision \
                  --id {} \
                  --recipient {} \
                  --out bundle.armor",
@@ -521,7 +521,7 @@ impl SealedHandoffState {
     /// sanctioned offline producer.
     ///
     /// OfflineExport returns the `vta keys bundle` variant — narrower
-    /// than `vta context reprovision`: ships only DID + operational
+    /// than `vta contexts reprovision`: ships only DID + operational
     /// keys, no admin credential. Use only when admin material is
     /// being managed out-of-band (key escrow, separate admin
     /// workstation, principle-of-least-privilege deployments).

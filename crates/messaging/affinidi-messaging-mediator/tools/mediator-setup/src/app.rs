@@ -720,7 +720,7 @@ impl WizardApp {
                     }
                     VtaIntent::OfflineExport => {
                         // No further inputs — context_id alone drives
-                        // `vta context reprovision`. Finalise the
+                        // `vta contexts reprovision`. Finalise the
                         // request right here so the operator lands on
                         // RequestGenerated in one keystroke.
                         if let Err(e) = state.finalize_request() {
@@ -1839,7 +1839,7 @@ impl WizardApp {
                         ),
                         SelectionOption::new(
                             "Pick up pre-provisioned mediator (offline export)",
-                            "VTA already provisioned the context + mediator DID + keys (e.g. during VTA bootstrap). Wizard writes a request; VTA admin runs `vta context reprovision --id <ctx> --recipient <file>` and returns the existing material in a ContextProvision bundle. Always offline.",
+                            "VTA already provisioned the context + mediator DID + keys (e.g. during VTA bootstrap). Wizard writes a request; VTA admin runs `vta contexts reprovision --id <ctx> --recipient <file>` and returns the existing material in a ContextProvision bundle. Always offline.",
                         ),
                         SelectionOption::new(
                             "No VTA",
@@ -1870,7 +1870,7 @@ impl WizardApp {
                                 // the TUI down mid-frame).
                                 return vec![SelectionOption::new(
                                     "(no transport choice for OfflineExport)",
-                                    "OfflineExport is always offline — sealed handoff via `vta context reprovision` is the only producer.",
+                                    "OfflineExport is always offline — sealed handoff via `vta contexts reprovision` is the only producer.",
                                 )];
                             }
                         };
@@ -3152,7 +3152,7 @@ impl WizardApp {
                 }
                 Some(VtaIntent::OfflineExport) => {
                     // OfflineExport mints an admin credential as a
-                    // side effect of `vta context reprovision` (for
+                    // side effect of `vta contexts reprovision` (for
                     // the mediator to authenticate back to the VTA),
                     // NOT as an intentional mediator-admin-API
                     // handoff. Reusing that same DID for both the
@@ -3285,7 +3285,7 @@ impl WizardApp {
     /// Today only the `Did` step qualifies, and only under online
     /// FullSetup / OfflineExport: the VTA either minted the integration
     /// DID during provision-integration (FullSetup — TemplateBootstrap
-    /// reply) or exported a pre-provisioned one via `vta context
+    /// reply) or exported a pre-provisioned one via `vta contexts
     /// reprovision` (OfflineExport — ContextProvision reply). Either
     /// way `apply_vta_defaults` already pinned `did_method = DID_VTA`
     /// and the mediator DID + doc + keys + did.jsonl ride on

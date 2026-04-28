@@ -88,7 +88,7 @@ pub enum VtaReply {
     /// integration DID; the VTA supplied an admin identity the mediator
     /// authenticates as against the VTA's admin APIs.
     AdminOnly(AdminCredentialReply),
-    /// Context-export reply. The VTA admin ran `vta context reprovision`
+    /// Context-export reply. The VTA admin ran `vta contexts reprovision`
     /// against an existing context; the bundle carries the
     /// already-provisioned mediator DID + operational keys + admin
     /// credential. Produced exclusively by the OfflineExport intent.

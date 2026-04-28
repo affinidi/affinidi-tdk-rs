@@ -20,7 +20,7 @@ and the command you run on the VTA side differ.
 |---|---|---|---|---|
 | [Online](#1-online) | Yes | No (greenfield) | `pnm bootstrap provision-integration` via admin PNM session | TUI only |
 | [Sealed-mint](#2-sealed-mint) | Optional (file transfer works air-gapped too) | No (greenfield) | `vta bootstrap provision-integration --request req.json` on VTA host | TUI *or* `--from` |
-| [Sealed-export](#3-sealed-export) | Optional | **Yes** (ran mode 1 or 2 previously) | `vta context reprovision --id <ctx> --recipient req.json` on VTA host | TUI *or* `--from` |
+| [Sealed-export](#3-sealed-export) | Optional | **Yes** (ran mode 1 or 2 previously) | `vta contexts reprovision --id <ctx> --recipient req.json` on VTA host | TUI *or* `--from` |
 
 If you're unsure whether the context already has a mediator DID on the
 VTA side, ask your VTA admin to run `pnm contexts show --id <ctx>`. A
@@ -220,7 +220,7 @@ Same as sealed-mint, plus:
 
 - The VTA context id the mediator was originally provisioned under
   (ask your VTA admin; they can `pnm contexts show --id <ctx>`)
-- A reasonably recent `vta` CLI — `vta context reprovision` auto-mints
+- A reasonably recent `vta` CLI — `vta contexts reprovision` auto-mints
   the admin key when `--admin-key` is omitted, which is the
   recommended default
 
@@ -240,7 +240,7 @@ template ask — nothing is being minted) at
 **On the VTA host**:
 
 ```bash
-vta context reprovision \
+vta contexts reprovision \
   --id mediator \
   --recipient bootstrap-request.json \
   --out bundle.armor
@@ -432,7 +432,7 @@ any existing keys).
 | Phase 1 fails: `A bootstrap is already in progress` | Previous phase-1 run is unfinished; seed is still in the backend's sweep index | Either `--bundle bundle.armor` to finalise, wait 24h for the auto-sweep (`MEDIATOR_BOOTSTRAP_SEED_TTL=<dur>` overrides), or `--force-reprovision` |
 | Phase 2 fails: `could not locate the ephemeral seed for bundle id XYZ` | Phase 2 points at a different `[secrets].backend` than phase 1, or the seed was swept / manually deleted | Re-run phase 2 with the same recipe (and therefore the same `[secrets].backend`) phase 1 used |
 | Phase 2 fails: `provided digest did not match the bundle` | Mis-typed digest, or bundle tampered in transit | Re-copy digest from VTA host; if still mismatched, re-request the bundle |
-| Phase 2 fails: `sealed payload was the wrong variant` | Recipe says `sealed-mint` but VTA ran `vta context reprovision` (or vice versa) | Match `vta_mode` to the VTA-side command. `sealed-mint` expects `provision-integration`; `sealed-export` expects `context reprovision` |
+| Phase 2 fails: `sealed payload was the wrong variant` | Recipe says `sealed-mint` but VTA ran `vta contexts reprovision` (or vice versa) | Match `vta_mode` to the VTA-side command. `sealed-mint` expects `provision-integration`; `sealed-export` expects `contexts reprovision` |
 | Mediator boots but logs `VTA integration DEGRADED` | VTA returned a validation error or was unreachable at boot; cached bundle loaded | Check the preceding SDK warning for root cause. Mediator continues to serve on cached keys; it will refresh on next successful VTA call |
 | Mediator boot fails: `VTA is unreachable and no cached secrets exist` | First boot, cache never populated, VTA not reachable | Re-run `mediator-setup` so it can seed the cache. The wizard writes `mediator/vta/last_known_bundle` on every successful setup |
 | Mediator boot fails: `context 'X' has no DID assigned` | VTA-side: `provision_integration` didn't bind the minted DID as context primary | Update `vta-service` to pick up the `bind minted DID as context primary` fix, or manually `pnm contexts update --id <ctx> --did <mediator-did>` |
