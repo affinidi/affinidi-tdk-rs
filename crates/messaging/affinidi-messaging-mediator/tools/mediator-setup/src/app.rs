@@ -115,7 +115,8 @@ impl WizardStep {
             Self::Protocol => StepData {
                 title: format!("Step {num}/{total}: Messaging Protocol"),
                 description:
-                    "Toggle protocols with Enter. At least one required. Press Esc to continue."
+                    "[Space] toggles a protocol (at least one required). [Enter] continues, \
+                     [Esc] goes back."
                         .into(),
             },
             Self::Did => StepData {
@@ -2143,8 +2144,8 @@ impl WizardApp {
                 }
             }
             WizardStep::Protocol => match self.selection_index {
-                0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments. Space toggles; Enter continues.".into(),
-                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm. Space toggles; Enter continues.".into(),
+                0 => "DIDComm v2 is the industry standard for DID-based secure messaging. Recommended for most deployments. [Space] toggles; [Enter] continues.".into(),
+                1 => "TSP is a lightweight alternative to DIDComm. EXPERIMENTAL: not all mediator features are supported yet. Can be enabled alongside DIDComm. [Space] toggles; [Enter] continues.".into(),
                 _ => String::new(),
             },
             WizardStep::Did => {

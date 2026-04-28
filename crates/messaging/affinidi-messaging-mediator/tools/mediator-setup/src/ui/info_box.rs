@@ -14,8 +14,10 @@ pub fn render_info_box(frame: &mut Frame, area: Rect, title: &str, text: &str) {
         .border_style(theme::border_style())
         .padding(Padding::new(1, 1, 0, 0));
 
-    let paragraph = Paragraph::new(text)
-        .style(theme::dim_style())
+    // `[Key]` tokens (e.g. `[Space]`, `[Enter]`) render in the accent
+    // colour to match the hotkey-cue convention used elsewhere in the
+    // wizard. Surrounding text keeps the dim info-box style.
+    let paragraph = Paragraph::new(theme::key_styled_line(text, theme::dim_style()))
         .block(block)
         .wrap(Wrap { trim: true });
 

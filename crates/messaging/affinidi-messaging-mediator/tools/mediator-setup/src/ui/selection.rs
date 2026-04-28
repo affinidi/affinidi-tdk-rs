@@ -74,8 +74,9 @@ pub fn render_selection(
     // rather than clipping at the column boundary. `trim: true`
     // collapses multiple whitespace at line breaks — matches the
     // `summary.rs` and `prompt.rs` convention for descriptive text.
-    let desc = Paragraph::new(description)
-        .style(theme::dim_style())
+    // `[Key]` tokens render in the accent colour to match the
+    // hotkey-cue convention in `instructions.rs` and `prompt.rs`.
+    let desc = Paragraph::new(theme::key_styled_line(description, theme::dim_style()))
         .wrap(Wrap { trim: true });
     frame.render_widget(desc, desc_area);
 
