@@ -45,8 +45,14 @@ async fn main() -> Result<(), ProcessorError> {
         }
     };
 
-    let processor =
-        MessageExpiryCleanupProcessor::new(config.processors.message_expiry_cleanup, database);
+    // The admin DID hash is used for Lua-level delete permission. When running
+    // standalone, use a system-level identity that the Lua script recognizes.
+    let admin_did_hash = sha256::digest("SYSTEM_EXPIRY_PROCESSOR");
+    let processor = MessageExpiryCleanupProcessor::new(
+        config.processors.message_expiry_cleanup,
+        database,
+        admin_did_hash,
+    );
 
     let handle = {
         tokio::spawn(async move {

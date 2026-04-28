@@ -2,7 +2,7 @@ use crate::ui_management::components::component::ComponentRender;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{self, Span},
 };
 

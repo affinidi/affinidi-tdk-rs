@@ -1,0 +1,139 @@
+/// Deployment type display strings
+pub const DEPLOYMENT_LOCAL: &str = "Local development";
+pub const DEPLOYMENT_SERVER: &str = "Headless server";
+pub const DEPLOYMENT_CONTAINER: &str = "Container";
+
+/// DID method display strings
+pub const DID_VTA: &str = "VTA managed";
+pub const DID_WEBVH: &str = "did:webvh";
+pub const DID_PEER: &str = "did:peer";
+pub const DID_IMPORT: &str = "Import existing";
+
+/// Secret storage schemes
+pub const STORAGE_STRING: &str = "string://";
+pub const STORAGE_FILE: &str = "file://";
+pub const STORAGE_KEYRING: &str = "keyring://";
+pub const STORAGE_AWS: &str = "aws_secrets://";
+pub const STORAGE_GCP: &str = "gcp_secrets://";
+pub const STORAGE_AZURE: &str = "azure_keyvault://";
+pub const STORAGE_VAULT: &str = "vault://";
+pub const STORAGE_VTA: &str = "vta://";
+
+/// SSL mode display strings
+pub const SSL_NONE: &str = "No SSL (TLS proxy)";
+pub const SSL_EXISTING: &str = "Existing certificates";
+pub const SSL_SELF_SIGNED: &str = "Self-signed";
+
+/// JWT secret provisioning mode. `generate` (default) tells the wizard to
+/// mint a fresh Ed25519 PKCS8 key and push it into the unified secret
+/// backend at `mediator/jwt/secret`. `provide` records the operator's
+/// intent to supply their own — the mediator then expects either a
+/// `MEDIATOR_JWT_SECRET` env var or a `--jwt-secret-file` path at boot.
+/// Interactive paste is intentionally NOT supported; private keys never
+/// belong in terminal scrollback.
+pub const JWT_MODE_GENERATE: &str = "generate";
+pub const JWT_MODE_PROVIDE: &str = "provide";
+
+/// Admin DID mode display strings
+pub const ADMIN_GENERATE: &str = "Generate did:key";
+pub const ADMIN_PASTE: &str = "Paste existing";
+pub const ADMIN_VTA: &str = "Copy from VTA";
+pub const ADMIN_SKIP: &str = "Skip";
+
+/// VTA connectivity modes.
+///
+/// `online` is the default — the mediator's setup wizard authenticates
+/// against the VTA's REST + DIDComm endpoints to mint the admin
+/// credential.
+///
+/// `sealed` (air-gapped sealed handoff) replaces the legacy
+/// `cold-start` mode: the operator generates an ephemeral X25519
+/// keypair on the mediator host, ships the public-half bootstrap
+/// request to the VTA admin out-of-band, and then pastes back an
+/// HPKE-armored bundle. No network call from the mediator host.
+/// `cold-start` is intentionally gone — its hand-rolled file format
+/// pre-dated the unified sealed-transfer envelope and offered no
+/// integrity guarantees on the wire.
+pub const VTA_MODE_ONLINE: &str = "online";
+/// Air-gapped sealed handoff where the VTA **mints** a fresh mediator
+/// DID + keys and returns them in a `TemplateBootstrap` bundle. Use
+/// for greenfield deployments. This is the canonical value the
+/// wizard writes; recipes containing the legacy value `"sealed"` are
+/// normalised to this on load.
+pub const VTA_MODE_SEALED_MINT: &str = "sealed-mint";
+/// Air-gapped sealed handoff where the VTA **exports** material it
+/// already provisioned (via a prior `sealed-mint` or online setup)
+/// into a `ContextProvision` bundle. Use for migrations and
+/// restoring a mediator on a new host.
+pub const VTA_MODE_SEALED_EXPORT: &str = "sealed-export";
+/// Deprecated alias for [`VTA_MODE_SEALED_MINT`]. Accepted by the
+/// recipe loader for backward compatibility — recipes written before
+/// the mint/export split used the single value `"sealed"`. New code
+/// should write [`VTA_MODE_SEALED_MINT`] directly.
+pub const VTA_MODE_SEALED_LEGACY: &str = "sealed";
+/// Legacy alias retained for call sites that still check
+/// `VTA_MODE_SEALED`. Value equals [`VTA_MODE_SEALED_LEGACY`]
+/// (the string `"sealed"`). Prefer [`VTA_MODE_SEALED_MINT`] in new
+/// code — this constant only appears where we compare against
+/// recipes that haven't been rewritten to the split values yet.
+pub const VTA_MODE_SEALED: &str = VTA_MODE_SEALED_LEGACY;
+/// Legacy alias for [`VTA_MODE_SEALED_EXPORT`]. Retained because
+/// earlier wizard commits shipped it as the field name on
+/// `WizardConfig.vta_mode`. New code should write
+/// [`VTA_MODE_SEALED_EXPORT`]; the recipe loader normalises both
+/// values onto the canonical form.
+pub const VTA_MODE_EXPORT: &str = VTA_MODE_SEALED_EXPORT;
+
+/// Default values
+pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
+pub const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";
+pub const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:7037";
+
+/// Default `[server] api_prefix` written to `mediator.toml`. The
+/// trailing `/` matches the example config and the mediator binary's
+/// route nesting (it strips a single trailing slash). Operators who
+/// want to serve the mediator at the host root can override via the
+/// recipe's `[output] api_prefix = ""`.
+pub const DEFAULT_API_PREFIX: &str = "/mediator/v1/";
+pub const DEFAULT_VTA_CONTEXT: &str = "mediator";
+/// Default expiry for the setup-did ACL entry granted via
+/// `pnm contexts create --admin-expires`. Gives the operator an hour to
+/// finish mediator setup; override to `24h`, `7d`, etc. for slower rollouts.
+pub const DEFAULT_VTA_SETUP_EXPIRY: &str = "1h";
+
+/// Name of the built-in VTA DID template the wizard asks the VTA to
+/// render for the mediator's own integration DID. Operators may
+/// shadow this under the context or global scope via
+/// `pnm did-templates upload --name didcomm-mediator …` and the VTA's
+/// resolution order (context → global → builtin) will pick up the
+/// override on the next wizard run.
+pub const DEFAULT_MEDIATOR_TEMPLATE: &str = "didcomm-mediator";
+
+/// Name of the built-in VTA DID template used for the long-term admin
+/// DID the VTA mints during provisioning (`adminTemplate` on the VP
+/// `ask`). Same shadowing rules as
+/// [`DEFAULT_MEDIATOR_TEMPLATE`] — a `vta-admin` template registered
+/// at the context scope overrides the builtin.
+pub const DEFAULT_VTA_ADMIN_TEMPLATE: &str = "vta-admin";
+
+/// Per-backend sensible defaults for the KeyStorage step.
+pub const DEFAULT_SECRET_FILE_PATH: &str = "conf/secrets.json";
+pub const DEFAULT_KEYRING_SERVICE: &str = "affinidi-mediator";
+pub const DEFAULT_AWS_REGION: &str = "us-east-1";
+pub const DEFAULT_AWS_SECRET_NAMESPACE: &str = "mediator/";
+/// GCP Secret Manager defaults — empty project so the operator must type
+/// theirs (no sensible global default — GCP IDs are tenant-scoped). The
+/// `mediator-` namespace matches AWS's convention so a single deployment
+/// can share naming patterns across clouds.
+pub const DEFAULT_GCP_PROJECT: &str = "";
+pub const DEFAULT_GCP_SECRET_NAMESPACE: &str = "mediator-";
+/// Azure Key Vault default — empty so the operator types either a bare
+/// vault name (commercial cloud) or a sovereign-cloud DNS name. The URL
+/// parser handles both shapes.
+pub const DEFAULT_AZURE_VAULT: &str = "";
+/// HashiCorp Vault defaults — empty endpoint forces a typed answer (the
+/// operator's `vault server` listen address is environment-specific). The
+/// `secret/mediator` mount+namespace matches the default KV v2 mount
+/// Vault ships with `vault server -dev`.
+pub const DEFAULT_VAULT_ENDPOINT: &str = "";
+pub const DEFAULT_VAULT_MOUNT: &str = "secret/mediator";

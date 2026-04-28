@@ -13,26 +13,43 @@ log_level = "info"
 log_json = "false"
 
 ### Env: MEDIATOR_DID
-### DID of the mediator (REQUIRED)
+### DID of the mediator (REQUIRED in self-hosted mode; optional otherwise).
+### When VTA integration is enabled (admin credential present in the secret
+### backend), the mediator uses the DID recorded on the VTA context and
+### this field is ignored.
 ### Supported formats:
 ###   did://<did_string>
 ###   aws_parameter_store://<parameter_name>
-###   vta://<context>  (requires [vta] section)
-mediator_did = "vta://mediator-local"
+mediator_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.EzQ3shVZJV9gKezYsvy5tC1LCwjjWSms2zCfZhvnRK48BNoHH3"
 
 ### ****************************************************************************************************************************
-### VTA (Verifiable Trust Agent) integration
-### Enables centralized key management via a VTA instance.
-### When configured, set mediator_did and/or security.mediator_secrets to "vta://<context>"
+### Unified secret storage
 ###
-### Example:
-###   mediator_did = "vta://mediator"
-###   [security]
-###   mediator_secrets = "vta://mediator"
+### Every sensitive value the mediator reads — admin credential, JWT
+### signing key, operating keys, VTA cache — lives under one backend.
+### Pick the `backend` URL and everything is automatic from there.
+###
+### Supported backends:
+###   keyring://<service>                   OS keyring (macOS Keychain,
+###                                         Linux Secret Service, Windows
+###                                         Credential Manager).
+###   file:///<absolute-path>[?encrypt=1]   Local JSON file (plaintext by
+###                                         default — DEV/TEST ONLY).
+###   aws_secrets://<region>/<prefix>       AWS Secrets Manager.
+###   gcp_secrets://<project>/<prefix>      GCP Secret Manager (coming soon).
+###   azure_keyvault://<vault>              Azure Key Vault (coming soon).
+###   vault://<host[:port]>/<kv-path>       HashiCorp Vault (coming soon).
+###
+### Env: MEDIATOR_SECRETS_BACKEND
 ### ****************************************************************************************************************************
-[vta]
-credential = "keyring://affinidi-mediator/vta-credential"
-context = "mediator-local"
+[secrets]
+backend = "keyring://affinidi-mediator"
+
+### Env: MEDIATOR_SECRETS_CACHE_TTL
+### Maximum age for the cached VTA bundle (humantime format). `0` means
+### no expiry — keep the cache until manually invalidated or a fresh
+### fetch overwrites it. Default: 30 days.
+# cache_ttl = "30d"
 ### ****************************************************************************************************************************
 ### Server configuration
 ### ****************************************************************************************************************************
@@ -58,7 +75,7 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 ###   file://<path>
 ###   aws_parameter_store://<parameter_name>
 ### When enabled, adds a did:web route at /.well-known/did.json
-did_web_self_hosted = "file://./conf/mediator_did.json"
+did_web_self_hosted = "file://./conf/did.jsonl"
 
 ### ****************************************************************************************************************************
 ### Database configuration
@@ -70,11 +87,15 @@ functions_file = "./conf/atm-functions.lua"
 
 ### Env: DATABASE_URL
 ### URL of the Redis compatible database
+### Supported schemes:
+###   redis://127.0.0.1/                    — local, no auth (dev only)
+###   redis://:password@host:6379/          — with password authentication
+###   redis://user:password@host:6379/      — with ACL user + password
+###   rediss://:password@host:6379/         — TLS encrypted connection
+###   redis://127.0.0.1/1                   — use database partition 1
+### SECURITY: Always use authentication (requirepass or ACLs) in production.
+### For remote Redis, use rediss:// (TLS) to encrypt data in transit.
 database_url = "redis://127.0.0.1/"
-
-### Env: DATABASE_POOL_SIZE
-### DEPRECATED - ignored, kept for backwards compatibility
-database_pool_size = "10"
 
 ### Env: DATABASE_TIMEOUT
 ### Timeout for database operations in seconds
@@ -104,14 +125,11 @@ local_direct_delivery_allowed = "true"
 ### If true, anonymous messages can be delivered directly to a local DID
 local_direct_delivery_allow_anon = "false"
 
-### Env: MEDIATOR_SECRETS
-### Location of mediator secrets (REQUIRED)
-### Supported formats:
-###   file://<path>
-###   aws_secrets://<secret_name>
-###   vta://<context>  (requires [vta] section)
-### NOTE: Key identifiers (id) must match the key identifiers in the mediator DID document
-mediator_secrets = "vta://mediator-local"
+### NOTE: `mediator_secrets` was removed. Operating keys now live in the
+### unified `[secrets]` backend at well-known keys
+### (`mediator/operating/signing`, `mediator/operating/key_agreement`) —
+### or are fetched from the VTA at startup when VTA integration is enabled
+### (indicated by the presence of `mediator/admin/credential`).
 
 ### Env: USE_SSL
 ### If true, SSL is enabled. Set to false only if TLS is terminated externally
@@ -125,10 +143,9 @@ ssl_certificate_file = "conf/keys/end.cert"
 ### Path to the SSL certificate key file
 ssl_key_file = "conf/keys/end.key"
 
-### Env: JWT_AUTHORIZATION_SECRET
-### Key used to sign JWT tokens (REQUIRED)
-### Supported formats: string://<key> | aws_secrets://<secret_name>
-jwt_authorization_secret = "string://MFECAQEwBQYDK2VwBCIEIIsgJfWwqWvy-_EbTy1OMMY1t5fex1UGUXVDfjdd30I6gSEArzZVXBELy8m4ICDLe9mIkr7qLJMxmEpDrE8WpfdcLeA"
+### JWT signing key is no longer a config field — it lives in the unified
+### `[secrets]` backend under the well-known key `mediator/jwt/secret` and
+### is provisioned by the setup wizard or `mediator rotate-jwt`.
 
 ### Env: JWT_ACCESS_EXPIRY
 ### Expiry time in seconds for JWT access tokens (minimum: 10)

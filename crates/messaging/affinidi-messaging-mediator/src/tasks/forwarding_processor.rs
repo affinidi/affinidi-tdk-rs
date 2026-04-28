@@ -30,50 +30,85 @@ use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-/// Tracks message rate to a specific endpoint over a sliding window
+/// Tracks message rate to a specific endpoint using time-bucketed counters.
+///
+/// Uses 1-second resolution buckets in a ring buffer instead of per-message
+/// timestamps. All operations are O(1) regardless of message throughput.
 struct EndpointRateTracker {
-    /// Timestamps of messages sent within the rate window
-    timestamps: Vec<Instant>,
-    /// Rate window duration
-    window: Duration,
+    /// Ring buffer of per-second message counts.
+    /// Index = unix_seconds % bucket_count.
+    buckets: Vec<(u64, u32)>, // (second_timestamp, count)
+    /// Number of buckets (= window size in seconds)
+    bucket_count: usize,
+    /// Total count across all active buckets (cached for O(1) rate queries)
+    total: u32,
+    /// Window duration in seconds
+    window_secs: u64,
 }
 
 impl EndpointRateTracker {
     fn new(window_seconds: u64) -> Self {
+        let bucket_count = window_seconds.max(1) as usize;
         Self {
-            timestamps: Vec::new(),
-            window: Duration::from_secs(window_seconds),
+            buckets: vec![(0, 0); bucket_count],
+            bucket_count,
+            total: 0,
+            window_secs: window_seconds,
         }
     }
 
-    /// Record a message send and return current rate per 10 seconds
-    fn record_and_rate(&mut self) -> f64 {
-        let now = Instant::now();
-        self.timestamps.push(now);
-        self.prune(now);
-        let window_secs = self.window.as_secs_f64();
-        if window_secs > 0.0 {
-            (self.timestamps.len() as f64 / window_secs) * 10.0
+    /// Record N message sends and return current rate per 10 seconds.
+    fn record_and_rate(&mut self, count: u32) -> f64 {
+        let now_secs = now_epoch_secs();
+        self.expire_stale(now_secs);
+
+        let idx = (now_secs as usize) % self.bucket_count;
+        let bucket = &mut self.buckets[idx];
+        if bucket.0 == now_secs {
+            bucket.1 += count;
         } else {
-            0.0
+            // New second — reset this bucket
+            if bucket.0 > 0 {
+                self.total = self.total.saturating_sub(bucket.1);
+            }
+            *bucket = (now_secs, count);
         }
+        self.total += count;
+
+        self.rate_per_10s()
     }
 
-    /// Get current rate per 10 seconds without recording
+    /// Get current rate per 10 seconds without recording.
     fn current_rate(&mut self) -> f64 {
-        self.prune(Instant::now());
-        let window_secs = self.window.as_secs_f64();
-        if window_secs > 0.0 {
-            (self.timestamps.len() as f64 / window_secs) * 10.0
+        self.expire_stale(now_epoch_secs());
+        self.rate_per_10s()
+    }
+
+    fn rate_per_10s(&self) -> f64 {
+        if self.window_secs > 0 {
+            (self.total as f64 / self.window_secs as f64) * 10.0
         } else {
             0.0
         }
     }
 
-    fn prune(&mut self, now: Instant) {
-        let cutoff = now - self.window;
-        self.timestamps.retain(|t| *t > cutoff);
+    /// Expire buckets that are outside the window.
+    fn expire_stale(&mut self, now_secs: u64) {
+        let cutoff = now_secs.saturating_sub(self.window_secs);
+        for bucket in &mut self.buckets {
+            if bucket.0 > 0 && bucket.0 <= cutoff {
+                self.total = self.total.saturating_sub(bucket.1);
+                *bucket = (0, 0);
+            }
+        }
     }
+}
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// State for a connection to a remote mediator endpoint
@@ -132,24 +167,32 @@ pub struct ForwardingProcessor {
 }
 
 impl ForwardingProcessor {
-    pub fn new(config: ForwardingConfig, database: Database) -> Self {
+    pub fn new(
+        config: ForwardingConfig,
+        database: Database,
+    ) -> Result<Self, affinidi_messaging_mediator_common::errors::MediatorError> {
         let consumer_name = format!("processor_{}", Uuid::new_v4());
         info!(
             "ForwardingProcessor created: consumer={}, group={}",
             consumer_name, config.consumer_group
         );
-        let http_pool = Arc::new(
-            HttpClientPool::new(config.accept_invalid_certs)
-                .expect("Failed to create HTTP client pool"),
-        );
-        Self {
+        let http_pool = Arc::new(HttpClientPool::new(config.accept_invalid_certs).map_err(
+            |e| {
+                affinidi_messaging_mediator_common::errors::MediatorError::InternalError(
+                    17,
+                    "forwarding".into(),
+                    format!("Failed to create HTTP client pool: {e}"),
+                )
+            },
+        )?);
+        Ok(Self {
             config,
             database,
             consumer_name,
             endpoints: Arc::new(RwLock::new(HashMap::new())),
             http_pool,
             ws_pool: Arc::new(Mutex::new(HashMap::new())),
-        }
+        })
     }
 
     /// Start the forwarding processor. This runs indefinitely.
@@ -295,11 +338,20 @@ impl ForwardingProcessor {
                     msg.to_did_hash, msg.from_did_hash, endpoint_url
                 );
             }
-            let _ = self
+            if let Err(e) = self
                 .database
                 .forward_queue_ack(&self.config.consumer_group, &expired_ids)
-                .await;
-            let _ = self.database.forward_queue_delete(&expired_ids).await;
+                .await
+            {
+                warn!("Failed to ACK {} expired entries: {}", expired_ids.len(), e);
+            }
+            if let Err(e) = self.database.forward_queue_delete(&expired_ids).await {
+                warn!(
+                    "Failed to delete {} expired entries: {}",
+                    expired_ids.len(),
+                    e
+                );
+            }
         }
 
         if active.is_empty() {
@@ -349,9 +401,7 @@ impl ForwardingProcessor {
                     consecutive_failures: 0,
                 });
 
-            for _ in 0..ready.len() {
-                state.rate_tracker.record_and_rate();
-            }
+            state.rate_tracker.record_and_rate(ready.len() as u32);
             state.last_activity = Instant::now();
 
             let rate = state.rate_tracker.current_rate();
@@ -408,11 +458,16 @@ impl ForwardingProcessor {
         // ACK and delete succeeded messages
         if !succeeded.is_empty() {
             let count = succeeded.len();
-            let _ = self
+            if let Err(e) = self
                 .database
                 .forward_queue_ack(&self.config.consumer_group, &succeeded)
-                .await;
-            let _ = self.database.forward_queue_delete(&succeeded).await;
+                .await
+            {
+                warn!("Failed to ACK {} succeeded entries: {}", count, e);
+            }
+            if let Err(e) = self.database.forward_queue_delete(&succeeded).await {
+                warn!("Failed to delete {} succeeded entries: {}", count, e);
+            }
             debug!("ACKed {} forwarded messages for {}", count, endpoint_url);
 
             // Reset failure counter on success
@@ -449,11 +504,16 @@ impl ForwardingProcessor {
                         msg.to_did_hash, msg.from_did_hash, endpoint_url, msg.retry_count
                     );
                     let ids = [msg.stream_id.as_str()];
-                    let _ = self
+                    if let Err(e) = self
                         .database
                         .forward_queue_ack(&self.config.consumer_group, &ids)
-                        .await;
-                    let _ = self.database.forward_queue_delete(&ids).await;
+                        .await
+                    {
+                        warn!("Failed to ACK abandoned entry: {e}");
+                    }
+                    if let Err(e) = self.database.forward_queue_delete(&ids).await {
+                        warn!("Failed to delete abandoned entry: {e}");
+                    }
 
                     // Send problem report to the original sender if we know their DID
                     if self.config.report_errors && !msg.from_did.is_empty() {
@@ -466,14 +526,21 @@ impl ForwardingProcessor {
 
                     // ACK the old entry
                     let ids = [msg.stream_id.as_str()];
-                    let _ = self
+                    if let Err(e) = self
                         .database
                         .forward_queue_ack(&self.config.consumer_group, &ids)
-                        .await;
-                    let _ = self.database.forward_queue_delete(&ids).await;
+                        .await
+                    {
+                        warn!("Failed to ACK retry entry: {e}");
+                    }
+                    if let Err(e) = self.database.forward_queue_delete(&ids).await {
+                        warn!("Failed to delete retry entry: {e}");
+                    }
 
                     // Enqueue new entry with incremented retry count
-                    let _ = self.database.forward_queue_enqueue(&retry_entry).await;
+                    if let Err(e) = self.database.forward_queue_enqueue(&retry_entry).await {
+                        error!("Failed to re-enqueue retry entry (message may be lost): {e}");
+                    }
                 }
             }
 
@@ -521,6 +588,7 @@ impl ForwardingProcessor {
                 &msg.from_did_hash,
                 Some("SYSTEM"),
                 now + 300,
+                0, // No MAXLEN for system-generated problem reports
             )
             .await
         {
@@ -747,19 +815,27 @@ mod tests {
     #[test]
     fn test_rate_tracker_record_increases_rate() {
         let mut tracker = EndpointRateTracker::new(60);
-        let rate = tracker.record_and_rate();
+        let rate = tracker.record_and_rate(1);
         // 1 message in 60 seconds = 1/60 * 10 = 0.1667 msgs/10s
         assert!(rate > 0.0);
     }
 
     #[test]
+    fn test_rate_tracker_batch_record() {
+        let mut tracker = EndpointRateTracker::new(60);
+        let rate = tracker.record_and_rate(10);
+        // 10 messages in 60 second window = 10/60 * 10 = ~1.667 msgs/10s
+        assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
+        assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
+    }
+
+    #[test]
     fn test_rate_tracker_multiple_records() {
         let mut tracker = EndpointRateTracker::new(60);
-        for _ in 0..10 {
-            tracker.record_and_rate();
-        }
+        tracker.record_and_rate(5);
+        tracker.record_and_rate(5);
         let rate = tracker.current_rate();
-        // 10 messages in 60 second window = 10/60 * 10 = ~1.667 msgs/10s
+        // 10 messages in 60 second window
         assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
         assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
     }
@@ -767,8 +843,7 @@ mod tests {
     #[test]
     fn test_rate_tracker_zero_window_returns_zero() {
         let mut tracker = EndpointRateTracker::new(0);
-        // With a zero-second window, all timestamps get pruned immediately
-        let rate = tracker.record_and_rate();
+        let rate = tracker.record_and_rate(1);
         assert_eq!(rate, 0.0);
     }
 

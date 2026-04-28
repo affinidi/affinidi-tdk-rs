@@ -1,7 +1,5 @@
 [database]
 database_url = "redis://127.0.0.1/"
-# database_pool_size is deprecated and ignored (multiplexed connection used)
-database_pool_size = 10
 database_timeout = 2
 
 [processors.forwarding]

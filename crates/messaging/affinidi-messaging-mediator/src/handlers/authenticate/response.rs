@@ -2,7 +2,7 @@ use super::super::message_inbound::InboundMessage;
 use super::AuthenticationChallenge;
 use super::helpers::{_create_access_token, _create_refresh_token, create_random_string};
 use crate::common::time::unix_timestamp_secs;
-use crate::didcomm_compat::{self, MetaEnvelope};
+use crate::didcomm_compat::MetaEnvelope;
 use crate::{SharedData, common::acl_checks::ACLCheck, database::session::SessionState};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
@@ -145,12 +145,12 @@ pub async fn authentication_response(
         };
 
         // Unpack the message
-        let (msg, unpack_metadata) = match didcomm_compat::unpack(
-            &s,
-            &state.did_resolver,
-            &*state.config.security.mediator_secrets,
-        )
-        .await
+        let (msg, unpack_metadata) = match envelope
+            .unpack(
+                &state.did_resolver,
+                &*state.config.security.mediator_secrets,
+            )
+            .await
         {
             Ok(ok) => ok,
             Err(e) => {

@@ -19,6 +19,7 @@ use std::{fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
+pub mod commands;
 pub mod common;
 pub mod database;
 #[cfg(feature = "didcomm")]

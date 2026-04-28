@@ -1,28 +1,64 @@
+//! Config-loading helpers for the mediator.
+//!
+//! After the unified secrets migration, credentials and operating keys
+//! are loaded through `MediatorSecrets` rather than per-field URL schemes.
+//! The helpers that remain here handle:
+//!
+//! - Reading the TOML file + applying env overrides.
+//! - Resolving `mediator_did` / `admin_did` from either a literal DID or
+//!   `aws_parameter_store://<name>`.
+//! - Reading the self-hosted DID document from `file://` or
+//!   `aws_parameter_store://`.
+//! - Hostname resolution and forwarding-loop protection.
+
 use affinidi_did_common::service::Endpoint;
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
+#[cfg(feature = "aws")]
 use aws_config::SdkConfig;
-use aws_sdk_secretsmanager;
+#[cfg(feature = "aws")]
 use aws_sdk_ssm::types::ParameterType;
-use base64::prelude::*;
 use std::{
-    env,
     fs::File,
     io::{self, BufRead},
     path::Path,
-    sync::Arc,
 };
 use tracing::{error, info, warn};
-use vta_sdk::client::VtaClient;
 
-use super::VtaConfigRaw;
+use super::AwsConfig;
 use super::processors::ForwardingConfig;
 
-/// Parse a `scheme://path` config string, returning `(scheme, path)`.
-///
-/// Used for credential, secret, and DID config fields that support
-/// multiple backends (e.g., `file://`, `aws_secrets://`, `vta://`, `keyring://`).
+/// Check if any DID-resolution field uses `aws_parameter_store://`,
+/// requiring the AWS SDK to be initialised. Secret-store backends are
+/// excluded — those are handled via `MediatorSecrets`, which owns its own
+/// AWS SDK client when the `secrets-aws` feature is enabled.
+pub(crate) fn config_needs_aws(raw: &super::ConfigRaw) -> bool {
+    let aws_param = |s: &str| s.starts_with("aws_parameter_store://");
+    aws_param(&raw.mediator_did)
+        || aws_param(&raw.server.admin_did)
+        || raw
+            .server
+            .did_web_self_hosted
+            .as_ref()
+            .is_some_and(|s| aws_param(s))
+}
+
+/// Extract the AWS `SdkConfig` from an `Option<AwsConfig>`, returning a clear
+/// error when AWS is needed but not available.
+#[cfg(feature = "aws")]
+fn require_aws_config<'a>(
+    aws_config: &'a Option<AwsConfig>,
+    context: &str,
+) -> Result<&'a SdkConfig, MediatorError> {
+    aws_config.as_ref().ok_or_else(|| {
+        MediatorError::ConfigError(
+            12,
+            "NA".into(),
+            format!("{context} requires AWS but AWS SDK was not initialized"),
+        )
+    })
+}
+
 fn parse_scheme<'a>(input: &'a str, field_name: &str) -> Result<(&'a str, &'a str), MediatorError> {
     input.split_once("://").ok_or_else(|| {
         MediatorError::ConfigError(
@@ -33,7 +69,6 @@ fn parse_scheme<'a>(input: &'a str, field_name: &str) -> Result<(&'a str, &'a st
     })
 }
 
-/// Override a String config field with an environment variable if set.
 macro_rules! env_override {
     ($field:expr, $env_var:expr) => {
         if let Ok(val) = std::env::var($env_var) {
@@ -42,7 +77,6 @@ macro_rules! env_override {
     };
 }
 
-/// Override an Option<String> config field with an environment variable if set.
 macro_rules! env_override_opt {
     ($field:expr, $env_var:expr) => {
         if let Ok(val) = std::env::var($env_var) {
@@ -51,27 +85,25 @@ macro_rules! env_override_opt {
     };
 }
 
-/// Apply environment variable overrides to the raw config.
-/// Env vars take priority over values in the TOML file.
+/// Apply environment variable overrides to the raw config. Env vars take
+/// priority over values in the TOML file.
 pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
-    // Top-level
     env_override!(config.log_level, "LOG_LEVEL");
     env_override!(config.log_json, "LOG_JSON");
     env_override!(config.mediator_did, "MEDIATOR_DID");
 
-    // Server
     env_override!(config.server.listen_address, "LISTEN_ADDRESS");
     env_override!(config.server.api_prefix, "API_PREFIX");
     env_override!(config.server.admin_did, "ADMIN_DID");
     env_override_opt!(config.server.did_web_self_hosted, "DID_WEB_SELF_HOSTED");
 
-    // Database
     env_override!(config.database.functions_file, "DATABASE_FUNCTIONS_FILE");
     env_override!(config.database.database_url, "DATABASE_URL");
-    env_override!(config.database.database_pool_size, "DATABASE_POOL_SIZE");
+    // DATABASE_POOL_SIZE removed — the mediator uses a multiplexed
+    // connection, there is no pool to size. Pre-0.14 deployments that
+    // set it can drop the env var with no behaviour change.
     env_override!(config.database.database_timeout, "DATABASE_TIMEOUT");
 
-    // Security
     env_override!(config.security.mediator_acl_mode, "MEDIATOR_ACL_MODE");
     env_override!(config.security.global_acl_default, "GLOBAL_DEFAULT_ACL");
     env_override!(
@@ -82,14 +114,9 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         config.security.local_direct_delivery_allow_anon,
         "LOCAL_DIRECT_DELIVERY_ALLOW_ANON"
     );
-    env_override!(config.security.mediator_secrets, "MEDIATOR_SECRETS");
     env_override!(config.security.use_ssl, "USE_SSL");
     env_override_opt!(config.security.ssl_certificate_file, "SSL_CERTIFICATE_FILE");
     env_override_opt!(config.security.ssl_key_file, "SSL_KEY_FILE");
-    env_override!(
-        config.security.jwt_authorization_secret,
-        "JWT_AUTHORIZATION_SECRET"
-    );
     env_override!(config.security.jwt_access_expiry, "JWT_ACCESS_EXPIRY");
     env_override!(config.security.jwt_refresh_expiry, "JWT_REFRESH_EXPIRY");
     env_override_opt!(config.security.cors_allow_origin, "CORS_ALLOW_ORIGIN");
@@ -110,11 +137,9 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "ADMIN_MESSAGES_EXPIRY"
     );
 
-    // Streaming
     env_override!(config.streaming.enabled, "STREAMING_ENABLED");
     env_override!(config.streaming.uuid, "STREAMING_UUID");
 
-    // DID Resolver
     env_override_opt!(config.did_resolver.address, "DID_RESOLVER_ADDRESS");
     env_override!(
         config.did_resolver.cache_capacity,
@@ -130,7 +155,6 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "DID_RESOLVER_NETWORK_LIMIT"
     );
 
-    // Limits
     env_override!(
         config.limits.attachments_max_count,
         "LIMIT_ATTACHMENTS_MAX_COUNT"
@@ -185,7 +209,6 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "LIMIT_DID_RATE_LIMIT_BURST"
     );
 
-    // Processors - Forwarding
     env_override!(
         config.processors.forwarding.enabled,
         "PROCESSOR_FORWARDING_ENABLED"
@@ -239,131 +262,13 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "PROCESSOR_FORWARDING_CONSUMER_GROUP"
     );
 
-    // Processors - Message Expiry Cleanup
     env_override!(
         config.processors.message_expiry_cleanup.enabled,
         "PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED"
     );
 
-    // VTA - create section from env vars if not present in TOML
-    if config.vta.is_none() {
-        if let Ok(credential) = env::var("VTA_CREDENTIAL") {
-            config.vta = Some(VtaConfigRaw {
-                credential,
-                context: env::var("VTA_CONTEXT").ok(),
-                url: env::var("VTA_URL").ok(),
-            });
-        }
-    } else if let Some(vta) = config.vta.as_mut() {
-        env_override!(vta.credential, "VTA_CREDENTIAL");
-        env_override_opt!(vta.context, "VTA_CONTEXT");
-        env_override_opt!(vta.url, "VTA_URL");
-    }
-}
-
-/// Loads the secret data into the Config file.
-/// Supports file://, aws_secrets://, and vta:// (Verifiable Trust Agent) schemes.
-///
-/// For `vta://`, secrets are loaded from the pre-fetched [`DidSecretsBundle`] in the
-/// VTA startup result (already cached locally by `integration::startup()`).
-pub(crate) async fn load_secrets(
-    secrets_resolver: &Arc<ThreadedSecretsResolver>,
-    secrets: &str,
-    aws_config: &SdkConfig,
-    vta_bundle: Option<&vta_sdk::did_secrets::DidSecretsBundle>,
-) -> Result<(), MediatorError> {
-    let (scheme, path) = parse_scheme(secrets, "mediator_secrets")?;
-    info!("Loading secrets method({scheme}) path({path})");
-
-    // VTA path: use the pre-fetched secrets bundle from integration::startup().
-    // The bundle was already fetched from VTA (or loaded from cache) and contains
-    // multicodec-prefixed private keys with verification method IDs.
-    if scheme == "vta" {
-        let bundle = vta_bundle.ok_or_else(|| {
-            MediatorError::ConfigError(
-                12,
-                "NA".into(),
-                "VTA startup result not available but vta:// scheme used for mediator_secrets"
-                    .into(),
-            )
-        })?;
-
-        let mut secrets = Vec::with_capacity(bundle.secrets.len());
-        for entry in &bundle.secrets {
-            let secret = Secret::from_multibase(&entry.private_key_multibase, Some(&entry.key_id))
-                .map_err(|e| {
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("Could not decode VTA secret '{}': {e}", entry.key_id),
-                    )
-                })?;
-            secrets.push(secret);
-        }
-
-        info!(
-            "Loading {} mediator Secret{} from VTA",
-            secrets.len(),
-            if secrets.len() == 1 { "" } else { "s" }
-        );
-        secrets_resolver.insert_vec(&secrets).await;
-        return Ok(());
-    }
-
-    // File / AWS path: fetch JSON content then parse
-    let content: String = match scheme {
-        "file" => read_file_lines(path)?.concat(),
-        "aws_secrets" => {
-            let asm = aws_sdk_secretsmanager::Client::new(aws_config);
-
-            let response = asm
-                .get_secret_value()
-                .secret_id(path)
-                .send()
-                .await
-                .map_err(|e| {
-                    error!("Could not get secret value. {e:?}");
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("Could not get secret value. {e:?}"),
-                    )
-                })?;
-            response.secret_string.ok_or_else(|| {
-                error!("No secret string found in response");
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    "No secret string found in response".into(),
-                )
-            })?
-        }
-        _ => {
-            return Err(MediatorError::ConfigError(
-                12,
-                "NA".into(),
-                "Invalid `mediator_secrets` format! Expecting file://, aws_secrets://, or vta:// ...".into(),
-            ));
-        }
-    };
-
-    let secrets: Vec<Secret> = serde_json::from_str(&content).map_err(|err| {
-        error!("Could not parse `mediator_secrets` JSON content. {err}");
-        MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            format!("Could not parse `mediator_secrets` JSON content. {err}"),
-        )
-    })?;
-
-    info!(
-        "Loading {} mediator Secret{}",
-        secrets.len(),
-        if secrets.is_empty() { "" } else { "s" }
-    );
-    secrets_resolver.insert_vec(&secrets).await;
-
-    Ok(())
+    env_override!(config.secrets.backend, "MEDIATOR_SECRETS_BACKEND");
+    env_override_opt!(config.secrets.cache_ttl, "MEDIATOR_SECRETS_CACHE_TTL");
 }
 
 /// Read the primary configuration file for the mediator.
@@ -381,19 +286,13 @@ pub(crate) fn read_config_file(file_name: &str) -> Result<super::ConfigRaw, Medi
         )
     })?;
 
-    // Apply environment variable overrides (env vars take priority over TOML values)
     apply_env_overrides(&mut config);
 
     Ok(config)
 }
 
 /// Reads a file and returns a vector of strings, one for each line in the file.
-/// It also strips any lines starting with a # (comments)
-/// You can join the Vec back into a single string with `.join("\n")`
-/// ```ignore
-/// let lines = read_file_lines("file.txt")?;
-/// let file_contents = lines.join("\n");
-/// ```
+/// Strips lines starting with `#` (comments).
 pub(crate) fn read_file_lines<P>(file_name: P) -> Result<Vec<String>, MediatorError>
 where
     P: AsRef<Path>,
@@ -417,7 +316,6 @@ where
 
     let mut lines = Vec::new();
     for line in io::BufReader::new(file).lines().map_while(Result::ok) {
-        // Strip comments out
         if !line.starts_with('#') {
             lines.push(line);
         }
@@ -426,108 +324,55 @@ where
     Ok(lines)
 }
 
-/// Converts the mediator_did config to a valid DID depending on source.
-/// Supports did://, aws_parameter_store://, and vta:// (Verifiable Trust Agent) schemes.
+/// Resolve a DID-producing config field.
+///
+/// Supported schemes:
+/// - `did://<did-string>` — literal DID.
+/// - `aws_parameter_store://<parameter-name>` — fetched at startup.
+///
+/// `vta://` is no longer supported here; when VTA integration is enabled
+/// the mediator DID is discovered from the admin credential at startup.
 pub(crate) async fn read_did_config(
     did_config: &str,
-    aws_config: &SdkConfig,
+    #[cfg_attr(not(feature = "aws"), allow(unused_variables))] aws_config: &Option<AwsConfig>,
     field_name: &str,
-    vta_client: Option<&VtaClient>,
 ) -> Result<String, MediatorError> {
     let (scheme, path) = parse_scheme(did_config, field_name)?;
     let content: String = match scheme {
         "did" => path.to_string(),
-        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
-        "vta" => {
-            let client = vta_client.ok_or_else(|| {
-                MediatorError::ConfigError(
+        "aws_parameter_store" => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(
+                    aws_config,
+                    &format!("{field_name} (aws_parameter_store://)"),
+                )?;
+                aws_parameter_store(path, cfg).await?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = path;
+                return Err(MediatorError::ConfigError(
                     12,
                     "NA".into(),
-                    format!("VTA client not initialized but vta:// scheme used for {field_name}"),
-                )
-            })?;
-            let context_id = path;
-            info!("Fetching {field_name} from VTA context '{context_id}'");
-            let ctx = client.get_context(context_id).await.map_err(|e| {
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    format!("Could not fetch context '{context_id}' from VTA: {e}"),
-                )
-            })?;
-            ctx.did.ok_or_else(|| {
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    format!("VTA context '{context_id}' has no DID configured"),
-                )
-            })?
+                    format!(
+                        "aws_parameter_store:// for {field_name} requires the 'aws' feature. Rebuild with: cargo build --features aws"
+                    ),
+                ));
+            }
         }
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
                 "NA".into(),
                 format!(
-                    "Invalid {field_name} format! Expecting did://, aws_parameter_store://, or vta:// ..."
+                    "Invalid {field_name} format! Expected did:// or aws_parameter_store:// (got '{did_config}')"
                 ),
             ));
         }
     };
 
     Ok(content)
-}
-
-/// Converts the jwt_authorization_secret config to a valid JWT secret
-/// Can take a basic string, or fetch from AWS Secrets Manager
-pub(crate) async fn config_jwt_secret(
-    jwt_secret: &str,
-    aws_config: &SdkConfig,
-) -> Result<Vec<u8>, MediatorError> {
-    let (scheme, path) = parse_scheme(jwt_secret, "jwt_authorization_secret")?;
-    let content: String = match scheme {
-        "string" => path.to_string(),
-        "aws_secrets" => {
-            info!("Loading JWT secret from AWS Secrets Manager");
-            let asm = aws_sdk_secretsmanager::Client::new(aws_config);
-
-            let response = asm
-                .get_secret_value()
-                .secret_id(path)
-                .send()
-                .await
-                .map_err(|e| {
-                    error!("Could not get secret value. {e:?}");
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("Could not get secret value. {e:?}"),
-                    )
-                })?;
-            response.secret_string.ok_or_else(|| {
-                error!("No secret string found in response");
-                MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    "No secret string found in response".into(),
-                )
-            })?
-        }
-        _ => return Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            "Invalid `jwt_authorization_secret` format! Expecting string:// or aws_secrets:// ..."
-                .into(),
-        )),
-    };
-
-    BASE64_URL_SAFE_NO_PAD.decode(content).map_err(|err| {
-        error!("Could not create JWT key pair. {err}");
-        MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            format!("Could not create JWT key pair. {err}"),
-        )
-    })
 }
 
 pub(crate) fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
@@ -559,6 +404,7 @@ pub(crate) fn get_hostname(host_name: &str) -> Result<String, MediatorError> {
     }
 }
 
+#[cfg(feature = "aws")]
 pub(crate) async fn aws_parameter_store(
     parameter_name: &str,
     aws_config: &SdkConfig,
@@ -567,7 +413,6 @@ pub(crate) async fn aws_parameter_store(
 
     let response = ssm
         .get_parameter()
-        // .set_name(Some(parts[1].to_string()))
         .set_name(Some(parameter_name.to_string()))
         .send()
         .await
@@ -623,12 +468,27 @@ pub(crate) async fn aws_parameter_store(
 /// Reads document from file or aws_parameter_store
 pub(crate) async fn read_document(
     document_path: &str,
-    aws_config: &SdkConfig,
+    #[cfg_attr(not(feature = "aws"), allow(unused_variables))] aws_config: &Option<AwsConfig>,
 ) -> Result<String, MediatorError> {
     let (scheme, path) = parse_scheme(document_path, "document_path")?;
     let content: String = match scheme {
         "file" => read_file_lines(path)?.concat(),
-        "aws_parameter_store" => aws_parameter_store(path, aws_config).await?,
+        "aws_parameter_store" => {
+            #[cfg(feature = "aws")]
+            {
+                let cfg = require_aws_config(aws_config, "document_path (aws_parameter_store://)")?;
+                aws_parameter_store(path, cfg).await?
+            }
+            #[cfg(not(feature = "aws"))]
+            {
+                let _ = path;
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "aws_parameter_store:// requires the 'aws' feature. Rebuild with: cargo build --features aws".into(),
+                ));
+            }
+        }
         _ => {
             return Err(MediatorError::ConfigError(
                 12,
@@ -640,113 +500,6 @@ pub(crate) async fn read_document(
     };
 
     Ok(content)
-}
-
-/// Loads the VTA credential from the configured source.
-/// Supported schemes:
-/// - `string://<base64url>` - Direct credential string (for CI/CD via env vars)
-/// - `aws_secrets://<secret_name>` - Load from AWS Secrets Manager
-/// - `keyring://<service>/<user>` - Load from OS keyring (requires `vta-keyring` feature)
-pub(crate) async fn load_vta_credential(
-    credential_config: &str,
-    #[cfg_attr(not(feature = "vta-aws-secrets"), allow(unused_variables))] aws_config: &SdkConfig,
-) -> Result<String, MediatorError> {
-    let (scheme, path) = parse_scheme(credential_config, "vta.credential")?;
-
-    match scheme {
-        "string" => {
-            info!("Loading VTA credential from config/environment");
-            Ok(path.to_string())
-        }
-        "aws_secrets" => {
-            #[cfg(feature = "vta-aws-secrets")]
-            {
-                info!("Loading VTA credential from AWS Secrets Manager");
-                let asm = aws_sdk_secretsmanager::Client::new(aws_config);
-                let response = asm
-                    .get_secret_value()
-                    .secret_id(path)
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        error!("Could not get VTA credential from AWS Secrets Manager. {e:?}");
-                        MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            format!("Could not get VTA credential from AWS Secrets Manager. {e:?}"),
-                        )
-                    })?;
-                response.secret_string.ok_or_else(|| {
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        "No secret string found in AWS Secrets Manager response for VTA credential"
-                            .into(),
-                    )
-                })
-            }
-            #[cfg(not(feature = "vta-aws-secrets"))]
-            {
-                Err(MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    "aws_secrets:// for VTA credentials requires the 'vta-aws-secrets' feature. \
-                     Rebuild with: cargo build --features vta-aws-secrets"
-                        .into(),
-                ))
-            }
-        }
-        "keyring" => {
-            #[cfg(feature = "vta-keyring")]
-            {
-                info!("Loading VTA credential from OS keyring");
-                let keyring_parts: Vec<&str> = path.splitn(2, '/').collect();
-                let (service, user) = match keyring_parts.len() {
-                    2 => (keyring_parts[0], keyring_parts[1]),
-                    1 => (keyring_parts[0], "credential"),
-                    _ => {
-                        return Err(MediatorError::ConfigError(
-                            12,
-                            "NA".into(),
-                            "Invalid keyring path. Expected keyring://service or keyring://service/user".into(),
-                        ));
-                    }
-                };
-                let entry = keyring::Entry::new(service, user).map_err(|e| {
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!("Could not access keyring entry '{service}/{user}': {e}"),
-                    )
-                })?;
-                entry.get_password().map_err(|e| {
-                    MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!(
-                            "Could not read VTA credential from keyring '{service}/{user}': {e}"
-                        ),
-                    )
-                })
-            }
-            #[cfg(not(feature = "vta-keyring"))]
-            {
-                Err(MediatorError::ConfigError(
-                    12,
-                    "NA".into(),
-                    "keyring:// requires the 'vta-keyring' feature. Rebuild with: cargo build --features vta-keyring".into(),
-                ))
-            }
-        }
-        _ => Err(MediatorError::ConfigError(
-            12,
-            "NA".into(),
-            format!(
-                "Invalid VTA credential scheme '{}'. Expected string://, aws_secrets://, or keyring://",
-                scheme
-            ),
-        )),
-    }
 }
 
 /// Creates a set of URI's that can be used to detect if forwarding loopbacks to the mediator could occur
@@ -768,10 +521,8 @@ pub(crate) async fn load_forwarding_protection_blocks(
         }
     };
 
-    // Add the mediator DID to the blocked list
     blocked_dids.push(mediator_did.into());
 
-    // Iterate through each DID that we need to block
     for did in blocked_dids {
         let doc = did_resolver.resolve(&did).await.map_err(|err| {
             MediatorError::DIDError(
@@ -784,7 +535,6 @@ pub(crate) async fn load_forwarding_protection_blocks(
 
         forwarding_config.blocked_forwarding.insert(did.clone());
 
-        // Add the service endpoints to the forwarding protection list
         for service in doc.doc.service.iter() {
             match &service.service_endpoint {
                 Endpoint::Url(uri) => {

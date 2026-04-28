@@ -7,6 +7,13 @@ Cargo.lock
 
 docs
 
+# mediator-setup wizard generated artifacts (may land in any directory)
+**/conf/secrets.json
+**/conf/secrets-admin.json
+**/conf/keys/
+**/bootstrap-request.json
+**/bootstrap-request-vp.json
+
 # Superego
 .superego/
 CLAUDE.md

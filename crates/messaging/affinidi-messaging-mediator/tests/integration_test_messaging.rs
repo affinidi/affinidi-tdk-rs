@@ -381,7 +381,7 @@ async fn test_mediator_server() {
 }
 
 async fn _start_mediator_server() {
-    tokio::spawn(async move { start().await });
+    tokio::spawn(async move { start("conf/mediator.toml").await });
     println!("Server running");
 }
 

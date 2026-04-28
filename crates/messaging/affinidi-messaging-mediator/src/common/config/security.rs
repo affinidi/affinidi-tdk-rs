@@ -1,7 +1,6 @@
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::{MediatorSecrets, errors::MediatorError};
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
-use affinidi_secrets_resolver::ThreadedSecretsResolver;
-use aws_config::SdkConfig;
+use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use http::{
     HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
@@ -16,20 +15,20 @@ use std::{
 use tower_http::cors::CorsLayer;
 use vta_sdk::did_secrets::DidSecretsBundle;
 
-use super::helpers::{config_jwt_secret, load_secrets};
-
-/// Security configuration for the mediator
+/// Security configuration for the mediator.
+///
+/// JWT signing secret + operating keys are no longer in this struct — they
+/// live in the unified secret backend (`[secrets] backend = "..."` in
+/// `mediator.toml`) and are loaded during [`SecurityConfigRaw::convert`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SecurityConfigRaw {
     pub mediator_acl_mode: String,
     pub global_acl_default: String,
     pub local_direct_delivery_allowed: String,
     pub local_direct_delivery_allow_anon: String,
-    pub mediator_secrets: String,
     pub use_ssl: String,
     pub ssl_certificate_file: Option<String>,
     pub ssl_key_file: Option<String>,
-    pub jwt_authorization_secret: String,
     pub jwt_access_expiry: String,
     pub jwt_refresh_expiry: String,
     pub cors_allow_origin: Option<String>,
@@ -149,10 +148,25 @@ impl SecurityConfigRaw {
             .collect()
     }
 
+    /// Build the runtime `SecurityConfig` from the raw TOML values.
+    ///
+    /// Operating keys and the JWT signing secret are loaded from the
+    /// unified secret backend:
+    /// - **VTA mode** (admin credential present in the backend):
+    ///   `vta_bundle` is the freshly-fetched [`DidSecretsBundle`] (or the
+    ///   cached copy if the VTA was unreachable). Secrets are inserted
+    ///   into the resolver directly.
+    /// - **Self-hosted mode** (no admin credential, no VTA bundle):
+    ///   operating secrets come from the well-known
+    ///   [`OPERATING_SECRETS`](affinidi_messaging_mediator_common::OPERATING_SECRETS)
+    ///   key in the backend.
+    ///
+    /// The JWT secret is always loaded from the backend's `JWT_SECRET`
+    /// well-known entry — no inline `string://` path.
     pub(crate) async fn convert(
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
-        aws_config: &SdkConfig,
+        secrets: &MediatorSecrets,
         vta_bundle: Option<&DidSecretsBundle>,
     ) -> Result<SecurityConfig, MediatorError> {
         let warn_default = |field: &str, value: &str, default: &str| {
@@ -237,7 +251,6 @@ impl SecurityConfigRaw {
             ..SecurityConfig::default(secrets_resolver)
         };
 
-        // Check if conflicting config on anonymous and force session_match
         if !config.block_anonymous_outer_envelope && config.force_session_did_match {
             tracing::error!(
                 "Conflicting configuration: security.force_session_did_match can not be true when security.block_anonymous_outer_envelope is false"
@@ -248,7 +261,6 @@ impl SecurityConfigRaw {
             ));
         }
 
-        // Convert the default ACL Set into a GlobalACLSet
         config.global_acl_default = MediatorACLSet::from_string_ruleset(&self.global_acl_default)
             .map_err(|err| {
             tracing::error!("Couldn't parse global_acl_default config parameter. Reason: {err}");
@@ -264,21 +276,93 @@ impl SecurityConfigRaw {
                 CorsLayer::new().allow_origin(self.parse_cors_allow_origin(cors_allow_origin)?);
         }
 
-        // Load mediator secrets
-        load_secrets(
-            &config.mediator_secrets,
-            &self.mediator_secrets,
-            aws_config,
-            vta_bundle,
-        )
-        .await?;
+        // ── Populate the DIDComm secrets resolver ────────────────────────
+        if let Some(bundle) = vta_bundle {
+            // VTA mode: operating keys arrived via integration::startup.
+            tracing::info!(
+                "Loading {} operating secret(s) from VTA DidSecretsBundle",
+                bundle.secrets.len()
+            );
+            let converted = bundle
+                .secrets
+                .iter()
+                .map(|entry| {
+                    Secret::from_multibase(&entry.private_key_multibase, Some(&entry.key_id))
+                        .map_err(|e| {
+                            MediatorError::ConfigError(
+                                12,
+                                "NA".into(),
+                                format!(
+                                    "Could not decode VTA operating secret '{}': {e}",
+                                    entry.key_id
+                                ),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            config.mediator_secrets.insert_vec(&converted).await;
+        } else {
+            // Self-hosted mode: operating keys come from the well-known
+            // OPERATING_SECRETS entry in the backend.
+            match secrets
+                .load_entry::<Vec<Secret>>(
+                    affinidi_messaging_mediator_common::OPERATING_SECRETS,
+                    "operating-secrets",
+                )
+                .await
+            {
+                Ok(Some(secrets_vec)) => {
+                    tracing::info!(
+                        "Loading {} operating secret(s) from unified secret backend",
+                        secrets_vec.len()
+                    );
+                    config.mediator_secrets.insert_vec(&secrets_vec).await;
+                }
+                Ok(None) => {
+                    return Err(MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        "No operating secrets found. In self-hosted mode, the backend must \
+                         contain an entry at 'mediator/operating/secrets'. Run \
+                         `mediator-setup` to provision, or enable VTA integration."
+                            .into(),
+                    ));
+                }
+                Err(err) => {
+                    tracing::error!("Could not load operating secrets: {err}");
+                    return Err(MediatorError::ConfigError(
+                        12,
+                        "NA".into(),
+                        format!("Could not load operating secrets: {err}"),
+                    ));
+                }
+            }
+        }
 
-        // Create the JWT encoding and decoding keys
-        let jwt_secret = config_jwt_secret(&self.jwt_authorization_secret, aws_config).await?;
+        // ── JWT signing secret ───────────────────────────────────────────
+        let jwt_bytes = match secrets.load_jwt_secret().await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    "JWT signing secret is missing from the backend (well-known key \
+                     'mediator/jwt/secret'). Re-run `mediator-setup` to provision."
+                        .into(),
+                ));
+            }
+            Err(err) => {
+                return Err(MediatorError::ConfigError(
+                    12,
+                    "NA".into(),
+                    format!("Could not load JWT signing secret: {err}"),
+                ));
+            }
+        };
 
-        config.jwt_encoding_key = EncodingKey::from_ed_der(&jwt_secret);
+        config.jwt_encoding_key = EncodingKey::from_ed_der(&jwt_bytes);
 
-        let pair = Ed25519KeyPair::from_pkcs8(&jwt_secret).map_err(|err| {
+        let pair = Ed25519KeyPair::from_pkcs8(&jwt_bytes).map_err(|err| {
             tracing::error!("Could not create JWT key pair. {err}");
             MediatorError::ConfigError(
                 12,

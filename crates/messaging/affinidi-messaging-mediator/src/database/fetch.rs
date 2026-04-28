@@ -75,7 +75,7 @@ impl Database {
                 if let FetchDeletePolicy::Optimistic = options.delete_policy {
                     match self
                         .handler
-                        .delete_message(Some(session_id), did_hash, &message.msg_id, None)
+                        .delete_message(Some(session_id), did_hash, &message.msg_id, None, None)
                         .await
                     {
                         Ok(_) => {

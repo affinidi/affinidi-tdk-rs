@@ -15,13 +15,13 @@ pub mod handlers;
 pub(crate) mod initialization;
 pub mod list;
 pub(crate) mod messages;
+pub(crate) mod migrations;
 #[cfg(feature = "didcomm")]
 pub(crate) mod oob_discovery;
 pub mod session;
 pub mod stats;
 pub mod store;
 pub mod streaming;
-pub(crate) mod upgrades;
 
 /// Mediator-specific database wrapper around [`DatabaseHandler`].
 ///
@@ -35,12 +35,18 @@ pub struct Database {
 }
 
 impl Database {
-    /// Create a new Database with a circuit breaker.
-    /// Opens the circuit after 5 consecutive failures, recovers after 10 seconds.
-    pub fn new(handler: DatabaseHandler) -> Self {
+    /// Create a new Database with a configurable circuit breaker.
+    pub fn new(
+        handler: DatabaseHandler,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+    ) -> Self {
         Self {
             handler,
-            circuit_breaker: Arc::new(CircuitBreaker::new(5, 10)),
+            circuit_breaker: Arc::new(CircuitBreaker::new(
+                circuit_breaker_threshold,
+                circuit_breaker_recovery_secs,
+            )),
         }
     }
 

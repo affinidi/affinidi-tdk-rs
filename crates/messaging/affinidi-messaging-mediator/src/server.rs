@@ -8,7 +8,7 @@ use crate::{
         request_id::RequestIdLayer,
     },
     database::Database,
-    handlers::{application_routes, health_checker_handler, readiness_handler},
+    handlers::{admin_status, application_routes, health_checker_handler, readiness_handler},
     tasks::{
         forwarding_processor::ForwardingProcessor, statistics::statistics,
         websocket_streaming::StreamingTask,
@@ -27,7 +27,14 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{self, TraceLayer};
 use tracing::{Level, error, info, warn};
 
-pub async fn start() {
+/// Run the mediator HTTP server.
+///
+/// `config_path` is read at startup; the wizard, the `RotateAdmin`
+/// subcommand, and ad-hoc operator runs all share this entry point so
+/// they pick up the same `[secrets]` backend, ACLs, and TLS settings.
+/// `conf/mediator.toml` (relative to CWD) was the historical default and
+/// is what `Cli::config` falls back to when the operator omits `--config`.
+pub async fn start(config_path: &str) {
     let ansi = env::var("LOCAL").is_ok();
 
     if ansi {
@@ -61,7 +68,7 @@ pub async fn start() {
 
     println!("[Loading Affinidi Secure Messaging Mediator configuration]");
 
-    let config = init("conf/mediator.toml", ansi)
+    let config = init(config_path, ansi)
         .await
         .expect("Couldn't initialize mediator!");
 
@@ -86,7 +93,11 @@ pub async fn start() {
     };
 
     // Convert from the common generic DatabaseHandler to the Mediator specific Database
-    let database = Database::new(database);
+    let database = Database::new(
+        database,
+        config.database.circuit_breaker_threshold,
+        config.database.circuit_breaker_recovery_secs,
+    );
 
     database
         .initialize(&config)
@@ -143,9 +154,11 @@ pub async fn start() {
     if config.processors.message_expiry_cleanup.enabled {
         let _database = database.handler.clone(); // Clone the DatabaseHandler for the message expiry cleanup thread
         let _config = config.processors.message_expiry_cleanup.clone();
+        let _admin_did_hash = config.mediator_did_hash.clone();
         let cleanup_token = shutdown_token.clone();
         tokio::spawn(async move {
-            let _processor = MessageExpiryCleanupProcessor::new(_config, _database);
+            let _processor =
+                MessageExpiryCleanupProcessor::new(_config, _database, _admin_did_hash);
             tokio::select! {
                 result = _processor.start() => {
                     if let Err(e) = result {
@@ -165,7 +178,13 @@ pub async fn start() {
         let _config = config.processors.forwarding.clone();
         let fwd_token = shutdown_token.clone();
         tokio::spawn(async move {
-            let processor = ForwardingProcessor::new(_config, _database);
+            let processor = match ForwardingProcessor::new(_config, _database) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Failed to create forwarding processor: {}", e);
+                    return;
+                }
+            };
             tokio::select! {
                 result = processor.start() => {
                     if let Err(e) = result {
@@ -279,7 +298,12 @@ pub async fn start() {
         // Deep readiness check for load balancers and orchestrators
         .route(
             format!("{}readyz", &config.api_prefix).as_str(),
-            get(readiness_handler).with_state(shared_state),
+            get(readiness_handler).with_state(shared_state.clone()),
+        )
+        // Admin status endpoint for monitoring tools (mediator-monitor TUI, etc.)
+        .route(
+            format!("{}admin/status", &config.api_prefix).as_str(),
+            get(admin_status::admin_status_handler).with_state(shared_state),
         );
 
     // Add Prometheus metrics endpoint if metrics recorder is available
