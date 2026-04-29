@@ -74,10 +74,27 @@ impl AwsStore {
 #[cfg(feature = "secrets-aws")]
 pub(crate) struct AwsRetryPolicy;
 
+/// Join the `Display` form of `err` with every `source()` in its chain.
+/// `SdkError::Display` only emits the kind ("service error"); the actual
+/// AWS reason (`ResourceNotFoundException: ...`, `AccessDeniedException:
+/// User ... is not authorized`, etc.) lives inside `source()`. Without
+/// this both the retry classifier and the surfaced error message are
+/// blind to anything past the wrapper.
 #[cfg(feature = "secrets-aws")]
-impl<E: std::fmt::Display> RetryPolicy<E> for AwsRetryPolicy {
+fn format_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut cur = err.source();
+    while let Some(src) = cur {
+        parts.push(src.to_string());
+        cur = src.source();
+    }
+    parts.join(" | ")
+}
+
+#[cfg(feature = "secrets-aws")]
+impl<E: std::error::Error + 'static> RetryPolicy<E> for AwsRetryPolicy {
     fn classify(&self, err: &E) -> Retryable {
-        let msg = err.to_string();
+        let msg = format_error_chain(err);
         // Hard "do not retry" cases first — these are deterministic
         // misconfigurations, not transient failures. Retrying them
         // wastes time and clutters the audit log with bogus retries.
@@ -146,7 +163,7 @@ impl SecretStore for AwsStore {
         let response = match response {
             Ok(r) => r,
             Err(sdk_err) => {
-                let msg = sdk_err.to_string();
+                let msg = format_error_chain(&sdk_err);
                 if msg.contains("ResourceNotFoundException") {
                     return Ok(None);
                 }
@@ -200,7 +217,7 @@ impl SecretStore for AwsStore {
         .await;
         match put_result {
             Ok(_) => Ok(()),
-            Err(err) if err.to_string().contains("ResourceNotFoundException") => {
+            Err(err) if format_error_chain(&err).contains("ResourceNotFoundException") => {
                 let create_label = format!("CreateSecret({name})");
                 with_retry(&create_label, &AwsRetryPolicy, || {
                     let client = client.clone();
@@ -218,13 +235,16 @@ impl SecretStore for AwsStore {
                 .await
                 .map_err(|e| SecretStoreError::Unreachable {
                     backend: BACKEND_LABEL,
-                    reason: format!("CreateSecret({name}) failed: {e}"),
+                    reason: format!("CreateSecret({name}) failed: {}", format_error_chain(&e)),
                 })?;
                 Ok(())
             }
             Err(err) => Err(SecretStoreError::Unreachable {
                 backend: BACKEND_LABEL,
-                reason: format!("PutSecretValue({name}) failed: {err}"),
+                reason: format!(
+                    "PutSecretValue({name}) failed: {}",
+                    format_error_chain(&err)
+                ),
             }),
         }
     }
@@ -248,10 +268,10 @@ impl SecretStore for AwsStore {
         .await;
         match result {
             Ok(_) => Ok(()),
-            Err(err) if err.to_string().contains("ResourceNotFoundException") => Ok(()),
+            Err(err) if format_error_chain(&err).contains("ResourceNotFoundException") => Ok(()),
             Err(err) => Err(SecretStoreError::Unreachable {
                 backend: BACKEND_LABEL,
-                reason: format!("DeleteSecret({name}) failed: {err}"),
+                reason: format!("DeleteSecret({name}) failed: {}", format_error_chain(&err)),
             }),
         }
     }
@@ -287,7 +307,7 @@ impl SecretStore for AwsStore {
             .await
             .map_err(|err| SecretStoreError::Unreachable {
                 backend: BACKEND_LABEL,
-                reason: format!("ListSecrets failed: {err}"),
+                reason: format!("ListSecrets failed: {}", format_error_chain(&err)),
             })?;
 
             if let Some(entries) = response.secret_list {
@@ -311,19 +331,41 @@ impl SecretStore for AwsStore {
 mod policy_tests {
     use super::*;
 
-    /// Minimal stand-in error type for testing the policy's string
-    /// match without a live AWS SDK error to construct. The
-    /// classifier only sees `Display` so this is a safe stub.
+    /// Minimal stand-in error type for testing the policy's classifier
+    /// without a live AWS SDK error to construct. Optionally chains a
+    /// `source` so we can exercise the `format_error_chain` walker that
+    /// the classifier and surfaced error messages now rely on.
     #[derive(Debug)]
-    struct StubErr(&'static str);
+    struct StubErr {
+        msg: &'static str,
+        source: Option<Box<StubErr>>,
+    }
+    impl StubErr {
+        fn new(msg: &'static str) -> Self {
+            Self { msg, source: None }
+        }
+        fn with_source(msg: &'static str, source: StubErr) -> Self {
+            Self {
+                msg,
+                source: Some(Box::new(source)),
+            }
+        }
+    }
     impl std::fmt::Display for StubErr {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.0)
+            f.write_str(self.msg)
+        }
+    }
+    impl std::error::Error for StubErr {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|s| s as &(dyn std::error::Error + 'static))
         }
     }
 
     fn classify(msg: &'static str) -> Retryable {
-        AwsRetryPolicy.classify(&StubErr(msg))
+        AwsRetryPolicy.classify(&StubErr::new(msg))
     }
 
     #[test]
@@ -372,5 +414,35 @@ mod policy_tests {
             classify("some new error variant we have not seen before"),
             Retryable::No
         ));
+    }
+
+    #[test]
+    fn classifier_sees_inner_source_message() {
+        // The aws-sdk-rust SdkError::Display only emits "service error"
+        // — the actual exception name (e.g. AccessDeniedException) lives
+        // in the source chain. The classifier must walk it or every
+        // terminal/transient case looks the same.
+        let inner = StubErr::new("AccessDeniedException: User is not authorized");
+        let outer = StubErr::with_source("service error", inner);
+        assert!(matches!(AwsRetryPolicy.classify(&outer), Retryable::No));
+    }
+
+    #[test]
+    fn chain_walker_concatenates_with_pipe_separator() {
+        let inner = StubErr::new("InvalidParameterException: bad name");
+        let outer = StubErr::with_source("service error", inner);
+        let formatted = format_error_chain(&outer);
+        assert!(
+            formatted.contains("service error"),
+            "outer message must be present: {formatted}"
+        );
+        assert!(
+            formatted.contains("InvalidParameterException"),
+            "inner message must be present: {formatted}"
+        );
+        assert!(
+            formatted.contains(" | "),
+            "expected ' | ' separator: {formatted}"
+        );
     }
 }
