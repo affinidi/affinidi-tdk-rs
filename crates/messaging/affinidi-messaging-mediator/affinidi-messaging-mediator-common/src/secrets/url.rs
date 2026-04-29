@@ -142,8 +142,23 @@ fn parse_aws(rest: &str, raw: &str) -> Result<BackendUrl> {
     }
     Ok(BackendUrl::Aws {
         region: region.to_string(),
-        namespace: namespace.to_string(),
+        namespace: normalize_namespace(namespace, &['/', '-', '_', '.'], '/'),
     })
+}
+
+/// Append `default_sep` to `ns` unless it already ends in one of `existing_seps`
+/// (or is empty). The namespace is concatenated to keys without a separator at
+/// call sites, so a bare `mediator` would otherwise produce names like
+/// `mediatorprobe_xxx`. Operators who explicitly use a non-default separator
+/// (`mediator-`, `mediator_`) keep their choice.
+fn normalize_namespace(ns: &str, existing_seps: &[char], default_sep: char) -> String {
+    if ns.is_empty() || ns.ends_with(existing_seps) {
+        return ns.to_string();
+    }
+    let mut out = String::with_capacity(ns.len() + 1);
+    out.push_str(ns);
+    out.push(default_sep);
+    out
 }
 
 fn parse_gcp(rest: &str, raw: &str) -> Result<BackendUrl> {
@@ -161,7 +176,9 @@ fn parse_gcp(rest: &str, raw: &str) -> Result<BackendUrl> {
     }
     Ok(BackendUrl::Gcp {
         project: project.to_string(),
-        namespace: namespace.to_string(),
+        // GCP secret IDs only allow [A-Za-z0-9_-], so '/' is not a legal
+        // separator here — fall back to '-' for the auto-append.
+        namespace: normalize_namespace(namespace, &['-', '_'], '-'),
     })
 }
 
@@ -285,12 +302,73 @@ mod tests {
     }
 
     #[test]
+    fn aws_bare_namespace_gets_trailing_slash() {
+        // No trailing separator → '/' is appended so concatenation with
+        // a key produces 'glenn/vtc/mediator/probe' rather than the
+        // confusing 'glenn/vtc/mediatorprobe'.
+        assert_eq!(
+            parse_url("aws_secrets://us-east-1/glenn/vtc/mediator").unwrap(),
+            BackendUrl::Aws {
+                region: "us-east-1".into(),
+                namespace: "glenn/vtc/mediator/".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn aws_dash_namespace_is_preserved() {
+        // Operators who pick '-' as the separator (to keep IAM
+        // wildcards from spanning sibling apps) keep their choice.
+        assert_eq!(
+            parse_url("aws_secrets://us-east-1/mediator-").unwrap(),
+            BackendUrl::Aws {
+                region: "us-east-1".into(),
+                namespace: "mediator-".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn aws_empty_namespace_stays_empty() {
+        assert_eq!(
+            parse_url("aws_secrets://us-east-1/").unwrap(),
+            BackendUrl::Aws {
+                region: "us-east-1".into(),
+                namespace: String::new(),
+            }
+        );
+    }
+
+    #[test]
     fn gcp_ok() {
         assert_eq!(
             parse_url("gcp_secrets://my-proj/mediator-").unwrap(),
             BackendUrl::Gcp {
                 project: "my-proj".into(),
                 namespace: "mediator-".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn gcp_bare_namespace_gets_trailing_dash() {
+        // GCP secret IDs disallow '/', so '-' is the auto-append.
+        assert_eq!(
+            parse_url("gcp_secrets://my-proj/mediator").unwrap(),
+            BackendUrl::Gcp {
+                project: "my-proj".into(),
+                namespace: "mediator-".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn gcp_underscore_namespace_is_preserved() {
+        assert_eq!(
+            parse_url("gcp_secrets://my-proj/mediator_").unwrap(),
+            BackendUrl::Gcp {
+                project: "my-proj".into(),
+                namespace: "mediator_".into(),
             }
         );
     }
