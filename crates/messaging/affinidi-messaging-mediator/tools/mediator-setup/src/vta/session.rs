@@ -132,7 +132,7 @@ impl VtaSession {
     /// `did` slot (admin-only context — degenerate but possible).
     pub fn integration_did(&self) -> Option<&str> {
         match &self.reply {
-            VtaReply::Full(p) => Some(p.integration_did()),
+            VtaReply::Full(p) => p.integration_did(),
             VtaReply::AdminOnly(_) => None,
             VtaReply::ContextExport(b) => b.did.as_ref().map(|d| d.id.as_str()),
         }

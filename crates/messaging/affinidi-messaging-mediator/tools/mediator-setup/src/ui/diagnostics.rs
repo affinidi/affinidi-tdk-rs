@@ -106,7 +106,12 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
                         theme::info_style(),
                     )),
                     Line::from(Span::styled(
-                        format!("  Mediator DID: {}", provision.integration_did()),
+                        format!(
+                            "  Mediator DID: {}",
+                            provision
+                                .integration_did()
+                                .unwrap_or("(none — admin-rotated)")
+                        ),
                         theme::info_style(),
                     )),
                 ],

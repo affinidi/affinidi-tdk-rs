@@ -71,7 +71,7 @@ fn push_vta_section(out: &mut String, session: Option<&VtaSession>) {
     };
     let _ = writeln!(out, "  Admin DID:     {admin_did}");
     let mediator_did: Option<&str> = match &session.reply {
-        VtaReply::Full(p) => Some(p.integration_did()),
+        VtaReply::Full(p) => p.integration_did(),
         VtaReply::AdminOnly(_) => None,
         VtaReply::ContextExport(b) => b.did.as_ref().map(|d| d.id.as_str()),
     };

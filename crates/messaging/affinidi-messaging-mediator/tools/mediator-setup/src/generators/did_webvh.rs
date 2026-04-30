@@ -59,8 +59,8 @@ pub async fn generate_did_webvh(
     };
 
     // ── Mediator keys ──────────────────────────────────────────────
-    // Ed25519 signing (maps to the template's `#key-1`), X25519 derived
-    // from the same seed for key agreement (maps to `#key-2`).
+    // Ed25519 signing (maps to the template's `#key-0`), X25519 derived
+    // from the same seed for key agreement (maps to `#key-1`).
     let mut signing = Secret::generate_ed25519(None, None);
     let mut key_agreement = signing
         .to_x25519()
@@ -125,11 +125,11 @@ pub async fn generate_did_webvh(
 
     let final_did = result.did().to_string();
 
-    // Align runtime secret IDs with the resolved DID. `#key-1` is the
-    // signing slot, `#key-2` is the key-agreement slot — matches the
+    // Align runtime secret IDs with the resolved DID. `#key-0` is the
+    // signing slot, `#key-1` is the key-agreement slot — matches the
     // built-in template.
-    signing.id = format!("{final_did}#key-1");
-    key_agreement.id = format!("{final_did}#key-2");
+    signing.id = format!("{final_did}#key-0");
+    key_agreement.id = format!("{final_did}#key-1");
 
     let did_doc = serde_json::to_string(result.log_entry())?;
 
@@ -160,17 +160,17 @@ mod tests {
         let doc = &entry["state"];
 
         // Canonical shape from the `didcomm-mediator` template:
-        // - 2 verification methods (`#key-1`, `#key-2`), both `Multikey`
-        // - assertionMethod + authentication -> `#key-1`
-        // - keyAgreement -> `#key-2`
-        // - DIDCommMessaging service (`#didcomm`) with a single serviceEndpoint
-        //   object carrying `uri`, `accept`, `routingKeys`
+        // - 2 verification methods (`#key-0`, `#key-1`), both `Multikey`
+        // - assertionMethod + authentication -> `#key-0`
+        // - keyAgreement -> `#key-1`
+        // - DIDCommMessaging service (`#service`) with two serviceEndpoint
+        //   entries carrying `uri`, `accept`, `routingKeys` for HTTP + WSS
         // - Authentication service (`#auth`) pointing at `{URL}/authenticate`
         let vms = doc["verificationMethod"].as_array().unwrap();
         assert_eq!(vms.len(), 2);
         assert!(vms.iter().all(|vm| vm["type"] == "Multikey"));
-        assert!(vms[0]["id"].as_str().unwrap().ends_with("#key-1"));
-        assert!(vms[1]["id"].as_str().unwrap().ends_with("#key-2"));
+        assert!(vms[0]["id"].as_str().unwrap().ends_with("#key-0"));
+        assert!(vms[1]["id"].as_str().unwrap().ends_with("#key-1"));
 
         assert_eq!(doc["assertionMethod"].as_array().unwrap().len(), 1);
         assert_eq!(doc["authentication"].as_array().unwrap().len(), 1);
@@ -178,18 +178,27 @@ mod tests {
 
         let services = doc["service"].as_array().unwrap();
         assert_eq!(services.len(), 2);
-        assert_eq!(services[0]["type"], "DIDCommMessaging");
-        assert!(services[0]["id"].as_str().unwrap().ends_with("#didcomm"));
-        let endpoint = &services[0]["serviceEndpoint"];
+        // `type` is now an array (`["DIDCommMessaging"]`) per the
+        // multi-transport template, and the id is `#service`.
+        assert_eq!(services[0]["type"][0], "DIDCommMessaging");
+        assert!(services[0]["id"].as_str().unwrap().ends_with("#service"));
+        let endpoints = services[0]["serviceEndpoint"].as_array().unwrap();
+        assert_eq!(endpoints.len(), 2);
         assert_eq!(
-            endpoint["uri"].as_str().unwrap(),
+            endpoints[0]["uri"].as_str().unwrap(),
             "https://mediator.example.com/mediator/v1"
         );
-        let accept = endpoint["accept"].as_array().unwrap();
+        // WS_URL is auto-derived by the template renderer: scheme swap
+        // plus `/ws` suffix on the path.
+        assert_eq!(
+            endpoints[1]["uri"].as_str().unwrap(),
+            "wss://mediator.example.com/mediator/v1/ws"
+        );
+        let accept = endpoints[0]["accept"].as_array().unwrap();
         assert_eq!(accept.len(), 1);
         assert_eq!(accept[0], "didcomm/v2");
 
-        assert_eq!(services[1]["type"], "Authentication");
+        assert_eq!(services[1]["type"][0], "Authentication");
         assert!(services[1]["id"].as_str().unwrap().ends_with("#auth"));
         assert_eq!(
             services[1]["serviceEndpoint"].as_str().unwrap(),
@@ -205,7 +214,7 @@ mod tests {
         for secret in &result.secrets {
             assert!(secret.id.starts_with(&result.did));
         }
-        assert!(result.secrets[0].id.ends_with("#key-1"));
-        assert!(result.secrets[1].id.ends_with("#key-2"));
+        assert!(result.secrets[0].id.ends_with("#key-0"));
+        assert!(result.secrets[1].id.ends_with("#key-1"));
     }
 }

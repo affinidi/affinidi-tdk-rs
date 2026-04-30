@@ -847,7 +847,7 @@ fn build_did_secrets_bundle(
             },
         ];
         return Some(DidSecretsBundle {
-            did: provision.integration_did().to_string(),
+            did: provision.integration_did()?.to_string(),
             secrets,
         });
     }
@@ -1083,7 +1083,16 @@ async fn generate_and_write(
             let from_full = vta_session.and_then(|s| s.as_full_provision());
             let from_export = vta_session.and_then(|s| s.as_context_export());
             if let Some(provision) = from_full {
-                let integration_did = provision.integration_did().to_string();
+                let integration_did = provision
+                    .integration_did()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "VTA Full reply has no integration DID — the AdminRotation \
+                             flow can't drive a mediator (`did_method = vta`); \
+                             re-run with a FullSetup intent or pick a different did_method."
+                        )
+                    })?
+                    .to_string();
                 println!("  VTA-minted mediator DID: {integration_did}");
 
                 // Persist the integration DID's private keys as

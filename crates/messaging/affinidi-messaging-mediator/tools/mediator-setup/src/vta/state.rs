@@ -352,7 +352,14 @@ impl VtaConnectState {
             return;
         };
         let did = match &conn.reply {
-            SdkVtaReply::Full(p) => p.integration_did().to_string(),
+            SdkVtaReply::Full(p) => match p.integration_did() {
+                Some(did) => did.to_string(),
+                None => {
+                    self.clipboard_status =
+                        Some("AdminRotation flow — no VTA-minted mediator DID".into());
+                    return;
+                }
+            },
             SdkVtaReply::AdminOnly(_) => {
                 self.clipboard_status = Some("AdminOnly mode — no VTA-minted mediator DID".into());
                 return;
