@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 /*!
 # affinidi-tdk-common
 
@@ -157,9 +158,15 @@ impl TDKSharedState {
             sr
         };
 
-        // Load the environment first — its `ssl_certificates` feed the
-        // HTTPS client we build in the next step.
-        let environment = if config.load_environment {
+        // Resolve the environment in priority order:
+        // 1. pre-built env supplied via TDKConfigBuilder::with_environment,
+        // 2. file-load via environment_path + environment_name (when
+        //    load_environment is true),
+        // 3. default empty environment.
+        // Its `ssl_certificates` feed the HTTPS client we build next.
+        let environment = if let Some(env) = config.prebuilt_environment.clone() {
+            env
+        } else if config.load_environment {
             match TDKEnvironments::fetch_from_file(
                 Some(&config.environment_path),
                 &config.environment_name,

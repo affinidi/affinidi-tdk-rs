@@ -10,7 +10,7 @@ use affinidi_did_authentication::CustomAuthHandlers;
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfig};
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 
-use crate::errors::TDKError;
+use crate::{environments::TDKEnvironment, errors::TDKError};
 
 const DEFAULT_ENVIRONMENT_PATH: &str = "environments.json";
 
@@ -29,6 +29,11 @@ pub struct TDKConfig {
     pub(crate) authentication_cache_limit: usize,
     pub(crate) use_atm: bool,
     pub(crate) custom_auth_handlers: Option<CustomAuthHandlers>,
+    /// Pre-built environment supplied via
+    /// [`TDKConfigBuilder::with_environment`]. When `Some`, takes priority
+    /// over the file-load path at [`crate::TDKSharedState::new`] time and
+    /// `load_environment` is ignored.
+    pub(crate) prebuilt_environment: Option<TDKEnvironment>,
 }
 
 impl TDKConfig {
@@ -86,6 +91,13 @@ impl TDKConfig {
     pub fn custom_auth_handlers(&self) -> Option<&CustomAuthHandlers> {
         self.custom_auth_handlers.as_ref()
     }
+
+    /// Pre-built environment supplied via
+    /// [`TDKConfigBuilder::with_environment`], if any. Wins over the file
+    /// loader at [`crate::TDKSharedState::new`] time when present.
+    pub fn prebuilt_environment(&self) -> Option<&TDKEnvironment> {
+        self.prebuilt_environment.as_ref()
+    }
 }
 
 /// Manual `Debug` impl. The upstream `DIDCacheClient`,
@@ -119,6 +131,7 @@ impl std::fmt::Debug for TDKConfig {
                     .as_ref()
                     .map(|_| "<CustomAuthHandlers>"),
             )
+            .field("prebuilt_environment", &self.prebuilt_environment)
             .finish()
     }
 }
@@ -134,6 +147,7 @@ pub struct TDKConfigBuilder {
     authentication_cache_limit: usize,
     use_atm: bool,
     custom_auth_handlers: Option<CustomAuthHandlers>,
+    prebuilt_environment: Option<TDKEnvironment>,
 }
 
 impl Default for TDKConfigBuilder {
@@ -148,6 +162,7 @@ impl Default for TDKConfigBuilder {
             authentication_cache_limit: 1_000,
             use_atm: true,
             custom_auth_handlers: None,
+            prebuilt_environment: None,
         }
     }
 }
@@ -169,6 +184,7 @@ impl TDKConfigBuilder {
             authentication_cache_limit: self.authentication_cache_limit,
             use_atm: self.use_atm,
             custom_auth_handlers: self.custom_auth_handlers,
+            prebuilt_environment: self.prebuilt_environment,
         })
     }
 
@@ -234,6 +250,18 @@ impl TDKConfigBuilder {
     /// Override the default DID Auth challenge / refresh flow.
     pub fn with_custom_auth_handlers(mut self, handlers: CustomAuthHandlers) -> Self {
         self.custom_auth_handlers = Some(handlers);
+        self
+    }
+
+    /// Supply a pre-built [`TDKEnvironment`] instead of loading one from disk.
+    ///
+    /// Takes priority over [`with_environment_path`](Self::with_environment_path)
+    /// and [`with_load_environment`](Self::with_load_environment) at
+    /// [`crate::TDKSharedState::new`] time. Useful when the host application
+    /// builds the environment in-memory (Tauri sidecars, embedded services,
+    /// integration tests).
+    pub fn with_environment(mut self, environment: TDKEnvironment) -> Self {
+        self.prebuilt_environment = Some(environment);
         self
     }
 }

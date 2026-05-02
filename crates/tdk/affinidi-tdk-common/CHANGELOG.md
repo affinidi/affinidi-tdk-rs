@@ -68,6 +68,27 @@ Major hardening + API tightening release. Multiple breaking changes; see
 
 ### Added
 
+- **`TDKConfigBuilder::with_environment(env)`** — supply a pre-built
+  [`TDKEnvironment`] instead of loading one from disk. Wins over the
+  file-load path at `TDKSharedState::new` time. Useful for embedded
+  contexts (Tauri sidecars, integration tests).
+- **`TDKError::Io(#[from] std::io::Error)` and
+  `TDKError::Json(#[from] serde_json::Error)`** — auto-converting variants
+  for the two most common foreign error sources. Non-breaking thanks to
+  `#[non_exhaustive]`. Lets downstream consumers use `?` for these
+  conversions without manual wrapping.
+- **`#![forbid(unsafe_code)]`** at the crate root — security signal,
+  zero-cost.
+- **`[package.metadata.docs.rs]`** with cross-platform target list so
+  docs.rs renders all four platform-store modules in `secrets`
+  (apple-keychain / apple-protected / windows / dbus-secret-service).
+- **`examples/`** directory:
+  - `keyring_roundtrip.rs` — `KeyringStore` save/read/delete demo
+    (uses `keyring_core::mock::Store` for safety; comment shows the
+    production swap).
+  - `shared_state.rs` — full `TDKConfig::builder` →
+    `TDKSharedState::new` → `add_profile` → `resolve_mediator` →
+    `shutdown` flow.
 - **`KeyringStore<'a>`** — namespace-scoped handle into the platform native
   credential store. `save` / `read` / `delete` / `load_into`.
 - **`secrets::init_keyring()`** — eager, optional keyring initialisation for
@@ -175,7 +196,16 @@ Major hardening + API tightening release. Multiple breaking changes; see
   features) to generate a fresh self-signed cert at test time, and round-
   trips it through `Verifier::new_with_extra_roots` — confirms the bytes
   are valid X.509, not just valid PEM framing.
-  **27 tests, all green.**
+- **Integration tests in `tests/`** — keyring tests moved to
+  `tests/keyring_store.rs` (separate process, isolated from the lib
+  unit-test `OnceLock` state on platform-store registration). New
+  `tests/end_to_end.rs` exercises the full public API as a downstream
+  consumer would: builder → `TDKSharedState` → `add_profile` →
+  `KeyringStore` → `shutdown`. Plus a smoke test for
+  `create_http_client(&[])`.
+- Added `Io` / `Json` `From` round-trip tests + `init_keyring()` smoke
+  coverage.
+  **34 tests, all green** (28 unit, 4 keyring integration, 2 end-to-end).
 
 ### Migration
 

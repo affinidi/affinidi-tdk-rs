@@ -53,6 +53,16 @@ pub enum TDKError {
 
     #[error("Data Integrity Error")]
     DataIntegrity(#[from] DataIntegrityError),
+
+    /// Wraps any `std::io::Error` — file not found, permission denied,
+    /// broken pipe, etc. Surfaced via `?` from internal IO sites that have
+    /// no specific variant of their own.
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Wraps any `serde_json` (de)serialisation failure.
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 pub type Result<T> = std::result::Result<T, TDKError>;
@@ -98,5 +108,25 @@ mod tests {
     fn display_format_preserves_payload() {
         let e = TDKError::Authentication("token expired".into());
         assert_eq!(e.to_string(), "Authentication failed: token expired");
+    }
+
+    #[test]
+    fn io_error_converts_via_question_mark() {
+        fn produce() -> Result<()> {
+            let _file = std::fs::File::open("/nonexistent/should-not-exist")?;
+            Ok(())
+        }
+        let err = produce().unwrap_err();
+        assert!(matches!(err, TDKError::Io(_)));
+    }
+
+    #[test]
+    fn json_error_converts_via_question_mark() {
+        fn produce() -> Result<serde_json::Value> {
+            let v = serde_json::from_str::<serde_json::Value>("not-json")?;
+            Ok(v)
+        }
+        let err = produce().unwrap_err();
+        assert!(matches!(err, TDKError::Json(_)));
     }
 }
