@@ -53,7 +53,7 @@ async fn main() -> Result<(), ATMError> {
         "default".to_string()
     };
 
-    let mut environment =
+    let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
     println!("Using Environment: {}", environment_name);
 

@@ -160,10 +160,10 @@ impl StateStore {
                         state.settings.show_settings_popup = !state.settings.show_settings_popup;
                     },
                     Action::SettingsCheck { settings } => {
-                        settings.check(&mut state, &tdk.did_resolver()).await;
+                        settings.check(&mut state, tdk.did_resolver()).await;
                     }
                     Action::SettingsUpdate { settings } => {
-                        if settings.update(&mut state, &tdk.did_resolver()).await {
+                        if settings.update(&mut state, tdk.did_resolver()).await {
                             state.settings.show_settings_popup = false;
                         }
                     }
