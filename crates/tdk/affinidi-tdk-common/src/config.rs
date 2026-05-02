@@ -72,7 +72,6 @@ pub struct TDKConfigBuilder {
     /// Default: 1000
     authentication_cache_limit: usize,
 
-    #[cfg(feature = "messaging")]
     /// Use Affinidi Trusted Messaging
     /// Default: true
     /// NOTE: You can specify an externally configured ATM instance when instantiating TDK which will override this
@@ -92,7 +91,6 @@ impl Default for TDKConfigBuilder {
             load_environment: true,
             environment_name: None,
             authentication_cache_limit: 1_000,
-            #[cfg(feature = "messaging")]
             use_atm: true,
             custom_auth_handlers: None,
         }
@@ -117,7 +115,6 @@ impl TDKConfigBuilder {
             load_environment: self.load_environment,
             environment_name: self.environment_name.unwrap_or("default".into()),
             authentication_cache_limit: self.authentication_cache_limit,
-            #[cfg(feature = "messaging")]
             use_atm: self.use_atm,
             custom_auth_handlers: self.custom_auth_handlers,
         })
@@ -244,7 +241,6 @@ impl TDKConfigBuilder {
         self
     }
 
-    #[cfg(feature = "messaging")]
     /// Should TDK create an ATM instance internally?
     /// Defaults: true
     /// Example:
