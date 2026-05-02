@@ -201,7 +201,7 @@ pub(crate) async fn init_remote_mediator(
             .interact()
             .unwrap()
         {
-            let admin_did = Input::with_theme(theme)
+            let admin_did: String = Input::with_theme(theme)
                 .with_prompt("Admin DID")
                 .interact_text()
                 .unwrap();
@@ -217,12 +217,7 @@ pub(crate) async fn init_remote_mediator(
                     .blink()
                     .red()
             );
-            Some(TDKProfile {
-                alias: "Admin".to_string(),
-                did: admin_did,
-                mediator: Some(mediator.to_string()),
-                secrets: vec![],
-            })
+            Some(TDKProfile::new("Admin", &admin_did, Some(mediator), vec![]))
         } else {
             None
         }
@@ -296,12 +291,12 @@ pub(crate) async fn init_remote_mediator(
     // Get admin account info
     let admin_did = _admin_did(&mediator_did, theme);
 
-    let environment = TDKEnvironment {
-        default_mediator: Some(mediator_did.clone()),
-        profiles: std::collections::HashMap::new(),
-        admin_did,
-        ssl_certificates,
-    };
+    let mut environment = TDKEnvironment::default();
+    environment.set_default_mediator(Some(mediator_did.clone()));
+    if let Some(admin) = admin_did {
+        environment.set_admin_did(Some(admin));
+    }
+    environment.set_ssl_certificate_paths(ssl_certificates);
 
     Ok((
         MediatorType::Remote,
@@ -458,12 +453,12 @@ pub(crate) async fn init_local_mediator(
         );
     }
 
-    let environment = TDKEnvironment {
-        default_mediator: new_mediator_config.mediator_did.clone(),
-        profiles: std::collections::HashMap::new(),
-        admin_did: Some(admin_did),
-        ssl_certificates: vec!["./affinidi-messaging-mediator/conf/keys/client.chain".to_string()],
-    };
+    let mut environment = TDKEnvironment::default();
+    environment.set_default_mediator(new_mediator_config.mediator_did.clone());
+    environment.set_admin_did(Some(admin_did));
+    environment.set_ssl_certificate_paths(vec![
+        "./affinidi-messaging-mediator/conf/keys/client.chain".to_string(),
+    ]);
     Ok((
         MediatorType::Local,
         save_environment(theme, environments, environment, "local")?,

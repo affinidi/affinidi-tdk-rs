@@ -68,17 +68,19 @@ async fn main() -> Result<(), ATMError> {
     )
     .await?;
 
-    let environment = &tdk.get_shared_state().environment;
+    let _shared = tdk.get_shared_state();
+    let environment = _shared.environment();
     let atm = tdk.atm.clone().unwrap();
 
     // Add and activate the admin profile
-    let tdk_admin = if let Some(admin) = &environment.admin_did {
+    let admin_opt = environment.admin_did();
+    let tdk_admin = if let Some(admin) = admin_opt {
         tdk.add_profile(admin).await;
         admin
     } else {
-        return Err(ATMError::ConfigError(
-            format!("ADMIN not found in Profile: {}", environment_name).to_string(),
-        ));
+        return Err(ATMError::ConfigError(format!(
+            "ADMIN not found in Profile: {environment_name}"
+        )));
     };
     let atm_admin = atm
         .profile_add(&ATMProfile::from_tdk_profile(&atm, tdk_admin).await?, true)
@@ -107,7 +109,7 @@ async fn main() -> Result<(), ATMError> {
     }
 
     // Add and activate the non-admin profile
-    let tdk_mallory = if let Some(mallory) = environment.profiles.get("Mallory") {
+    let tdk_mallory = if let Some(mallory) = environment.profiles().get("Mallory") {
         tdk.add_profile(mallory).await;
         mallory
     } else {
@@ -147,11 +149,14 @@ async fn main() -> Result<(), ATMError> {
     }
 
     // Mediator for this demo
-    let Some(mediator) = environment.default_mediator.clone() else {
-        return Err(ATMError::ConfigError(
-            format!("Mediator not found in Environment: {}", environment_name).to_string(),
-        ));
-    };
+    let mediator = environment
+        .default_mediator()
+        .ok_or_else(|| {
+            ATMError::ConfigError(format!(
+                "Mediator not found in Environment: {environment_name}"
+            ))
+        })?
+        .to_string();
 
     // Try and do an admin function with Mallory
     info!("Trying to access an admin function with Mallory");
@@ -168,7 +173,7 @@ async fn main() -> Result<(), ATMError> {
     info!("Starting hijack of admin credentials...");
     let admin_tokens = match tdk
         .get_shared_state()
-        .authentication
+        .authentication()
         .authenticated(tdk_admin.did.clone(), mediator.clone())
         .await
     {
@@ -373,7 +378,7 @@ async fn http_post(
 ) {
     let response = tdk
         .get_shared_state()
-        .client
+        .client()
         .post([&profile.get_mediator_rest_endpoint().unwrap(), "/inbound"].concat())
         .header("Content-Type", "application/json")
         .header(

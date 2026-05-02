@@ -506,7 +506,7 @@ impl WebSocketTransport {
         let tokens = self
             .shared
             .tdk_common
-            .authentication
+            .authentication()
             .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
             .await?;
 

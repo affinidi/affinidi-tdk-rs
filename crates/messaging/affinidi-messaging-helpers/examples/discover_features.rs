@@ -75,7 +75,15 @@ async fn main() -> Result<(), ATMError> {
     println!("Using Environment: {}", environment_name);
 
     // Instantiate TDK
-    let tdk = Arc::new(TDKSharedState::default().await);
+    let tdk = Arc::new(
+        TDKSharedState::new(
+            affinidi_tdk::common::config::TDKConfig::builder()
+                .with_load_environment(false)
+                .with_use_atm(false)
+                .build()?,
+        )
+        .await?,
+    );
 
     // Configure tracing
     let subscriber = tracing_subscriber::fmt()
@@ -83,7 +91,7 @@ async fn main() -> Result<(), ATMError> {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
-    let bob = if let Some(bob) = environment.profiles.get("Bob") {
+    let bob = if let Some(bob) = environment.profiles().get("Bob") {
         tdk.add_profile(bob).await;
         bob
     } else {
@@ -93,7 +101,7 @@ async fn main() -> Result<(), ATMError> {
     };
 
     let mut config = ATMConfig::builder();
-    config = config.with_ssl_certificates(&mut environment.ssl_certificates);
+    config = config.with_ssl_certificates(&mut environment.ssl_certificate_paths().to_vec());
 
     // Create a new ATM Client
     let atm = ATM::new(config.build()?, tdk).await?;

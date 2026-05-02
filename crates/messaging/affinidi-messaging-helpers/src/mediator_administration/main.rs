@@ -9,7 +9,7 @@ use affinidi_messaging_sdk::{
 };
 use affinidi_tdk::{
     common::{
-        TDKSharedState,
+        self as affinidi_tdk_common, TDKSharedState,
         environments::{TDKEnvironment, TDKEnvironments},
     },
     secrets_resolver::SecretsResolver,
@@ -198,14 +198,15 @@ async fn init() -> Result<(ColorfulTheme, ATMConfig, TDKEnvironment), Box<dyn Er
         style("Welcome to the Affinidi Messaging Mediator Administration wizard").green(),
     );
 
-    if environment.admin_did.is_none() {
+    if environment.admin_did().is_none() {
         return Err("Admin DID not found in Environment".into());
     }
 
-    let mut ssl_certificates = Vec::new();
-    for certificate in &environment.ssl_certificates {
-        ssl_certificates.push(certificate.to_string());
-    }
+    let mut ssl_certificates: Vec<String> = environment
+        .ssl_certificate_paths()
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
 
     // Connect to the Mediator
     let config = ATMConfig::builder()
@@ -219,15 +220,20 @@ async fn init() -> Result<(ColorfulTheme, ATMConfig, TDKEnvironment), Box<dyn Er
 async fn main() -> Result<(), Box<dyn Error>> {
     let (theme, config, environment) = init().await?;
 
-    let admin = if let Some(admin) = environment.admin_did {
-        admin
-    } else {
-        return Err("Admin DID not found in Environment".into());
-    };
+    let mut admin = environment
+        .admin_did()
+        .cloned()
+        .ok_or("Admin DID not found in Environment")?;
 
     // Create a new ATM Client
-    let tdk = Arc::new(TDKSharedState::default().await);
-    tdk.secrets_resolver.insert_vec(&admin.secrets).await;
+    let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
+        .with_load_environment(false)
+        .with_use_atm(false)
+        .build()?;
+    let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await?);
+    tdk.secrets_resolver()
+        .insert_vec(&admin.take_secrets())
+        .await;
     let atm = ATM::new(config, tdk).await?;
 
     // Create the admin profile and enable it

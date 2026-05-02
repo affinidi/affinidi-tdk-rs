@@ -103,22 +103,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         fn _create_friend(alias: &str, mediator: Option<&str>) -> TDKProfile {
             let (did, secrets) = DID::generate_did_peer(vec![(PeerKeyRole::Verification, KeyType::P256), (PeerKeyRole::Verification, KeyType::Ed25519), (PeerKeyRole::Encryption, KeyType::Secp256k1), (PeerKeyRole::Encryption, KeyType::P256), (PeerKeyRole::Encryption, KeyType::X25519)], None).unwrap();
-            TDKProfile {
-                alias: alias.to_string(),
-                did,
-                secrets,
-                mediator: mediator.map(|m| m.to_string()),
-            }
+            TDKProfile::new(alias, &did, mediator, secrets)
         }
 
-        environment.profiles.insert("Alice".into(), _create_friend("Alice", environment.default_mediator.as_deref()));
-        println!("  {}{}", style("Friend Alice created with DID: ").blue(), style(&environment.profiles.get("Alice").unwrap().did).color256(208));
-        environment.profiles.insert("Bob".into(), _create_friend("Bob", environment.default_mediator.as_deref()));
-        println!("  {}{}", style("Friend Bob created with DID: ").blue(), style(&environment.profiles.get("Bob").unwrap().did).color256(208));
-        environment.profiles.insert("Charlie".into(), _create_friend("Charlie", environment.default_mediator.as_deref()));
-        println!("  {}{}", style("Friend Charlie created with DID: ").blue(), style(&environment.profiles.get("Charlie").unwrap().did).color256(208));
-        environment.profiles.insert("Mallory".into(), _create_friend("Mallory", environment.default_mediator.as_deref()));
-        println!("  {}{}{}{}", style("Friend(?) ").blue(), style("Mallory").red(), style(" created with DID: ").blue(), style(&environment.profiles.get("Mallory").unwrap().did).color256(208));
+        let mediator = environment.default_mediator().map(str::to_owned);
+        for friend in ["Alice", "Bob", "Charlie", "Mallory"] {
+            let profile = _create_friend(friend, mediator.as_deref());
+            let did = profile.did.clone();
+            environment.add_profile(profile);
+            let label = if friend == "Mallory" {
+                format!("{}{}{}", style("Friend(?) ").blue(), style(friend).red(), style(" created with DID: ").blue())
+            } else {
+                format!("{}{}{}", style("Friend ").blue(), style(friend).blue(), style(" created with DID: ").blue())
+            };
+            println!("  {}{}", label, style(did).color256(208));
+        }
     }
 
     if Confirm::with_theme(&theme)
