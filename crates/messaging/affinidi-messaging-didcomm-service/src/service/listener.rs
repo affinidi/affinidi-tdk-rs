@@ -103,10 +103,7 @@ impl Listener {
 
         let tdk_config = match self.config.tdk_config.take() {
             Some(cfg) => cfg,
-            None => affinidi_tdk_common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
+            None => affinidi_tdk_common::config::TDKConfig::headless()?,
         };
         let shared_state = Arc::new(TDKSharedState::new(tdk_config).await?);
 

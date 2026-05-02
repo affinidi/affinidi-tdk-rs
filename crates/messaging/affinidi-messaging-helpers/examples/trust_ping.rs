@@ -54,15 +54,8 @@ async fn main() -> Result<(), ATMError> {
     println!("Using Environment: {}", environment_name);
 
     // Instantiate TDK
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()

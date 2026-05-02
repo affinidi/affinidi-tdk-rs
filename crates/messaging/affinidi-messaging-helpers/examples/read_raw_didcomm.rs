@@ -31,15 +31,8 @@ struct Args {
 async fn main() -> Result<(), ATMError> {
     // Create a new ATM Client
     let config = ATMConfig::builder();
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
     let atm = ATM::new(config.build()?, tdk).await?;
 
     // Load the DIDComm message

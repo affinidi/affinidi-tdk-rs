@@ -226,10 +226,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("Admin DID not found in Environment")?;
 
     // Create a new ATM Client
-    let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
-        .with_load_environment(false)
-        .with_use_atm(false)
-        .build()?;
+    let tdk_cfg = affinidi_tdk_common::config::TDKConfig::headless()?;
     let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await?);
     tdk.secrets_resolver()
         .insert_vec(&admin.take_secrets())
