@@ -4,7 +4,7 @@
 
 use super::Database;
 use super::migrations::run_pending_migrations;
-use crate::common::config::Config;
+use crate::common::{config::Config, error_codes};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use sha256::digest;
@@ -17,14 +17,21 @@ impl Database {
 
         // Setup the mediator account if it doesn't exist
         // Set the ACL for the mediator account to deny_all by default
+        let mediator_acl =
+            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").map_err(|e| {
+                MediatorError::ConfigError(
+                    error_codes::CONFIG_ERROR,
+                    "NA".into(),
+                    format!("Hardcoded mediator ACL ruleset is invalid: {e}"),
+                )
+            })?;
+
         self.setup_admin_account(
             &config.mediator_did_hash,
             AccountType::Mediator,
-            &MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED")
-                .expect("hardcoded ACL ruleset is valid"),
+            &mediator_acl,
         )
-        .await
-        .expect("Could not setup mediator account! exiting...");
+        .await?;
 
         // Set up the administration account if it doesn't exist
         self.setup_admin_account(
@@ -32,8 +39,7 @@ impl Database {
             AccountType::RootAdmin,
             &config.security.global_acl_default,
         )
-        .await
-        .expect("Could not setup admin account! exiting...");
+        .await?;
         Ok(())
     }
 }

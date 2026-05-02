@@ -26,15 +26,11 @@ pub struct RateLimiterState {
 impl RateLimiterState {
     /// Create a new rate limiter. If `per_second` is 0, rate limiting is disabled.
     pub fn new(per_second: u32, burst: u32) -> Self {
-        if per_second == 0 {
+        let Some(per_second) = NonZeroU32::new(per_second) else {
             return Self { limiter: None };
-        }
-
-        let quota = Quota::per_second(
-            NonZeroU32::new(per_second).expect("per_second checked non-zero above"),
-        )
-        .allow_burst(NonZeroU32::new(burst.max(1)).expect("burst.max(1) is always non-zero"));
-
+        };
+        let burst = NonZeroU32::new(burst).unwrap_or(NonZeroU32::MIN);
+        let quota = Quota::per_second(per_second).allow_burst(burst);
         Self {
             limiter: Some(Arc::new(RateLimiter::keyed(quota))),
         }

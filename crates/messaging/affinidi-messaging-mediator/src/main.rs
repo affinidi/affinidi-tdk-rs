@@ -48,7 +48,12 @@ enum Command {
 async fn main() {
     let cli = Cli::parse();
     match cli.command {
-        None => start(&cli.config).await,
+        None => {
+            if let Err(e) = start(&cli.config).await {
+                eprintln!("\x1b[31mMediator failed:\x1b[0m {e}");
+                std::process::exit(1);
+            }
+        }
         Some(Command::RotateAdmin { dry_run }) => {
             // Subcommands handle their own tracing init lazily
             // (rotate_admin uses the global subscriber if one is

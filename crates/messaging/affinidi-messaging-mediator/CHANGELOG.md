@@ -144,6 +144,29 @@ for the detailed list)
   lockstep; processors code itself unchanged apart from the
   `lru` bump).
 
+**Startup hardening (folds in #282)**
+- **BREAKING:** `database.functions_file` is now required. Earlier
+  builds silently exited with success when it was unset, claiming
+  the mediator had started; the wizard always emits a value, so
+  this only bites hand-rolled configs.
+- **CHORE:** `server::start` returns `Result<(), MediatorError>` and
+  the panic-style paths in startup (config init, DB open / init,
+  LUA load, streaming task, DID resolver, TLS cert/key, listen-addr
+  parse, HTTP/HTTPS bind+serve) propagate typed errors instead of
+  `expect()` / `unwrap()` / `process::exit(1)`. `main.rs` prints the
+  error and exits non-zero.
+- **CHORE:** `database::initialize` propagates failures via `?`
+  instead of `expect`-ing on the hardcoded ACL parse and admin
+  account setup.
+- **CHORE:** Per-IP and per-DID rate limiter constructors use a
+  `let-else` on `NonZeroU32::new(per_second)` and
+  `unwrap_or(NonZeroU32::MIN)` for burst, dropping the
+  `expect("checked non-zero above")` invariant comments.
+- **CHORE:** `shutdown_signal` no longer panics if a Ctrl-C or
+  SIGTERM handler fails to install; the failed branch logs and
+  parks on `pending::<()>` so the surviving handler can still
+  trigger graceful shutdown.
+
 **Earlier work (16 April — Wizard / Monitoring / Redis perf)**
 - **FEAT:** Interactive TUI setup wizard (`mediator-setup`) replacing three
   fragmented tools (setup_environment, generate_mediator_config, mediator-setup-vta)
