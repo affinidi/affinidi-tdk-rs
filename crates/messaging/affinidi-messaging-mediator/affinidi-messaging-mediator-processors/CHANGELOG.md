@@ -4,10 +4,10 @@
 
 ## 24th April 2026
 
-### 0.14.0
+### 0.13.0
 
 - **CHORE:** Bumped internal pin on
-  `affinidi-messaging-mediator-common` to `0.14` (new cloud
+  `affinidi-messaging-mediator-common` to `0.13` (new cloud
   backends + schema change on `AdminCredential`). Processor code
   itself is unchanged apart from the `lru` dep bump below — the
   version bump exists to move the workspace in lockstep.

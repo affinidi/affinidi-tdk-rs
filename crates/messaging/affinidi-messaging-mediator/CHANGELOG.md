@@ -4,11 +4,12 @@
 
 ## 24th April 2026
 
-### 0.15.0 — Unified Secret Backend + Setup Wizard
+### 0.14.0 — Setup Wizard, Monitoring, Unified Secret Backend
 
-Consolidates the multi-phase unified-backend rollout (original
-Phases A–L on 20 April + the cloud-backends completion on 24 April)
-into one release. Replaces the fragmented pre-branch secret model
+Consolidates the wizard/monitoring/Redis-optimisation work (16
+April), the unified-backend foundation (Phases A–L on 20 April),
+and the cloud-backends completion (24 April) into one release.
+Replaces the fragmented pre-branch secret model
 (`[vta].credential` / `[security].mediator_secrets` /
 `[security].jwt_authorization_secret`) with a single
 `[secrets].backend = "<url>"` pointer and six fully-implemented
@@ -138,15 +139,12 @@ for the detailed list)
   self-hosted).
 
 **Internal**
-- `affinidi-messaging-mediator-common 0.13 → 0.14`.
-- `affinidi-messaging-mediator-processors 0.13 → 0.14` (in
+- `affinidi-messaging-mediator-common 0.12 → 0.13`.
+- `affinidi-messaging-mediator-processors 0.12 → 0.13` (in
   lockstep; processors code itself unchanged apart from the
   `lru` bump).
 
-## 16th April 2026
-
-### 0.14.0 — Setup Wizard, Monitoring, Redis Optimization
-
+**Earlier work (16 April — Wizard / Monitoring / Redis perf)**
 - **FEAT:** Interactive TUI setup wizard (`mediator-setup`) replacing three
   fragmented tools (setup_environment, generate_mediator_config, mediator-setup-vta)
   - Real crypto generation: did:peer, did:webvh, did:key, JWT (Ed25519), SSL
