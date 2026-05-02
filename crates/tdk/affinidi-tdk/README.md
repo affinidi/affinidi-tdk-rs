@@ -15,7 +15,7 @@ single crate and enable feature flags to pull in only the libraries you need.
 
 ```toml
 [dependencies]
-affinidi-tdk = "0.6"
+affinidi-tdk = "0.7"
 ```
 
 ## Feature Flags
@@ -32,7 +32,7 @@ Disable defaults with `default-features = false` in your `Cargo.toml` or
 
 ```toml
 [dependencies]
-affinidi-tdk = { version = "0.5", default-features = false, features = ["data-integrity"] }
+affinidi-tdk = { version = "0.7", default-features = false, features = ["data-integrity"] }
 ```
 
 ## Re-exported Crates

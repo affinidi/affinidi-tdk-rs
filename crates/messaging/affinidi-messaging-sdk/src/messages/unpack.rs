@@ -118,7 +118,7 @@ impl SharedState {
 
         for recipient in recipients {
             if let Some(kid) = recipient["header"]["kid"].as_str()
-                && let Some(secret) = self.tdk_common.secrets_resolver.get_secret(kid).await
+                && let Some(secret) = self.tdk_common.secrets_resolver().get_secret(kid).await
             {
                 let curve = match secret.get_key_type() {
                     affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
@@ -206,7 +206,7 @@ impl SharedState {
         // Resolve the sender DID document
         let sender_doc = self
             .tdk_common
-            .did_resolver
+            .did_resolver()
             .resolve(sender_did)
             .await
             .ok()?;
@@ -425,10 +425,16 @@ mod tests {
 
     /// Helper: create an ATM instance with secrets pre-loaded for the given party.
     async fn create_atm_with_secrets(secrets: Vec<Secret>) -> ATM {
+        use affinidi_tdk_common::config::TDKConfig;
         let config = ATMConfig::builder().build().unwrap();
-        let tdk = Arc::new(TDKSharedState::default().await);
+        let tdk_cfg = TDKConfig::builder()
+            .with_load_environment(false)
+            .with_use_atm(false)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         for secret in &secrets {
-            tdk.secrets_resolver.insert(secret.clone()).await;
+            tdk.secrets_resolver().insert(secret.clone()).await;
         }
         ATM::new(config, tdk).await.unwrap()
     }
@@ -899,7 +905,12 @@ mod tests {
     /// Creates an ATM instance with default config (unpack_forwards=true).
     async fn create_atm() -> ATM {
         let config = ATMConfig::builder().build().unwrap();
-        let tdk = Arc::new(TDKSharedState::default().await);
+        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
+            .with_load_environment(false)
+            .with_use_atm(false)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         ATM::new(config, tdk).await.unwrap()
     }
 
@@ -909,7 +920,12 @@ mod tests {
             .with_unpack_forwards(false)
             .build()
             .unwrap();
-        let tdk = Arc::new(TDKSharedState::default().await);
+        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
+            .with_load_environment(false)
+            .with_use_atm(false)
+            .build()
+            .unwrap();
+        let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         ATM::new(config, tdk).await.unwrap()
     }
 

@@ -54,11 +54,12 @@ async fn main() -> Result<(), ATMError> {
     )
     .await?;
 
-    let environment = &tdk.get_shared_state().environment;
+    let _shared = tdk.get_shared_state();
+    let environment = _shared.environment();
     let atm = tdk.atm.clone().unwrap();
 
     // Activate Alice Profile
-    let tdk_alice = if let Some(alice) = environment.profiles.get("Alice") {
+    let tdk_alice = if let Some(alice) = environment.profiles().get("Alice") {
         tdk.add_profile(alice).await;
         alice
     } else {
@@ -82,7 +83,7 @@ async fn main() -> Result<(), ATMError> {
     info!("Alice ACL Mode Type: {:?}", alice_acl_mode);
 
     // Activate Bob Profile
-    let tdk_bob = if let Some(bob) = environment.profiles.get("Bob") {
+    let tdk_bob = if let Some(bob) = environment.profiles().get("Bob") {
         tdk.add_profile(bob).await;
         bob
     } else {
@@ -136,7 +137,7 @@ async fn main() -> Result<(), ATMError> {
     info!("Bob Access Lists reset");
 
     // Ensure Profile has a valid mediator to forward through
-    let mediator_did = if let Some(mediator) = &environment.default_mediator {
+    let mediator_did = if let Some(mediator) = &environment.default_mediator() {
         mediator.to_string()
     } else {
         return Err(ATMError::ConfigError(

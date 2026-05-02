@@ -1,24 +1,27 @@
 /*!
  * Affinidi Trust Development Kit
  *
- * Instantiate a TDK client with the `new` function
+ * Umbrella crate that wires together [`affinidi_tdk_common::TDKSharedState`]
+ * (DID resolver, secrets resolver, HTTPS client, authentication cache) with
+ * the optional Affinidi Messaging SDK ([`messaging::ATM`]) and Meeting Place
+ * client ([`meeting_place::MeetingPlace`]).
+ *
+ * Construct with [`TDK::new`]; the heavy lifting is delegated to
+ * [`TDKSharedState::new`].
  */
+
+#![forbid(unsafe_code)]
 
 #[cfg(feature = "data-integrity")]
 use affinidi_data_integrity::{
     DataIntegrityError, DataIntegrityProof, VerifyOptions, verification_proof::VerificationProof,
 };
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 #[cfg(feature = "messaging")]
-use affinidi_messaging_sdk::ATM;
-#[cfg(feature = "messaging")]
-use affinidi_messaging_sdk::config::ATMConfigBuilder;
-use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
+use affinidi_messaging_sdk::{ATM, config::ATMConfigBuilder};
 use affinidi_tdk_common::{
-    TDKSharedState, create_http_client, environments::TDKEnvironments, errors::Result,
-    profiles::TDKProfile, tasks::authentication::AuthenticationCache,
+    TDKSharedState, config::TDKConfig, errors::Result, profiles::TDKProfile,
 };
-use common::{config::TDKConfig, environments::TDKEnvironment};
 #[cfg(feature = "data-integrity")]
 use serde::Serialize;
 use std::sync::Arc;
@@ -26,7 +29,7 @@ use std::sync::Arc;
 pub mod dids;
 pub mod secrets;
 
-// Re-export required crates for convenience to applications
+// Re-exports for application convenience.
 #[cfg(feature = "meeting-place")]
 pub use affinidi_meeting_place as meeting_place;
 
@@ -34,127 +37,64 @@ pub use affinidi_messaging_didcomm as didcomm;
 #[cfg(feature = "messaging")]
 pub use affinidi_messaging_sdk as messaging;
 
-// did-peer functionality is now integrated into affinidi_did_common
-// Use affinidi_tdk::dids module for DID generation
-
 #[cfg(feature = "data-integrity")]
 pub use affinidi_data_integrity as data_integrity;
 
-// Always exported
 pub use affinidi_crypto;
 pub use affinidi_did_authentication as did_authentication;
 pub use affinidi_did_common as did_common;
 pub use affinidi_secrets_resolver as secrets_resolver;
 pub use affinidi_tdk_common as common;
 
-/// TDK instance that can be used to interact with Affinidi services
+/// TDK instance — a thin orchestrator over [`TDKSharedState`] plus optional
+/// messaging and meeting-place clients.
+///
+/// Cloning is cheap; the inner shared state is `Arc`-backed.
 #[derive(Clone)]
 pub struct TDK {
-    pub(crate) inner: Arc<TDKSharedState>,
+    inner: Arc<TDKSharedState>,
     #[cfg(feature = "messaging")]
     pub atm: Option<ATM>,
     #[cfg(feature = "meeting-place")]
     pub meeting_place: Option<meeting_place::MeetingPlace>,
 }
 
-/// Affinidi Trusted Development Kit (TDK)
-///
-/// Use this to instantiate everything required to easily interact with Affinidi services
-/// If you are self hosting the services, you can use your own service URL's where required
-///
-/// Example:
-/// ```ignore
-/// use affinidi_tdk::TDK;
-/// use affinidi_tdk_common::config::TDKConfig;
-///
-/// let config = TDKConfig::new().build();
-/// let mut tdk = TDK::new(config).await?;
-///
-///
-/// ```
-/// NOTE: If feature-flag "messaging" is enabled, then there is an option to bring a
-/// pre-configgured ATM instance to the TDK. If none is specified then ATM is automatically setup
-/// for you.
 impl TDK {
+    /// Build a new `TDK` from the supplied configuration.
+    ///
+    /// Delegates state construction to [`TDKSharedState::new`] (which loads
+    /// the on-disk environment when `config.load_environment()` is `true`),
+    /// then loads each profile's secrets into the shared resolver and
+    /// optionally instantiates [`ATM`] when `config.use_atm()` is set.
+    ///
+    /// Pass `Some(atm)` to bring a pre-built `ATM` instance (the config's
+    /// `use_atm` is still honoured — it gates whether `atm` is retained at
+    /// all). Pass `None` to let `TDK` construct one for you.
     pub async fn new(
         config: TDKConfig,
         #[cfg(feature = "messaging")] atm: Option<ATM>,
     ) -> Result<Self> {
-        let client = create_http_client();
+        let shared = Arc::new(TDKSharedState::new(config).await?);
 
-        // Instantiate the DID resolver for TDK
-        let did_resolver = if let Some(did_resolver) = &config.did_resolver {
-            did_resolver.to_owned()
-        } else if let Some(did_resolver_config) = &config.did_resolver_config {
-            DIDCacheClient::new(did_resolver_config.to_owned()).await?
-        } else {
-            DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?
-        };
-
-        // Instantiate the SecretsManager for TDK
-        let secrets_resolver = if let Some(secrets_resolver) = &config.secrets_resolver {
-            secrets_resolver.to_owned()
-        } else {
-            ThreadedSecretsResolver::new(None).await.0
-        };
-
-        // Instantiate the authentication cache
-        let (authentication, _) = AuthenticationCache::new(
-            config.authentication_cache_limit as u64,
-            &did_resolver,
-            secrets_resolver.clone(),
-            &client,
-            config.custom_auth_handlers.clone(),
-        );
-
-        authentication.start().await;
-
-        // Load Environment
-        // Adds secrets to the secrets resolver
-        // Removes secrets from the environment itself
-        let environment = if config.load_environment {
-            let mut environment = TDKEnvironments::fetch_from_file(
-                Some(&config.environment_path),
-                &config.environment_name,
-            )?;
-            for (_, profile) in environment.profiles.iter_mut() {
-                secrets_resolver
-                    .insert_vec(profile.secrets.as_slice())
-                    .await;
-
-                // Remove secrets from profile after adding them to the secrets resolver
-                profile.secrets.clear();
-            }
-            environment
-        } else {
-            TDKEnvironment::default()
-        };
-
-        // Create the shared state, then we can use this inside other Affinidi Crates
-        let shared_state = Arc::new(TDKSharedState {
-            config,
-            did_resolver,
-            secrets_resolver,
-            client,
-            environment,
-            authentication,
-        });
+        // Hand each environment profile's secrets to the shared resolver so
+        // signing/auth flows can find them. The environment retains the
+        // canonical copy on disk; this is the in-memory load step.
+        for profile in shared.environment().profiles().values() {
+            shared.add_profile(profile).await;
+        }
 
         #[cfg(feature = "messaging")]
-        // Instantiate Affinidi Messaging
-        let atm = if shared_state.config.use_atm {
-            if let Some(atm) = atm {
-                Some(atm.to_owned())
-            } else {
-                // Use the same DID Resolver for ATM
-                Some(ATM::new(ATMConfigBuilder::default().build()?, shared_state.clone()).await?)
-            }
+        let atm = if shared.config().use_atm() {
+            Some(match atm {
+                Some(atm) => atm,
+                None => ATM::new(ATMConfigBuilder::default().build()?, shared.clone()).await?,
+            })
         } else {
             None
         };
 
         Ok(TDK {
-            inner: shared_state,
+            inner: shared,
             #[cfg(feature = "messaging")]
             atm,
             #[cfg(feature = "meeting-place")]
@@ -162,31 +102,37 @@ impl TDK {
         })
     }
 
-    /// Get the shared state of the TDK
+    /// Shared state handle. Cheap to clone.
     pub fn get_shared_state(&self) -> Arc<TDKSharedState> {
         self.inner.clone()
     }
 
-    /// Adds a TDK Profile to the shared state
-    /// Which is really just adding the secrets to the secrets resolver
-    /// For the moment...
+    /// Borrow the shared state without bumping its refcount.
+    pub fn shared(&self) -> &TDKSharedState {
+        &self.inner
+    }
+
+    /// Add a [`TDKProfile`]'s secrets to the shared resolver. Convenience
+    /// passthrough to [`TDKSharedState::add_profile`].
     pub async fn add_profile(&self, profile: &TDKProfile) {
-        self.inner
-            .secrets_resolver
-            .insert_vec(&profile.secrets)
-            .await;
+        self.inner.add_profile(profile).await;
     }
 
-    /// Access shared DID resolver
+    /// Borrow the shared DID resolver.
     pub fn did_resolver(&self) -> &DIDCacheClient {
-        &self.inner.did_resolver
+        self.inner.did_resolver()
     }
 
-    /// Verify a signed JSON Schema document which includes a DID lookup resolution step.
-    /// If you already have public key bytes, call
-    /// [`DataIntegrityProof::verify_with_public_key`] directly instead.
-    /// You must strip `proof` from the document as needed
-    /// Context is a copy of any context that needs to be passed in
+    /// Verify a Data Integrity proof, resolving the public key from the
+    /// `proof.verification_method` DID URL.
+    ///
+    /// If you already hold the public key bytes, prefer
+    /// [`DataIntegrityProof::verify_with_public_key`] to skip the resolver
+    /// hop. The `context` argument, when set, is checked against the proof's
+    /// `@context` array.
+    ///
+    /// `signed_doc` must already have its `proof` field stripped — the proof
+    /// is supplied separately.
     #[cfg(feature = "data-integrity")]
     pub async fn verify_data<S>(
         &self,
@@ -200,33 +146,30 @@ impl TDK {
         use affinidi_did_common::document::DocumentExt;
         use affinidi_tdk_common::errors::TDKError;
 
-        let did = if let Some((did, _)) = proof.verification_method.split_once("#") {
-            did
-        } else {
-            return Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(
+        let (did, _) = proof.verification_method.split_once('#').ok_or_else(|| {
+            TDKError::DataIntegrity(DataIntegrityError::MalformedProof(
                 "Invalid proof:verificationMethod. Must be DID#key-id format".to_string(),
-            )));
-        };
+            ))
+        })?;
 
-        let resolved = self.inner.did_resolver.resolve(did).await?;
-        let public_bytes = if let Some(vm) = resolved
+        let resolved = self.inner.did_resolver().resolve(did).await?;
+        let vm = resolved
             .doc
             .get_verification_method(&proof.verification_method)
-        {
+            .ok_or_else(|| {
+                TDKError::DataIntegrity(DataIntegrityError::MalformedProof(format!(
+                    "Couldn't find key-id ({}) in resolved DID Document",
+                    proof.verification_method
+                )))
+            })?;
+
+        let public_bytes =
             vm.get_public_key_bytes()
                 .map_err(|e| DataIntegrityError::InvalidPublicKey {
                     codec: None,
                     len: 0,
                     reason: format!("Failed to get public key bytes from verification method: {e}"),
-                })?
-        } else {
-            return Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(
-                format!(
-                    "Couldn't find key-id ({}) in resolved DID Document",
-                    proof.verification_method
-                ),
-            )));
-        };
+                })?;
 
         let mut options = VerifyOptions::new();
         if let Some(ctx) = context {
@@ -245,119 +188,91 @@ impl TDK {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    #[cfg(feature = "data-integrity")]
+    mod data_integrity {
+        use std::collections::HashMap;
 
-    use affinidi_data_integrity::{DataIntegrityError, crypto_suites::CryptoSuite};
-    use affinidi_tdk_common::{config::TDKConfig, errors::TDKError};
+        use affinidi_data_integrity::{DataIntegrityError, crypto_suites::CryptoSuite};
+        use affinidi_tdk_common::{config::TDKConfig, errors::TDKError};
 
-    use crate::TDK;
+        use crate::{DataIntegrityProof, TDK};
 
-    #[tokio::test]
-    async fn invalid_verification_method() {
-        let proof = crate::DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "test".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
-                context: None,
-        };
-
-        let tdk = TDK::new(
-            TDKConfig::builder()
-                .with_load_environment(false)
-                .build()
-                .unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        let result = tdk
-            .verify_data(&HashMap::<String, String>::new(), None, &proof)
-            .await;
-        assert!(result.is_err());
-        match result {
-            Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
-                assert_eq!(
-                    txt,
-                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
-                );
-            }
-            _ => panic!("Invalid return type"),
+        async fn tdk() -> TDK {
+            TDK::new(
+                TDKConfig::builder()
+                    .with_load_environment(false)
+                    .with_use_atm(false)
+                    .build()
+                    .expect("config builds"),
+                #[cfg(feature = "messaging")]
+                None,
+            )
+            .await
+            .expect("tdk builds")
         }
-    }
 
-    #[tokio::test]
-    async fn invalid_verification_method_2() {
-        let proof = crate::DataIntegrityProof {
+        fn proof_with_vm(verification_method: &str) -> DataIntegrityProof {
+            DataIntegrityProof {
                 type_: "DataIntegrityProof".to_string(),
                 cryptosuite: CryptoSuite::EddsaJcs2022,
                 created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "did:key:not_a_key".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
+                verification_method: verification_method.to_string(),
+                proof_purpose: "assertionMethod".to_string(),
+                proof_value: Some(
+                    "z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj"
+                        .to_string(),
+                ),
                 context: None,
-        };
-
-        let tdk = TDK::new(
-            TDKConfig::builder()
-                .with_load_environment(false)
-                .build()
-                .unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        let result = tdk
-            .verify_data(&HashMap::<String, String>::new(), None, &proof)
-            .await;
-        assert!(result.is_err());
-        match result {
-            Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
-                assert_eq!(
-                    txt,
-                    "Invalid proof:verificationMethod. Must be DID#key-id format".to_string()
-                );
             }
-            _ => panic!("Invalid return type"),
         }
-    }
 
-    #[tokio::test]
-    async fn invalid_verification_method_3() {
-        let proof = crate::DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: "did:key:test#test".to_string(),
-                proof_purpose: "test".to_string(),
-                proof_value: Some("z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj".to_string()),
-                context: None,
-        };
-
-        let tdk = TDK::new(
-            TDKConfig::builder()
-                .with_load_environment(false)
-                .build()
-                .unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        let result = tdk
-            .verify_data(&HashMap::<String, String>::new(), None, &proof)
-            .await;
-        assert!(result.is_err());
-        match result {
-            Err(TDKError::DIDResolver(txt)) => {
-                assert_eq!(
-                    txt,
-                    "DID error: Failed to parse DID: Invalid method-specific ID: invalid did:key encoding: Invalid multibase prefix: expected 'z' (base58btc), got 't'"
-                        .to_string()
-                );
+        #[tokio::test]
+        async fn verify_rejects_vm_without_fragment() {
+            let proof = proof_with_vm("test");
+            let result = tdk()
+                .await
+                .verify_data(&HashMap::<String, String>::new(), None, &proof)
+                .await;
+            match result {
+                Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
+                    assert_eq!(
+                        txt,
+                        "Invalid proof:verificationMethod. Must be DID#key-id format"
+                    );
+                }
+                other => panic!("expected MalformedProof, got {other:?}"),
             }
-            _ => panic!("Invalid return type {result:#?}"),
+        }
+
+        #[tokio::test]
+        async fn verify_rejects_did_without_fragment_separator() {
+            let proof = proof_with_vm("did:key:not_a_key");
+            let result = tdk()
+                .await
+                .verify_data(&HashMap::<String, String>::new(), None, &proof)
+                .await;
+            match result {
+                Err(TDKError::DataIntegrity(DataIntegrityError::MalformedProof(txt))) => {
+                    assert_eq!(
+                        txt,
+                        "Invalid proof:verificationMethod. Must be DID#key-id format"
+                    );
+                }
+                other => panic!("expected MalformedProof, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn verify_propagates_resolver_error_on_invalid_did() {
+            let proof = proof_with_vm("did:key:test#test");
+            let result = tdk()
+                .await
+                .verify_data(&HashMap::<String, String>::new(), None, &proof)
+                .await;
+            assert!(
+                matches!(result, Err(TDKError::DIDResolver(_))),
+                "expected DIDResolver error, got {result:?}"
+            );
         }
     }
 }

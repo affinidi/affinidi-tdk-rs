@@ -101,15 +101,18 @@ impl Listener {
         // Clear the connection handle so outbound callers get NotConnected
         let _ = self.connection_tx.send(None);
 
-        let shared_state = if let Some(tdk_config) = self.config.tdk_config.take() {
-            Arc::new(TDKSharedState::new(tdk_config).await?)
-        } else {
-            Arc::new(TDKSharedState::default().await)
+        let tdk_config = match self.config.tdk_config.take() {
+            Some(cfg) => cfg,
+            None => affinidi_tdk_common::config::TDKConfig::builder()
+                .with_load_environment(false)
+                .with_use_atm(false)
+                .build()?,
         };
+        let shared_state = Arc::new(TDKSharedState::new(tdk_config).await?);
 
         shared_state
-            .secrets_resolver
-            .insert_vec(&self.config.profile.secrets)
+            .secrets_resolver()
+            .insert_vec(self.config.profile.secrets())
             .await;
 
         let atm_config = ATMConfigBuilder::default()

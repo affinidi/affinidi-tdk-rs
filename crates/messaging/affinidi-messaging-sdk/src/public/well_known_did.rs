@@ -20,7 +20,7 @@ impl ATM {
             let res = self
                 .inner
                 .tdk_common
-                .client
+                .client()
                 .get(well_known_did_atm_api)
                 .header("Content-Type", "application/json")
                 .send()

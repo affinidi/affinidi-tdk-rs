@@ -22,7 +22,7 @@ impl ATM {
             // Check if authenticated
             let tokens = self
                 .get_tdk()
-                .authentication
+                .authentication()
                 .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
                 .await?;
 
@@ -35,7 +35,7 @@ impl ATM {
             let res = self
                 .inner
                 .tdk_common
-                .client
+                .client()
                 .get(format!(
                     "{}/list/{}/{}",
                     mediator_url,

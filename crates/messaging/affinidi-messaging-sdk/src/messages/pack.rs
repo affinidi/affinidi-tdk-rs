@@ -44,7 +44,7 @@ impl SharedState {
             // 1. Resolve recipient DID and get their key agreement public key
             let recipient_doc = self
                 .tdk_common
-                .did_resolver
+                .did_resolver()
                 .resolve(to)
                 .await
                 .map_err(|e| {
@@ -66,7 +66,7 @@ impl SharedState {
                 // Authcrypt: resolve sender, get private key, encrypt
                 let sender_doc = self
                     .tdk_common
-                    .did_resolver
+                    .did_resolver()
                     .resolve(sender_did)
                     .await
                     .map_err(|e| {
@@ -86,7 +86,7 @@ impl SharedState {
                 // Get sender's private key from secrets resolver
                 let sender_secret = self
                     .tdk_common
-                    .secrets_resolver
+                    .secrets_resolver()
                     .get_secret(sender_kid.as_ref())
                     .await
                     .ok_or_else(|| {

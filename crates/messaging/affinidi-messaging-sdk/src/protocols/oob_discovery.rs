@@ -45,7 +45,7 @@ impl OOBDiscovery {
         // Check if authenticated
         let tokens = atm
             .get_tdk()
-            .authentication
+            .authentication()
             .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
             .await?;
 
@@ -84,7 +84,7 @@ impl OOBDiscovery {
         let res = atm
             .inner
             .tdk_common
-            .client
+            .client()
             .post([&mediator_url, "/oob"].concat())
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
@@ -130,7 +130,7 @@ impl OOBDiscovery {
         let res = atm
             .inner
             .tdk_common
-            .client
+            .client()
             .get(url)
             .header("Content-Type", "application/json")
             .send()
@@ -203,7 +203,7 @@ impl OOBDiscovery {
         // Check if authenticated
         let tokens = atm
             .get_tdk()
-            .authentication
+            .authentication()
             .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
             .await?;
 
@@ -217,7 +217,7 @@ impl OOBDiscovery {
         let res = atm
             .inner
             .tdk_common
-            .client
+            .client()
             .delete(format!("{mediator_url}/oob?_oobid={oobid}"))
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
