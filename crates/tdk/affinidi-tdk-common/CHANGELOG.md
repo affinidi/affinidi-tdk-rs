@@ -32,6 +32,15 @@ Major hardening + API tightening release. Multiple breaking changes; see
   `take_secrets()` (drain) to access. `take_secrets()` is the recommended
   pattern when handing secrets to a `SecretsResolver` — clearing the in-memory
   copy shortens the plaintext lifetime.
+- **`TDKEnvironment` fields are now `pub(crate)`.** Read via `profiles()`,
+  `profile(alias)`, `default_mediator()`, `admin_did()`,
+  `ssl_certificate_paths()`. Mutate via `add_profile`,
+  `set_default_mediator`, `set_admin_did`, `set_ssl_certificate_paths`.
+- **`create_http_client` now takes `&[CertificateDer<'static>]`** for extra
+  trust roots. Pass `&[]` for the default platform-only behaviour. The
+  internals that reach this function from `TDKSharedState::new` populate it
+  automatically from the active environment's
+  `ssl_certificate_paths()`.
 - **`TDKSharedState::default()` removed.** It was a `pub async fn` that
   panicked on real init failures (DID resolver, network). Replace with
   `TDKSharedState::new(TDKConfig::builder().build()?).await?`.
@@ -68,6 +77,21 @@ Major hardening + API tightening release. Multiple breaking changes; see
 - **`TDKSharedState::authenticate_profile(&profile, target_did)`** — convenience
   wrapper over `AuthenticationCache::authenticate_default` taking a
   [`TDKProfile`].
+- **`TDKSharedState::resolve_mediator(&profile)`** — picks
+  `profile.mediator` if set, otherwise the active environment's
+  `default_mediator`. Returns `None` if neither is configured.
+- **`TDKSharedState::activate_admin_profile()`** — loads the environment's
+  `admin_did` profile's secrets into the shared resolver and returns the
+  admin profile. Admin secrets are **not** loaded automatically; this call
+  is the explicit opt-in.
+- **Custom TLS roots from `TDKEnvironment::ssl_certificate_paths()`** —
+  `TDKSharedState::new` now parses each PEM file and feeds the
+  certificates to `rustls-platform-verifier::Verifier::new_with_extra_roots`
+  on top of the platform trust store. Useful for environments with private
+  CAs.
+- **`TDKEnvironment::load_ssl_certificates()`** — public helper that
+  parses the configured paths into `Vec<CertificateDer<'static>>`. Failures
+  surface loudly as `TDKError::Config`.
 - **`TDKSharedState::shutdown()`** — graceful drain. Sends `Terminate` to the
   authentication task and awaits its `JoinHandle`.
 - **`tasks::authentication`** public consts: `DEFAULT_AUTH_RETRIES`,
@@ -128,7 +152,10 @@ Major hardening + API tightening release. Multiple breaking changes; see
   `TDKConfig` builder defaults and overrides, error `From` conversions,
   authentication-cache hash determinism and collision avoidance, the
   `expire_after_create` already-expired path, `TDKProfile` constructor /
-  `take_secrets()` drain semantics / serde roundtrip. **21 tests, all green.**
+  `take_secrets()` drain semantics / serde roundtrip,
+  `TDKEnvironment` accessors (`default_mediator`, SSL-cert PEM parsing,
+  missing-file error path), and `TDKSharedState::resolve_mediator` priority.
+  **26 tests, all green.**
 
 ### Migration
 

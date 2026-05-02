@@ -25,7 +25,7 @@ Errors are funneled through [`TDKError`]; consumers convert it to their own
 error types via `From<TDKError>` impls.
 */
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use affinidi_did_authentication::{AuthorizationTokens, errors::DIDAuthError};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
@@ -35,8 +35,8 @@ use environments::{TDKEnvironment, TDKEnvironments};
 use errors::TDKError;
 use profiles::TDKProfile;
 use reqwest::Client;
-use rustls::ClientConfig;
-use rustls_platform_verifier::ConfigVerifierExt;
+use rustls::{ClientConfig, pki_types::CertificateDer};
+use rustls_platform_verifier::{ConfigVerifierExt, Verifier};
 use tracing::warn;
 
 pub mod config;
@@ -66,7 +66,13 @@ pub struct TDKSharedState {
 }
 
 /// Build a reusable HTTP/HTTPS [`Client`] backed by `rustls` with the platform
-/// trust verifier.
+/// trust verifier, optionally extended with `extra_roots`.
+///
+/// Pass an empty slice for the default behaviour (platform trust store only).
+/// Non-empty `extra_roots` are added on top of the platform store via
+/// [`Verifier::new_with_extra_roots`] — useful for environments with
+/// internal/private CAs (see
+/// [`TDKEnvironment::ssl_certificate_paths`](environments::TDKEnvironment::ssl_certificate_paths)).
 ///
 /// Installs `rustls`'s `aws-lc-rs` crypto provider as the process default
 /// exactly once via [`OnceLock`] — repeated calls are a no-op.
@@ -75,14 +81,33 @@ pub struct TDKSharedState {
 ///
 /// Returns [`TDKError::Config`] if the platform TLS verifier or the
 /// [`reqwest::Client`] cannot be constructed.
-pub fn create_http_client() -> Result<Client, TDKError> {
+pub fn create_http_client(extra_roots: &[CertificateDer<'static>]) -> Result<Client, TDKError> {
     static CRYPTO_INIT: OnceLock<()> = OnceLock::new();
     CRYPTO_INIT.get_or_init(|| {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     });
 
-    let tls_config = ClientConfig::with_platform_verifier()
-        .map_err(|e| TDKError::Config(format!("rustls platform verifier init failed: {e}")))?;
+    let tls_config = if extra_roots.is_empty() {
+        ClientConfig::with_platform_verifier()
+            .map_err(|e| TDKError::Config(format!("rustls platform verifier init failed: {e}")))?
+    } else {
+        let crypto_provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+        let verifier =
+            Verifier::new_with_extra_roots(extra_roots.iter().cloned(), crypto_provider.clone())
+                .map_err(|e| {
+                    TDKError::Config(format!(
+                        "rustls platform verifier (with extra roots) init failed: {e}"
+                    ))
+                })?;
+        ClientConfig::builder_with_provider(crypto_provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| TDKError::Config(format!("rustls protocol-version setup failed: {e}")))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_no_client_auth()
+    };
     reqwest::ClientBuilder::new()
         .use_rustls_tls()
         .use_preconfigured_tls(tls_config)
@@ -132,7 +157,8 @@ impl TDKSharedState {
             sr
         };
 
-        let client = create_http_client()?;
+        // Load the environment first — its `ssl_certificates` feed the
+        // HTTPS client we build in the next step.
         let environment = if config.load_environment {
             match TDKEnvironments::fetch_from_file(
                 Some(&config.environment_path),
@@ -152,6 +178,12 @@ impl TDKSharedState {
         } else {
             TDKEnvironment::default()
         };
+
+        // Parse environment-supplied PEM files; these become extra trust
+        // roots on top of the platform verifier.
+        let extra_roots = environment.load_ssl_certificates()?;
+        let client = create_http_client(&extra_roots)?;
+
         let authentication = AuthenticationCache::new(
             config.authentication_cache_limit as u64,
             &did_resolver,
@@ -174,6 +206,40 @@ impl TDKSharedState {
     /// Add a [`TDKProfile`]'s secrets to the shared `SecretsResolver`.
     pub async fn add_profile(&self, profile: &TDKProfile) {
         self.secrets_resolver.insert_vec(&profile.secrets).await;
+    }
+
+    /// Resolve the effective mediator DID for a profile.
+    ///
+    /// Lookup order:
+    /// 1. `profile.mediator` if set,
+    /// 2. otherwise the active environment's
+    ///    [`default_mediator`](environments::TDKEnvironment::default_mediator).
+    ///
+    /// Returns `None` if neither is configured — the caller should treat
+    /// that as a configuration error.
+    pub fn resolve_mediator<'a>(&'a self, profile: &'a TDKProfile) -> Option<&'a str> {
+        profile
+            .mediator
+            .as_deref()
+            .or_else(|| self.environment.default_mediator())
+    }
+
+    /// Load the environment's [`admin_did`](environments::TDKEnvironment::admin_did)
+    /// secrets into the shared `SecretsResolver`, returning the admin
+    /// `TDKProfile` for further use.
+    ///
+    /// Admin secrets are sensitive and **not** loaded automatically by
+    /// [`new`](Self::new). Call this only when you need the admin identity
+    /// active in the resolver.
+    ///
+    /// Returns `Ok(None)` if no admin DID is configured.
+    pub async fn activate_admin_profile(&self) -> Result<Option<TDKProfile>, TDKError> {
+        let Some(admin) = self.environment.admin_did() else {
+            return Ok(None);
+        };
+        let admin = admin.clone();
+        self.secrets_resolver.insert_vec(admin.secrets()).await;
+        Ok(Some(admin))
     }
 
     /// Authenticate the given `profile` against `target_did` using the
@@ -228,5 +294,85 @@ impl TDKSharedState {
     /// exit. Call before process shutdown for graceful drain.
     pub async fn shutdown(&self) {
         self.authentication.terminate().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_mediator_prefers_profile() {
+        // Build a state shell directly for the unit test — the helper is
+        // a pure read of `profile.mediator || environment.default_mediator`,
+        // so we don't need the full async constructor.
+        let mut env = TDKEnvironment::default();
+        env.set_default_mediator(Some("did:web:env-default".into()));
+
+        let p_with = TDKProfile::new("alice", "did:example:1", Some("did:web:profile"), vec![]);
+        let p_without = TDKProfile::new("bob", "did:example:2", None, vec![]);
+
+        // Build a minimal TDKSharedState by hand — we only touch `environment`.
+        // Skip via direct field expressions (we're inside the crate).
+        // Re-assemble using a closure to keep this concise.
+        let make_state = |environment: TDKEnvironment| TDKSharedState {
+            config: TDKConfig::builder().build().unwrap(),
+            // The remaining fields are unused by `resolve_mediator`; we use
+            // dummies that the unit test never exercises.
+            did_resolver: dummy_did_cache(),
+            secrets_resolver: dummy_secrets_resolver(),
+            client: reqwest::Client::new(),
+            environment,
+            authentication: dummy_auth_cache(),
+        };
+
+        let state_with = make_state(env.clone());
+        assert_eq!(
+            state_with.resolve_mediator(&p_with),
+            Some("did:web:profile")
+        );
+
+        let state_without = make_state(env);
+        assert_eq!(
+            state_without.resolve_mediator(&p_without),
+            Some("did:web:env-default")
+        );
+
+        let state_empty = make_state(TDKEnvironment::default());
+        assert_eq!(state_empty.resolve_mediator(&p_without), None);
+    }
+
+    fn dummy_did_cache() -> DIDCacheClient {
+        // Construct via the public constructor with a default config — this
+        // is in-process / local mode and does not touch the network.
+        // We block on the future synchronously by polling once; for the
+        // unit test we instead run on a current-thread runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+                .await
+                .unwrap()
+        })
+    }
+
+    fn dummy_secrets_resolver() -> ThreadedSecretsResolver {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let (sr, _) = ThreadedSecretsResolver::new(None).await;
+            sr
+        })
+    }
+
+    fn dummy_auth_cache() -> AuthenticationCache {
+        let did_resolver = dummy_did_cache();
+        let secrets_resolver = dummy_secrets_resolver();
+        let client = reqwest::Client::new();
+        AuthenticationCache::new(1, &did_resolver, secrets_resolver, &client, None)
     }
 }

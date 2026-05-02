@@ -9,6 +9,7 @@ use crate::{
     errors::{Result, TDKError},
     profiles::TDKProfile,
 };
+use rustls::pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -17,21 +18,36 @@ use std::{
     path::Path,
 };
 
+/// A named environment: a bag of profiles plus environment-level defaults
+/// (mediator, admin identity, custom TLS roots).
+///
+/// Persisted to disk via [`TDKEnvironments`]; consumed at runtime by
+/// [`crate::TDKSharedState`]. Fields are `pub(crate)`; read via accessor
+/// methods, mutate via `add_profile` / `set_*` helpers.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TDKEnvironment {
-    /// HashMap of profile name to TDKProfile
-    pub profiles: HashMap<String, TDKProfile>,
+    /// Profiles keyed by alias.
+    #[serde(default)]
+    pub(crate) profiles: HashMap<String, TDKProfile>,
 
-    /// Default messaging mediator for this environment
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_mediator: Option<String>,
+    /// DIDComm mediator DID used as a fall-back when a profile's own
+    /// `mediator` field is `None`. See
+    /// [`crate::TDKSharedState::resolve_mediator`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) default_mediator: Option<String>,
 
-    /// An Admin DID for this environment to configure services if required
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub admin_did: Option<TDKProfile>,
+    /// Admin profile for this environment, if any. Activated by an explicit
+    /// call to [`crate::TDKSharedState::activate_admin_profile`] — not loaded
+    /// automatically, since admin secrets are sensitive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) admin_did: Option<TDKProfile>,
 
-    /// Custom Client SSL certificates for this environment if needed
-    pub ssl_certificates: Vec<String>,
+    /// Paths to PEM-encoded SSL certificates to add as extra trust roots on
+    /// the TDK HTTPS client. Each entry is a path on disk; multiple
+    /// certificates per file are supported. Loaded at
+    /// [`crate::TDKSharedState::new`] time alongside the platform verifier.
+    #[serde(default)]
+    pub(crate) ssl_certificates: Vec<String>,
 }
 
 impl TDKEnvironment {
@@ -44,6 +60,75 @@ impl TDKEnvironment {
         self.profiles
             .insert(profile.alias.clone(), profile)
             .is_none()
+    }
+
+    /// All profiles in this environment, keyed by alias.
+    pub fn profiles(&self) -> &HashMap<String, TDKProfile> {
+        &self.profiles
+    }
+
+    /// Look up a profile by alias.
+    pub fn profile(&self, alias: &str) -> Option<&TDKProfile> {
+        self.profiles.get(alias)
+    }
+
+    /// Default mediator DID, if configured.
+    pub fn default_mediator(&self) -> Option<&str> {
+        self.default_mediator.as_deref()
+    }
+
+    /// Set or clear the default mediator.
+    pub fn set_default_mediator(&mut self, mediator: Option<String>) {
+        self.default_mediator = mediator;
+    }
+
+    /// Admin profile, if configured.
+    pub fn admin_did(&self) -> Option<&TDKProfile> {
+        self.admin_did.as_ref()
+    }
+
+    /// Set or clear the admin profile.
+    pub fn set_admin_did(&mut self, admin_did: Option<TDKProfile>) {
+        self.admin_did = admin_did;
+    }
+
+    /// File paths to PEM-encoded SSL certificates configured for this
+    /// environment. The actual `CertificateDer` byte payloads are loaded
+    /// at [`crate::TDKSharedState::new`] time.
+    pub fn ssl_certificate_paths(&self) -> &[String] {
+        &self.ssl_certificates
+    }
+
+    /// Replace the list of SSL certificate paths.
+    pub fn set_ssl_certificate_paths(&mut self, paths: Vec<String>) {
+        self.ssl_certificates = paths;
+    }
+
+    /// Load and parse all PEM files referenced by
+    /// [`ssl_certificate_paths`](Self::ssl_certificate_paths). Multiple
+    /// certificates per file are supported. Returns an empty `Vec` if no
+    /// paths are configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TDKError::Config`] on the first IO or parse error — there
+    /// is no silent partial-success path, since silently dropping trust
+    /// anchors is a security footgun.
+    pub fn load_ssl_certificates(&self) -> Result<Vec<CertificateDer<'static>>> {
+        let mut out = Vec::new();
+        for path in &self.ssl_certificates {
+            let file = File::open(path).map_err(|e| {
+                TDKError::Config(format!("Couldn't open SSL certificate file ({path}): {e}"))
+            })?;
+            let mut reader = BufReader::new(file);
+            for cert in rustls_pemfile::certs(&mut reader) {
+                let cert = cert.map_err(|e| {
+                    TDKError::Config(format!("Couldn't parse SSL certificate from ({path}): {e}"))
+                })?;
+                out.push(cert);
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -211,13 +296,7 @@ mod tests {
 
         let reloaded = TDKEnvironments::load_file(&path).unwrap();
         assert_eq!(reloaded.environments(), vec!["local".to_string()]);
-        assert!(
-            reloaded
-                .get("local")
-                .unwrap()
-                .profiles
-                .contains_key("alice")
-        );
+        assert!(reloaded.get("local").unwrap().profile("alice").is_some());
     }
 
     #[test]
@@ -230,7 +309,56 @@ mod tests {
         envs.save().unwrap();
 
         let env = TDKEnvironments::fetch_from_file(Some(&path), "dev").unwrap();
-        assert!(env.profiles.is_empty());
+        assert!(env.profiles().is_empty());
+    }
+
+    #[test]
+    fn default_mediator_round_trips() {
+        let mut env = TDKEnvironment::default();
+        assert!(env.default_mediator().is_none());
+        env.set_default_mediator(Some("did:web:mediator.example.com".into()));
+        assert_eq!(env.default_mediator(), Some("did:web:mediator.example.com"));
+        env.set_default_mediator(None);
+        assert!(env.default_mediator().is_none());
+    }
+
+    #[test]
+    fn load_ssl_certificates_empty_when_unset() {
+        let env = TDKEnvironment::default();
+        assert!(env.load_ssl_certificates().unwrap().is_empty());
+    }
+
+    #[test]
+    fn load_ssl_certificates_parses_pem_file() {
+        let dir = TempDir::new().unwrap();
+        let pem_path = dir.path().join("test-ca.pem");
+        // Minimal self-signed test certificate generated for this test.
+        // Issuer/subject CN=tdk-test-ca, valid 1970-2099.
+        const TEST_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIBhDCCASqgAwIBAgIULjs5/G2vlobcETBOIINyzlYG/2YwCgYIKoZIzj0EAwIw\n\
+FjEUMBIGA1UEAwwLdGRrLXRlc3QtY2EwIBcNNzAwMTAxMDAwMDAxWhgPMjA5OTEy\n\
+MzEyMzU5NTlaMBYxFDASBgNVBAMMC3Rkay10ZXN0LWNhMFkwEwYHKoZIzj0CAQYI\n\
+KoZIzj0DAQcDQgAEgmehPLMaCJl9XwPFNaaHN5KbKHDaR/D5K3uBzPJ8LqsR3XRo\n\
+0Q+L3tudLpr1EatHC58mPSAcb3CpwpufKpCw0KNTMFEwHQYDVR0OBBYEFB7yyBuy\n\
+8KS0H3jwgY40lc6wDPoTMB8GA1UdIwQYMBaAFB7yyBuy8KS0H3jwgY40lc6wDPoT\n\
+MA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhAOrMcOhEMQyAJUmU\n\
+xxnCt9D8Yh3I+QTW9zd6/EGUUYz2AiBYwDOX4Hd/8oF3MBLQEKDPa8qHrtyf2X1d\n\
+HM18aTnPhg==\n\
+-----END CERTIFICATE-----\n";
+        std::fs::write(&pem_path, TEST_PEM).unwrap();
+
+        let mut env = TDKEnvironment::default();
+        env.set_ssl_certificate_paths(vec![pem_path.to_string_lossy().into_owned()]);
+        let certs = env.load_ssl_certificates().unwrap();
+        assert_eq!(certs.len(), 1);
+    }
+
+    #[test]
+    fn load_ssl_certificates_errors_on_missing_file() {
+        let mut env = TDKEnvironment::default();
+        env.set_ssl_certificate_paths(vec!["/nonexistent/no-such-cert.pem".to_string()]);
+        let err = env.load_ssl_certificates().unwrap_err();
+        assert!(matches!(err, TDKError::Config(_)));
     }
 
     #[test]
