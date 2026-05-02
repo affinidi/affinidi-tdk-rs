@@ -167,6 +167,18 @@ for the detailed list)
   parks on `pending::<()>` so the surviving handler can still
   trigger graceful shutdown.
 
+**Container deployment**
+- **FEAT:** Container mode now generates a `docker-compose.yml`
+  alongside the `Dockerfile`, so `docker compose up --build` brings
+  up a self-contained stack (mediator + bundled Redis on a private
+  network, named volume for Redis persistence). The mediator's
+  `database.database_url` from `mediator.toml` is overridden via
+  the `DATABASE_URL` env var so the same image still works against
+  an external Redis when run outside of compose. Redis is internal
+  to the compose network and not exposed on the host.
+- **FIX:** Container Dockerfile's `EXPOSE` line now uses the port
+  derived from `listen_address` instead of the hardcoded `7037`.
+
 **Earlier work (16 April — Wizard / Monitoring / Redis perf)**
 - **FEAT:** Interactive TUI setup wizard (`mediator-setup`) replacing three
   fragmented tools (setup_environment, generate_mediator_config, mediator-setup-vta)

@@ -1928,6 +1928,7 @@ fn print_final_summary(config: &app::WizardConfig) {
 
     if config.deployment_type == DEPLOYMENT_CONTAINER {
         println!("    \x1b[36mDockerfile\x1b[0m  — container build file");
+        println!("    \x1b[36mdocker-compose.yml\x1b[0m  — mediator + Redis self-contained stack");
     }
 
     // Key information
