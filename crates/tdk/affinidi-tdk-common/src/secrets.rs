@@ -30,10 +30,10 @@
  */
 
 use crate::errors::TDKError;
-use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
+use affinidi_secrets_resolver::{SecretsResolver, secrets::Secret};
 use base64::{Engine, prelude::BASE64_STANDARD_NO_PAD};
 use keyring_core::{Entry, error::Error as KeyringError};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, warn};
 
 /// A handle to the platform-native credential store, scoped to a single
@@ -123,13 +123,13 @@ impl<'a> KeyringStore<'a> {
 
         let decoded = BASE64_STANDARD_NO_PAD.decode(&bytes).map_err(|e| {
             TDKError::Secrets(format!(
-                "Failed to decode keyring entry (service_id={}, did={did}): not valid JSON or legacy base64: {e}",
+                "Keyring entry (service_id={}, did={did}) is neither valid JSON nor legacy base64: {e}",
                 self.service_id
             ))
         })?;
         let secrets: Vec<Secret> = serde_json::from_slice(&decoded).map_err(|e| {
             TDKError::Secrets(format!(
-                "Failed to parse legacy base64 keyring entry (service_id={}, did={did}): {e}",
+                "Keyring entry (service_id={}, did={did}) decoded as base64 but JSON parse failed (entry corrupted or not written by this library): {e}",
                 self.service_id
             ))
         })?;
@@ -170,11 +170,12 @@ impl<'a> KeyringStore<'a> {
     /// Read secrets for `did` and insert them into the supplied resolver.
     ///
     /// Convenience over [`read`](Self::read) +
-    /// [`ThreadedSecretsResolver::insert_vec`].
-    pub async fn load_into(
+    /// [`SecretsResolver::insert_vec`]. Generic over any
+    /// [`SecretsResolver`] implementation.
+    pub async fn load_into<R: SecretsResolver>(
         &self,
         did: &str,
-        resolver: &ThreadedSecretsResolver,
+        resolver: &R,
     ) -> Result<(), TDKError> {
         let secrets = self.read(did)?;
         resolver.insert_vec(&secrets).await;
@@ -195,6 +196,22 @@ pub fn init_keyring() -> Result<(), TDKError> {
 
 fn ensure_default_store() -> Result<(), TDKError> {
     static INIT: OnceLock<()> = OnceLock::new();
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
+
+    // Fast path: already initialised (no lock).
+    if INIT.get().is_some() {
+        return Ok(());
+    }
+
+    // Slow path: serialise initialisation across threads. We do not cache
+    // the failure result inside `INIT`, so a transient failure (e.g. D-Bus
+    // unavailable at boot) can be retried on the next call.
+    let _guard = INIT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    // Re-check after taking the lock — another thread may have completed
+    // initialisation while we were waiting.
     if INIT.get().is_some() {
         return Ok(());
     }

@@ -77,8 +77,12 @@ struct AuthenticationCacheInner {
     custom_handlers: Option<CustomAuthHandlers>,
 }
 
-/// MPSC Authentication Commands
-pub enum AuthenticationCommand {
+/// MPSC commands consumed by the background authentication task.
+///
+/// Internal — `pub(crate)` because public methods on
+/// [`AuthenticationCache`] (`authenticate`, `authenticated`, `invalidate`,
+/// `terminate`) are the supported way to drive the cache.
+pub(crate) enum AuthenticationCommand {
     /// Terminate the Authentication Task
     Terminate,
 
@@ -134,10 +138,6 @@ impl Expiry<u64, AuthenticationRecord> for AuthenticationRecord {
 impl AuthenticationCache {
     /// Build a new [`AuthenticationCache`].
     ///
-    /// The returned `mpsc::Sender` is the same one the cache uses internally
-    /// and is provided for callers that want to embed an `Authenticate`
-    /// command into a custom workflow.
-    ///
     /// # Arguments
     /// * `max_capacity` — maximum number of entries (≈ DIDs × services).
     /// * `did_resolver` — DID Resolver Cache Client.
@@ -150,7 +150,7 @@ impl AuthenticationCache {
         secrets_resolver: ThreadedSecretsResolver,
         client: &Client,
         custom_handlers: Option<CustomAuthHandlers>,
-    ) -> (Self, mpsc::Sender<AuthenticationCommand>) {
+    ) -> Self {
         let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_CAPACITY);
 
         let expiry_template = AuthenticationRecord {
@@ -170,22 +170,17 @@ impl AuthenticationCache {
             custom_handlers,
         };
 
-        (
-            AuthenticationCache {
-                tx: tx.clone(),
-                handle: Arc::new(Mutex::new(None)),
-                state: Arc::new(Mutex::new(Some(inner))),
-            },
+        AuthenticationCache {
             tx,
-        )
+            handle: Arc::new(Mutex::new(None)),
+            state: Arc::new(Mutex::new(Some(inner))),
+        }
     }
 
     /// Spawn the background task. Idempotent — if the task is already running
-    /// the call is a no-op.
-    ///
-    /// Note: this is `async fn` for backwards compatibility, but performs no
-    /// async work and can be called from any async context.
-    pub async fn start(&self) {
+    /// the call is a no-op. Synchronous because no async work happens here;
+    /// the spawned task runs concurrently.
+    pub fn start(&self) {
         let inner = match self.state.lock() {
             Ok(mut guard) => guard.take(),
             Err(_) => return,

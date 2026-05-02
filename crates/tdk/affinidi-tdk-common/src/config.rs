@@ -1,5 +1,9 @@
 /*!
- * TDK Configuration options
+ * TDK Configuration options.
+ *
+ * Build a [`TDKConfig`] via [`TDKConfig::builder`] and one or more `with_*`
+ * methods. Fields are encapsulated; read them through accessor methods on
+ * [`TDKConfig`] (e.g. [`TDKConfig::environment_path`]).
  */
 
 use affinidi_did_authentication::CustomAuthHandlers;
@@ -10,78 +14,125 @@ use crate::errors::TDKError;
 
 const DEFAULT_ENVIRONMENT_PATH: &str = "environments.json";
 
+/// Configuration for [`crate::TDKSharedState`].
+///
+/// Construct via [`TDKConfig::builder`]. Fields are `pub(crate)`; consumers
+/// read them through accessor methods.
 #[derive(Clone)]
 pub struct TDKConfig {
-    pub did_resolver: Option<DIDCacheClient>,
-    pub did_resolver_config: Option<DIDCacheConfig>,
-    pub secrets_resolver: Option<ThreadedSecretsResolver>,
-    pub environment_path: String,
-    pub load_environment: bool,
-    pub environment_name: String,
-    pub authentication_cache_limit: usize,
-    pub use_atm: bool,
-    pub custom_auth_handlers: Option<CustomAuthHandlers>,
+    pub(crate) did_resolver: Option<DIDCacheClient>,
+    pub(crate) did_resolver_config: Option<DIDCacheConfig>,
+    pub(crate) secrets_resolver: Option<ThreadedSecretsResolver>,
+    pub(crate) environment_path: String,
+    pub(crate) load_environment: bool,
+    pub(crate) environment_name: String,
+    pub(crate) authentication_cache_limit: usize,
+    pub(crate) use_atm: bool,
+    pub(crate) custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
 impl TDKConfig {
-    /// Returns a builder for `Config`
-    /// Example:
-    /// ```
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let config = TDKConfig::builder().build();
-    /// ```
+    /// Returns a fresh [`TDKConfigBuilder`] with default values.
     pub fn builder() -> TDKConfigBuilder {
         TDKConfigBuilder::default()
     }
+
+    /// Pre-built DID resolver, if one was supplied to the builder.
+    pub fn did_resolver(&self) -> Option<&DIDCacheClient> {
+        self.did_resolver.as_ref()
+    }
+
+    /// Custom DID-resolver configuration. Used when the TDK constructs the
+    /// resolver internally (i.e. `did_resolver()` is `None`).
+    pub fn did_resolver_config(&self) -> Option<&DIDCacheConfig> {
+        self.did_resolver_config.as_ref()
+    }
+
+    /// Pre-built `SecretsResolver`, if one was supplied to the builder.
+    pub fn secrets_resolver(&self) -> Option<&ThreadedSecretsResolver> {
+        self.secrets_resolver.as_ref()
+    }
+
+    /// Path to the on-disk environment file.
+    pub fn environment_path(&self) -> &str {
+        &self.environment_path
+    }
+
+    /// Whether [`crate::TDKSharedState::new`] should load
+    /// [`crate::environments::TDKEnvironments`] from disk on construction.
+    pub fn load_environment(&self) -> bool {
+        self.load_environment
+    }
+
+    /// Name of the environment to load on startup.
+    pub fn environment_name(&self) -> &str {
+        &self.environment_name
+    }
+
+    /// Maximum number of entries the in-process authentication cache will
+    /// retain.
+    pub fn authentication_cache_limit(&self) -> usize {
+        self.authentication_cache_limit
+    }
+
+    /// Whether the host TDK should auto-instantiate Affinidi Trusted Messaging.
+    /// Read by `affinidi-tdk` (which owns the `dep:affinidi-messaging-sdk`
+    /// linkage); ignored by this crate.
+    pub fn use_atm(&self) -> bool {
+        self.use_atm
+    }
+
+    /// Custom authentication handlers, if any.
+    pub fn custom_auth_handlers(&self) -> Option<&CustomAuthHandlers> {
+        self.custom_auth_handlers.as_ref()
+    }
 }
 
-/// Builder for `TDKConfig`.
-/// Example:
-/// ```
-/// use affinidi_tdk_common::config::TDKConfig;
-///
-/// // Create a new `TDKConfig` with defaults
-/// let config = TDKConfig::builder().build();
-/// ```
+/// Manual `Debug` impl. The upstream `DIDCacheClient`,
+/// `ThreadedSecretsResolver`, and `CustomAuthHandlers` types do not implement
+/// `Debug`; we render them as `<…>` placeholders so logs still surface the
+/// scalar config knobs.
+impl std::fmt::Debug for TDKConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TDKConfig")
+            .field(
+                "did_resolver",
+                &self.did_resolver.as_ref().map(|_| "<DIDCacheClient>"),
+            )
+            .field("did_resolver_config", &self.did_resolver_config)
+            .field(
+                "secrets_resolver",
+                &self.secrets_resolver.as_ref().map(|_| "<SecretsResolver>"),
+            )
+            .field("environment_path", &self.environment_path)
+            .field("load_environment", &self.load_environment)
+            .field("environment_name", &self.environment_name)
+            .field(
+                "authentication_cache_limit",
+                &self.authentication_cache_limit,
+            )
+            .field("use_atm", &self.use_atm)
+            .field(
+                "custom_auth_handlers",
+                &self
+                    .custom_auth_handlers
+                    .as_ref()
+                    .map(|_| "<CustomAuthHandlers>"),
+            )
+            .finish()
+    }
+}
+
+/// Builder for [`TDKConfig`]. Construct via [`TDKConfig::builder`].
 pub struct TDKConfigBuilder {
-    /// Affinidi DID Resolver cache client
     did_resolver: Option<DIDCacheClient>,
-
-    /// Affinidi DID Resolver cache configuration
-    /// Allows for a custom configuration when instantiating the DID Resolver internally
-    /// Does nothing if `did_resolver` is provided
     did_resolver_config: Option<DIDCacheConfig>,
-
-    /// Affinidi Secrets Resolver
-    /// Allows for a custom secrets resolver to be provided
     secrets_resolver: Option<ThreadedSecretsResolver>,
-
-    /// Path to load a profile environment from
     environment_path: Option<String>,
-
-    /// Load the environment profile on startup
-    /// Defaults to `true`
     load_environment: bool,
-
-    /// Default environment name to load
-    /// Default: default
     environment_name: Option<String>,
-
-    /// Limit for the authentication cache
-    /// Default: 1000
     authentication_cache_limit: usize,
-
-    /// Use Affinidi Trusted Messaging
-    /// Default: true
-    /// NOTE: You can specify an externally configured ATM instance when instantiating TDK which will override this
     use_atm: bool,
-
-    /// Custom authentication handlers used when this TDK instance acts as the
-    /// authenticating party. Lets the host application override the default
-    /// DID Auth challenge / refresh flow — for example, to inject Nitro Enclave
-    /// attestations or to swap in a non-DID identity provider. See
-    /// [`affinidi_did_authentication::CustomAuthHandlers`] for the trait shape.
     custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
@@ -102,12 +153,7 @@ impl Default for TDKConfigBuilder {
 }
 
 impl TDKConfigBuilder {
-    /// Default starting constructor for `TDKConfigBuilder`
-    pub fn new() -> TDKConfigBuilder {
-        TDKConfigBuilder::default()
-    }
-
-    /// Build the `TDKConfig` from the builder
+    /// Build the [`TDKConfig`] from the builder.
     pub fn build(self) -> Result<TDKConfig, TDKError> {
         Ok(TDKConfig {
             did_resolver: self.did_resolver,
@@ -115,166 +161,77 @@ impl TDKConfigBuilder {
             secrets_resolver: self.secrets_resolver,
             environment_path: self
                 .environment_path
-                .unwrap_or(DEFAULT_ENVIRONMENT_PATH.into()),
+                .unwrap_or_else(|| DEFAULT_ENVIRONMENT_PATH.to_string()),
             load_environment: self.load_environment,
-            environment_name: self.environment_name.unwrap_or("default".into()),
+            environment_name: self
+                .environment_name
+                .unwrap_or_else(|| "default".to_string()),
             authentication_cache_limit: self.authentication_cache_limit,
             use_atm: self.use_atm,
             custom_auth_handlers: self.custom_auth_handlers,
         })
     }
 
-    /// If you want to provide a DID resolver already setup outside of the TDK
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    /// use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-    ///
-    /// // let did_resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build()).await?;
-    /// // let tdk_config = TDKConfig::builder().with_did_resolver(did_resolver).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Supply a pre-built DID resolver. Takes priority over
+    /// [`with_did_resolver_config`](Self::with_did_resolver_config).
     pub fn with_did_resolver(mut self, did_resolver: DIDCacheClient) -> Self {
         self.did_resolver = Some(did_resolver);
         self
     }
 
-    /// Provide a custom DID resolver configuration.
-    /// This is used when the TDK creates the DID resolver internally.
-    /// Has no effect if `with_did_resolver()` is also called (pre-built resolver takes priority).
+    /// Supply a custom DID-resolver configuration. Used when the TDK
+    /// constructs the resolver internally; ignored if
+    /// [`with_did_resolver`](Self::with_did_resolver) is also set.
     ///
-    /// Use this to configure network mode for deployments where the resolver
-    /// runs as a sidecar (e.g., Nitro Enclaves).
-    ///
-    /// Example:
-    /// ```ignore
-    /// use affinidi_tdk_common::config::TDKConfig;
-    /// use affinidi_did_resolver_cache_sdk::config::DIDCacheConfigBuilder;
-    ///
-    /// let resolver_config = DIDCacheConfigBuilder::default()
-    ///     .with_network_mode("ws://127.0.0.1:4445/did/v1/ws")
-    ///     .build();
-    ///
-    /// let tdk_config = TDKConfig::builder()
-    ///     .with_did_resolver_config(resolver_config)
-    ///     .build()?;
-    /// ```
+    /// Useful for sidecar deployments (e.g. Nitro Enclaves) where the
+    /// resolver lives at a known network endpoint.
     pub fn with_did_resolver_config(mut self, config: DIDCacheConfig) -> Self {
         self.did_resolver_config = Some(config);
         self
     }
 
-    /// If you have a SecretsResolver already setup outside of the TDK
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    /// use affinidi_secrets_resolver::ThreadedSecretsResolver;
-    ///
-    /// // let secrets_resolver = ThreadedSecretsResolver::new(None).await?;
-    /// // let tdk_config = TDKConfig::builder().with_secrets_resolver(secrets_resolver).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Supply a pre-built `SecretsResolver`. If absent, a fresh empty
+    /// in-memory resolver is created at `TDKSharedState::new`.
     pub fn with_secrets_resolver(mut self, secrets_resolver: ThreadedSecretsResolver) -> Self {
         self.secrets_resolver = Some(secrets_resolver);
         self
     }
 
-    /// Specify a path to the environment profile file containing profiles
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let tdk_config = TDKConfig::builder().with_environment_path("environment.json".into()).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Set the path to the environment file (defaults to `environments.json`).
     pub fn with_environment_path(mut self, environment_path: String) -> Self {
         self.environment_path = Some(environment_path);
         self
     }
 
-    /// Should TDK load an environment on startup?
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let tdk_config = TDKConfig::builder().with_load_environment(false).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Whether to load the environment file at `TDKSharedState::new` time.
+    /// Defaults to `true`.
     pub fn with_load_environment(mut self, load_environment: bool) -> Self {
         self.load_environment = load_environment;
         self
     }
 
-    /// Change the environment to load on startup
-    /// Defaults: "default"
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let tdk_config = TDKConfig::builder().with_environment_name("local".into()).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Name of the environment to load on startup. Defaults to `"default"`.
     pub fn with_environment_name(mut self, environment_name: String) -> Self {
         self.environment_name = Some(environment_name);
         self
     }
 
-    /// How many Authentication sets should we cache?
-    /// Defaults: 1_000
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let tdk_config = TDKConfig::builder().with_authentication_cache_limit(10_000).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Maximum number of entries in the authentication cache. Defaults to
+    /// 1000.
     pub fn with_authentication_cache_limit(mut self, authentication_cache_limit: usize) -> Self {
         self.authentication_cache_limit = authentication_cache_limit;
         self
     }
 
-    /// Should TDK create an ATM instance internally?
-    /// Defaults: true
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    ///
-    /// let tdk_config = TDKConfig::builder().with_use_atm(false).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Whether `affinidi-tdk` should auto-instantiate ATM (Affinidi Trusted
+    /// Messaging). Defaults to `true`. Read by the umbrella crate; ignored
+    /// here.
     pub fn with_use_atm(mut self, use_atm: bool) -> Self {
         self.use_atm = use_atm;
         self
     }
 
-    /// Set custom authentication handlers
-    /// Example:
-    /// ```
-    /// // use affinidi_tdk::TDK;
-    /// use affinidi_tdk_common::config::TDKConfig;
-    /// use affinidi_did_authentication::CustomAuthHandlers;
-    ///
-    /// // let handlers = CustomAuthHandlers::new()
-    /// //     .with_auth_handler(Arc::new(MyCustomAuthHandler))
-    /// //     .with_refresh_handler(Arc::new(MyCustomRefreshHandler));
-    /// // let tdk_config = TDKConfig::builder().with_custom_auth_handlers(handlers).build();
-    ///
-    /// // let tdk = TDK::new(tdk_config);
-    /// ```
+    /// Override the default DID Auth challenge / refresh flow.
     pub fn with_custom_auth_handlers(mut self, handlers: CustomAuthHandlers) -> Self {
         self.custom_auth_handlers = Some(handlers);
         self
@@ -288,11 +245,11 @@ mod tests {
     #[test]
     fn builder_defaults_are_sensible() {
         let cfg = TDKConfig::builder().build().unwrap();
-        assert_eq!(cfg.environment_path, DEFAULT_ENVIRONMENT_PATH);
-        assert_eq!(cfg.environment_name, "default");
-        assert_eq!(cfg.authentication_cache_limit, 1_000);
-        assert!(cfg.use_atm);
-        assert!(cfg.load_environment);
+        assert_eq!(cfg.environment_path(), DEFAULT_ENVIRONMENT_PATH);
+        assert_eq!(cfg.environment_name(), "default");
+        assert_eq!(cfg.authentication_cache_limit(), 1_000);
+        assert!(cfg.use_atm());
+        assert!(cfg.load_environment());
     }
 
     #[test]
@@ -304,9 +261,9 @@ mod tests {
             .with_load_environment(false)
             .build()
             .unwrap();
-        assert_eq!(cfg.environment_path, "custom.json");
-        assert_eq!(cfg.environment_name, "prod");
-        assert_eq!(cfg.authentication_cache_limit, 50);
-        assert!(!cfg.load_environment);
+        assert_eq!(cfg.environment_path(), "custom.json");
+        assert_eq!(cfg.environment_name(), "prod");
+        assert_eq!(cfg.authentication_cache_limit(), 50);
+        assert!(!cfg.load_environment());
     }
 }

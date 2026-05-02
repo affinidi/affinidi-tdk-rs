@@ -25,18 +25,37 @@ Major hardening + API tightening release. Multiple breaking changes; see
   `config()`, `did_resolver()`, `secrets_resolver()`, `client()`,
   `environment()`, `authentication()`. The internal layout can now evolve
   without breaking consumers.
+- **`TDKConfig` fields are now `pub(crate)`.** Read via accessor methods on
+  `TDKConfig` (`environment_path()`, `load_environment()`, `use_atm()`, etc.).
+  The builder is the only sanctioned construction path.
+- **`TDKProfile.secrets` is now `pub(crate)`.** Use `secrets()` (borrow) or
+  `take_secrets()` (drain) to access. `take_secrets()` is the recommended
+  pattern when handing secrets to a `SecretsResolver` — clearing the in-memory
+  copy shortens the plaintext lifetime.
 - **`TDKSharedState::default()` removed.** It was a `pub async fn` that
   panicked on real init failures (DID resolver, network). Replace with
   `TDKSharedState::new(TDKConfig::builder().build()?).await?`.
 - **`create_http_client` now returns `Result<Client, TDKError>`.** Previously
   panicked on TLS init failure. The crypto-provider install is also now
   `OnceLock`-guarded, so repeated calls are no-ops.
+- **`AuthenticationCache::new` now returns `Self`** (no longer a `(Self, Sender)`
+  tuple). The internal MPSC sender was never useful externally.
+- **`AuthenticationCache::start` is now synchronous** (`pub fn` rather than
+  `pub async fn`). Drop the `.await` at call sites.
+- **`AuthenticationCommand` is now `pub(crate)`.** It was a leaked internal
+  channel-message format; the supported way to drive the cache is via the
+  public methods on `AuthenticationCache`.
+- **`KeyringStore::load_into` is now generic** over `R: SecretsResolver`
+  rather than locked to `ThreadedSecretsResolver`. Existing calls compile
+  unchanged (type inference covers it); custom resolver impls now work too.
 - **`tokio` features narrowed** from `["full"]` to
   `["macros", "rt", "rt-multi-thread", "sync", "time"]`. Downstream binaries
   that were implicitly relying on tdk-common to enable other tokio features
   for them must enable those features explicitly.
 - **`TDKError` is now `#[non_exhaustive]`.** Match arms must include a
   wildcard.
+- **`TDKConfigBuilder::new()` removed.** Use `TDKConfigBuilder::default()` or
+  `TDKConfig::builder()`.
 
 ### Added
 
@@ -58,6 +77,11 @@ Major hardening + API tightening release. Multiple breaking changes; see
 
 ### Changed
 
+- **`TDKSharedState::new`** now actually loads the environment file when
+  `config.load_environment` is `true` (previously the builder's
+  `with_environment_path` / `with_environment_name` / `with_load_environment`
+  were stored but never consumed). Missing files fall back to the default
+  empty environment with a `warn!` log.
 - **`AuthenticationCacheInner`**: removed the always-held `tokio::sync::Mutex`.
   Inner state is now moved into the spawned task by value at `start()` time;
   the `Mutex<Option<...>>` retained on the `AuthenticationCache` is for the
@@ -73,6 +97,18 @@ Major hardening + API tightening release. Multiple breaking changes; see
   and from "deserialise failed".
 - **`KeyringStore::delete`** treats the `NoEntry` keyring error as success
   (idempotent delete) and propagates real errors.
+- **`ensure_default_store`** now uses double-checked locking to avoid the
+  rare double-init race where two threads both build a platform store; only
+  successful init is cached, so a transient platform-store failure (e.g. D-Bus
+  not yet up) can be retried on the next call.
+- **`KeyringStore::read`** error wording for legacy-format failures clarified
+  to distinguish "neither JSON nor base64" from "decoded base64 but JSON
+  parse failed".
+- **`TDKEnvironment::add_profile`** docstring corrected: returns `true` if
+  no previous profile with this alias existed, `false` if an existing one
+  was replaced. The library still always inserts; the bool is informational.
+- **`TDKConfig`** has a manual `Debug` impl that masks non-`Debug` upstream
+  fields with `<…>` placeholders.
 
 ### Documentation
 
@@ -90,8 +126,9 @@ Major hardening + API tightening release. Multiple breaking changes; see
   migration shim, using `keyring_core::mock::Store`),
   `TDKEnvironments::{load_file, save, fetch_from_file}` (using `tempfile`),
   `TDKConfig` builder defaults and overrides, error `From` conversions,
-  authentication-cache hash determinism and collision avoidance, and the
-  `expire_after_create` already-expired path. **18 tests, all green.**
+  authentication-cache hash determinism and collision avoidance, the
+  `expire_after_create` already-expired path, `TDKProfile` constructor /
+  `take_secrets()` drain semantics / serde roundtrip. **21 tests, all green.**
 
 ### Migration
 
@@ -128,6 +165,28 @@ let state = TDKSharedState::default().await;
 
 // 0.6:
 let state = TDKSharedState::new(TDKConfig::builder().build()?).await?;
+```
+
+```rust
+// 0.5.x:
+let mediator = profile.mediator.clone();
+let secrets = profile.secrets.clone();
+
+// 0.6:
+let mediator = profile.mediator.clone();          // unchanged
+let secrets = profile.secrets().to_vec();         // borrow
+// or, if you're done with the profile's plaintext:
+let secrets = profile.take_secrets();             // drain
+```
+
+```rust
+// 0.5.x:
+let path = config.environment_path.clone();
+let limit = config.authentication_cache_limit;
+
+// 0.6:
+let path = config.environment_path().to_string();
+let limit = config.authentication_cache_limit();
 ```
 
 ## 0.5.3 — 2026-05-02

@@ -31,12 +31,13 @@ use affinidi_did_authentication::{AuthorizationTokens, errors::DIDAuthError};
 use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
 use config::TDKConfig;
-use environments::TDKEnvironment;
+use environments::{TDKEnvironment, TDKEnvironments};
 use errors::TDKError;
 use profiles::TDKProfile;
 use reqwest::Client;
 use rustls::ClientConfig;
 use rustls_platform_verifier::ConfigVerifierExt;
+use tracing::warn;
 
 pub mod config;
 pub mod environments;
@@ -132,15 +133,33 @@ impl TDKSharedState {
         };
 
         let client = create_http_client()?;
-        let environment = TDKEnvironment::default();
-        let (authentication, _) = AuthenticationCache::new(
+        let environment = if config.load_environment {
+            match TDKEnvironments::fetch_from_file(
+                Some(&config.environment_path),
+                &config.environment_name,
+            ) {
+                Ok(env) => env,
+                Err(e) => {
+                    warn!(
+                        path = %config.environment_path,
+                        name = %config.environment_name,
+                        error = %e,
+                        "environment-file load failed; falling back to default"
+                    );
+                    TDKEnvironment::default()
+                }
+            }
+        } else {
+            TDKEnvironment::default()
+        };
+        let authentication = AuthenticationCache::new(
             config.authentication_cache_limit as u64,
             &did_resolver,
             secrets_resolver.clone(),
             &client,
             config.custom_auth_handlers.clone(),
         );
-        authentication.start().await;
+        authentication.start();
 
         Ok(TDKSharedState {
             config,

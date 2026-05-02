@@ -35,7 +35,11 @@ pub struct TDKEnvironment {
 }
 
 impl TDKEnvironment {
-    /// Returns true if profile was added, false if it already exists
+    /// Insert a profile, keyed on its `alias`. Any existing profile with the
+    /// same alias is replaced.
+    ///
+    /// Returns `true` if no previous profile with this alias existed,
+    /// `false` if an existing profile was replaced.
     pub fn add_profile(&mut self, profile: TDKProfile) -> bool {
         self.profiles
             .insert(profile.alias.clone(), profile)
