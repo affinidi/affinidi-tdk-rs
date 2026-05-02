@@ -32,10 +32,10 @@ affinidi-did-resolver-cache-sdk = { version = "0.8", features = [
 affinidi-did-common = "0.3"
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", features = ["messaging-core"] }
 affinidi-messaging-core = { path = "../affinidi-messaging-core" }
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.17" }
 affinidi-tsp = { path = "../affinidi-tsp", features = ["messaging-core"] }
 affinidi-secrets-resolver = "0.5"
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.7" }
 
 didwebvh-rs = "0.5"
 ahash = { version = "0.8", features = ["serde"] }

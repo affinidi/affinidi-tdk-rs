@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.6.5"
+version = "0.7.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -22,13 +22,13 @@ data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.3"
-affinidi-messaging-sdk = { version = "0.16", optional = true }
+affinidi-messaging-sdk = { version = "0.17", optional = true }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.13" }
 affinidi-did-authentication = "0.3"
-affinidi-tdk-common = "0.5"
+affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.1"
-affinidi-meeting-place = { version = "0.3", optional = true }
+affinidi-meeting-place = { version = "0.4", optional = true }
 affinidi-data-integrity = { version = "0.6",  optional = true }
 
 # External Crates
