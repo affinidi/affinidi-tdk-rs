@@ -21,9 +21,9 @@ path = "src/mediator_administration/main.rs"
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK for connecting to and communicating with a running mediator
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.17" }
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.6" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.7" }
 ## DIDComm message types — used by example binaries
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", features = ["messaging-core"] }
 ## Protocol-agnostic messaging-core traits — used by `unified_messaging` example

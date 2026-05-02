@@ -40,7 +40,15 @@ async fn main() -> anyhow::Result<()> {
     let (state_store, state_rx) = StateStore::new();
     let (ui_manager, action_rx) = UiManager::new();
 
-    let tdk = Arc::new(TDKSharedState::default().await);
+    let tdk = Arc::new(
+        TDKSharedState::new(
+            affinidi_tdk::common::config::TDKConfig::builder()
+                .with_load_environment(false)
+                .with_use_atm(false)
+                .build()?,
+        )
+        .await?,
+    );
     tokio::try_join!(
         state_store.main_loop(terminator, action_rx, interrupt_rx.resubscribe(), tdk),
         ui_manager.main_loop(state_rx, interrupt_rx.resubscribe()),

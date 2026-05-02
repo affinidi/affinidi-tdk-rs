@@ -452,12 +452,7 @@ mod tests {
         // Try to add a new listener with a different ID but the same DID
         let config = ListenerConfig {
             id: "listener-2".to_string(),
-            profile: TDKProfile {
-                alias: "alice-duplicate".to_string(),
-                did: "did:example:alice".to_string(),
-                mediator: None,
-                secrets: vec![],
-            },
+            profile: TDKProfile::new("alice-duplicate", "did:example:alice", None, vec![]),
             acl_mode: None,
             restart_policy: RestartPolicy::Never,
             message_wait_duration_secs: 5,

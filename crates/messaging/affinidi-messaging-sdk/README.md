@@ -20,7 +20,7 @@ mediator service.
 
 ```toml
 [dependencies]
-affinidi-messaging-sdk = "0.15"
+affinidi-messaging-sdk = "0.17"
 ```
 
 ## Quick Start

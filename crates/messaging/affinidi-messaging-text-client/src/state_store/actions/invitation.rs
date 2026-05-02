@@ -87,7 +87,7 @@ pub async fn create_new_profile(
     }
 
     atm.get_tdk()
-        .secrets_resolver
+        .secrets_resolver()
         .insert(p256_secret.clone())
         .await;
     state.add_secret(p256_secret);

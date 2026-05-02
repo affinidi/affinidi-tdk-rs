@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-affinidi-messaging-didcomm-service = "0.2"
+affinidi-messaging-didcomm-service = "0.3"
 ```
 
 ## Features

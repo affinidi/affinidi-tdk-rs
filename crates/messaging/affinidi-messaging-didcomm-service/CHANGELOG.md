@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0] - 2026-05-02
+
+### Breaking
+
+- Migrated to `affinidi-tdk-common` 0.6 and `affinidi-messaging-sdk` 0.17.
+  Both upstream bumps are SemVer-breaking, so this crate's public API is
+  re-exported through the new types.
+- The `connect()` retry path no longer falls back to
+  `TDKSharedState::default().await` (removed upstream). It now requires a
+  `TDKConfig` (either supplied via `ListenerConfig.tdk_config` or built
+  internally with `with_load_environment(false) / with_use_atm(false)`).
+  Initialisation failures now surface as `TDKError` instead of silently
+  panicking.
+- `ListenerConfig` literals using `TDKProfile { ... }` must switch to
+  `TDKProfile::new(...)` — the `secrets` field is `pub(crate)` in
+  tdk-common 0.6.
+
 ## [0.2.3] - 2026-04-25
 
 ### Fixed

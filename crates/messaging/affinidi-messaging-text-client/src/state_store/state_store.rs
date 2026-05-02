@@ -61,7 +61,7 @@ impl StateStore {
         let mut state = State::read_from_file("config.json").unwrap_or_default();
         state.initialization = true;
 
-        tdk.secrets_resolver.insert_vec(&state.secrets).await;
+        tdk.secrets_resolver().insert_vec(&state.secrets).await;
 
         if !state.chat_list.chats.is_empty() {
             // Set the first chat as the active chat
@@ -160,10 +160,10 @@ impl StateStore {
                         state.settings.show_settings_popup = !state.settings.show_settings_popup;
                     },
                     Action::SettingsCheck { settings } => {
-                        settings.check(&mut state, &tdk.did_resolver).await;
+                        settings.check(&mut state, tdk.did_resolver()).await;
                     }
                     Action::SettingsUpdate { settings } => {
-                        if settings.update(&mut state, &tdk.did_resolver).await {
+                        if settings.update(&mut state, tdk.did_resolver()).await {
                             state.settings.show_settings_popup = false;
                         }
                     }

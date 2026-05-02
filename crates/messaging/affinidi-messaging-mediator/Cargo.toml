@@ -47,7 +47,7 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.16" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.17" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)

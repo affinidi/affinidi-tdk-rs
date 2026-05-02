@@ -32,7 +32,7 @@ secrets-vault = ["dep:vaultrs"]
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 ## SDK message types, problem reports, and protocol definitions
-affinidi-messaging-sdk = { path = "../../affinidi-messaging-sdk", version = "0.16" }
+affinidi-messaging-sdk = { path = "../../affinidi-messaging-sdk", version = "0.17" }
 
 # ── Secrets module: core ─────────────────────────────────────────────────
 async-trait = "0.1"

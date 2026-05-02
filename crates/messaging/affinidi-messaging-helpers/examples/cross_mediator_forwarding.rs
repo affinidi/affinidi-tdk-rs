@@ -78,10 +78,11 @@ async fn main() -> Result<(), ATMError> {
     )
     .await?;
 
-    let alice_env = &alice_tdk.get_shared_state().environment;
+    let _shared = alice_tdk.get_shared_state();
+    let alice_env = _shared.environment();
     let alice_atm = alice_tdk.atm.clone().unwrap();
 
-    let tdk_alice = alice_env.profiles.get("Alice").ok_or_else(|| {
+    let tdk_alice = alice_env.profiles().get("Alice").ok_or_else(|| {
         ATMError::ConfigError(format!(
             "Alice profile not found in environment: {}",
             args.alice_environment
@@ -109,10 +110,11 @@ async fn main() -> Result<(), ATMError> {
     )
     .await?;
 
-    let bob_env = &bob_tdk.get_shared_state().environment;
+    let _shared = bob_tdk.get_shared_state();
+    let bob_env = _shared.environment();
     let bob_atm = bob_tdk.atm.clone().unwrap();
 
-    let tdk_bob = bob_env.profiles.get("Bob").ok_or_else(|| {
+    let tdk_bob = bob_env.profiles().get("Bob").ok_or_else(|| {
         ATMError::ConfigError(format!(
             "Bob profile not found in environment: {}",
             args.bob_environment
