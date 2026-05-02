@@ -92,6 +92,11 @@ Major hardening + API tightening release. Multiple breaking changes; see
 - **`TDKEnvironment::load_ssl_certificates()`** — public helper that
   parses the configured paths into `Vec<CertificateDer<'static>>`. Failures
   surface loudly as `TDKError::Config`.
+- **`TDKEnvironment::resolve_mediator(&profile)`** — picks `profile.mediator`
+  if set, otherwise this environment's `default_mediator`. The same logic
+  is exposed via `TDKSharedState::resolve_mediator` for the common case.
+- **`TDKEnvironment::remove_profile(alias)`** — symmetric counterpart to
+  `add_profile`; returns the removed profile or `None`.
 - **`TDKSharedState::shutdown()`** — graceful drain. Sends `Terminate` to the
   authentication task and awaits its `JoinHandle`.
 - **`tasks::authentication`** public consts: `DEFAULT_AUTH_RETRIES`,
@@ -133,6 +138,17 @@ Major hardening + API tightening release. Multiple breaking changes; see
   was replaced. The library still always inserts; the bool is informational.
 - **`TDKConfig`** has a manual `Debug` impl that masks non-`Debug` upstream
   fields with `<…>` placeholders.
+- **`TDKSharedState::activate_admin_profile`** now drains secrets via
+  `take_secrets()` before returning the profile — eliminates a redundant
+  plaintext copy that was previously held by the returned `TDKProfile`.
+  The only live plaintext after the call is the one held by the resolver.
+- **`TDKEnvironment` deserialisation** is now permissive about missing
+  fields: missing `profiles` / `default_mediator` / `admin_did` /
+  `ssl_certificates` keys default to empty rather than failing the parse.
+  Old configs without these fields now load cleanly.
+- **`TDKSharedState::add_profile`** uses `profile.secrets()` rather than the
+  internal field — consistent with the public-API pattern we ask consumers
+  to follow.
 
 ### Documentation
 
@@ -153,9 +169,13 @@ Major hardening + API tightening release. Multiple breaking changes; see
   authentication-cache hash determinism and collision avoidance, the
   `expire_after_create` already-expired path, `TDKProfile` constructor /
   `take_secrets()` drain semantics / serde roundtrip,
-  `TDKEnvironment` accessors (`default_mediator`, SSL-cert PEM parsing,
-  missing-file error path), and `TDKSharedState::resolve_mediator` priority.
-  **26 tests, all green.**
+  `TDKEnvironment` accessors (`default_mediator`, `remove_profile`,
+  `resolve_mediator` priority).
+- **SSL-certificate test uses `rcgen`** (pure-Rust, `aws_lc_rs` + `pem`
+  features) to generate a fresh self-signed cert at test time, and round-
+  trips it through `Verifier::new_with_extra_roots` — confirms the bytes
+  are valid X.509, not just valid PEM framing.
+  **27 tests, all green.**
 
 ### Migration
 

@@ -204,41 +204,44 @@ impl TDKSharedState {
     }
 
     /// Add a [`TDKProfile`]'s secrets to the shared `SecretsResolver`.
+    ///
+    /// Note: this borrows the profile's secrets — the original `Vec` lives
+    /// on with the profile until it is dropped or [`TDKProfile::take_secrets`]
+    /// is called. For tighter plaintext lifetime, prefer the `take_secrets()`
+    /// drain pattern at the call site.
     pub async fn add_profile(&self, profile: &TDKProfile) {
-        self.secrets_resolver.insert_vec(&profile.secrets).await;
+        self.secrets_resolver.insert_vec(profile.secrets()).await;
     }
 
-    /// Resolve the effective mediator DID for a profile.
-    ///
-    /// Lookup order:
-    /// 1. `profile.mediator` if set,
-    /// 2. otherwise the active environment's
-    ///    [`default_mediator`](environments::TDKEnvironment::default_mediator).
-    ///
-    /// Returns `None` if neither is configured — the caller should treat
-    /// that as a configuration error.
+    /// Resolve the effective mediator DID for a profile, using the active
+    /// environment as the fallback. Delegates to
+    /// [`TDKEnvironment::resolve_mediator`].
     pub fn resolve_mediator<'a>(&'a self, profile: &'a TDKProfile) -> Option<&'a str> {
-        profile
-            .mediator
-            .as_deref()
-            .or_else(|| self.environment.default_mediator())
+        self.environment.resolve_mediator(profile)
     }
 
     /// Load the environment's [`admin_did`](environments::TDKEnvironment::admin_did)
     /// secrets into the shared `SecretsResolver`, returning the admin
-    /// `TDKProfile` for further use.
+    /// `TDKProfile` (with secrets drained) for further use.
     ///
     /// Admin secrets are sensitive and **not** loaded automatically by
     /// [`new`](Self::new). Call this only when you need the admin identity
     /// active in the resolver.
+    ///
+    /// The returned profile carries `alias` / `did` / `mediator` only — its
+    /// `secrets` `Vec` is drained before return, so the only live plaintext
+    /// copy is the one held by the resolver. The original entry on
+    /// [`TDKEnvironment::admin_did`] is unmodified (the environment owns the
+    /// canonical copy on disk).
     ///
     /// Returns `Ok(None)` if no admin DID is configured.
     pub async fn activate_admin_profile(&self) -> Result<Option<TDKProfile>, TDKError> {
         let Some(admin) = self.environment.admin_did() else {
             return Ok(None);
         };
-        let admin = admin.clone();
-        self.secrets_resolver.insert_vec(admin.secrets()).await;
+        let mut admin = admin.clone();
+        let secrets = admin.take_secrets();
+        self.secrets_resolver.insert_vec(&secrets).await;
         Ok(Some(admin))
     }
 
@@ -294,85 +297,5 @@ impl TDKSharedState {
     /// exit. Call before process shutdown for graceful drain.
     pub async fn shutdown(&self) {
         self.authentication.terminate().await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_mediator_prefers_profile() {
-        // Build a state shell directly for the unit test — the helper is
-        // a pure read of `profile.mediator || environment.default_mediator`,
-        // so we don't need the full async constructor.
-        let mut env = TDKEnvironment::default();
-        env.set_default_mediator(Some("did:web:env-default".into()));
-
-        let p_with = TDKProfile::new("alice", "did:example:1", Some("did:web:profile"), vec![]);
-        let p_without = TDKProfile::new("bob", "did:example:2", None, vec![]);
-
-        // Build a minimal TDKSharedState by hand — we only touch `environment`.
-        // Skip via direct field expressions (we're inside the crate).
-        // Re-assemble using a closure to keep this concise.
-        let make_state = |environment: TDKEnvironment| TDKSharedState {
-            config: TDKConfig::builder().build().unwrap(),
-            // The remaining fields are unused by `resolve_mediator`; we use
-            // dummies that the unit test never exercises.
-            did_resolver: dummy_did_cache(),
-            secrets_resolver: dummy_secrets_resolver(),
-            client: reqwest::Client::new(),
-            environment,
-            authentication: dummy_auth_cache(),
-        };
-
-        let state_with = make_state(env.clone());
-        assert_eq!(
-            state_with.resolve_mediator(&p_with),
-            Some("did:web:profile")
-        );
-
-        let state_without = make_state(env);
-        assert_eq!(
-            state_without.resolve_mediator(&p_without),
-            Some("did:web:env-default")
-        );
-
-        let state_empty = make_state(TDKEnvironment::default());
-        assert_eq!(state_empty.resolve_mediator(&p_without), None);
-    }
-
-    fn dummy_did_cache() -> DIDCacheClient {
-        // Construct via the public constructor with a default config — this
-        // is in-process / local mode and does not touch the network.
-        // We block on the future synchronously by polling once; for the
-        // unit test we instead run on a current-thread runtime.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
-                .await
-                .unwrap()
-        })
-    }
-
-    fn dummy_secrets_resolver() -> ThreadedSecretsResolver {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let (sr, _) = ThreadedSecretsResolver::new(None).await;
-            sr
-        })
-    }
-
-    fn dummy_auth_cache() -> AuthenticationCache {
-        let did_resolver = dummy_did_cache();
-        let secrets_resolver = dummy_secrets_resolver();
-        let client = reqwest::Client::new();
-        AuthenticationCache::new(1, &did_resolver, secrets_resolver, &client, None)
     }
 }

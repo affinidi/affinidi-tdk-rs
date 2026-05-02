@@ -54,15 +54,23 @@ impl TDKProfile {
     }
 
     /// Borrow the profile's secrets without taking ownership.
+    ///
+    /// The borrow keeps the underlying `Vec<Secret>` alive on the profile —
+    /// the plaintext is **not** zeroized when the borrow ends. For shorter
+    /// plaintext lifetime, use [`take_secrets`](Self::take_secrets) instead,
+    /// which moves ownership and lets `Zeroize`-on-drop run promptly.
     pub fn secrets(&self) -> &[Secret] {
         &self.secrets
     }
 
-    /// Drain the profile's secrets, leaving an empty `Vec`.
+    /// Drain the profile's secrets, leaving an empty `Vec`. The original
+    /// allocation is dropped, triggering `ZeroizeOnDrop` on each `Secret`;
+    /// the returned `Vec` then carries the only remaining plaintext copy
+    /// until the caller drops it (also zeroized on drop).
     ///
-    /// Prefer this over [`secrets`](Self::secrets) when handing the
-    /// secrets to a `SecretsResolver` — clearing the in-memory copy
-    /// shortens the plaintext lifetime.
+    /// Prefer this over [`secrets`](Self::secrets) when handing secrets to
+    /// a `SecretsResolver` — it shortens the time plaintext lives in
+    /// process memory.
     pub fn take_secrets(&mut self) -> Vec<Secret> {
         std::mem::take(&mut self.secrets)
     }

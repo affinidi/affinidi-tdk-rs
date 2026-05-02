@@ -1,8 +1,19 @@
 /*!
- * Environments modules contains the implementation of the Environments struct and methods.
+ * Named environments — bags of profiles plus environment-level defaults.
  *
- * Environments are a collection of profiles, Can be used to maintain a local, development and remote configurations
- * A Profile contains information relevant to an identity profile (a DID) and associated information
+ * Each [`TDKEnvironment`] carries:
+ * - a `HashMap` of [`TDKProfile`] keyed by alias,
+ * - an optional `default_mediator` DID used as a fall-back when a profile
+ *   does not specify its own mediator (see
+ *   [`TDKEnvironment::resolve_mediator`]),
+ * - an optional `admin_did` profile, activated explicitly via
+ *   [`crate::TDKSharedState::activate_admin_profile`],
+ * - a list of paths to PEM-encoded SSL certificates, layered on top of the
+ *   platform trust store at [`crate::TDKSharedState::new`] time (see
+ *   [`TDKEnvironment::load_ssl_certificates`]).
+ *
+ * Environments are grouped on disk via [`TDKEnvironments`], a JSON
+ * top-level keyed by environment name (e.g. `"local"`, `"dev"`, `"prod"`).
 */
 
 use crate::{
@@ -62,6 +73,12 @@ impl TDKEnvironment {
             .is_none()
     }
 
+    /// Remove a profile by alias. Returns the removed profile, or `None`
+    /// if no profile with this alias was present.
+    pub fn remove_profile(&mut self, alias: &str) -> Option<TDKProfile> {
+        self.profiles.remove(alias)
+    }
+
     /// All profiles in this environment, keyed by alias.
     pub fn profiles(&self) -> &HashMap<String, TDKProfile> {
         &self.profiles
@@ -82,12 +99,32 @@ impl TDKEnvironment {
         self.default_mediator = mediator;
     }
 
+    /// Resolve the effective mediator DID for a profile.
+    ///
+    /// Lookup order:
+    /// 1. `profile.mediator` if set,
+    /// 2. otherwise this environment's [`default_mediator`](Self::default_mediator).
+    ///
+    /// Returns `None` if neither is configured — callers should treat that
+    /// as a configuration error.
+    pub fn resolve_mediator<'a>(&'a self, profile: &'a TDKProfile) -> Option<&'a str> {
+        profile.mediator.as_deref().or(self.default_mediator())
+    }
+
     /// Admin profile, if configured.
     pub fn admin_did(&self) -> Option<&TDKProfile> {
         self.admin_did.as_ref()
     }
 
     /// Set or clear the admin profile.
+    ///
+    /// **Disk-persistence warning**: the admin profile is part of the
+    /// serialised [`TDKEnvironment`]. If the parent [`TDKEnvironments`] is
+    /// later persisted via [`TDKEnvironments::save`], the admin's
+    /// `secrets` `Vec` is written to disk in plaintext JSON. Avoid setting
+    /// an admin profile with active secrets on an environment that will be
+    /// saved unless the destination file is itself protected (filesystem
+    /// permissions, encrypted volume, etc).
     pub fn set_admin_did(&mut self, admin_did: Option<TDKProfile>) {
         self.admin_did = admin_did;
     }
@@ -328,29 +365,37 @@ mod tests {
         assert!(env.load_ssl_certificates().unwrap().is_empty());
     }
 
+    /// Generate a fresh self-signed test certificate via rcgen, write the
+    /// PEM to a tempfile, load via [`TDKEnvironment::load_ssl_certificates`],
+    /// then *also* feed the result through
+    /// [`rustls_platform_verifier::Verifier::new_with_extra_roots`] to confirm
+    /// the bytes are valid X.509 — not just valid PEM framing.
     #[test]
-    fn load_ssl_certificates_parses_pem_file() {
+    fn load_ssl_certificates_parses_and_verifier_accepts() {
+        use std::sync::Arc;
+
         let dir = TempDir::new().unwrap();
         let pem_path = dir.path().join("test-ca.pem");
-        // Minimal self-signed test certificate generated for this test.
-        // Issuer/subject CN=tdk-test-ca, valid 1970-2099.
-        const TEST_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
-MIIBhDCCASqgAwIBAgIULjs5/G2vlobcETBOIINyzlYG/2YwCgYIKoZIzj0EAwIw\n\
-FjEUMBIGA1UEAwwLdGRrLXRlc3QtY2EwIBcNNzAwMTAxMDAwMDAxWhgPMjA5OTEy\n\
-MzEyMzU5NTlaMBYxFDASBgNVBAMMC3Rkay10ZXN0LWNhMFkwEwYHKoZIzj0CAQYI\n\
-KoZIzj0DAQcDQgAEgmehPLMaCJl9XwPFNaaHN5KbKHDaR/D5K3uBzPJ8LqsR3XRo\n\
-0Q+L3tudLpr1EatHC58mPSAcb3CpwpufKpCw0KNTMFEwHQYDVR0OBBYEFB7yyBuy\n\
-8KS0H3jwgY40lc6wDPoTMB8GA1UdIwQYMBaAFB7yyBuy8KS0H3jwgY40lc6wDPoT\n\
-MA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhAOrMcOhEMQyAJUmU\n\
-xxnCt9D8Yh3I+QTW9zd6/EGUUYz2AiBYwDOX4Hd/8oF3MBLQEKDPa8qHrtyf2X1d\n\
-HM18aTnPhg==\n\
------END CERTIFICATE-----\n";
-        std::fs::write(&pem_path, TEST_PEM).unwrap();
+
+        // Generate a self-signed certificate at test time. rcgen is pure
+        // Rust + aws-lc-rs (matches our crypto stack), no external openssl.
+        let cert = rcgen::generate_simple_self_signed(vec!["tdk-test-ca".to_string()])
+            .expect("rcgen self-sign");
+        std::fs::write(&pem_path, cert.cert.pem()).unwrap();
 
         let mut env = TDKEnvironment::default();
         env.set_ssl_certificate_paths(vec![pem_path.to_string_lossy().into_owned()]);
         let certs = env.load_ssl_certificates().unwrap();
         assert_eq!(certs.len(), 1);
+
+        // End-to-end: feed the parsed CertificateDer through the verifier
+        // constructor that production code uses. This catches PEM-frames-OK
+        // / X.509-bytes-broken cases that the load step alone misses.
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+        rustls_platform_verifier::Verifier::new_with_extra_roots(certs.iter().cloned(), provider)
+            .expect("Verifier accepts the parsed certificate");
     }
 
     #[test]
@@ -387,5 +432,37 @@ HM18aTnPhg==\n\
         let p = TDKProfile::new("alice", "did:example:1", None, vec![]);
         assert!(env.add_profile(p.clone()));
         assert!(!env.add_profile(p)); // same alias replaces
+    }
+
+    #[test]
+    fn remove_profile_returns_removed_or_none() {
+        let mut env = TDKEnvironment::default();
+        let p = TDKProfile::new("alice", "did:example:1", None, vec![]);
+        env.add_profile(p);
+
+        let removed = env.remove_profile("alice").expect("returns the profile");
+        assert_eq!(removed.did, "did:example:1");
+        assert!(env.profile("alice").is_none());
+
+        assert!(env.remove_profile("alice").is_none());
+        assert!(env.remove_profile("nobody").is_none());
+    }
+
+    #[test]
+    fn resolve_mediator_prefers_profile_then_environment_then_none() {
+        let mut env = TDKEnvironment::default();
+        env.set_default_mediator(Some("did:web:env-default".into()));
+
+        let p_with = TDKProfile::new("alice", "did:example:1", Some("did:web:profile"), vec![]);
+        assert_eq!(env.resolve_mediator(&p_with), Some("did:web:profile"));
+
+        let p_without = TDKProfile::new("bob", "did:example:2", None, vec![]);
+        assert_eq!(
+            env.resolve_mediator(&p_without),
+            Some("did:web:env-default")
+        );
+
+        let env_empty = TDKEnvironment::default();
+        assert_eq!(env_empty.resolve_mediator(&p_without), None);
     }
 }
