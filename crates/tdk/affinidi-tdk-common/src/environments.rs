@@ -81,52 +81,62 @@ impl TDKEnvironments {
         }
     }
 
-    // Load all environments from file
+    /// Load all environments from `path`.
+    ///
+    /// If the file does not exist, returns an empty [`TDKEnvironments`] with
+    /// `file_name` set so a subsequent [`save`](Self::save) creates it.
+    /// Permissions / IO errors and JSON-parse errors propagate as
+    /// [`TDKError::Profile`].
     pub fn load_file(path: &str) -> Result<Self> {
         match Path::new(path).try_exists() {
-            Ok(exists) => {
-                if exists {
-                    let file = File::open(path).map_err(|err| {
-                        TDKError::Profile(format!("Couldn't open file ({path}): {err}"))
+            Ok(true) => {
+                let file = File::open(path).map_err(|err| {
+                    TDKError::Profile(format!("Failed to open environments file ({path}): {err}"))
+                })?;
+                let reader = BufReader::new(file);
+                let mut profiles: TDKEnvironments =
+                    serde_json::from_reader(reader).map_err(|err| {
+                        TDKError::Profile(format!(
+                            "Failed to deserialise environments file ({path}): {err}"
+                        ))
                     })?;
-                    let reader = BufReader::new(file);
-                    let mut profiles: TDKEnvironments =
-                        serde_json::from_reader(reader).map_err(|err| {
-                            TDKError::Profile(format!("Couldn't deserialize JSON: {err}"))
-                        })?;
-                    profiles.file_name = Some(path.to_string());
-                    Ok(profiles)
-                } else {
-                    Ok(TDKEnvironments {
-                        file_name: Some(path.to_string()),
-                        ..Default::default()
-                    })
-                }
+                profiles.file_name = Some(path.to_string());
+                Ok(profiles)
             }
-            Err(err) => Err(crate::errors::TDKError::Profile(format!(
-                "Profiles file ({path}) doesn't exist: {err}"
+            Ok(false) => Ok(TDKEnvironments {
+                file_name: Some(path.to_string()),
+                ..Default::default()
+            }),
+            Err(err) => Err(TDKError::Profile(format!(
+                "Failed to stat environments file ({path}): {err}"
             ))),
         }
     }
 
-    /// Saves environments to a file
-    /// File name is stored in the TDKEnvironments struct
+    /// Persist environments to the file the [`TDKEnvironments`] was loaded
+    /// from (or whose name was supplied at construction). Errors if no
+    /// file name has been recorded.
     pub fn save(&self) -> Result<()> {
         let Some(file_name) = &self.file_name else {
-            return Err(TDKError::Profile("No file name provided".to_string()));
+            return Err(TDKError::Profile(
+                "Cannot save TDKEnvironments: no file name recorded (load via load_file first)"
+                    .to_string(),
+            ));
         };
 
         let contents = serde_json::to_string_pretty(self).map_err(|err| {
-            TDKError::Profile(format!("Couldn't serialize TDK Environments: {err}"))
+            TDKError::Profile(format!("Failed to serialise TDKEnvironments: {err}"))
         })?;
 
         let mut f = File::create(file_name).map_err(|err| {
-            TDKError::Profile(format!("Couldn't create file ({file_name}): {err}"))
+            TDKError::Profile(format!(
+                "Failed to create environments file ({file_name}): {err}"
+            ))
         })?;
 
         f.write_all(contents.as_bytes()).map_err(|err| {
             TDKError::Profile(format!(
-                "Couldn't write TDK Environments to file ({file_name}): {err}"
+                "Failed to write environments file ({file_name}): {err}"
             ))
         })?;
         Ok(())
@@ -163,5 +173,87 @@ impl TDKEnvironments {
     /// Returns a list of environment names
     pub fn environments(&self) -> Vec<String> {
         self.environments.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn tmp_path(dir: &TempDir, name: &str) -> String {
+        dir.path().join(name).to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn load_file_returns_empty_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "missing.json");
+        let envs = TDKEnvironments::load_file(&path).unwrap();
+        assert!(envs.is_empty());
+        assert_eq!(envs.file_name.as_deref(), Some(path.as_str()));
+    }
+
+    #[test]
+    fn save_then_load_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+
+        let mut envs = TDKEnvironments::load_file(&path).unwrap();
+        let mut env = TDKEnvironment::default();
+        env.add_profile(TDKProfile::new("alice", "did:example:alice", None, vec![]));
+        envs.add("local", env);
+        envs.save().unwrap();
+
+        let reloaded = TDKEnvironments::load_file(&path).unwrap();
+        assert_eq!(reloaded.environments(), vec!["local".to_string()]);
+        assert!(
+            reloaded
+                .get("local")
+                .unwrap()
+                .profiles
+                .contains_key("alice")
+        );
+    }
+
+    #[test]
+    fn fetch_from_file_returns_named_environment() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+
+        let mut envs = TDKEnvironments::load_file(&path).unwrap();
+        envs.add("dev", TDKEnvironment::default());
+        envs.save().unwrap();
+
+        let env = TDKEnvironments::fetch_from_file(Some(&path), "dev").unwrap();
+        assert!(env.profiles.is_empty());
+    }
+
+    #[test]
+    fn fetch_from_file_errors_for_unknown_environment() {
+        let dir = TempDir::new().unwrap();
+        let path = tmp_path(&dir, "envs.json");
+
+        let mut envs = TDKEnvironments::load_file(&path).unwrap();
+        envs.add("dev", TDKEnvironment::default());
+        envs.save().unwrap();
+
+        let err = TDKEnvironments::fetch_from_file(Some(&path), "prod").unwrap_err();
+        assert!(matches!(err, TDKError::Profile(_)));
+    }
+
+    #[test]
+    fn save_without_filename_errors() {
+        let envs = TDKEnvironments::default();
+        let err = envs.save().unwrap_err();
+        assert!(matches!(err, TDKError::Profile(_)));
+    }
+
+    #[test]
+    fn add_profile_returns_false_on_replace() {
+        let mut env = TDKEnvironment::default();
+        let p = TDKProfile::new("alice", "did:example:1", None, vec![]);
+        assert!(env.add_profile(p.clone()));
+        assert!(!env.add_profile(p)); // same alias replaces
     }
 }

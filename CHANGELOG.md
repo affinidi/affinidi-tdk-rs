@@ -9,29 +9,15 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
-## 2026-05-02 — `affinidi-tdk-common` 0.5.3 — keyring-core migration, rustls-platform-verifier 0.7
+## Per-crate changelogs
 
-### Changed
+Some crates maintain their own changelogs alongside their source. Entries below
+this line are workspace-wide rollups; per-crate detail lives in the linked
+files.
 
-- **`affinidi-tdk-common` 0.5.2 → 0.5.3** — Replaced the bundled `keyring 3.x`
-  dependency with the new split-out
-  [`keyring-core 1.0`](https://crates.io/crates/keyring-core) plus per-target
-  platform store crates: `apple-native-keyring-store` (macOS `keychain`, iOS
-  `protected`), `windows-native-keyring-store`, and
-  `dbus-secret-service-keyring-store` (`crypto-rust`). The public
-  `secrets::{save_secrets_locally, delete_did_secret, TDKSharedState::load_secrets}`
-  surface is unchanged — a `OnceLock`-guarded
-  `keyring_core::set_default_store(...)` runs lazily on the first secret op
-  and is a no-op if the host application has already registered its own
-  default store, so callers do not need an init step at startup.
-- **`affinidi-tdk-common`** — Bumped `rustls-platform-verifier` 0.6 → 0.7 to
-  pick up the upstream patch line.
-- **`affinidi-tdk-common`** — Retired the empty `messaging` Cargo feature. It
-  only gated the `use_atm: bool` field on `TDKConfig` / `TDKConfigBuilder`
-  while the actually meaningful gate lives on `affinidi-tdk` (which carries
-  the `dep:affinidi-messaging-sdk` linkage). `use_atm` is now unconditionally
-  present, matching `affinidi-tdk`'s already-unconditional read of it. Four
-  dead `#[cfg(feature = "messaging")]` annotations in `config.rs` removed.
+- [`crates/tdk/affinidi-tdk-common/CHANGELOG.md`](crates/tdk/affinidi-tdk-common/CHANGELOG.md)
+  — last release: **0.6.0** (2026-05-02, hardening + API tightening,
+  KeyringStore, accessor encapsulation).
 
 ## 2026-04-20 — `did:key` raw-bytes helpers for HPKE / sealed transfer
 

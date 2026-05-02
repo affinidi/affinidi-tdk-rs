@@ -9,7 +9,11 @@ use affinidi_secrets_resolver::errors::SecretsResolverError;
 use thiserror::Error;
 
 /// Affinidi Trust Development Kit Errors
+///
+/// Marked `#[non_exhaustive]` — consumers must include a wildcard arm when
+/// matching, so new variants can be added without breaking downstream builds.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum TDKError {
     /// Authentication error, can be retried
     #[error("Authentication failed: {0}")]
@@ -68,5 +72,31 @@ impl From<SecretsResolverError> for TDKError {
 impl From<PeerError> for TDKError {
     fn from(error: PeerError) -> Self {
         TDKError::DIDMethod(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn did_resolver_error_converts() {
+        let inner = DIDCacheError::DIDError("bad did".into());
+        let tdk: TDKError = inner.into();
+        assert!(matches!(tdk, TDKError::DIDResolver(_)));
+        assert!(tdk.to_string().contains("bad did"));
+    }
+
+    #[test]
+    fn data_integrity_error_converts() {
+        let inner = DataIntegrityError::signing(std::io::Error::other("bad sig"));
+        let tdk: TDKError = inner.into();
+        assert!(matches!(tdk, TDKError::DataIntegrity(_)));
+    }
+
+    #[test]
+    fn display_format_preserves_payload() {
+        let e = TDKError::Authentication("token expired".into());
+        assert_eq!(e.to_string(), "Authentication failed: token expired");
     }
 }

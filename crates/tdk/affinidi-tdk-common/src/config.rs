@@ -77,7 +77,11 @@ pub struct TDKConfigBuilder {
     /// NOTE: You can specify an externally configured ATM instance when instantiating TDK which will override this
     use_atm: bool,
 
-    /// Custom authentication handlers
+    /// Custom authentication handlers used when this TDK instance acts as the
+    /// authenticating party. Lets the host application override the default
+    /// DID Auth challenge / refresh flow — for example, to inject Nitro Enclave
+    /// attestations or to swap in a non-DID identity provider. See
+    /// [`affinidi_did_authentication::CustomAuthHandlers`] for the trait shape.
     custom_auth_handlers: Option<CustomAuthHandlers>,
 }
 
@@ -274,5 +278,35 @@ impl TDKConfigBuilder {
     pub fn with_custom_auth_handlers(mut self, handlers: CustomAuthHandlers) -> Self {
         self.custom_auth_handlers = Some(handlers);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_defaults_are_sensible() {
+        let cfg = TDKConfig::builder().build().unwrap();
+        assert_eq!(cfg.environment_path, DEFAULT_ENVIRONMENT_PATH);
+        assert_eq!(cfg.environment_name, "default");
+        assert_eq!(cfg.authentication_cache_limit, 1_000);
+        assert!(cfg.use_atm);
+        assert!(cfg.load_environment);
+    }
+
+    #[test]
+    fn builder_overrides_apply() {
+        let cfg = TDKConfig::builder()
+            .with_environment_path("custom.json".to_string())
+            .with_environment_name("prod".to_string())
+            .with_authentication_cache_limit(50)
+            .with_load_environment(false)
+            .build()
+            .unwrap();
+        assert_eq!(cfg.environment_path, "custom.json");
+        assert_eq!(cfg.environment_name, "prod");
+        assert_eq!(cfg.authentication_cache_limit, 50);
+        assert!(!cfg.load_environment);
     }
 }
