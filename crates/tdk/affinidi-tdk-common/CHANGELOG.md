@@ -36,17 +36,15 @@ Major hardening + API tightening release. Multiple breaking changes; see
   `profile(alias)`, `default_mediator()`, `admin_did()`,
   `ssl_certificate_paths()`. Mutate via `add_profile`,
   `set_default_mediator`, `set_admin_did`, `set_ssl_certificate_paths`.
-- **`create_http_client` now takes `&[CertificateDer<'static>]`** for extra
-  trust roots. Pass `&[]` for the default platform-only behaviour. The
-  internals that reach this function from `TDKSharedState::new` populate it
-  automatically from the active environment's
-  `ssl_certificate_paths()`.
+- **`create_http_client` signature changed** to
+  `fn(extra_roots: &[CertificateDer<'static>]) -> Result<Client, TDKError>`.
+  Pass `&[]` for the default platform-only behaviour; non-empty slices are
+  layered on top via `Verifier::new_with_extra_roots`. Now returns `Result`
+  rather than panicking on TLS init failure. The crypto-provider install
+  is also `OnceLock`-guarded, so repeated calls are no-ops.
 - **`TDKSharedState::default()` removed.** It was a `pub async fn` that
   panicked on real init failures (DID resolver, network). Replace with
   `TDKSharedState::new(TDKConfig::builder().build()?).await?`.
-- **`create_http_client` now returns `Result<Client, TDKError>`.** Previously
-  panicked on TLS init failure. The crypto-provider install is also now
-  `OnceLock`-guarded, so repeated calls are no-ops.
 - **`AuthenticationCache::new` now returns `Self`** (no longer a `(Self, Sender)`
   tuple). The internal MPSC sender was never useful externally.
 - **`AuthenticationCache::start` is now synchronous** (`pub fn` rather than
@@ -205,7 +203,11 @@ Major hardening + API tightening release. Multiple breaking changes; see
   `create_http_client(&[])`.
 - Added `Io` / `Json` `From` round-trip tests + `init_keyring()` smoke
   coverage.
-  **34 tests, all green** (28 unit, 4 keyring integration, 2 end-to-end).
+- Doctests: the `KeyringStore` example is `no_run` (compile-checked,
+  doesn't touch a real keyring); a fresh `no_run`-free executable
+  doctest on `TDKConfig::builder` demonstrates the entry-point flow.
+- **Total: 34 tests, all green** — 26 unit, 4 keyring integration,
+  2 end-to-end, 2 doctests.
 
 ### Migration
 

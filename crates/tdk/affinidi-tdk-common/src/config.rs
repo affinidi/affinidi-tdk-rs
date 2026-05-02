@@ -38,6 +38,20 @@ pub struct TDKConfig {
 
 impl TDKConfig {
     /// Returns a fresh [`TDKConfigBuilder`] with default values.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use affinidi_tdk_common::config::TDKConfig;
+    ///
+    /// let config = TDKConfig::builder()
+    ///     .with_load_environment(false)
+    ///     .with_authentication_cache_limit(500)
+    ///     .build()
+    ///     .expect("config builds");
+    /// assert_eq!(config.authentication_cache_limit(), 500);
+    /// assert!(!config.load_environment());
+    /// ```
     pub fn builder() -> TDKConfigBuilder {
         TDKConfigBuilder::default()
     }

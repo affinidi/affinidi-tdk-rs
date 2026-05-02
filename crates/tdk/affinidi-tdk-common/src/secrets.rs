@@ -45,13 +45,16 @@ use tracing::{debug, warn};
 ///
 /// # Example
 ///
-/// ```ignore
-/// use affinidi_tdk_common::secrets::KeyringStore;
-///
+/// ```no_run
+/// # use affinidi_secrets_resolver::secrets::Secret;
+/// # use affinidi_tdk_common::{secrets::KeyringStore, errors::TDKError};
+/// # fn run(secrets: &[Secret]) -> Result<(), TDKError> {
 /// let store = KeyringStore::new("my-app");
-/// store.save("did:example:123", &secrets)?;
-/// let loaded = store.read("did:example:123")?;
+/// store.save("did:example:123", secrets)?;
+/// let _loaded = store.read("did:example:123")?;
 /// store.delete("did:example:123")?;
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct KeyringStore<'a> {
