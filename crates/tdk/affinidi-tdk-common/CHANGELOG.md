@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.1 — 2026-05-02
+
+Ergonomic additions to soften the 0.6 migration. No breaking changes.
+
+### Added
+
+- **`TDKConfig::headless()`** — one-line shorthand for the recurring
+  `TDKConfig::builder().with_load_environment(false).with_use_atm(false).build()`
+  pattern that 0.6 surfaced across tests, examples, and embedded contexts.
+  Equivalent in every respect; just shorter.
+- **`TDKSharedState::add_profile_drained(&self, profile: &mut TDKProfile)`**
+  — the security-preferred variant of
+  [`add_profile`](crate::TDKSharedState::add_profile). Drains the profile's
+  secrets (via `take_secrets`) into the shared `SecretsResolver` in one
+  call so the resolver holds the only live plaintext copies and
+  `Zeroize`-on-drop fires promptly when those copies are dropped.
+- Doc cross-link from `add_profile` pointing to `add_profile_drained`.
+
 ## 0.6.0 — 2026-05-02
 
 Major hardening + API tightening release. Multiple breaking changes; see

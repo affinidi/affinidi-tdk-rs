@@ -214,10 +214,27 @@ impl TDKSharedState {
     ///
     /// Note: this borrows the profile's secrets — the original `Vec` lives
     /// on with the profile until it is dropped or [`TDKProfile::take_secrets`]
-    /// is called. For tighter plaintext lifetime, prefer the `take_secrets()`
-    /// drain pattern at the call site.
+    /// is called. For tighter plaintext lifetime, prefer
+    /// [`add_profile_drained`](Self::add_profile_drained), which moves the
+    /// secrets into the resolver in one call.
     pub async fn add_profile(&self, profile: &TDKProfile) {
         self.secrets_resolver.insert_vec(profile.secrets()).await;
+    }
+
+    /// Drain a profile's secrets into the shared `SecretsResolver`.
+    ///
+    /// Security-preferred variant of [`add_profile`](Self::add_profile): the
+    /// plaintext is moved out of the profile (which retains an empty
+    /// allocation), the resolver holds the only live copies, and
+    /// `Zeroize`-on-drop fires promptly when those copies are dropped.
+    ///
+    /// Use this when the profile is no longer needed as a secret carrier
+    /// after registration. Use [`add_profile`](Self::add_profile) when the
+    /// caller still needs the profile to retain its secrets (e.g. for
+    /// later re-registration into a different resolver).
+    pub async fn add_profile_drained(&self, profile: &mut TDKProfile) {
+        let secrets = profile.take_secrets();
+        self.secrets_resolver.insert_vec(&secrets).await;
     }
 
     /// Resolve the effective mediator DID for a profile, using the active

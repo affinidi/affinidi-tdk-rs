@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.7.1] - 2026-05-02
+
+### Deprecated
+
+- `TDK::delete_did_secret`, `TDK::save_secrets_locally`, and
+  `TDK::load_secrets` — one-shot wrappers that build a fresh
+  `KeyringStore` per call. They were retained from the pre-0.6 API for
+  source compatibility; the canonical replacement is to construct a
+  `KeyringStore` once at the call site and reuse it (cheaper for
+  repeated ops, explicit lifetime). Marked `#[deprecated]` in 0.7.1
+  with a removal target of **0.8**.
+
 ## [0.7.0] - 2026-05-02
 
 ### Breaking
