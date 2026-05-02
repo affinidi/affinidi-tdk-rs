@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-tdk-common"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.5.2"
+version = "0.6.0"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -12,10 +12,6 @@ repository.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-[features]
-default = ["messaging"]
-messaging = []
-
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-authentication = "0.3"
@@ -25,20 +21,50 @@ affinidi-data-integrity = "0.6"
 
 ahash = "0.8"
 base64 = "0.22"
-keyring = { version = "3", features = [
-  "apple-native",
-  "windows-native",
-  "sync-secret-service",
-] }
+keyring-core = "1"
 moka = { version = "0.12", features = ["future"] }
 reqwest = { version = "0.13", features = ["rustls", "json"] }
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
   "tls12",
 ] }
-rustls-platform-verifier = "0.6"
+rustls-pemfile = "2"
+rustls-platform-verifier = "0.7"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = [
+  "macros",
+  "rt",
+  "rt-multi-thread",
+  "sync",
+  "time",
+] }
 tracing = "0.1"
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
+
+[package.metadata.docs.rs]
+# Render rustdoc on all supported platforms so the cfg-gated platform-store
+# modules in `secrets` (apple/windows/dbus) all show up.
+targets = [
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }

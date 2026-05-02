@@ -9,6 +9,16 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+## Per-crate changelogs
+
+Some crates maintain their own changelogs alongside their source. Entries below
+this line are workspace-wide rollups; per-crate detail lives in the linked
+files.
+
+- [`crates/tdk/affinidi-tdk-common/CHANGELOG.md`](crates/tdk/affinidi-tdk-common/CHANGELOG.md)
+  — last release: **0.6.0** (2026-05-02, hardening + API tightening,
+  KeyringStore, accessor encapsulation).
+
 ## 2026-04-20 — `did:key` raw-bytes helpers for HPKE / sealed transfer
 
 ### Added
