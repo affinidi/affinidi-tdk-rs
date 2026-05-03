@@ -1,7 +1,9 @@
+pub mod circuit_breaker;
 pub mod database;
 pub mod errors;
 pub mod secrets;
 pub mod store;
+pub mod time;
 
 pub use secrets::backends::{PASSPHRASE_ENV, PASSPHRASE_FILE_ENV};
 pub use secrets::well_known::OPERATING_SECRETS;

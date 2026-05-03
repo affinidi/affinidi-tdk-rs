@@ -118,6 +118,13 @@ sha256 = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["valuable"] }
 
+# ── Metrics ──────────────────────────────────────────────────────────────
+## CircuitBreaker emits a gauge + counter for ops. Records to whichever
+## global recorder the binary installs (the mediator installs Prometheus
+## via the `init_metrics` setup; standalone binaries that don't install
+## a recorder get no-op metric writes).
+metrics = "0.24"
+
 [dev-dependencies]
 tempfile = "3"
 ## `test-util` enables `start_paused`, used by the secrets/retry tests
