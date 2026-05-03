@@ -19,7 +19,6 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     secrets::open_store,
 };
-use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use async_convert::{TryFrom, async_trait};
 #[cfg(feature = "aws")]

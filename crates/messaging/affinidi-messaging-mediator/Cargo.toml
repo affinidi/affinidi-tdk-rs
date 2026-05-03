@@ -67,8 +67,6 @@ affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version =
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)
 affinidi-encoding = { version = "0.1", optional = true }
-## Background processors: message expiry cleanup, forwarding
-affinidi-messaging-mediator-processors = { version = "0.13", path = "affinidi-messaging-mediator-processors" }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.

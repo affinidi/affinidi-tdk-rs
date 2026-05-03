@@ -1,3 +1,16 @@
+//! # Standalone Forwarding Processor — Redis-only
+//!
+//! Reads messages from the `FORWARD_Q` Redis stream and delivers them to
+//! remote mediators. Designed for horizontal scaling: deploy multiple
+//! instances on different hosts, all pointed at the same Redis. They
+//! coordinate through the consumer group (`XREADGROUP` / `XACK` /
+//! `XAUTOCLAIM`) so each message is processed exactly once.
+//!
+//! Only meaningful for Redis-backed mediator deployments. If the mediator
+//! is using `memory-backend` or `fjall-backend`, run the in-process
+//! forwarding loop instead — those backends are single-process by design
+//! and there is no second host for this binary to coordinate with.
+
 use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::ProcessorError};
 use affinidi_messaging_mediator_processors::forwarding::processor::ForwardingProcessor;
 use clap::Parser;

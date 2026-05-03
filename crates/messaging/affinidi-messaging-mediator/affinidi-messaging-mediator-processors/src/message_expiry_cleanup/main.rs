@@ -1,3 +1,16 @@
+//! # Standalone Message Expiry Cleanup — Redis-only
+//!
+//! Sweeps expired messages from the mediator's Redis store. Designed for
+//! horizontal scaling: deploy multiple instances on different hosts to
+//! share the work. Coordination is via atomic `SPOP` on the
+//! per-timeslot expiry sets, so concurrent processors never delete the
+//! same message twice.
+//!
+//! Only meaningful for Redis-backed mediator deployments. The mediator
+//! also runs an in-process expiry sweep (via `MediatorStore::sweep_expired_messages`)
+//! that works against any backend — Memory and Fjall don't need this
+//! binary because they're single-process by design.
+
 use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::ProcessorError};
 use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
 use clap::Parser;

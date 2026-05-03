@@ -1,7 +1,4 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::{
-    MessageExpiryCleanupConfig, MessageExpiryCleanupConfigRaw,
-};
 use ahash::AHashSet as HashSet;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +22,36 @@ impl Default for ProcessorsConfig {
 pub(crate) struct ProcessorsConfigRaw {
     pub forwarding: ForwardingConfigRaw,
     pub message_expiry_cleanup: MessageExpiryCleanupConfigRaw,
+}
+
+/// Configuration for the in-process message expiry sweep. The standalone
+/// `message_expiry_cleanup` binary in `affinidi-messaging-mediator-processors`
+/// has its own config — they're intentionally not shared because the
+/// standalone binary is Redis-only by design and runs in a separate process.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MessageExpiryCleanupConfig {
+    pub enabled: bool,
+}
+
+impl Default for MessageExpiryCleanupConfig {
+    fn default() -> Self {
+        MessageExpiryCleanupConfig { enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct MessageExpiryCleanupConfigRaw {
+    pub enabled: String,
+}
+
+impl std::convert::TryFrom<MessageExpiryCleanupConfigRaw> for MessageExpiryCleanupConfig {
+    type Error = MediatorError;
+
+    fn try_from(raw: MessageExpiryCleanupConfigRaw) -> Result<Self, Self::Error> {
+        Ok(MessageExpiryCleanupConfig {
+            enabled: raw.enabled.parse().unwrap_or(true),
+        })
+    }
 }
 
 /// DIDComm routing and forwarding configuration
