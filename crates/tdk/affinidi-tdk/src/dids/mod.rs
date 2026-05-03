@@ -6,11 +6,17 @@
 
 use affinidi_did_common::DID as DIDCommon;
 #[cfg(feature = "did-peer")]
-use affinidi_did_common::one_or_many::OneOrMany;
+use affinidi_did_common::PeerCreateKey;
 #[cfg(feature = "did-peer")]
-use affinidi_did_common::{
-    PeerCreateKey, PeerKeyPurpose, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
-};
+use affinidi_did_common::PeerKeyPurpose;
+
+// Re-export the peer-service types so consumers of
+// [`DID::generate_did_peer_with_services`] can build their own service
+// entries without depending on `affinidi-did-common` directly.
+#[cfg(feature = "did-peer")]
+pub use affinidi_did_common::one_or_many::OneOrMany;
+#[cfg(feature = "did-peer")]
+pub use affinidi_did_common::{PeerService, PeerServiceEndpoint, PeerServiceEndpointLong};
 use affinidi_secrets_resolver::secrets::{KeyType as CryptoKeyType, Secret};
 use affinidi_tdk_common::errors::{Result, TDKError};
 use std::fmt::Display;
@@ -152,7 +158,11 @@ impl DID {
             secrets.push(secret);
         }
 
-        Self::complete_did_peer_creation(&mut secrets, &peer_keys, didcomm_service_uri)
+        Self::complete_did_peer_creation(
+            &mut secrets,
+            &peer_keys,
+            didcomm_service_uri.map(default_didcomm_services),
+        )
     }
 
     #[cfg(feature = "did-peer")]
@@ -161,6 +171,24 @@ impl DID {
     pub fn generate_did_peer(
         keys: Vec<(PeerKeyRole, KeyType)>,
         didcomm_service_uri: Option<String>,
+    ) -> Result<(String, Vec<Secret>)> {
+        Self::generate_did_peer_with_services(
+            keys,
+            didcomm_service_uri.map(default_didcomm_services),
+        )
+    }
+
+    #[cfg(feature = "did-peer")]
+    /// Generate a new DID:peer with caller-supplied service entries.
+    ///
+    /// Use this when the default single `dm` service produced by
+    /// [`generate_did_peer`] is not enough — e.g. mediators that need
+    /// to publish both a DIDComm service and a separate `#auth` service
+    /// for HTTP authentication, or any DID document with multiple
+    /// service endpoints.
+    pub fn generate_did_peer_with_services(
+        keys: Vec<(PeerKeyRole, KeyType)>,
+        services: Option<Vec<PeerService>>,
     ) -> Result<(String, Vec<Secret>)> {
         let mut peer_keys: Vec<PeerCreateKey> = Vec::new();
         let mut secrets: Vec<Secret> = Vec::new();
@@ -180,8 +208,7 @@ impl DID {
             secrets_mut.push(secret);
         }
 
-        let peer =
-            Self::complete_did_peer_creation(&mut secrets_mut, &peer_keys, didcomm_service_uri)?;
+        let peer = Self::complete_did_peer_creation(&mut secrets_mut, &peer_keys, services)?;
         Ok((peer, secrets))
     }
 
@@ -190,20 +217,8 @@ impl DID {
     fn complete_did_peer_creation(
         secrets: &mut [&mut Secret],
         peer_keys: &[PeerCreateKey],
-        service_uri: Option<String>,
+        services: Option<Vec<PeerService>>,
     ) -> Result<String> {
-        let services = service_uri.map(|service_uri| {
-            vec![PeerService {
-                type_: "dm".into(),
-                endpoint: PeerServiceEndpoint::Long(OneOrMany::One(PeerServiceEndpointLong {
-                    uri: service_uri,
-                    accept: vec!["didcomm/v2".into()],
-                    routing_keys: vec![],
-                })),
-                id: None,
-            }]
-        });
-
         let (peer_did, _created_keys) = DIDCommon::generate_peer(peer_keys, services.as_deref())
             .map_err(|e| TDKError::DIDMethod(e.to_string()))?;
         let peer = peer_did.to_string();
@@ -215,6 +230,21 @@ impl DID {
 
         Ok(peer)
     }
+}
+
+#[cfg(feature = "did-peer")]
+/// Build the default service set used by [`DID::generate_did_peer`]:
+/// a single DIDComm Messaging service (`type: "dm"`) at the given URI.
+fn default_didcomm_services(service_uri: String) -> Vec<PeerService> {
+    vec![PeerService {
+        type_: "dm".into(),
+        endpoint: PeerServiceEndpoint::Long(OneOrMany::One(PeerServiceEndpointLong {
+            uri: service_uri,
+            accept: vec!["didcomm/v2".into()],
+            routing_keys: vec![],
+        })),
+        id: None,
+    }]
 }
 
 #[cfg(test)]

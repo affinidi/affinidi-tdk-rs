@@ -79,7 +79,9 @@ use affinidi_messaging_mediator_common::{
     store::MediatorStore,
 };
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
-use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
+use affinidi_tdk::dids::{
+    DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
+};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair, signature::KeyPair};
 use thiserror::Error;
@@ -389,7 +391,12 @@ fn bind_ephemeral_listener(requested: Option<SocketAddr>) -> Result<SocketAddr, 
 /// Generate the mediator's `did:peer:2` identity:
 /// - Ed25519 verification key
 /// - X25519 key-agreement key
-/// - DIDComm service endpoint pointing at the bound URL
+/// - DIDComm service entry (default `#service`) pointing at the bound URL
+/// - Authentication service entry (`#auth`) pointing at
+///   `<bound_url>authenticate` — required for clients that authenticate
+///   via `affinidi-did-authentication` (which looks for a service whose
+///   id ends in `#auth`). Mirrors the canonical mediator DID shape
+///   produced by the `didcomm-mediator` template.
 ///
 /// Returns the DID, its secrets (for the caller to inspect or merge
 /// elsewhere), and a `ThreadedSecretsResolver` already populated with
@@ -397,12 +404,49 @@ fn bind_ephemeral_listener(requested: Option<SocketAddr>) -> Result<SocketAddr, 
 async fn generate_mediator_identity(
     service_uri: &str,
 ) -> Result<(String, Vec<Secret>, Arc<ThreadedSecretsResolver>), TestMediatorError> {
-    let (did, secrets) = DID::generate_did_peer(
+    // `service_uri` is `http://<bound>/mediator/v1/` (trailing slash).
+    // The DIDComm service entry advertises both HTTP and WS endpoints
+    // (matching the canonical mediator-template shape) so SDK clients
+    // that prefer the streaming transport can find a `ws://` URI. The
+    // `#auth` endpoint is `<service_uri>authenticate` (no extra slash
+    // — `service_uri` already ends in `/`); the auth library appends
+    // `/challenge` itself, yielding `…/authenticate/challenge`.
+    let ws_uri = format!(
+        "ws://{}",
+        service_uri
+            .trim_start_matches("http://")
+            .trim_end_matches('/'),
+    ) + "/ws";
+    let auth_uri = format!("{service_uri}authenticate");
+    let services = vec![
+        PeerService {
+            type_: "dm".into(),
+            endpoint: PeerServiceEndpoint::Long(OneOrMany::Many(vec![
+                PeerServiceEndpointLong {
+                    uri: service_uri.to_string(),
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+                PeerServiceEndpointLong {
+                    uri: ws_uri,
+                    accept: vec!["didcomm/v2".into()],
+                    routing_keys: vec![],
+                },
+            ])),
+            id: None,
+        },
+        PeerService {
+            type_: "Authentication".into(),
+            endpoint: PeerServiceEndpoint::Uri(auth_uri),
+            id: Some("#auth".into()),
+        },
+    ];
+    let (did, secrets) = DID::generate_did_peer_with_services(
         vec![
             (PeerKeyRole::Verification, KeyType::Ed25519),
             (PeerKeyRole::Encryption, KeyType::X25519),
         ],
-        Some(service_uri.to_string()),
+        Some(services),
     )
     .map_err(|e| TestMediatorError::DidGeneration(e.to_string()))?;
 
