@@ -269,6 +269,43 @@ pub async fn serve_internal(
         Some(database)
     };
 
+    // Build the polymorphic store now so background tasks can take
+    // `Arc<dyn MediatorStore>` instead of the concrete `Database`.
+    // Pre-built stores (Memory/Fjall) flow through; otherwise wrap
+    // the Redis `Database` in a `RedisStore`.
+    use affinidi_messaging_mediator_common::store::MediatorStore;
+    let store: Arc<dyn MediatorStore> = if let Some(store) = pre_built_store {
+        store
+    } else {
+        // Fall through to the Redis path. When the binary is built
+        // without `redis-backend`, `database` is unconditionally
+        // `None` and this branch is unreachable — but the compiler
+        // still needs a value here. Gate the construction so the
+        // build doesn't break on Memory-only or Fjall-only feature
+        // sets.
+        #[cfg(feature = "redis-backend")]
+        {
+            use crate::store::RedisStore;
+            let database = database
+                .as_ref()
+                .expect("database must exist when pre_built_store is None");
+            Arc::new(RedisStore::new(
+                database.clone(),
+                config.database.functions_file.clone(),
+            ))
+        }
+        #[cfg(not(feature = "redis-backend"))]
+        {
+            return Err(MediatorError::ConfigError(
+                error_codes::CONFIG_ERROR,
+                "NA".into(),
+                "no pre-built store supplied and `redis-backend` feature is disabled — \
+                 either enable `redis-backend` or pass MediatorBuilder::store(...)"
+                    .into(),
+            ));
+        }
+    };
+
     // Optional signal handler — cancels the same token the caller
     // provided so the embedded path's caller-driven cancellation and
     // the binary's signal-driven cancellation share a code path.
@@ -283,29 +320,29 @@ pub async fn serve_internal(
 
     let metrics_handle = metrics::init_metrics();
 
-    // The four background tasks below all take a raw `Database`
-    // (Redis-specific). When a pre-built store is supplied they are
-    // skipped — Memory and Fjall don't have a `Database` to give
-    // these tasks. Refactoring them to take `Arc<dyn MediatorStore>`
-    // is tracked as future work.
-    if let Some(database) = &database {
-        // Statistics task — runs the periodic stats logger.
-        let _stats_database = database.clone();
-        let tags = config.tags.clone();
-        let stats_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                result = statistics(_stats_database, tags) => {
-                    if let Err(e) = result {
-                        error!("Statistics thread error: {}", e);
-                    }
-                }
-                _ = stats_token.cancelled() => {
-                    info!("Statistics thread shutting down");
+    // Statistics task — runs against any backend via the trait.
+    let stats_store = store.clone();
+    let tags = config.tags.clone();
+    let stats_token = shutdown_token.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            result = statistics(stats_store, tags) => {
+                if let Err(e) = result {
+                    error!("Statistics thread error: {}", e);
                 }
             }
-        });
+            _ = stats_token.cancelled() => {
+                info!("Statistics thread shutting down");
+            }
+        }
+    });
 
+    // The remaining background tasks still take the concrete
+    // `Database` (Redis-specific). When a pre-built store is
+    // supplied they are skipped — Memory and Fjall don't have a
+    // `Database` to give them. Migrating each onto
+    // `Arc<dyn MediatorStore>` is tracked as follow-up work.
+    if let Some(database) = &database {
         if config.processors.message_expiry_cleanup.enabled {
             let _database = database.handler.clone();
             let _config = config.processors.message_expiry_cleanup.clone();
@@ -414,43 +451,6 @@ pub async fn serve_internal(
     let mediator_did = config.mediator_did.clone();
     let admin_did = config.admin_did.clone();
     let api_prefix = config.api_prefix.clone();
-
-    // Pick the store to wire into SharedData. Pre-built stores
-    // (Memory/Fjall) are used directly. Otherwise wrap the legacy
-    // Redis `Database` in a `RedisStore` so handlers can talk to it
-    // via the `MediatorStore` trait.
-    use affinidi_messaging_mediator_common::store::MediatorStore;
-    let store: Arc<dyn MediatorStore> = if let Some(store) = pre_built_store {
-        store
-    } else {
-        // Fall through to the Redis path. When the binary is built
-        // without `redis-backend`, `database` is unconditionally
-        // `None` and this branch is unreachable — but the compiler
-        // still needs a value here. Gate the construction so the
-        // build doesn't break on Memory-only or Fjall-only feature
-        // sets.
-        #[cfg(feature = "redis-backend")]
-        {
-            use crate::store::RedisStore;
-            let database = database
-                .as_ref()
-                .expect("database must exist when pre_built_store is None");
-            Arc::new(RedisStore::new(
-                database.clone(),
-                config.database.functions_file.clone(),
-            ))
-        }
-        #[cfg(not(feature = "redis-backend"))]
-        {
-            return Err(MediatorError::ConfigError(
-                error_codes::CONFIG_ERROR,
-                "NA".into(),
-                "no pre-built store supplied and `redis-backend` feature is disabled — \
-                 either enable `redis-backend` or pass MediatorBuilder::store(...)"
-                    .into(),
-            ));
-        }
-    };
 
     let shared_state = SharedData {
         config: config.clone(),
