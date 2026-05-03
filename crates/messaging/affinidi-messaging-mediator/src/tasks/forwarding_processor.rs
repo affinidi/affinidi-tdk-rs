@@ -15,10 +15,9 @@
 //! - Connection failures: retry with exponential backoff
 //! - Rejection from remote mediator: send problem report to sender, drop message
 
+use crate::common::config::ForwardingConfig;
 use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
-use crate::{
-    common::config::ForwardingConfig, database::Database, database::forwarding::ForwardQueueEntry,
-};
+use affinidi_messaging_mediator_common::store::{MediatorStore, types::ForwardQueueEntry};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::HashMap,
@@ -158,7 +157,7 @@ struct PooledWebSocket {
 /// The forwarding processor that reads from FORWARD_Q and delivers to remote mediators
 pub struct ForwardingProcessor {
     config: ForwardingConfig,
-    database: Database,
+    database: Arc<dyn MediatorStore>,
     consumer_name: String,
     endpoints: Arc<RwLock<HashMap<String, EndpointState>>>,
     http_pool: Arc<HttpClientPool>,
@@ -169,7 +168,7 @@ pub struct ForwardingProcessor {
 impl ForwardingProcessor {
     pub fn new(
         config: ForwardingConfig,
-        database: Database,
+        database: Arc<dyn MediatorStore>,
     ) -> Result<Self, affinidi_messaging_mediator_common::errors::MediatorError> {
         let consumer_name = format!("processor_{}", Uuid::new_v4());
         info!(
@@ -197,12 +196,8 @@ impl ForwardingProcessor {
 
     /// Start the forwarding processor. This runs indefinitely.
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Ensure consumer group exists
-        self.database
-            .forward_queue_ensure_group(&self.config.consumer_group)
-            .await
-            .map_err(|e| format!("Failed to create consumer group: {e}"))?;
-
+        // The consumer group is created lazily on the first
+        // `forward_queue_read` call; no explicit ensure step needed.
         info!(
             "ForwardingProcessor started: consumer={}, group={}, batch_size={}, ws_threshold={} msgs/10s, ws_idle_timeout={}s",
             self.consumer_name,
@@ -221,7 +216,7 @@ impl ForwardingProcessor {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 match db_clone
-                    .forward_queue_autoclaim(&group, &consumer, 60_000, batch_size)
+                    .forward_queue_autoclaim(&group, &consumer, Duration::from_secs(60), batch_size)
                     .await
                 {
                     Ok(entries) if !entries.is_empty() => {
@@ -276,7 +271,8 @@ impl ForwardingProcessor {
                     &self.config.consumer_group,
                     &self.consumer_name,
                     self.config.batch_size,
-                    5000, // 5 second block timeout, then loop to check for stale messages
+                    // 5 second block timeout, then loop to check for stale messages
+                    Duration::from_secs(5),
                 )
                 .await
             {
@@ -537,8 +533,11 @@ impl ForwardingProcessor {
                         warn!("Failed to delete retry entry: {e}");
                     }
 
-                    // Enqueue new entry with incremented retry count
-                    if let Err(e) = self.database.forward_queue_enqueue(&retry_entry).await {
+                    // Enqueue new entry with incremented retry count.
+                    // `max_len = 0` keeps the legacy unbounded behaviour
+                    // for retries; the inbound enqueue path applies the
+                    // queue limit instead.
+                    if let Err(e) = self.database.forward_queue_enqueue(&retry_entry, 0).await {
                         error!("Failed to re-enqueue retry entry (message may be lost): {e}");
                     }
                 }

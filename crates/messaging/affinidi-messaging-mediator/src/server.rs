@@ -337,6 +337,32 @@ pub async fn serve_internal(
         }
     });
 
+    // Forwarding processor — runs against any backend via the trait.
+    if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
+        let _database = store.clone();
+        let _config = config.processors.forwarding.clone();
+        let fwd_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            let processor = match ForwardingProcessor::new(_config, _database) {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("Failed to create forwarding processor: {}", e);
+                    return;
+                }
+            };
+            tokio::select! {
+                result = processor.start() => {
+                    if let Err(e) = result {
+                        error!("Forwarding processor error: {}", e);
+                    }
+                }
+                _ = fwd_token.cancelled() => {
+                    info!("Forwarding processor shutting down");
+                }
+            }
+        });
+    }
+
     // The remaining background tasks still take the concrete
     // `Database` (Redis-specific). When a pre-built store is
     // supplied they are skipped — Memory and Fjall don't have a
@@ -359,32 +385,6 @@ pub async fn serve_internal(
                     }
                     _ = cleanup_token.cancelled() => {
                         info!("Message expiry cleanup shutting down");
-                    }
-                }
-            });
-        }
-
-        if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding
-        {
-            let _database = database.clone();
-            let _config = config.processors.forwarding.clone();
-            let fwd_token = shutdown_token.clone();
-            tokio::spawn(async move {
-                let processor = match ForwardingProcessor::new(_config, _database) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        error!("Failed to create forwarding processor: {}", e);
-                        return;
-                    }
-                };
-                tokio::select! {
-                    result = processor.start() => {
-                        if let Err(e) = result {
-                            error!("Forwarding processor error: {}", e);
-                        }
-                    }
-                    _ = fwd_token.cancelled() => {
-                        info!("Forwarding processor shutting down");
                     }
                 }
             });
