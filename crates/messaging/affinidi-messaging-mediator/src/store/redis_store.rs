@@ -20,7 +20,6 @@ use crate::database::{
     stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
-use crate::tasks::websocket_streaming::PubSubRecord as InnerPubSubRecord;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
@@ -892,18 +891,11 @@ impl MediatorStore for RedisStore {
             let mut stream = pubsub.on_message();
             while let Some(msg) = stream.next().await {
                 match msg.get_payload::<String>() {
-                    Ok(payload) => match serde_json::from_str::<InnerPubSubRecord>(&payload) {
+                    Ok(payload) => match serde_json::from_str::<PubSubRecord>(&payload) {
                         Ok(record) => {
-                            // Convert the legacy record shape to the
-                            // trait's PubSubRecord. Same fields.
-                            let new = PubSubRecord {
-                                did_hash: record.did_hash,
-                                message: record.message,
-                                force_delivery: record.force_delivery,
-                            };
                             // Ignore send errors — no current
                             // subscribers is acceptable.
-                            let _ = inner_sender.send(new);
+                            let _ = inner_sender.send(record);
                         }
                         Err(e) => warn!(
                             "RedisStore pubsub bridge ({}): malformed payload: {}",

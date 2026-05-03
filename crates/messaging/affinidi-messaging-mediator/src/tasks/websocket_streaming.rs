@@ -1,27 +1,28 @@
 /*!
- A task that listens for messages on a Redis pub/sub channel and sends them to clients over a websocket.
+ A task that listens for streaming notifications from the storage
+ backend and sends them to clients over a websocket.
 
- It will maintain a HashSet of channels based on the DID hash. As a result, if duplicate websockets
- are created for the same DID, only the most recent one will receive messages as the older websocket
- channel will be forcibly closed.
+ It maintains a HashMap of channels keyed by DID hash. If a duplicate
+ WebSocket is opened for the same DID the older session is forcibly
+ closed so only the most recent one receives messages.
 
- Any status on the existing websocket channel for a DID will need to be reset on the new channel.
-
+ The notification stream comes from `MediatorStore::streaming_subscribe`,
+ so the task runs unchanged whether the backend is Redis pub/sub,
+ Fjall's in-process broadcast, or the test MemoryStore.
 */
-use crate::database::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
+use affinidi_messaging_mediator_common::{
+    errors::MediatorError,
+    store::{MediatorStore, types::PubSubRecord},
+};
 use ahash::AHashMap as HashMap;
-use http::StatusCode;
-use redis::aio::PubSub;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
-use tokio::{select, sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::StreamExt;
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    select,
+    sync::{broadcast, mpsc},
+    task::JoinHandle,
+    time::sleep,
+};
 use tracing::{Instrument, Level, debug, error, info, span, warn};
-
-// Useful links on redis pub/sub in Rust:
-// https://github.com/redis-rs/redis-rs/issues/509
 
 /// Used when updating the streaming state.
 /// Register: Creates the hash map entry for the DID hash and TX Channel
@@ -59,23 +60,10 @@ pub struct StreamingTask {
     pub channel: mpsc::Sender<StreamingUpdate>,
 }
 
-/// This is the format of the JSON message that is sent to the pub/sub channel.
-/// did_hash : SHA256 hash of the DID
-/// message : The message to send to the client
-/// force_delivery : If true, the message will be sent to the client even if they are not active.
-///
-/// NOTE: The force_delivery is required as when changing live_delivery status, standard says to send a status message
-#[derive(Serialize, Deserialize, Debug)]
-pub struct PubSubRecord {
-    pub did_hash: String,
-    pub message: String,
-    pub force_delivery: bool,
-}
-
 impl StreamingTask {
     /// Creates the streaming task handler
     pub async fn new(
-        database: Database,
+        database: Arc<dyn MediatorStore>,
         mediator_uuid: &str,
     ) -> Result<(Self, JoinHandle<()>), MediatorError> {
         let _span = span!(Level::INFO, "StreamingTask::new");
@@ -108,43 +96,11 @@ impl StreamingTask {
         .await
     }
 
-    /// Starts a pubsub connection to Redis and subscribes to a channel.
-    /// Useful way to restart a terminated connection from within a loop.
-    async fn _start_pubsub(&self, database: Database, uuid: &str) -> Result<PubSub, MediatorError> {
-        let _span = span!(Level::INFO, "_start_pubsub");
-
-        async move {
-            let mut pubsub = database.handler.get_pubsub_connection().await?;
-
-            let channel = format!("CHANNEL:{uuid}");
-            pubsub.subscribe(channel.clone()).await.map_err(|err| {
-                error!("Error subscribing to channel: {}", err);
-
-                MediatorError::problem(
-                    78,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.pubsub.subscribe",
-                    "Can't subscribe to channel: {1}",
-                    vec![err.to_string()],
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-            })?;
-
-            info!("Subscribed to channel: {}", channel);
-            Ok(pubsub)
-        }
-        .instrument(_span)
-        .await
-    }
-
     /// Streams messages to subscribed clients over websocket.
     /// Is spawned as a task
     async fn ws_streaming_task(
         self,
-        database: Database,
+        database: Arc<dyn MediatorStore>,
         channel: &mut mpsc::Receiver<StreamingUpdate>,
     ) -> Result<(), MediatorError> {
         let _span = span!(Level::INFO, "ws_streaming_task", uuid = &self.uuid);
@@ -157,69 +113,44 @@ impl StreamingTask {
 
             // Create a hashmap to store the clients and if they are active (true = yes)
             // Key: did_hash, Value: (channel, session_id, live_delivery_active)
-            let mut clients: HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)> = HashMap::new();
+            let mut clients: HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)> =
+                HashMap::new();
 
-            // Start streaming messages to clients
-            let mut pubsub = self._start_pubsub(database.clone(), &self.uuid).await?;
+            // Subscribe to delivery notifications via the trait. Backends
+            // are responsible for the wire-level transport (Redis pub/sub,
+            // in-process broadcast, etc.) — the task just consumes
+            // already-decoded `PubSubRecord`s.
+            let mut rx = database.streaming_subscribe(&self.uuid).await?;
+
             loop {
-                let mut stream = pubsub.on_message();
-
-                // Listen for an update on either the redis pubsub stream, or the command channel
-                // stream: redis pubsub of incoming messages destined for a client
-                // channel: command channel to start/stop streaming for a client
                 select! {
-                    value = stream.next() => { // redis pubsub
-                        if let Some(msg) = value {
-                            if let Ok(payload) = msg.get_payload::<String>() {
-                                let payload: PubSubRecord = match serde_json::from_str(&payload) {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        error!("Failed to parse pub/sub payload: {e}");
-                                        continue;
+                    value = rx.recv() => {
+                        match value {
+                            Ok(payload) => {
+                                self.dispatch_payload(database.as_ref(), &mut clients, payload).await;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                                // Subscriber fell behind; backend's broadcast capacity
+                                // was exceeded. Live messages were dropped, but the
+                                // queueing path still picked them up — clients just
+                                // won't get a real-time push for those entries.
+                                warn!(
+                                    "Streaming subscriber lagged, dropped {} live notifications",
+                                    skipped
+                                );
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                error!("Streaming subscription closed, attempting to resubscribe");
+                                rx = loop {
+                                    sleep(Duration::from_secs(1)).await;
+                                    match database.streaming_subscribe(&self.uuid).await {
+                                        Ok(rx) => break rx,
+                                        Err(err) => {
+                                            error!("Error resubscribing to streaming channel: {err}");
+                                            continue;
+                                        }
                                     }
                                 };
-
-                                // Find the MPSC transmit channel for the associated DID hash
-                                match clients.get(&payload.did_hash) { Some((tx, _, active)) => {
-                                    if payload.force_delivery ||  *active {
-                                        // Send the message to the client
-                                        if let Err(err) = tx.send(WebSocketCommands::Message(payload.message.clone())).await {
-                                            warn!("Dead WebSocket channel for ({}), cleaning up: {}", payload.did_hash, err);
-                                            clients.remove(&payload.did_hash);
-                                            if let Err(e) = database.streaming_deregister_client(&payload.did_hash, &self.uuid).await {
-                                                error!("Error deregistering dead client ({}): {}", payload.did_hash, e);
-                                            }
-                                        } else {
-                                            debug!("Sent message to client ({})", payload.did_hash);
-                                        }
-                                    } else {
-                                        debug!("pub/sub msg received for did_hash({}) but it is not active", payload.did_hash);
-                                        if let Err(err) = database.streaming_stop_live(&payload.did_hash, &self.uuid).await {
-                                            error!("Error stopping streaming for client ({}): {}", payload.did_hash, err);
-                                        }
-                                    }
-                                } _ => {
-                                    warn!("pub/sub msg received for did_hash({}) but it doesn't exist in clients HashMap", payload.did_hash);
-                                }}
-
-                            } else {
-                                error!("Error getting payload from message");
-                                continue;
-                            };
-                        } else {
-                            // Redis connection dropped, need to retry
-                            error!("Redis connection dropped, retrying...");
-                            drop(stream);
-
-                            pubsub = loop {
-                                sleep(Duration::from_secs(1)).await;
-                                match self._start_pubsub(database.clone(), &self.uuid).await {
-                                    Ok(pubsub) => break pubsub,
-                                    Err(err) => {
-                                        error!("Error starting pubsub: {}", err);
-                                        continue;
-                                    }
-                                }
                             }
                         }
                     }
@@ -227,7 +158,7 @@ impl StreamingTask {
                         if let Some(value) = &value {
                             match &value.state {
                                 StreamingUpdateState::Register { channel: client_tx, session_id, did } => {
-                                    self._handle_registration(&database, &mut clients, value, client_tx, session_id, did).await;
+                                    self._handle_registration(database.as_ref(), &mut clients, value, client_tx, session_id, did).await;
                                 },
                                 StreamingUpdateState::Start => {
                                     if let Some((_, _, active)) = clients.get_mut(&value.did_hash) {
@@ -273,11 +204,68 @@ impl StreamingTask {
         .await
     }
 
+    /// Forward one streaming notification to the WebSocket sender for
+    /// its target DID, dropping clients whose channels have closed.
+    async fn dispatch_payload(
+        &self,
+        database: &dyn MediatorStore,
+        clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)>,
+        payload: PubSubRecord,
+    ) {
+        match clients.get(&payload.did_hash) {
+            Some((tx, _, active)) => {
+                if payload.force_delivery || *active {
+                    if let Err(err) = tx
+                        .send(WebSocketCommands::Message(payload.message.clone()))
+                        .await
+                    {
+                        warn!(
+                            "Dead WebSocket channel for ({}), cleaning up: {}",
+                            payload.did_hash, err
+                        );
+                        clients.remove(&payload.did_hash);
+                        if let Err(e) = database
+                            .streaming_deregister_client(&payload.did_hash, &self.uuid)
+                            .await
+                        {
+                            error!(
+                                "Error deregistering dead client ({}): {}",
+                                payload.did_hash, e
+                            );
+                        }
+                    } else {
+                        debug!("Sent message to client ({})", payload.did_hash);
+                    }
+                } else {
+                    debug!(
+                        "pub/sub msg received for did_hash({}) but it is not active",
+                        payload.did_hash
+                    );
+                    if let Err(err) = database
+                        .streaming_stop_live(&payload.did_hash, &self.uuid)
+                        .await
+                    {
+                        error!(
+                            "Error stopping streaming for client ({}): {}",
+                            payload.did_hash, err
+                        );
+                    }
+                }
+            }
+            None => {
+                warn!(
+                    "pub/sub msg received for did_hash({}) but it doesn't exist in clients HashMap",
+                    payload.did_hash
+                );
+            }
+        }
+    }
+
     /// Helper function to handle the registration of a new client.
     /// Handles if this is a duplicate channel for a DID
     async fn _handle_registration(
         &self,
-        database: &Database,
+        database: &dyn MediatorStore,
         clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)>,
         value: &StreamingUpdate,
         client_tx: &mpsc::Sender<WebSocketCommands>,

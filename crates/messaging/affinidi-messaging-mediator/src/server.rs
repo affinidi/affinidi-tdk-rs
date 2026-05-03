@@ -391,14 +391,11 @@ pub async fn serve_internal(
         }
     }
 
-    // Streaming task: same Database-only constraint. When the
-    // mediator is running on a pre-built store (Memory/Fjall),
-    // streaming pub/sub still works in-process via the trait's
-    // `streaming_subscribe` — but the websocket task that bridges
-    // those notifications to connected clients hasn't been refactored
-    // off `Database` yet, so leave the slot empty for now.
-    let (streaming_task, _) = if config.streaming_enabled && database.is_some() {
-        let _database = database.as_ref().unwrap().clone();
+    // Streaming task: subscribes via the trait, so it runs on any
+    // backend. RedisStore bridges Redis pub/sub into a tokio
+    // broadcast; Memory and Fjall feed the broadcast directly.
+    let (streaming_task, _) = if config.streaming_enabled {
+        let _database = store.clone();
         let uuid = config.streaming_uuid.clone();
         let (_task, _handle) = StreamingTask::new(_database, &uuid).await.map_err(|e| {
             error!("Error starting streaming task: {e}");

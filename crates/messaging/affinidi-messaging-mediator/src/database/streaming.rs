@@ -1,5 +1,4 @@
-use crate::tasks::websocket_streaming::PubSubRecord;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::{errors::MediatorError, store::types::PubSubRecord};
 use redis::{Value, from_redis_value};
 use tracing::{Level, debug, error, event};
 
