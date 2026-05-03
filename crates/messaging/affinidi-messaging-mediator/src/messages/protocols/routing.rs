@@ -4,7 +4,6 @@ use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
     common::session::Session,
-    database::forwarding::ForwardQueueEntry,
     messages::{
         ProcessMessageResponse, WrapperType,
         error_response::generate_error_response,
@@ -14,6 +13,7 @@ use crate::{
 use affinidi_did_common::Document;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},

@@ -2,23 +2,24 @@
 //!
 //! This is the multi-mediator backend: cross-process pub/sub via Redis
 //! `PUBLISH`/`SUBSCRIBE`, atomic composite operations via the bundled
-//! Lua functions in `conf/atm-functions.lua`. It wraps the existing
-//! [`Database`] type — until the call-site refactor (commit 6) lands,
-//! the original code paths in `crate::database::*` continue to work
-//! and `RedisStore` is a parallel implementation that satisfies the
-//! trait. Commit 6 swaps call sites onto the trait and the legacy
-//! wrappers can be retired.
+//! Lua functions in `conf/atm-functions.lua`.
 //!
-//! The store maintains a per-mediator-UUID broadcast channel for live
-//! streaming so multiple in-process subscribers can share one Redis
-//! pubsub bridge.
+//! The implementation is split across [`crate::database`] for
+//! readability — each topic (accounts, ACLs, sessions, forwarding,
+//! streaming, etc.) lives in its own submodule as inherent methods on
+//! `RedisStore`. The `MediatorStore` trait impl below delegates to
+//! those inherent methods. The store maintains a per-mediator-UUID
+//! broadcast channel for live streaming so multiple in-process
+//! subscribers can share one Redis pubsub bridge.
 
+use crate::common::circuit_breaker::CircuitBreaker;
 use crate::common::session::{Session as InnerSession, SessionState as InnerSessionState};
 use crate::database::{
-    Database, forwarding::ForwardQueueEntry as InnerForwardEntry,
-    stats::MetadataStats as InnerMetadataStats, store::MessageMetaData as InnerMessageMetaData,
+    forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
+    store::MessageMetaData as InnerMessageMetaData,
 };
 use affinidi_messaging_mediator_common::{
+    database::DatabaseHandler,
     errors::MediatorError,
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
@@ -40,7 +41,11 @@ use affinidi_messaging_sdk::{
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
-use redis::{Value, from_redis_value};
+use redis::{
+    Value,
+    aio::{ConnectionManager, MultiplexedConnection},
+    from_redis_value,
+};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, warn};
@@ -50,44 +55,99 @@ const STATIC_TIMESLOT_BATCH: u32 = 100;
 
 /// Redis-backed [`MediatorStore`].
 ///
-/// Wraps the existing [`Database`] (which itself wraps
-/// `DatabaseHandler` + a circuit breaker). All composite atomic ops
-/// (store/delete/fetch/expire) go through Lua functions registered on
-/// the Redis server.
+/// Holds the Redis connection pool (`DatabaseHandler`) plus a circuit
+/// breaker for fast-fail when Redis is unavailable. All composite
+/// atomic ops (store/delete/fetch/expire) go through Lua functions
+/// registered on the Redis server. The per-topic inherent methods that
+/// implement those ops live in `crate::database::*`.
 #[derive(Clone)]
 pub struct RedisStore {
-    db: Database,
+    pub(crate) handler: DatabaseHandler,
+    circuit_breaker: Arc<CircuitBreaker>,
     lua_scripts_path: Option<String>,
     broadcast_channels: Arc<Mutex<HashMap<String, broadcast::Sender<PubSubRecord>>>>,
 }
 
 impl RedisStore {
-    /// Construct a new `RedisStore` wrapping the given [`Database`].
+    /// Construct a new `RedisStore` from a connected `DatabaseHandler`.
     ///
     /// `lua_scripts_path` should match `config.database.functions_file`
     /// from the mediator config. When `None`, [`MediatorStore::initialize`]
     /// returns an error — the Redis backend cannot operate without its
     /// Lua functions loaded.
-    pub fn new(db: Database, lua_scripts_path: Option<String>) -> Self {
+    pub fn new(
+        handler: DatabaseHandler,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+        lua_scripts_path: Option<String>,
+    ) -> Self {
         Self {
-            db,
+            handler,
+            circuit_breaker: Arc::new(CircuitBreaker::new(
+                circuit_breaker_threshold,
+                circuit_breaker_recovery_secs,
+            )),
             lua_scripts_path,
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Access the wrapped [`Database`]. Used by the call-site refactor
-    /// in commit 6 while we shim trait methods into the existing code
-    /// paths. Will be removed once those paths are retired.
-    pub fn inner(&self) -> &Database {
-        &self.db
+    /// Get a clone of the auto-reconnecting multiplexed Redis connection.
+    /// Protected by circuit breaker for fast-fail when Redis is unavailable.
+    pub async fn get_connection(&self) -> Result<ConnectionManager, MediatorError> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(MediatorError::DatabaseError(
+                14,
+                "circuit_breaker".into(),
+                "Redis circuit breaker is open — failing fast. Redis may be unavailable.".into(),
+            ));
+        }
+
+        match self.handler.get_async_connection().await {
+            Ok(conn) => {
+                self.circuit_breaker.record_success();
+                Ok(conn)
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                Err(e)
+            }
+        }
+    }
+
+    /// Get a dedicated Redis connection with no response timeout for
+    /// blocking commands (XREADGROUP BLOCK, etc.).
+    pub async fn get_blocking_connection(&self) -> Result<MultiplexedConnection, MediatorError> {
+        if !self.circuit_breaker.allow_request() {
+            return Err(MediatorError::DatabaseError(
+                14,
+                "circuit_breaker".into(),
+                "Redis circuit breaker is open — failing fast. Redis may be unavailable.".into(),
+            ));
+        }
+
+        match self.handler.get_blocking_connection().await {
+            Ok(conn) => {
+                self.circuit_breaker.record_success();
+                Ok(conn)
+            }
+            Err(e) => {
+                self.circuit_breaker.record_failure();
+                Err(e)
+            }
+        }
+    }
+
+    /// Circuit breaker state, surfaced in `/admin/status`.
+    pub fn circuit_breaker_state(&self) -> &'static str {
+        self.circuit_breaker.state_str()
     }
 }
 
 impl std::fmt::Debug for RedisStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RedisStore")
-            .field("circuit_breaker", &self.db.circuit_breaker_state())
+            .field("circuit_breaker", &self.circuit_breaker_state())
             .finish()
     }
 }
@@ -218,11 +278,11 @@ impl MediatorStore for RedisStore {
                 "lua_scripts_path is required for the Redis backend".into(),
             )
         })?;
-        self.db.load_scripts(path).await
+        self.load_scripts(path).await
     }
 
     async fn health(&self) -> StoreHealth {
-        match self.db.circuit_breaker_state() {
+        match self.circuit_breaker_state() {
             "closed" => StoreHealth::Healthy,
             "half_open" => StoreHealth::Degraded,
             "open" => StoreHealth::Unavailable,
@@ -249,16 +309,15 @@ impl MediatorStore for RedisStore {
         expires_at: u64,
         queue_maxlen: usize,
     ) -> Result<String, MediatorError> {
-        self.db
-            .store_message(
-                session_id,
-                message,
-                to_did_hash,
-                from_hash,
-                expires_at,
-                queue_maxlen,
-            )
-            .await
+        self.store_message(
+            session_id,
+            message,
+            to_did_hash,
+            from_hash,
+            expires_at,
+            queue_maxlen,
+        )
+        .await
     }
 
     async fn delete_message(
@@ -274,8 +333,7 @@ impl MediatorStore for RedisStore {
                 (admin_did_hash.as_str(), Some(admin_did_hash.as_str()))
             }
         };
-        self.db
-            .handler
+        self.handler
             .delete_message(None, did_hash, message_hash, None, admin)
             .await
     }
@@ -285,7 +343,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         msg_id: &str,
     ) -> Result<Option<MessageListElement>, MediatorError> {
-        self.db.get_message(did_hash, msg_id).await
+        self.get_message(did_hash, msg_id).await
     }
 
     async fn get_message_metadata(
@@ -293,10 +351,7 @@ impl MediatorStore for RedisStore {
         session_id: &str,
         message_hash: &str,
     ) -> Result<MessageMetaData, MediatorError> {
-        let inner = self
-            .db
-            .get_message_metadata(session_id, message_hash)
-            .await?;
+        let inner = self.get_message_metadata(session_id, message_hash).await?;
         Ok(message_meta_into_new(inner))
     }
 
@@ -309,7 +364,7 @@ impl MediatorStore for RedisStore {
         range: Option<(&str, &str)>,
         limit: u32,
     ) -> Result<MessageList, MediatorError> {
-        self.db.list_messages(did_hash, folder, range, limit).await
+        self.list_messages(did_hash, folder, range, limit).await
     }
 
     async fn fetch_messages(
@@ -318,7 +373,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         options: &FetchOptions,
     ) -> Result<GetMessagesResponse, MediatorError> {
-        self.db.fetch_messages(session_id, did_hash, options).await
+        self.fetch_messages(session_id, did_hash, options).await
     }
 
     async fn purge_folder(
@@ -334,7 +389,7 @@ impl MediatorStore for RedisStore {
             session_id: session_id.to_string(),
             ..Default::default()
         };
-        self.db.purge_messages(&session, did_hash, folder).await
+        self.purge_messages(&session, did_hash, folder).await
     }
 
     async fn delete_folder_stream(
@@ -347,9 +402,7 @@ impl MediatorStore for RedisStore {
             session_id: session_id.to_string(),
             ..Default::default()
         };
-        self.db
-            .delete_folder_stream(&session, did_hash, &folder)
-            .await
+        self.delete_folder_stream(&session, did_hash, &folder).await
     }
 
     async fn inbox_status(&self, did_hash: &str) -> Result<InboxStatusReply, MediatorError> {
@@ -358,7 +411,7 @@ impl MediatorStore for RedisStore {
         // builds a Message Pickup 3.0 reply directly in the handler;
         // here we expose the underlying data so the trait stays
         // protocol-agnostic.
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         let result: Value = redis::cmd("FCALL")
             .arg("get_status_reply")
             .arg(1)
@@ -418,7 +471,7 @@ impl MediatorStore for RedisStore {
     // ─── Sessions ───────────────────────────────────────────────────────────
 
     async fn put_session(&self, session: &Session, ttl: Duration) -> Result<(), MediatorError> {
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         let sid = format!("SESSION:{}", session.session_id);
         let mut pipe = redis::pipe();
         pipe.atomic()
@@ -450,13 +503,13 @@ impl MediatorStore for RedisStore {
     }
 
     async fn get_session(&self, session_id: &str, did: &str) -> Result<Session, MediatorError> {
-        let inner = self.db.get_session(session_id, did).await?;
-        let refresh = self.db.get_refresh_token_hash(session_id).await?;
+        let inner = self.get_session(session_id, did).await?;
+        let refresh = self.get_refresh_token_hash(session_id).await?;
         Ok(session_into_new(inner, refresh))
     }
 
     async fn delete_session(&self, session_id: &str) -> Result<(), MediatorError> {
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         let sid = format!("SESSION:{session_id}");
         redis::cmd("DEL")
             .arg(&sid)
@@ -475,11 +528,11 @@ impl MediatorStore for RedisStore {
     // ─── Accounts ───────────────────────────────────────────────────────────
 
     async fn account_exists(&self, did_hash: &str) -> Result<bool, MediatorError> {
-        self.db.account_exists(did_hash).await
+        self.account_exists(did_hash).await
     }
 
     async fn account_get(&self, did_hash: &str) -> Result<Option<Account>, MediatorError> {
-        self.db.account_get(did_hash).await
+        self.account_get(did_hash).await
     }
 
     async fn account_add(
@@ -488,7 +541,7 @@ impl MediatorStore for RedisStore {
         acls: &MediatorACLSet,
         queue_limit: Option<u32>,
     ) -> Result<Account, MediatorError> {
-        self.db.account_add(did_hash, acls, queue_limit).await
+        self.account_add(did_hash, acls, queue_limit).await
     }
 
     async fn account_remove(
@@ -502,7 +555,7 @@ impl MediatorStore for RedisStore {
             session_id: session.session_id.clone(),
             ..Default::default()
         };
-        self.db.account_remove(&inner_session, did_hash).await
+        self.account_remove(&inner_session, did_hash).await
     }
 
     async fn account_list(
@@ -510,7 +563,7 @@ impl MediatorStore for RedisStore {
         cursor: u32,
         limit: u32,
     ) -> Result<MediatorAccountList, MediatorError> {
-        self.db.account_list(cursor, limit).await
+        self.account_list(cursor, limit).await
     }
 
     async fn account_set_role(
@@ -522,7 +575,7 @@ impl MediatorStore for RedisStore {
         // is in the ADMINS set; for Standard, remove it. This wraps
         // the legacy `account_change_type` + admin-set membership in
         // one atomic operation.
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         let key = format!("DID:{did_hash}");
         let role_str: String = account_type.to_owned().into();
 
@@ -553,8 +606,7 @@ impl MediatorStore for RedisStore {
         send_queue_limit: Option<i32>,
         receive_queue_limit: Option<i32>,
     ) -> Result<(), MediatorError> {
-        self.db
-            .account_change_queue_limits(did_hash, send_queue_limit, receive_queue_limit)
+        self.account_change_queue_limits(did_hash, send_queue_limit, receive_queue_limit)
             .await
     }
 
@@ -565,11 +617,11 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         acls: &MediatorACLSet,
     ) -> Result<MediatorACLSet, MediatorError> {
-        self.db.set_did_acl(did_hash, acls).await
+        self.set_did_acl(did_hash, acls).await
     }
 
     async fn get_did_acl(&self, did_hash: &str) -> Result<Option<MediatorACLSet>, MediatorError> {
-        self.db.get_did_acl(did_hash).await
+        self.get_did_acl(did_hash).await
     }
 
     async fn get_did_acls(
@@ -577,11 +629,11 @@ impl MediatorStore for RedisStore {
         dids: &[String],
         mediator_acl_mode: AccessListModeType,
     ) -> Result<MediatorACLGetResponse, MediatorError> {
-        self.db.get_did_acls(dids, mediator_acl_mode).await
+        self.get_did_acls(dids, mediator_acl_mode).await
     }
 
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool {
-        self.db.access_list_allowed(to_hash, from_hash).await
+        self.access_list_allowed(to_hash, from_hash).await
     }
 
     async fn access_list_list(
@@ -589,11 +641,11 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         cursor: u64,
     ) -> Result<MediatorAccessListListResponse, MediatorError> {
-        self.db.access_list_list(did_hash, cursor).await
+        self.access_list_list(did_hash, cursor).await
     }
 
     async fn access_list_count(&self, did_hash: &str) -> Result<usize, MediatorError> {
-        self.db.access_list_count(did_hash).await
+        self.access_list_count(did_hash).await
     }
 
     async fn access_list_add(
@@ -602,8 +654,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         hashes: &Vec<String>,
     ) -> Result<MediatorAccessListAddResponse, MediatorError> {
-        self.db
-            .access_list_add(access_list_limit, did_hash, hashes)
+        self.access_list_add(access_list_limit, did_hash, hashes)
             .await
     }
 
@@ -612,11 +663,11 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         hashes: &Vec<String>,
     ) -> Result<usize, MediatorError> {
-        self.db.access_list_remove(did_hash, hashes).await
+        self.access_list_remove(did_hash, hashes).await
     }
 
     async fn access_list_clear(&self, did_hash: &str) -> Result<(), MediatorError> {
-        self.db.access_list_clear(did_hash).await
+        self.access_list_clear(did_hash).await
     }
 
     async fn access_list_get(
@@ -624,7 +675,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         hashes: &Vec<String>,
     ) -> Result<MediatorAccessListGetResponse, MediatorError> {
-        self.db.access_list_get(did_hash, hashes).await
+        self.access_list_get(did_hash, hashes).await
     }
 
     // ─── Admin accounts ─────────────────────────────────────────────────────
@@ -635,13 +686,12 @@ impl MediatorStore for RedisStore {
         admin_type: AccountType,
         acls: &MediatorACLSet,
     ) -> Result<(), MediatorError> {
-        self.db
-            .setup_admin_account(admin_did_hash, admin_type, acls)
+        self.setup_admin_account(admin_did_hash, admin_type, acls)
             .await
     }
 
     async fn check_admin_account(&self, did_hash: &str) -> Result<bool, MediatorError> {
-        self.db.check_admin_account(did_hash).await
+        self.check_admin_account(did_hash).await
     }
 
     async fn list_admin_accounts(
@@ -649,7 +699,7 @@ impl MediatorStore for RedisStore {
         cursor: u32,
         limit: u32,
     ) -> Result<MediatorAdminList, MediatorError> {
-        self.db.list_admin_accounts(cursor, limit).await
+        self.list_admin_accounts(cursor, limit).await
     }
 
     // ─── OOB Discovery invitations ──────────────────────────────────────────
@@ -668,7 +718,7 @@ impl MediatorStore for RedisStore {
 
         let invite_hash = digest(invite_b64);
         let key = format!("OOB_INVITES:{invite_hash}");
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
 
         redis::pipe()
             .atomic()
@@ -702,23 +752,23 @@ impl MediatorStore for RedisStore {
         &self,
         oob_id: &str,
     ) -> Result<Option<(String, String)>, MediatorError> {
-        self.db.oob_discovery_get(oob_id).await
+        self.oob_discovery_get(oob_id).await
     }
 
     async fn oob_discovery_delete(&self, oob_id: &str) -> Result<bool, MediatorError> {
-        self.db.oob_discovery_delete(oob_id).await
+        self.oob_discovery_delete(oob_id).await
     }
 
     // ─── Stats / counters ───────────────────────────────────────────────────
 
     async fn get_global_stats(&self) -> Result<MetadataStats, MediatorError> {
-        let inner = self.db.get_db_metadata().await?;
+        let inner = self.get_db_metadata().await?;
         Ok(stats_into_new(inner))
     }
 
     async fn stats_increment(&self, counter: StatCounter, by: i64) -> Result<(), MediatorError> {
         let field = stat_counter_redis_field(counter);
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         redis::cmd("HINCRBY")
             .arg("GLOBAL")
             .arg(field)
@@ -743,13 +793,11 @@ impl MediatorStore for RedisStore {
         max_len: usize,
     ) -> Result<String, MediatorError> {
         let inner = fwd_entry_into_old(entry);
-        self.db
-            .forward_queue_enqueue_with_limit(&inner, max_len)
-            .await
+        self.forward_queue_enqueue_with_limit(&inner, max_len).await
     }
 
     async fn forward_queue_len(&self) -> Result<usize, MediatorError> {
-        self.db.get_forward_tasks_len().await
+        self.get_forward_tasks_len().await
     }
 
     async fn forward_queue_read(
@@ -761,9 +809,8 @@ impl MediatorStore for RedisStore {
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
         // Auto-create the consumer group on first read. Idempotent —
         // the legacy ensure_group ignores BUSYGROUP errors.
-        self.db.forward_queue_ensure_group(group_name).await?;
+        self.forward_queue_ensure_group(group_name).await?;
         let inner = self
-            .db
             .forward_queue_read(group_name, consumer_name, count, block.as_millis() as usize)
             .await?;
         Ok(inner.into_iter().map(fwd_entry_into_new).collect())
@@ -774,11 +821,11 @@ impl MediatorStore for RedisStore {
         group_name: &str,
         stream_ids: &[&str],
     ) -> Result<(), MediatorError> {
-        self.db.forward_queue_ack(group_name, stream_ids).await
+        self.forward_queue_ack(group_name, stream_ids).await
     }
 
     async fn forward_queue_delete(&self, stream_ids: &[&str]) -> Result<(), MediatorError> {
-        self.db.forward_queue_delete(stream_ids).await
+        self.forward_queue_delete(stream_ids).await
     }
 
     async fn forward_queue_autoclaim(
@@ -789,7 +836,6 @@ impl MediatorStore for RedisStore {
         count: usize,
     ) -> Result<Vec<ForwardQueueEntry>, MediatorError> {
         let inner = self
-            .db
             .forward_queue_autoclaim(
                 group_name,
                 consumer_name,
@@ -803,7 +849,7 @@ impl MediatorStore for RedisStore {
     // ─── Live streaming (WebSocket pub/sub) ─────────────────────────────────
 
     async fn streaming_clean_start(&self, mediator_uuid: &str) -> Result<(), MediatorError> {
-        self.db.streaming_clean_start(mediator_uuid).await
+        self.streaming_clean_start(mediator_uuid).await
     }
 
     async fn streaming_set_state(
@@ -814,16 +860,12 @@ impl MediatorStore for RedisStore {
     ) -> Result<(), MediatorError> {
         match state {
             StreamingClientState::Registered => {
-                self.db
-                    .streaming_register_client(did_hash, mediator_uuid)
+                self.streaming_register_client(did_hash, mediator_uuid)
                     .await
             }
-            StreamingClientState::Live => {
-                self.db.streaming_start_live(did_hash, mediator_uuid).await
-            }
+            StreamingClientState::Live => self.streaming_start_live(did_hash, mediator_uuid).await,
             StreamingClientState::Deregistered => {
-                self.db
-                    .streaming_deregister_client(did_hash, mediator_uuid)
+                self.streaming_deregister_client(did_hash, mediator_uuid)
                     .await
             }
         }
@@ -834,8 +876,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         force_delivery: bool,
     ) -> Option<String> {
-        self.db
-            .streaming_is_client_live(did_hash, force_delivery)
+        self.streaming_is_client_live(did_hash, force_delivery)
             .await
     }
 
@@ -846,8 +887,7 @@ impl MediatorStore for RedisStore {
         message: &str,
         force_delivery: bool,
     ) -> Result<(), MediatorError> {
-        self.db
-            .streaming_publish_message(did_hash, mediator_uuid, message, force_delivery)
+        self.streaming_publish_message(did_hash, mediator_uuid, message, force_delivery)
             .await
     }
 
@@ -865,7 +905,7 @@ impl MediatorStore for RedisStore {
         // channel. The bridge task lives until the underlying pubsub
         // connection drops or the broadcast Sender is removed.
         let (sender, receiver) = broadcast::channel(PUBSUB_BROADCAST_CAPACITY);
-        let mut pubsub = self.db.handler.get_pubsub_connection().await?;
+        let mut pubsub = self.handler.get_pubsub_connection().await?;
         let channel_name = format!("CHANNEL:{mediator_uuid}");
         pubsub.subscribe(&channel_name).await.map_err(|err| {
             MediatorError::DatabaseError(
@@ -919,7 +959,7 @@ impl MediatorStore for RedisStore {
         // Replicates the legacy two-step `timeslot_scan` +
         // `expire_messages_from_timeslot` flow inline so the trait
         // doesn't have to expose the timeslot abstraction.
-        let mut conn = self.db.get_connection().await?;
+        let mut conn = self.get_connection().await?;
         let timeslot_keys: Vec<String> = redis::cmd("ZRANGE")
             .arg("MSG_EXPIRY")
             .arg("-inf")
@@ -944,7 +984,7 @@ impl MediatorStore for RedisStore {
         };
 
         for key in &timeslot_keys {
-            let mut conn = self.db.get_connection().await?;
+            let mut conn = self.get_connection().await?;
             loop {
                 let msg_id: Option<String> = redis::cmd("SPOP")
                     .arg(key)
@@ -960,7 +1000,6 @@ impl MediatorStore for RedisStore {
 
                 if let Some(msg_id) = msg_id {
                     match self
-                        .db
                         .handler
                         .delete_message(None, admin_did_hash, &msg_id, None, Some(admin_did_hash))
                         .await

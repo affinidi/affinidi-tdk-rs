@@ -9,7 +9,6 @@ use crate::{
         rate_limiter::{RateLimitLayer, RateLimiterState},
         request_id::RequestIdLayer,
     },
-    database::Database,
     handlers::{admin_status, application_routes, health_checker_handler, readiness_handler},
     tasks::{
         forwarding_processor::ForwardingProcessor, statistics::statistics,
@@ -17,6 +16,7 @@ use crate::{
     },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+#[cfg(feature = "redis-backend")]
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
@@ -201,13 +201,8 @@ pub async fn serve_internal(
     // tasks (statistics, expiry sweep, forwarding processor, websocket
     // streaming) all consume `Arc<dyn MediatorStore>`, so they run
     // unchanged regardless of which backend is in use.
-    //
-    // The `database` binding is only consumed by the `RedisStore`
-    // wrapper below, which is gated on `redis-backend`. On memory- or
-    // fjall-only builds the variable is genuinely unused — silence the
-    // warning rather than scatter `#[cfg]` attributes through the body.
-    #[cfg_attr(not(feature = "redis-backend"), allow(unused_variables))]
-    let database: Option<Database> = if let Some(store) = &pre_built_store {
+    use affinidi_messaging_mediator_common::store::MediatorStore;
+    let store: Arc<dyn MediatorStore> = if let Some(store) = pre_built_store {
         // Initialise the store (no-op for Memory; opens partitions
         // for Fjall; loads Lua + runs migrations for Redis if a
         // RedisStore was passed in directly).
@@ -215,89 +210,70 @@ pub async fn serve_internal(
             error!("Store initialize failed: {e}");
             e
         })?;
-        None
-    } else {
-        // Set up the Redis database with a 30s connection timeout.
-        let handler = match tokio::time::timeout(
-            Duration::from_secs(30),
-            DatabaseHandler::new(&config.database),
-        )
-        .await
-        {
-            Ok(Ok(db)) => db,
-            Ok(Err(err)) => {
-                error!("Error opening database: {err}");
-                return Err(MediatorError::DatabaseError(
-                    error_codes::DB_OPERATION_ERROR,
-                    "NA".into(),
-                    format!("Error opening database: {err}"),
-                ));
-            }
-            Err(_) => {
-                error!("Database connection timed out after 30 seconds");
-                return Err(MediatorError::DatabaseError(
-                    error_codes::DB_OPERATION_ERROR,
-                    "NA".into(),
-                    "Database connection timed out after 30 seconds".into(),
-                ));
-            }
-        };
-
-        let database = Database::new(
-            handler,
-            config.database.circuit_breaker_threshold,
-            config.database.circuit_breaker_recovery_secs,
-        );
-
-        database.initialize(&config).await.map_err(|e| {
-            error!("Error initializing database: {e}");
-            e
-        })?;
-
-        if let Some(functions_file) = &config.database.functions_file {
-            info!(
-                "Loading LUA scripts into the database from file: {}",
-                functions_file
-            );
-            database.load_scripts(functions_file).await.map_err(|e| {
-                error!("Failed to load LUA scripts: {e}");
-                e
-            })?;
-        } else {
-            error!("LUA scripts file is required but not specified in the configuration");
-            return Err(MediatorError::ConfigError(
-                error_codes::CONFIG_ERROR,
-                "NA".into(),
-                "LUA scripts file is required but not specified in the configuration".into(),
-            ));
-        }
-        Some(database)
-    };
-
-    // Build the polymorphic store now so background tasks can take
-    // `Arc<dyn MediatorStore>` instead of the concrete `Database`.
-    // Pre-built stores (Memory/Fjall) flow through; otherwise wrap
-    // the Redis `Database` in a `RedisStore`.
-    use affinidi_messaging_mediator_common::store::MediatorStore;
-    let store: Arc<dyn MediatorStore> = if let Some(store) = pre_built_store {
         store
     } else {
-        // Fall through to the Redis path. When the binary is built
-        // without `redis-backend`, `database` is unconditionally
-        // `None` and this branch is unreachable — but the compiler
-        // still needs a value here. Gate the construction so the
-        // build doesn't break on Memory-only or Fjall-only feature
-        // sets.
+        // Bootstrap a Redis-backed store from `config.database`. When
+        // the binary is built without `redis-backend`, this branch is
+        // unreachable and we fail at config-load time with a clearer
+        // error.
         #[cfg(feature = "redis-backend")]
         {
             use crate::store::RedisStore;
-            let database = database
-                .as_ref()
-                .expect("database must exist when pre_built_store is None");
-            Arc::new(RedisStore::new(
-                database.clone(),
+
+            let handler = match tokio::time::timeout(
+                Duration::from_secs(30),
+                DatabaseHandler::new(&config.database),
+            )
+            .await
+            {
+                Ok(Ok(h)) => h,
+                Ok(Err(err)) => {
+                    error!("Error opening database: {err}");
+                    return Err(MediatorError::DatabaseError(
+                        error_codes::DB_OPERATION_ERROR,
+                        "NA".into(),
+                        format!("Error opening database: {err}"),
+                    ));
+                }
+                Err(_) => {
+                    error!("Database connection timed out after 30 seconds");
+                    return Err(MediatorError::DatabaseError(
+                        error_codes::DB_OPERATION_ERROR,
+                        "NA".into(),
+                        "Database connection timed out after 30 seconds".into(),
+                    ));
+                }
+            };
+
+            let store = RedisStore::new(
+                handler,
+                config.database.circuit_breaker_threshold,
+                config.database.circuit_breaker_recovery_secs,
                 config.database.functions_file.clone(),
-            ))
+            );
+            store.initialize_redis(&config).await.map_err(|e| {
+                error!("Error initializing database: {e}");
+                e
+            })?;
+            if let Some(functions_file) = &config.database.functions_file {
+                info!(
+                    "Loading LUA scripts into the database from file: {}",
+                    functions_file
+                );
+                store.load_scripts(functions_file).await.map_err(|e| {
+                    error!("Failed to load LUA scripts: {e}");
+                    e
+                })?;
+            } else {
+                error!("LUA scripts file is required but not specified in the configuration");
+                return Err(MediatorError::ConfigError(
+                    error_codes::CONFIG_ERROR,
+                    "NA".into(),
+                    "LUA scripts file is required but not specified in the configuration".into(),
+                ));
+            }
+            let s: Arc<dyn MediatorStore> = Arc::new(store);
+            s
         }
         #[cfg(not(feature = "redis-backend"))]
         {

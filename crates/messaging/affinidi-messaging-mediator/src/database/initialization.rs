@@ -2,16 +2,20 @@
  * Handles the initial setup of the database when the Mediator starts
  */
 
-use super::Database;
 use super::migrations::run_pending_migrations;
 use crate::common::{config::Config, error_codes};
+use crate::store::RedisStore;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use sha256::digest;
 
-impl Database {
-    /// Initializes the database and ensures minimal configuration required is in place.
-    pub(crate) async fn initialize(&self, config: &Config) -> Result<(), MediatorError> {
+impl RedisStore {
+    /// Run schema migrations and seed the mediator + root-admin
+    /// accounts. Called once at startup before the trait's
+    /// [`initialize`](affinidi_messaging_mediator_common::store::MediatorStore::initialize)
+    /// hook (which loads Lua functions). Named `initialize_redis` to
+    /// avoid colliding with the trait method.
+    pub(crate) async fn initialize_redis(&self, config: &Config) -> Result<(), MediatorError> {
         // Run any pending schema migrations
         run_pending_migrations(self, config).await?;
 

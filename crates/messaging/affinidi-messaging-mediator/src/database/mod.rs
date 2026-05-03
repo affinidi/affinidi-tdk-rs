@@ -1,9 +1,11 @@
-//! All Redis related database methods are handled by `DatabaseHandler` module
-
-use crate::common::circuit_breaker::CircuitBreaker;
-use affinidi_messaging_mediator_common::{database::DatabaseHandler, errors::MediatorError};
-use redis::aio::{ConnectionManager, MultiplexedConnection};
-use std::sync::Arc;
+//! Redis-specific implementation modules for [`crate::store::RedisStore`].
+//!
+//! Each submodule houses one topic's worth of Redis operations
+//! (accounts, ACLs, sessions, streaming, etc.) implemented as inherent
+//! methods on [`crate::store::RedisStore`]. The
+//! [`MediatorStore`](affinidi_messaging_mediator_common::store::MediatorStore)
+//! trait impl in [`crate::store::redis_store`] delegates to these
+//! methods. Splitting by topic keeps each file under ~500 lines.
 
 pub mod accounts;
 pub(crate) mod acls;
@@ -23,80 +25,7 @@ pub mod stats;
 pub mod store;
 pub mod streaming;
 
-/// Mediator-specific database wrapper around [`DatabaseHandler`].
-///
-/// Provides mediator-level operations (sessions, accounts, forwarding, etc.)
-/// while delegating low-level Redis access through `self.handler` to `DatabaseHandler`.
-/// Includes a circuit breaker for Redis connection resilience.
-#[derive(Clone)]
-pub struct Database {
-    pub(crate) handler: DatabaseHandler,
-    circuit_breaker: Arc<CircuitBreaker>,
-}
-
-impl Database {
-    /// Create a new Database with a configurable circuit breaker.
-    pub fn new(
-        handler: DatabaseHandler,
-        circuit_breaker_threshold: u32,
-        circuit_breaker_recovery_secs: u64,
-    ) -> Self {
-        Self {
-            handler,
-            circuit_breaker: Arc::new(CircuitBreaker::new(
-                circuit_breaker_threshold,
-                circuit_breaker_recovery_secs,
-            )),
-        }
-    }
-
-    /// Get a clone of the auto-reconnecting multiplexed Redis connection.
-    /// Protected by circuit breaker for fast-fail when Redis is unavailable.
-    pub async fn get_connection(&self) -> Result<ConnectionManager, MediatorError> {
-        if !self.circuit_breaker.allow_request() {
-            return Err(MediatorError::DatabaseError(
-                14,
-                "circuit_breaker".into(),
-                "Redis circuit breaker is open — failing fast. Redis may be unavailable.".into(),
-            ));
-        }
-
-        match self.handler.get_async_connection().await {
-            Ok(conn) => {
-                self.circuit_breaker.record_success();
-                Ok(conn)
-            }
-            Err(e) => {
-                self.circuit_breaker.record_failure();
-                Err(e)
-            }
-        }
-    }
-
-    /// Get a dedicated Redis connection with no response timeout for blocking commands.
-    pub async fn get_blocking_connection(&self) -> Result<MultiplexedConnection, MediatorError> {
-        if !self.circuit_breaker.allow_request() {
-            return Err(MediatorError::DatabaseError(
-                14,
-                "circuit_breaker".into(),
-                "Redis circuit breaker is open — failing fast. Redis may be unavailable.".into(),
-            ));
-        }
-
-        match self.handler.get_blocking_connection().await {
-            Ok(conn) => {
-                self.circuit_breaker.record_success();
-                Ok(conn)
-            }
-            Err(e) => {
-                self.circuit_breaker.record_failure();
-                Err(e)
-            }
-        }
-    }
-
-    /// Get the circuit breaker state for health checks
-    pub fn circuit_breaker_state(&self) -> &'static str {
-        self.circuit_breaker.state_str()
-    }
-}
+/// Compatibility alias preserved during the Database → RedisStore fold.
+/// External callers that still hold `&Database` references see
+/// the same type. New code should use `RedisStore` directly.
+pub use crate::store::RedisStore as Database;
