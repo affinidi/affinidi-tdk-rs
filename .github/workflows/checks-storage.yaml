@@ -114,6 +114,37 @@ jobs:
             -p affinidi-messaging-test-mediator \
             --tests
 
+  test-mediator-e2e-fjall:
+    # Same e2e suite as the memory job, this time against the on-disk
+    # Fjall backend. The fixture wraps each store in a tempfile::TempDir
+    # so partition files don't leak between tests.
+    name: test-mediator (fjall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-mediator-e2e-fjall
+
+      - name: cargo test -p affinidi-messaging-test-mediator --features fjall-backend --tests
+        run: |
+          cargo test \
+            -p affinidi-messaging-test-mediator \
+            --features fjall-backend \
+            --tests
+
   all-backends-compile:
     # Compile the mediator with every backend feature enabled at
     # once. Doesn't run any tests — the test commands per-backend

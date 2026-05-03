@@ -12,11 +12,23 @@ repository.workspace = true
 # Internal-only test fixture; do not publish to crates.io.
 publish = false
 
+[features]
+default = []
+## Compile in `FjallStore` so tests can run the e2e suite against the
+## on-disk LSM backend in addition to `MemoryStore` (which is always
+## available). Adds a few hundred ms to test-binary build time and
+## pulls in fjall + tempfile, so it's opt-in.
+fjall-backend = ["affinidi-messaging-mediator/fjall-backend", "dep:tempfile"]
+
 [dependencies]
 # ── Mediator: the thing we're spawning ───────────────────────────────────
 affinidi-messaging-mediator = { path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
 affinidi-messaging-mediator-common = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
-affinidi-messaging-mediator-processors = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
+
+# ── Optional: Fjall on-disk backend support (gated on `fjall-backend`) ──
+## Wraps each FjallStore in a temp directory that's cleaned up when the
+## handle drops, so tests don't leak partition files on disk.
+tempfile = { version = "3", optional = true }
 
 # ── DID + key generation ────────────────────────────────────────────────
 ## Used for `DID::generate_did_peer` (Ed25519 + X25519, with service URI).

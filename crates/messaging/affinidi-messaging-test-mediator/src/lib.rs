@@ -31,11 +31,17 @@
 //!
 //! # Storage backends
 //!
-//! Until the [`MediatorStore`] trait refactor lands (commits 5–6 of the
-//! embedded-mediator branch), the fixture talks to Redis directly via
-//! the existing `DatabaseConfig` path. Tests that use this fixture
-//! **today** need a reachable Redis. After the refactor, the fixture
-//! will default to the in-memory backend and Redis becomes opt-in.
+//! The fixture defaults to `MemoryStore` — fastest, no I/O, automatic
+//! cleanup. Pass a custom store via [`TestMediatorBuilder::store`] for
+//! tests that need different semantics:
+//!
+//! - **Fjall** (on-disk LSM) — compile with the `fjall-backend` feature
+//!   and call [`TestMediatorBuilder::fjall_backend`]. The fixture
+//!   manages a temp directory whose lifetime is tied to the handle, so
+//!   no partition files leak.
+//! - **Redis** — supply an `Arc<RedisStore>` via `store(...)`. Useful
+//!   for tests that exercise multi-mediator coordination, but requires
+//!   a reachable Redis instance.
 //!
 //! [`MediatorStore`]: affinidi_messaging_mediator_common::store::MediatorStore
 //!
@@ -133,6 +139,11 @@ pub struct TestMediatorBuilder {
     enable_forwarding: bool,
     enable_message_expiry: bool,
     enable_streaming: bool,
+    /// Temp directory backing a Fjall store, kept alive for the lifetime
+    /// of the resulting handle so the partition files don't get cleaned
+    /// up while the mediator is still using them.
+    #[cfg(feature = "fjall-backend")]
+    fjall_dir: Option<tempfile::TempDir>,
 }
 
 impl Default for TestMediatorBuilder {
@@ -143,6 +154,8 @@ impl Default for TestMediatorBuilder {
             enable_forwarding: false,
             enable_message_expiry: false,
             enable_streaming: true,
+            #[cfg(feature = "fjall-backend")]
+            fjall_dir: None,
         }
     }
 }
@@ -169,30 +182,47 @@ impl TestMediatorBuilder {
 
     /// Enable the forwarding processor. Defaults to off — most tests
     /// don't exercise routing 2.0 forwarding to remote mediators.
-    /// **Note:** the forwarding processor currently requires the
-    /// Redis backend; setting this with the default Memory store has
-    /// no effect.
+    /// Runs against any backend via the `MediatorStore` trait.
     pub fn enable_forwarding(mut self, enabled: bool) -> Self {
         self.enable_forwarding = enabled;
         self
     }
 
-    /// Enable the message expiry sweep. Defaults to off.
-    /// **Note:** Redis-only at the moment, same as `enable_forwarding`.
+    /// Enable the message expiry sweep. Defaults to off. Runs against
+    /// any backend via the `MediatorStore` trait.
     pub fn enable_message_expiry(mut self, enabled: bool) -> Self {
         self.enable_message_expiry = enabled;
         self
     }
 
     /// Enable WebSocket live-streaming registration. Defaults to **on**.
-    /// **Note:** the WebSocket task that bridges Redis pub/sub to
-    /// connected clients is currently Redis-specific. With the
-    /// default Memory store, the WebSocket *handshake* still
-    /// completes (the handler tolerates a missing streaming task);
-    /// active push delivery requires Redis.
+    /// Runs against any backend via the `MediatorStore` trait — Memory
+    /// and Fjall feed an in-process broadcast channel; Redis bridges
+    /// pub/sub into the same shape.
     pub fn enable_streaming(mut self, enabled: bool) -> Self {
         self.enable_streaming = enabled;
         self
+    }
+
+    /// Run this test mediator against an on-disk Fjall backend instead
+    /// of the default in-memory store. The data lives in a temporary
+    /// directory tied to the resulting handle — when the handle drops,
+    /// the temp dir and all partition files are deleted.
+    ///
+    /// Use this for tests that need to exercise persistence semantics
+    /// (e.g. messages survive restart, expiry indices live on disk).
+    /// `MemoryStore` is faster for the common case of "did the
+    /// handler return the right shape."
+    #[cfg(feature = "fjall-backend")]
+    pub fn fjall_backend(mut self) -> Result<Self, TestMediatorError> {
+        use affinidi_messaging_mediator::store::FjallStore;
+        let dir = tempfile::tempdir().map_err(TestMediatorError::Bind)?;
+        let store = FjallStore::open(dir.path()).map_err(TestMediatorError::Mediator)?;
+        self.store = Some(Arc::new(store));
+        // Hold the temp dir alive for the lifetime of the builder so
+        // it lands in the handle's `_fjall_dir` slot once `spawn` runs.
+        self.fjall_dir = Some(dir);
+        Ok(self)
     }
 
     /// Spawn the mediator and wait until it's listening. Returns the
@@ -251,6 +281,8 @@ impl TestMediatorBuilder {
             inner,
             secrets_resolver,
             mediator_secrets,
+            #[cfg(feature = "fjall-backend")]
+            _fjall_dir: self.fjall_dir,
         })
     }
 }
@@ -261,6 +293,11 @@ pub struct TestMediatorHandle {
     inner: MediatorHandle,
     secrets_resolver: Arc<ThreadedSecretsResolver>,
     mediator_secrets: Vec<Secret>,
+    /// Backing temp dir for the Fjall store (when applicable). Held
+    /// alongside the handle so the partition files survive as long as
+    /// the mediator is using them, and get cleaned up on drop.
+    #[cfg(feature = "fjall-backend")]
+    _fjall_dir: Option<tempfile::TempDir>,
 }
 
 impl TestMediatorHandle {
