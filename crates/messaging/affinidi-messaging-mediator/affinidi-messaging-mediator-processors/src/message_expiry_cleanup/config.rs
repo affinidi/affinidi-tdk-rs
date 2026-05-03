@@ -1,19 +1,13 @@
-// *****************************************************************
-// If running the processor separate, then we need some additional
-// configuration to run the processor
-// *****************************************************************
+//! Standalone message-expiry binary's TOML config.
+//!
+//! Only the `[database]` section is consumed — the binary needs Redis
+//! connection settings to construct a `RedisStore`. The trait-based
+//! sweep loop has no other tunables.
 
 use affinidi_messaging_mediator_common::database::config::DatabaseConfig;
-use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::MessageExpiryCleanupConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Config {
     pub database: DatabaseConfig,
-    pub processors: ProcessorConfig,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ProcessorConfig {
-    pub message_expiry_cleanup: MessageExpiryCleanupConfig,
 }

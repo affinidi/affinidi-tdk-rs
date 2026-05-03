@@ -34,7 +34,6 @@ secrets-azure = [
   "dep:azure_security_keyvault_secrets",
   "dep:azure_identity",
   "dep:azure_core",
-  "dep:futures-util",
 ]
 secrets-vault = ["dep:vaultrs"]
 
@@ -88,9 +87,11 @@ azure_security_keyvault_secrets = { version = "0.14", optional = true }
 azure_identity = { version = "0.35", optional = true }
 azure_core = { version = "0.35", optional = true }
 ## Pager iteration over Azure's `list_secret_properties` Stream — only the
-## `TryStreamExt::try_next` adapter is used. Default features off so we
-## don't pull in the full futures executor stack.
-futures-util = { version = "0.3", default-features = false, optional = true }
+## `TryStreamExt::try_next` adapter is used. Now also used by the
+## forwarding processor below, so it's no longer optional. The
+## `secrets-azure` feature still depends on it but the dep is
+## unconditionally enabled.
+## (Unified declaration lives further down in the dependency block.)
 ## HashiCorp Vault KV v2 (rustify-based async REST client). Token auth
 ## via VAULT_TOKEN env. Default features bring in the rustls HTTP
 ## stack; pin to `0.8` so future breaking bumps don't land silently.
@@ -102,6 +103,18 @@ vaultrs = { version = "0.8", default-features = false, features = ["rustls"], op
 ## so the redis-backend code path picks up `StreamExt::next` without
 ## affecting other secret-backend builds.
 tokio-stream = "0.1"
+
+# ── Forwarding processor deps (used by `tasks::forwarding::processor`) ──
+## HTTP / WS delivery to remote mediators + sink/stream traits used by
+## the connection pools. The processor itself is gated on
+## `redis-backend`, so memory- and fjall-only consumers don't pull
+## these in at runtime — but cargo can't conditionally enable a
+## non-optional dep, so the deps stay declared here unconditionally
+## (cheap when the processor module is gated out: the compiler still
+## elides the unused crates from the link step).
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-native-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }

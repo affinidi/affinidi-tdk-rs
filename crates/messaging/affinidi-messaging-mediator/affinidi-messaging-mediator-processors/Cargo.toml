@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-mediator-processors"
 version = "0.13.0"
-description = "Background processors for the Affinidi Messaging Mediator (message expiry, forwarding)"
+description = "Standalone background processor binaries for the Affinidi Messaging Mediator (Redis-only, horizontal scaling)"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -15,51 +15,40 @@ repository.workspace = true
 [lib]
 path = "src/lib/lib.rs"
 
-## Standalone binary for message expiry cleanup (can run separately from mediator)
+## Standalone binary for message expiry cleanup. Reuses the trait-based
+## sweep loop in mediator-common; this crate just wires config to the
+## RedisStore constructor.
 [[bin]]
 name = "message_expiry_cleanup"
 path = "src/message_expiry_cleanup/main.rs"
 
-## Standalone binary for forwarding processor (can run separately from mediator)
+## Standalone binary for the forwarding processor. Reuses
+## `mediator-common::tasks::forwarding::ForwardingProcessor` directly
+## — same code that runs in-process inside the mediator.
 [[bin]]
 name = "forwarding_processor"
 path = "src/forwarding/main.rs"
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
-## Shared types: DatabaseHandler, errors, config
-affinidi-messaging-mediator-common = { version = "0.13", path = "../affinidi-messaging-mediator-common" }
+## Shared types + RedisStore (trait-based backend) + ForwardingProcessor.
+## Standalone binaries here are Redis-only by design, so the
+## `redis-backend` feature is always enabled. The unified processor
+## logic now lives in this crate; no duplicated implementation here.
+affinidi-messaging-mediator-common = { version = "0.13", path = "../affinidi-messaging-mediator-common", features = ["redis-backend"] }
 
-# ── CLI (for standalone processor binaries) ──────────────────────────────
+# ── CLI ──────────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }
 
-# ── Database ─────────────────────────────────────────────────────────────
-## Direct Redis access for stream operations (XREADGROUP, XACK, etc.)
-redis = { version = "1.1", features = [
-  "tokio-rustls-comp",
-  "tls-rustls-insecure",
-  "ahash",
-] }
-
-# ── HTTP Client (forwarding processor delivers to remote mediators) ──────
-reqwest = { version = "0.13", features = ["rustls", "json"] }
-
-# ── Serialization ────────────────────────────────────────────────────────
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+# ── Serialization (config TOML parsing only) ─────────────────────────────
+serde = { version = "1", features = ["derive"] }
 sha256 = "1"
 toml = "1"
 
-# ── Async Runtime ────────────────────────────────────────────────────────
-tokio = { workspace = true, features = ["full"] }
-
-# ── Observability ────────────────────────────────────────────────────────
+# ── Async runtime + observability ────────────────────────────────────────
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tracing = { version = "0.1", features = ["valuable"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "valuable"] }
-
-# ── Utilities ────────────────────────────────────────────────────────────
-lru = "0.17"
-uuid = { version = "1", features = ["v4", "fast-rng"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [lints]
 workspace = true

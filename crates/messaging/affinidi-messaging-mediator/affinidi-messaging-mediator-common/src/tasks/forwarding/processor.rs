@@ -15,9 +15,9 @@
 //! - Connection failures: retry with exponential backoff
 //! - Rejection from remote mediator: send problem report to sender, drop message
 
-use crate::common::config::ForwardingConfig;
-use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
-use affinidi_messaging_mediator_common::store::{MediatorStore, types::ForwardQueueEntry};
+use crate::store::{MediatorStore, types::ForwardQueueEntry};
+use crate::tasks::forwarding::config::ForwardingConfig;
+use crate::time::{unix_timestamp_millis, unix_timestamp_secs};
 use futures_util::{SinkExt, StreamExt};
 use std::{
     collections::HashMap,
@@ -169,7 +169,7 @@ impl ForwardingProcessor {
     pub fn new(
         config: ForwardingConfig,
         database: Arc<dyn MediatorStore>,
-    ) -> Result<Self, affinidi_messaging_mediator_common::errors::MediatorError> {
+    ) -> Result<Self, crate::errors::MediatorError> {
         let consumer_name = format!("processor_{}", Uuid::new_v4());
         info!(
             "ForwardingProcessor created: consumer={}, group={}",
@@ -177,7 +177,7 @@ impl ForwardingProcessor {
         );
         let http_pool = Arc::new(HttpClientPool::new(config.accept_invalid_certs).map_err(
             |e| {
-                affinidi_messaging_mediator_common::errors::MediatorError::InternalError(
+                crate::errors::MediatorError::InternalError(
                     17,
                     "forwarding".into(),
                     format!("Failed to create HTTP client pool: {e}"),

@@ -10,15 +10,14 @@ use crate::{
         request_id::RequestIdLayer,
     },
     handlers::{admin_status, application_routes, health_checker_handler, readiness_handler},
-    tasks::{
-        forwarding_processor::ForwardingProcessor, statistics::statistics,
-        websocket_streaming::StreamingTask,
-    },
+    tasks::{statistics::statistics, websocket_streaming::StreamingTask},
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 #[cfg(feature = "redis-backend")]
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+#[cfg(feature = "redis-backend")]
+use affinidi_messaging_mediator_common::tasks::forwarding::ForwardingProcessor;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
@@ -323,7 +322,13 @@ pub async fn serve_internal(
         }
     });
 
-    // Forwarding processor — runs against any backend via the trait.
+    // Forwarding processor — gated on `redis-backend` because it
+    // depends on Redis Streams consumer-group semantics
+    // (XREADGROUP / XACK / XAUTOCLAIM) for at-least-once delivery
+    // across competing consumers. Memory and Fjall are single-process
+    // backends with no equivalent multi-process coordination, so the
+    // processor isn't compiled into those builds.
+    #[cfg(feature = "redis-backend")]
     if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
         let _database = store.clone();
         let _config = config.processors.forwarding.clone();
