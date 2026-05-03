@@ -6,7 +6,7 @@
  */
 use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::{Attachment, Message};
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::{errors::MediatorError, store::DeletionAuthority};
 use affinidi_messaging_sdk::{
     messages::{
         fetch::FetchOptions,
@@ -19,8 +19,6 @@ use affinidi_messaging_sdk::{
 };
 use base64::prelude::*;
 use http::StatusCode;
-use itertools::Itertools;
-use redis::{Value, from_redis_value};
 use serde_json::json;
 use sha256::digest;
 use tracing::{Instrument, debug, info, span, warn};
@@ -114,87 +112,43 @@ async fn generate_status_reply(
     let _span = span!(tracing::Level::DEBUG, "generate_status_reply",);
 
     async move {
-        let mut conn = state.database.get_connection().await?;
+        // Pull the underlying status fields from the trait. The
+        // `InboxStatusReply` mirrors the Lua function's response shape
+        // so this is a structured read instead of a raw FCALL +
+        // tuple-walk; backends that don't speak Redis Lua produce the
+        // same data via their own implementations.
+        let inbox = state.database.inbox_status(did_hash).await.map_err(|e| {
+            MediatorError::problem_with_log(
+                14,
+                &session.session_id,
+                Some(thid.to_string()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.res.storage.error",
+                "Database transaction error: {1}",
+                vec![e.to_string()],
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("Database transaction error: {e}"),
+            )
+        })?;
 
-        let response: Vec<Value> = redis::cmd("FCALL")
-            .arg("get_status_reply")
-            .arg(1)
-            .arg(did_hash)
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| {
-                MediatorError::problem_with_log(
-                    14,
-                    &session.session_id,
-                    Some(thid.to_string()),
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.error",
-                    "Database transaction error: {1}",
-                    vec![e.to_string()],
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!("Database transaction error: {e}"),
-                )
-            })?;
+        // Helper: a stream ID like "1700000000000-0" carries the
+        // millisecond timestamp in the part before the hyphen. Convert
+        // that to seconds; return None when the format doesn't match.
+        let parse_stream_secs = |raw: &str| -> Option<u64> {
+            let head = raw.split('-').next()?;
+            head.parse::<u64>().ok().map(|ms| ms / 1000)
+        };
 
         let mut status = MessagePickupStatusReply {
             recipient_did: session.did.clone(),
+            message_count: u32::try_from(inbox.message_count).unwrap_or(u32::MAX),
+            total_bytes: inbox.total_bytes,
+            live_delivery: inbox.live_delivery,
+            newest_received_time: parse_stream_secs(&inbox.newest_received),
+            oldest_received_time: parse_stream_secs(&inbox.oldest_received),
             ..Default::default()
         };
-
-        for (k, v) in response.into_iter().tuples() {
-            match from_redis_value::<String>(k.clone())
-                .unwrap_or("".into())
-                .as_str()
-            {
-                "newest_received" => {
-                    if let Ok(v) = from_redis_value::<String>(v) {
-                        let a: Vec<&str> = v.split('-').collect();
-                        if a.len() != 2 {
-                            continue;
-                        }
-                        status.newest_received_time = if let Ok(t) = a[0].parse::<u64>() {
-                            Some(t / 1000)
-                        } else {
-                            None
-                        };
-                    }
-                }
-                "oldest_received" => {
-                    if let Ok(v) = from_redis_value::<String>(v) {
-                        let a: Vec<&str> = v.split('-').collect();
-                        if a.len() != 2 {
-                            continue;
-                        }
-                        status.oldest_received_time = if let Ok(t) = a[0].parse::<u64>() {
-                            Some(t / 1000)
-                        } else {
-                            None
-                        };
-                    }
-                }
-                "message_count" => {
-                    if let Ok(v) = from_redis_value::<u32>(v) {
-                        status.message_count = v;
-                    }
-                }
-                "queue_count" => continue,
-                "live_delivery" => {
-                    if let Ok(v) = from_redis_value::<bool>(v) {
-                        status.live_delivery = v;
-                    }
-                }
-                "total_bytes" => {
-                    if let Ok(v) = from_redis_value::<u64>(v) {
-                        status.total_bytes = v;
-                    }
-                }
-                "recipient_did" => continue,
-                _ => {
-                    warn!("Unknown key: ({:?}) with value: ({:?})", k, v);
-                }
-            }
-        }
 
         if let Some(live_delivery) = override_live_delivery {
             status.live_delivery = live_delivery;
@@ -468,13 +422,11 @@ pub(crate) async fn messages_received(
                     debug!("Deleting message: {}", msg_id);
                     match state
                         .database
-                        .handler
                         .delete_message(
-                            Some(&session.session_id),
-                            &session.did_hash,
                             msg_id,
-                            Some(&thid),
-                            None,
+                            DeletionAuthority::Owner {
+                                did_hash: session.did_hash.clone(),
+                            },
                         )
                         .await
                     {

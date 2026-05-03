@@ -3,7 +3,11 @@ use super::AuthenticationChallenge;
 use super::helpers::{_create_access_token, _create_refresh_token, create_random_string};
 use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
-use crate::{SharedData, common::acl_checks::ACLCheck, database::session::SessionState};
+use crate::{
+    SharedData,
+    common::acl_checks::ACLCheck,
+    database::session::{Session, SessionState},
+};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
     messages::{
@@ -310,13 +314,14 @@ pub async fn authentication_response(
             )
         })?;
 
-        // Retrieve the session info from the database
-        let mut session = match state
+        // Retrieve the session info from the database. Convert from
+        // the trait-layer Session to the local Session shape.
+        let mut session: Session = match state
             .database
             .get_session(&challenge.session_id, &from_did)
             .await
         {
-            Ok(session) => session,
+            Ok(session) => session.into(),
             Err(e) => {
                 return Err(MediatorError::problem_with_log(
                     14,

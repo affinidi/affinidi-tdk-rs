@@ -287,7 +287,11 @@ pub(crate) async fn process(
                         StatusCode::FORBIDDEN,
                     ));
                 }
-                match state.database.account_remove(session,&did_hash, false, false).await {
+                match state
+                    .database
+                    .account_remove(&session.to_store_session(), &did_hash, false, false)
+                    .await
+                {
                     Ok(response) => _generate_response_message(
                         &msg.id,
                         &session.did,

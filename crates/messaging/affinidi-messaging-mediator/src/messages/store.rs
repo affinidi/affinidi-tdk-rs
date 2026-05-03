@@ -1,12 +1,12 @@
 use crate::SharedData;
 use crate::common::time::unix_timestamp_secs;
-use crate::database::Database;
 use crate::database::session::Session;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
 use crate::messages::PackOptions;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::MediatorStore;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::PackEncryptedMetadata;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
@@ -14,6 +14,7 @@ use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, Probl
 use affinidi_messaging_sdk::messages::sending::{InboundMessageList, InboundMessageResponse};
 use http::StatusCode;
 use sha256::digest;
+use std::sync::Arc;
 use tracing::{Instrument, debug, error, span, trace, warn};
 
 use super::{ProcessMessageResponse, WrapperType};
@@ -277,7 +278,7 @@ pub(crate) async fn store_message(
 /// If live streaming is enabled, this function will send the message to the live stream
 /// Ok to ignore errors here
 async fn _live_stream(
-    database: &Database,
+    database: &Arc<dyn MediatorStore>,
     did_hash: &str,
     stream_uuid: &str,
     message: &str,

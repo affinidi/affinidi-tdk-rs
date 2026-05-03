@@ -33,6 +33,7 @@ pub async fn authentication_challenge(
         acls: MediatorACLSet::default(), // this will be updated later
         account_type: AccountType::Standard,
         expires_at: 0,
+        refresh_token_hash: None,
     };
     let _span = span!(
         Level::DEBUG,
@@ -77,7 +78,10 @@ pub async fn authentication_challenge(
                 .await?;
         }
 
-        state.database.create_session(&session).await?;
+        state
+            .database
+            .create_session(&session.to_store_session())
+            .await?;
 
         metrics::counter!(crate::common::metrics::names::AUTH_CHALLENGES_TOTAL).increment(1);
         debug!("Challenge sent to {}", session.did);

@@ -329,6 +329,13 @@ impl Database {
     /// Changes the type of an account to the new type
     /// - `did_hash` - SHA256 hash of the DID
     /// - `_type` - AccountType to change to
+    ///
+    /// Superseded by [`MediatorStore::account_set_role`]; kept here as
+    /// a Redis-specific helper in case operator tooling needs the
+    /// legacy entry point.
+    ///
+    /// [`MediatorStore::account_set_role`]: affinidi_messaging_mediator_common::store::MediatorStore::account_set_role
+    #[allow(dead_code)]
     pub(crate) async fn account_change_type(
         &self,
         did_hash: &str,

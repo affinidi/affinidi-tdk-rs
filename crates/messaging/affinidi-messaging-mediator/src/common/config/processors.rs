@@ -12,6 +12,15 @@ pub struct ProcessorsConfig {
     pub message_expiry_cleanup: MessageExpiryCleanupConfig,
 }
 
+impl Default for ProcessorsConfig {
+    fn default() -> Self {
+        Self {
+            forwarding: ForwardingConfig::default(),
+            message_expiry_cleanup: MessageExpiryCleanupConfig::default(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ProcessorsConfigRaw {
     pub forwarding: ForwardingConfigRaw,

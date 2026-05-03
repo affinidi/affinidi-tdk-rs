@@ -1,6 +1,7 @@
 pub mod database;
 pub mod errors;
 pub mod secrets;
+pub mod store;
 
 pub use secrets::backends::{PASSPHRASE_ENV, PASSPHRASE_FILE_ENV};
 pub use secrets::well_known::OPERATING_SECRETS;

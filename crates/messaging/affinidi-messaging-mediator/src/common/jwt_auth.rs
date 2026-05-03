@@ -144,7 +144,7 @@ where
         let did_hash = digest(&did);
 
         // Everything has passed token wise - expensive database operations happen here
-        let mut saved_session = state
+        let mut saved_session: Session = state
             .database
             .get_session(&session_id, &did)
             .await
@@ -156,7 +156,8 @@ where
                 AuthError::InternalServerError(format!(
                     "Couldn't get session from database! Reason: {e}"
                 ))
-            })?;
+            })?
+            .into();
 
         // Check if ACL is satisfied
         if saved_session.acls.get_blocked() {

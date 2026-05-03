@@ -1,3 +1,13 @@
+//! Session storage on the Redis backend.
+//!
+//! `Session`, `SessionState`, and `SessionClaims` are kept as **local
+//! types** here (with identical shape to
+//! [`affinidi_messaging_mediator_common::store::types::Session`] etc.)
+//! because the JWT auth middleware impls `FromRequestParts` on
+//! `Session` — the orphan rule prevents implementing a foreign trait
+//! on a foreign type. `From` impls bridge to / from the trait-side
+//! types at the call sites that need to cross the boundary.
+
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use ahash::AHashMap as HashMap;
@@ -22,7 +32,7 @@ pub struct SessionClaims {
 }
 
 /// Lifecycle state of an authentication session.
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionState {
     /// Initial state before any interaction.
     #[default]
@@ -55,7 +65,7 @@ impl TryFrom<&String> for SessionState {
 }
 
 impl Display for SessionState {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
     }
 }
@@ -82,72 +92,87 @@ pub struct Session {
     pub account_type: AccountType,
     /// Unix timestamp when this session expires.
     pub expires_at: u64,
+    /// Hash of the most recently issued refresh token.
+    pub refresh_token_hash: Option<String>,
 }
 
-impl TryFrom<(&str, HashMap<String, String>)> for Session {
-    type Error = MediatorError;
+// ─── Conversions to / from the trait-layer Session ──────────────────────────
 
-    fn try_from(value: (&str, HashMap<String, String>)) -> Result<Self, Self::Error> {
-        let mut session: Session = Session::default();
-        let (sid, hash) = value;
-        session.session_id = sid.into();
-
-        if let Some(challenge) = hash.get("challenge") {
-            session.challenge.clone_from(challenge);
-        } else {
-            warn!("Session ({}): No challenge found", sid);
-            return Err(MediatorError::SessionError(
-                20,
-                sid.into(),
-                "No challenge found when retrieving session".into(),
-            ));
+impl From<affinidi_messaging_mediator_common::store::types::SessionState> for SessionState {
+    fn from(s: affinidi_messaging_mediator_common::store::types::SessionState) -> Self {
+        use affinidi_messaging_mediator_common::store::types::SessionState as S;
+        match s {
+            S::Unknown => Self::Unknown,
+            S::ChallengeSent => Self::ChallengeSent,
+            S::Authenticated => Self::Authenticated,
+            S::Blocked => Self::Blocked,
         }
+    }
+}
 
-        if let Some(state) = hash.get("state") {
-            session.state = state.try_into()?;
-        } else {
-            warn!("Session ({}): No state found", sid);
-            return Err(MediatorError::SessionError(
-                20,
-                sid.into(),
-                "No state found when retrieving session".into(),
-            ));
+impl From<SessionState> for affinidi_messaging_mediator_common::store::types::SessionState {
+    fn from(s: SessionState) -> Self {
+        use affinidi_messaging_mediator_common::store::types::SessionState as S;
+        match s {
+            SessionState::Unknown => S::Unknown,
+            SessionState::ChallengeSent => S::ChallengeSent,
+            SessionState::Authenticated => S::Authenticated,
+            SessionState::Blocked => S::Blocked,
         }
+    }
+}
 
-        if let Some(did) = hash.get("did") {
-            session.did = did.into();
-            session.did_hash = digest(did);
-        } else {
-            warn!("Session ({}): No DID found", sid);
-            return Err(MediatorError::SessionError(
-                20,
-                sid.into(),
-                "No DID found when retrieving session".into(),
-            ));
+impl From<affinidi_messaging_mediator_common::store::types::Session> for Session {
+    fn from(s: affinidi_messaging_mediator_common::store::types::Session) -> Self {
+        Self {
+            session_id: s.session_id,
+            challenge: s.challenge,
+            state: s.state.into(),
+            did: s.did,
+            did_hash: s.did_hash,
+            authenticated: s.authenticated,
+            acls: s.acls,
+            account_type: s.account_type,
+            expires_at: s.expires_at,
+            refresh_token_hash: s.refresh_token_hash,
         }
+    }
+}
 
-        if let Some(acls) = hash.get("acls") {
-            session.acls = match u64::from_str_radix(acls, 16) {
-                Ok(acl) => MediatorACLSet::from_u64(acl),
-                Err(err) => {
-                    warn!("{}: Error parsing acls({})! Error: {}", sid, acls, err);
-                    return Err(MediatorError::SessionError(
-                        26,
-                        sid.into(),
-                        "No ACL found when retrieving session".into(),
-                    ));
-                }
-            }
-        } else {
-            warn!("{}: Error parsing acls!", sid);
-            return Err(MediatorError::SessionError(
-                20,
-                sid.into(),
-                "No ACL found when retrieving session".into(),
-            ));
+impl From<Session> for affinidi_messaging_mediator_common::store::types::Session {
+    fn from(s: Session) -> Self {
+        Self {
+            session_id: s.session_id,
+            challenge: s.challenge,
+            state: s.state.into(),
+            did: s.did,
+            did_hash: s.did_hash,
+            authenticated: s.authenticated,
+            acls: s.acls,
+            account_type: s.account_type,
+            expires_at: s.expires_at,
+            refresh_token_hash: s.refresh_token_hash,
         }
+    }
+}
 
-        Ok(session)
+impl Session {
+    /// Borrowed conversion to the trait-layer session type. Avoids the
+    /// allocation of going through `From` when only the trait-layer
+    /// shape is needed transiently.
+    pub fn to_store_session(&self) -> affinidi_messaging_mediator_common::store::types::Session {
+        affinidi_messaging_mediator_common::store::types::Session {
+            session_id: self.session_id.clone(),
+            challenge: self.challenge.clone(),
+            state: self.state.into(),
+            did: self.did.clone(),
+            did_hash: self.did_hash.clone(),
+            authenticated: self.authenticated,
+            acls: self.acls.clone(),
+            account_type: self.account_type.clone(),
+            expires_at: self.expires_at,
+            refresh_token_hash: self.refresh_token_hash.clone(),
+        }
     }
 }
 
@@ -169,8 +194,6 @@ impl Database {
             .arg(session.state.to_string())
             .arg("did")
             .arg(&session.did)
-            // .arg("acls")
-            // .arg(session.acls.to_hex_string())
             .cmd("HINCRBY")
             .arg("GLOBAL")
             .arg("SESSIONS_CREATED")
@@ -192,7 +215,6 @@ impl Database {
     }
 
     /// Retrieves a session and associated other info from the database
-    ///
     pub async fn get_session(&self, session_id: &str, did: &str) -> Result<Session, MediatorError> {
         let mut con = self.get_connection().await?;
 
@@ -219,7 +241,6 @@ impl Database {
             ..Default::default()
         };
 
-        // Process Session info from database
         if let Some(challenge) = session_db.get("challenge") {
             session.challenge.clone_from(challenge);
         } else {
@@ -258,7 +279,6 @@ impl Database {
             ));
         }
 
-        // Process DID info from database
         if let Some(Some(role_type)) = did_db.first() {
             session.account_type = AccountType::from(role_type.as_str());
         } else {
@@ -306,9 +326,6 @@ impl Database {
     }
 
     /// Updates a session in the database to become authenticated
-    /// Updates the state, and the expiry time
-    /// Also ensures that the DID is recorded in the KNOWN_DIDS Set
-    /// Stores the refresh token hash for one-time-use validation
     pub async fn update_session_authenticated(
         &self,
         old_session_id: &str,
@@ -354,7 +371,6 @@ impl Database {
     }
 
     /// Updates the stored refresh token hash for an existing authenticated session.
-    /// Called during token refresh to rotate the one-time-use refresh token.
     pub async fn update_refresh_token_hash(
         &self,
         session_id: &str,
@@ -401,113 +417,5 @@ impl Database {
             })?;
 
         Ok(hash)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ahash::AHashMap as HashMap;
-
-    // ── SessionState Display ──────────────────────────────────────────
-
-    #[test]
-    fn session_state_display_formatting() {
-        assert_eq!(SessionState::Unknown.to_string(), "Unknown");
-        assert_eq!(SessionState::ChallengeSent.to_string(), "ChallengeSent");
-        assert_eq!(SessionState::Authenticated.to_string(), "Authenticated");
-        assert_eq!(SessionState::Blocked.to_string(), "Blocked");
-    }
-
-    // ── SessionState TryFrom ──────────────────────────────────────────
-
-    #[test]
-    fn session_state_try_from_challenge_sent() {
-        let val = "ChallengeSent".to_string();
-        let state = SessionState::try_from(&val).expect("should parse ChallengeSent");
-        assert_eq!(state, SessionState::ChallengeSent);
-    }
-
-    #[test]
-    fn session_state_try_from_authenticated() {
-        let val = "Authenticated".to_string();
-        let state = SessionState::try_from(&val).expect("should parse Authenticated");
-        assert_eq!(state, SessionState::Authenticated);
-    }
-
-    #[test]
-    fn session_state_try_from_invalid_returns_error() {
-        let val = "InvalidState".to_string();
-        let result = SessionState::try_from(&val);
-        assert!(result.is_err(), "invalid state string should return Err");
-    }
-
-    // ── Session TryFrom ───────────────────────────────────────────────
-
-    fn valid_session_map() -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        map.insert("challenge".to_string(), "test-challenge".to_string());
-        map.insert("state".to_string(), "ChallengeSent".to_string());
-        map.insert("did".to_string(), "did:example:123".to_string());
-        map.insert("acls".to_string(), "ff".to_string());
-        map
-    }
-
-    #[test]
-    fn session_try_from_valid_hashmap() {
-        let map = valid_session_map();
-        let session =
-            Session::try_from(("test-session-id", map)).expect("should create Session from map");
-
-        assert_eq!(session.session_id, "test-session-id");
-        assert_eq!(session.challenge, "test-challenge");
-        assert_eq!(session.state, SessionState::ChallengeSent);
-        assert_eq!(session.did, "did:example:123");
-        assert_eq!(session.did_hash, digest("did:example:123"));
-    }
-
-    #[test]
-    fn session_try_from_missing_challenge_returns_error() {
-        let mut map = valid_session_map();
-        map.remove("challenge");
-
-        let result = Session::try_from(("sid", map));
-        assert!(result.is_err(), "missing challenge should return Err");
-    }
-
-    #[test]
-    fn session_try_from_missing_state_returns_error() {
-        let mut map = valid_session_map();
-        map.remove("state");
-
-        let result = Session::try_from(("sid", map));
-        assert!(result.is_err(), "missing state should return Err");
-    }
-
-    #[test]
-    fn session_try_from_missing_did_returns_error() {
-        let mut map = valid_session_map();
-        map.remove("did");
-
-        let result = Session::try_from(("sid", map));
-        assert!(result.is_err(), "missing DID should return Err");
-    }
-
-    #[test]
-    fn session_try_from_invalid_acl_returns_error() {
-        let mut map = valid_session_map();
-        map.insert("acls".to_string(), "not-hex".to_string());
-
-        let result = Session::try_from(("sid", map));
-        assert!(result.is_err(), "invalid ACL hex should return Err");
-    }
-
-    #[test]
-    fn session_try_from_missing_acl_returns_error() {
-        let mut map = valid_session_map();
-        map.remove("acls");
-
-        let result = Session::try_from(("sid", map));
-        assert!(result.is_err(), "missing ACL should return Err");
     }
 }

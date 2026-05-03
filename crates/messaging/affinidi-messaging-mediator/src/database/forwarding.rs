@@ -4,38 +4,10 @@
 
 use super::Database;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::{Level, debug, event, warn};
 
-/// Represents a message queued for forwarding to a remote mediator
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ForwardQueueEntry {
-    /// Redis stream entry ID (set after reading from stream)
-    pub stream_id: String,
-    /// The packed message to forward
-    pub message: String,
-    /// DID hash of the recipient
-    pub to_did_hash: String,
-    /// DID hash of the sender
-    pub from_did_hash: String,
-    /// The sender DID (not hashed, needed for problem reports)
-    pub from_did: String,
-    /// The recipient DID (not hashed, needed for routing)
-    pub to_did: String,
-    /// The service endpoint URL of the remote mediator
-    pub endpoint_url: String,
-    /// Unix timestamp (millis) when the message was received by this mediator
-    pub received_at_ms: u128,
-    /// Optional delay in milliseconds requested by the sender
-    pub delay_milli: i64,
-    /// Unix timestamp (seconds) when the message expires
-    pub expires_at: u64,
-    /// Number of retry attempts so far
-    pub retry_count: u32,
-    /// Hop counter for loop detection. Incremented each time a mediator forwards the message.
-    pub hop_count: u32,
-}
+pub use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
 
 impl Database {
     /// Enqueue a message for forwarding to a remote mediator.

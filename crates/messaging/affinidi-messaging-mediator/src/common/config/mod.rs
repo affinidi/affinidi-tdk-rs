@@ -122,6 +122,26 @@ pub(crate) struct ConfigRaw {
     /// Unified secret backend — required whenever the mediator has any
     /// persistent identity (which is effectively always).
     pub secrets: SecretsConfigRaw,
+    /// Optional storage backend selector. Absent → Redis (legacy
+    /// behaviour, uses `[database]`). Present with `backend = "fjall"`
+    /// → embedded Fjall at `data_dir`, `[database]` is ignored.
+    #[serde(default)]
+    pub storage: Option<StorageConfig>,
+}
+
+/// `[storage]` section — selects the mediator's storage backend.
+/// Mirrors the wizard recipe shape so a `mediator.toml` produced by
+/// the wizard parses unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageConfig {
+    /// `"redis"` (default) or `"fjall"`. Memory backend is not
+    /// exposed here — it's a tests-only backend.
+    pub backend: String,
+    /// On-disk path for the Fjall data directory. Required when
+    /// `backend = "fjall"`. The mediator creates this directory if
+    /// it doesn't exist.
+    #[serde(default)]
+    pub data_dir: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -174,6 +194,11 @@ pub struct Config {
     /// operator wants to see surfaced on /readyz.
     #[serde(skip_serializing)]
     pub operating_keys_loaded: bool,
+    /// Resolved storage backend selector. `None` → use the legacy
+    /// `[database]` Redis path. `Some(StorageConfig)` → honour the
+    /// `[storage]` section the wizard wrote.
+    #[serde(default)]
+    pub storage: Option<StorageConfig>,
 }
 
 impl fmt::Debug for Config {
@@ -200,6 +225,18 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    /// Construct a [`Config`] with placeholder identity fields and
+    /// stubbed secret/JWT material. Embedding callers (and the
+    /// `MediatorBuilder` it backs) start here and overwrite the
+    /// fields that matter for their deployment.
+    ///
+    /// Not suitable for direct use — `mediator_did`, `admin_did`,
+    /// `secrets_backend`, the database config, and the JWT keys must
+    /// all be set before passing the result to the server.
+    pub fn headless(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
+        Self::default(secrets_resolver)
+    }
+
     fn default(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
         let did_resolver_config = DIDCacheConfigBuilder::default()
             .with_cache_capacity(1000)
@@ -232,6 +269,7 @@ impl Config {
                 affinidi_messaging_mediator_common::secrets::backends::MemoryStore::new("memory"),
             )),
             operating_keys_loaded: false,
+            storage: None,
             security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
                 forwarding: ForwardingConfig::default(),
@@ -564,6 +602,10 @@ impl TryFrom<ConfigRaw> for Config {
             tags,
             secrets_backend_url: raw.secrets.backend.clone(),
             secrets_backend: mediator_secrets.clone(),
+            // Pass the optional `[storage]` section through unchanged.
+            // server::serve_internal inspects it to decide between the
+            // legacy Redis path and the embedded Fjall path.
+            storage: raw.storage.clone(),
             // Operating keys come either from the VTA (when integration
             // is active) or from the unified backend's well-known
             // `mediator/operating/secrets` entry (self-hosted). The

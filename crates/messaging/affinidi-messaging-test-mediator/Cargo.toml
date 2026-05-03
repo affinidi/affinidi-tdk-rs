@@ -1,0 +1,56 @@
+[package]
+name = "affinidi-messaging-test-mediator"
+version = "0.1.0"
+description = "Embedded mediator fixture for integration tests"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+# Internal-only test fixture; do not publish to crates.io.
+publish = false
+
+[dependencies]
+# ── Mediator: the thing we're spawning ───────────────────────────────────
+affinidi-messaging-mediator = { path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
+affinidi-messaging-mediator-common = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-processors = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-processors" }
+
+# ── DID + key generation ────────────────────────────────────────────────
+## Used for `DID::generate_did_peer` (Ed25519 + X25519, with service URI).
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-secrets-resolver = { path = "../../core/affinidi-secrets-resolver" }
+affinidi-did-resolver-cache-sdk = { path = "../../identity/affinidi-did-resolver-cache-sdk" }
+
+# ── SDK client (for the e2e test environment) ───────────────────────────
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk" }
+
+# ── JWT signing key generation for the test mediator's session tokens ───
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+ring = { version = "0.17", features = ["std"] }
+
+# ── Async + lifecycle ───────────────────────────────────────────────────
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+
+# ── Errors + utility ────────────────────────────────────────────────────
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+## Used by integration tests to hit the mediator's HTTP endpoints
+## without going through the SDK.
+reqwest = { version = "0.13", features = ["rustls", "json"] }
+## Tracing subscriber for test diagnostics.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+## WebSocket handshake test.
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
+serde_json = "1"
+
+[lints]
+workspace = true

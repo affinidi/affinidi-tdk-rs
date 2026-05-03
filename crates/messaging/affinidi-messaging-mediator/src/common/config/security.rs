@@ -97,6 +97,17 @@ impl Debug for SecurityConfig {
 }
 
 impl SecurityConfig {
+    /// Construct a baseline `SecurityConfig` with conservative defaults
+    /// and zero-byte JWT keys. Used by [`Config::headless`] and the
+    /// `MediatorBuilder` as a starting point — embedded callers MUST
+    /// overwrite `jwt_encoding_key` / `jwt_decoding_key` with real
+    /// material before starting the mediator.
+    ///
+    /// [`Config::headless`]: crate::common::config::Config::headless
+    pub fn headless(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
+        Self::default(secrets_resolver)
+    }
+
     pub(crate) fn default(secrets_resolver: Arc<ThreadedSecretsResolver>) -> Self {
         SecurityConfig {
             mediator_acl_mode: AccessListModeType::ExplicitDeny,

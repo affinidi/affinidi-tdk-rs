@@ -8,17 +8,18 @@
 compile_error!("At least one of the `didcomm` or `tsp` features must be enabled");
 
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
+use affinidi_messaging_mediator_common::store::MediatorStore;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::extract::{FromRef, FromRequestParts};
 use chrono::{DateTime, Utc};
 use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthError};
-use database::Database;
 use http::request::Parts;
 use std::{fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
+pub mod builder;
 pub mod commands;
 pub mod common;
 pub mod database;
@@ -27,6 +28,7 @@ pub mod didcomm_compat;
 pub mod handlers;
 pub mod messages;
 pub mod server;
+pub mod store;
 pub mod tasks;
 
 /// Shared application state available to all request handlers via Axum's state extraction.
@@ -38,8 +40,10 @@ pub struct SharedData {
     pub service_start_timestamp: DateTime<Utc>,
     /// Cached DID resolver for resolving DID documents.
     pub did_resolver: DIDCacheClient,
-    /// Redis-backed database for sessions, messages, and accounts.
-    pub database: Database,
+    /// Storage backend for sessions, messages, accounts, and live
+    /// streaming. Polymorphic so the mediator can run against Redis,
+    /// Fjall, or memory without changing handler code.
+    pub database: Arc<dyn MediatorStore>,
     /// Optional background task handle for WebSocket streaming.
     pub streaming_task: Option<StreamingTask>,
     /// DIDComm Discover Features protocol handler.

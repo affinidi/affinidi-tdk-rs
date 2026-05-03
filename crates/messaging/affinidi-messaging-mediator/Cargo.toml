@@ -17,9 +17,22 @@ name = "mediator"
 path = "src/main.rs"
 
 [features]
-## Default: DIDComm v2 protocol support.
+## Default: DIDComm v2 protocol support + Redis storage backend.
 ## AWS integration is opt-in: use --features aws when deploying to AWS.
-default = ["didcomm"]
+default = ["didcomm", "redis-backend"]
+
+## Storage backends for the `MediatorStore` trait. At least one must be
+## enabled for the binary to function. Multiple may be enabled, but the
+## binary still picks one at startup based on its config.
+##
+## Cross-process pub/sub (multiple mediator instances sharing a backend)
+## is only supported by `redis-backend` — `fjall-backend` and
+## `memory-backend` are inherently single-process. The mediator binary
+## refuses to start with multi-instance config when the chosen backend
+## doesn't support it.
+redis-backend = []
+fjall-backend = ["dep:fjall"]
+memory-backend = []
 
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.
@@ -92,6 +105,13 @@ redis = { version = "1.1", features = [
   "ahash",                   # Faster hashing for internal maps
 ] }
 
+# ── Database (Fjall, optional) ──────────────────────────────────────────
+## Embedded LSM-tree key-value store; activated by `fjall-backend` feature.
+## Single-process backend for self-hosted mediators that don't want a
+## separate Redis. Cross-process pub/sub is not supported (Fjall is
+## inherently single-instance).
+fjall = { version = "3.1", optional = true }
+
 # ── DID Infrastructure ───────────────────────────────────────────────────
 didwebvh-rs = "0.5"
 
@@ -121,6 +141,7 @@ tokio = { workspace = true, features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
 async-convert = "1"
+async-trait = "0.1"
 futures-util = "0.3"
 
 # ── Observability ────────────────────────────────────────────────────────
@@ -151,6 +172,8 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 lazy_static = "1"
+## `FjallStore` smoke tests open a temp directory.
+tempfile = "3"
 
 [lints]
 workspace = true
