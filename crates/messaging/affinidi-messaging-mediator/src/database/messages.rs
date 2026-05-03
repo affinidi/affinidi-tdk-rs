@@ -4,8 +4,8 @@
  */
 
 use super::Database;
-use crate::common::session::Session;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::types::Session;
 use affinidi_messaging_sdk::messages::Folder;
 use ahash::AHashMap as HashMap;
 use tracing::{Instrument, Level, debug, span, warn};

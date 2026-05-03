@@ -13,7 +13,6 @@
 //! subscribers can share one Redis pubsub bridge.
 
 use crate::common::circuit_breaker::CircuitBreaker;
-use crate::common::session::{Session as InnerSession, SessionState as InnerSessionState};
 use crate::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
@@ -160,25 +159,25 @@ impl std::fmt::Debug for RedisStore {
 // still use the legacy types, the trait uses the new types, and the
 // store impl converts at the boundary. Commit 6 unifies them.
 
-fn session_state_into_new(s: InnerSessionState) -> SessionState {
+fn session_state_into_new(s: SessionState) -> SessionState {
     match s {
-        InnerSessionState::Unknown => SessionState::Unknown,
-        InnerSessionState::ChallengeSent => SessionState::ChallengeSent,
-        InnerSessionState::Authenticated => SessionState::Authenticated,
-        InnerSessionState::Blocked => SessionState::Blocked,
+        SessionState::Unknown => SessionState::Unknown,
+        SessionState::ChallengeSent => SessionState::ChallengeSent,
+        SessionState::Authenticated => SessionState::Authenticated,
+        SessionState::Blocked => SessionState::Blocked,
     }
 }
 
-fn session_state_into_old(s: SessionState) -> InnerSessionState {
+fn session_state_into_old(s: SessionState) -> SessionState {
     match s {
-        SessionState::Unknown => InnerSessionState::Unknown,
-        SessionState::ChallengeSent => InnerSessionState::ChallengeSent,
-        SessionState::Authenticated => InnerSessionState::Authenticated,
-        SessionState::Blocked => InnerSessionState::Blocked,
+        SessionState::Unknown => SessionState::Unknown,
+        SessionState::ChallengeSent => SessionState::ChallengeSent,
+        SessionState::Authenticated => SessionState::Authenticated,
+        SessionState::Blocked => SessionState::Blocked,
     }
 }
 
-fn session_into_new(inner: InnerSession, refresh_token_hash: Option<String>) -> Session {
+fn session_into_new(inner: Session, refresh_token_hash: Option<String>) -> Session {
     Session {
         session_id: inner.session_id,
         challenge: inner.challenge,
@@ -385,7 +384,7 @@ impl MediatorStore for RedisStore {
         // Synthesize a minimal Session for the legacy `purge_messages`
         // signature — it only reads `session_id` for log context and
         // doesn't touch the other fields.
-        let session = InnerSession {
+        let session = Session {
             session_id: session_id.to_string(),
             ..Default::default()
         };
@@ -398,7 +397,7 @@ impl MediatorStore for RedisStore {
         did_hash: &str,
         folder: Folder,
     ) -> Result<(), MediatorError> {
-        let session = InnerSession {
+        let session = Session {
             session_id: session_id.to_string(),
             ..Default::default()
         };
@@ -551,7 +550,7 @@ impl MediatorStore for RedisStore {
     ) -> Result<bool, MediatorError> {
         // Synthesize a legacy session — `account_remove` only reads
         // session_id from it for tracing context.
-        let inner_session = InnerSession {
+        let inner_session = Session {
             session_id: session.session_id.clone(),
             ..Default::default()
         };

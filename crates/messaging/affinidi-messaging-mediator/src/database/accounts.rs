@@ -1,7 +1,7 @@
 //! Handles scanning, adding and removing DID accounts from the mediator
 use super::Database;
-use crate::common::session::Session;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::types::Session;
 use affinidi_messaging_sdk::{
     messages::Folder,
     protocols::mediator::{
