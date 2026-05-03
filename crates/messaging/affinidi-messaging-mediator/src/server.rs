@@ -19,7 +19,6 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::database::DatabaseHandler;
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_processors::message_expiry_cleanup::processor::MessageExpiryCleanupProcessor;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
@@ -363,32 +362,49 @@ pub async fn serve_internal(
         });
     }
 
-    // The remaining background tasks still take the concrete
-    // `Database` (Redis-specific). When a pre-built store is
-    // supplied they are skipped — Memory and Fjall don't have a
-    // `Database` to give them. Migrating each onto
-    // `Arc<dyn MediatorStore>` is tracked as follow-up work.
-    if let Some(database) = &database {
-        if config.processors.message_expiry_cleanup.enabled {
-            let _database = database.handler.clone();
-            let _config = config.processors.message_expiry_cleanup.clone();
-            let _admin_did_hash = config.mediator_did_hash.clone();
-            let cleanup_token = shutdown_token.clone();
-            tokio::spawn(async move {
-                let _processor =
-                    MessageExpiryCleanupProcessor::new(_config, _database, _admin_did_hash);
+    // Message expiry sweep — runs against any backend via
+    // `MediatorStore::sweep_expired_messages`. The standalone
+    // `message_expiry_cleanup` binary in mediator-processors keeps
+    // its own direct-Redis loop for distributed deployments.
+    if config.processors.message_expiry_cleanup.enabled {
+        let expiry_store = store.clone();
+        let admin_did_hash = config.mediator_did_hash.clone();
+        let cleanup_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
                 tokio::select! {
-                    result = _processor.start() => {
-                        if let Err(e) = result {
-                            error!("Message expiry cleanup error: {}", e);
-                        }
-                    }
                     _ = cleanup_token.cancelled() => {
                         info!("Message expiry cleanup shutting down");
+                        return;
+                    }
+                    _ = tick.tick() => {}
+                }
+
+                let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+                match expiry_store
+                    .sweep_expired_messages(now_secs, &admin_did_hash)
+                    .await
+                {
+                    Ok(report) if report.expired > 0 || report.timeslots_swept > 0 => {
+                        info!(
+                            event_type = "ExpirySweep",
+                            timeslots_swept = report.timeslots_swept,
+                            expired = report.expired,
+                            already_deleted = report.already_deleted,
+                            "expiry sweep drained {} messages across {} timeslots",
+                            report.expired,
+                            report.timeslots_swept,
+                        );
+                    }
+                    Ok(_) => {} // nothing to sweep
+                    Err(err) => {
+                        warn!("Message expiry sweep error: {err}");
                     }
                 }
-            });
-        }
+            }
+        });
     }
 
     // Streaming task: subscribes via the trait, so it runs on any
