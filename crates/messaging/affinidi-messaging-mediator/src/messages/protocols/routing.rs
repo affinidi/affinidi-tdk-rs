@@ -468,7 +468,16 @@ pub(crate) async fn process(
                 }
         } else if let Some(ref json_val) = attachment.data.json {
                 if attachment.data.jws.is_some() {
-                    // TODO: Implement JWS verification
+                    // JSON-with-JWS attachments would need a full
+                    // verification path: parse the protected header,
+                    // resolve the kid via the DID resolver, extract
+                    // the Ed25519 verification key, then verify before
+                    // forwarding. Until that lands, we reject rather
+                    // than forward untrusted signed payloads. Most
+                    // DIDComm clients use base64-encoded encrypted
+                    // attachments instead, which don't require this
+                    // path. Tracked as future work in PR #286's
+                    // follow-up section.
                     return Err(MediatorError::problem(
                         66,
                         &session.session_id,
