@@ -24,6 +24,13 @@ pub struct BuildRecipe {
     pub security: SecuritySection,
     #[serde(default)]
     pub database: DatabaseSection,
+    /// Optional storage backend selector. When `[storage].backend =
+    /// "fjall"`, the mediator opens an embedded Fjall database at
+    /// `data_dir`; the `[database]` section is ignored. Defaults to
+    /// `"redis"`, so existing recipes without `[storage]` continue
+    /// to use the legacy Redis path.
+    #[serde(default)]
+    pub storage: StorageSection,
     #[serde(default)]
     pub output: OutputSection,
     #[serde(default)]
@@ -206,6 +213,44 @@ impl Default for DatabaseSection {
     fn default() -> Self {
         Self {
             url: default_database_url(),
+        }
+    }
+}
+
+/// Optional `[storage]` section in the recipe — selects the mediator's
+/// storage backend. When omitted, falls back to the legacy `[database]`
+/// section (Redis). The wizard-generated `mediator.toml` mirrors the
+/// shape: a `[storage]` section with `backend = "redis" | "fjall"`,
+/// plus a backend-specific configuration.
+///
+/// Memory backend is intentionally absent — it's a tests-only backend
+/// and shouldn't appear in operator-facing config.
+#[derive(Debug, Deserialize)]
+pub struct StorageSection {
+    /// `"redis"` or `"fjall"`. Defaults to `"redis"` so existing
+    /// recipes without a `[storage]` section continue to work.
+    #[serde(default = "default_storage_backend")]
+    pub backend: String,
+    /// On-disk path for the Fjall data directory. Used only when
+    /// `backend = "fjall"`. The mediator creates this directory if it
+    /// doesn't exist.
+    #[serde(default = "default_fjall_data_dir")]
+    pub data_dir: String,
+}
+
+fn default_storage_backend() -> String {
+    "redis".into()
+}
+
+fn default_fjall_data_dir() -> String {
+    "./data/mediator".into()
+}
+
+impl Default for StorageSection {
+    fn default() -> Self {
+        Self {
+            backend: default_storage_backend(),
+            data_dir: default_fjall_data_dir(),
         }
     }
 }
@@ -462,6 +507,24 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
 
     // Database
     config.database_url = recipe.database.url.clone();
+
+    // Storage backend selector. Validate the choice up-front so a
+    // typo in the recipe surfaces here rather than at mediator
+    // startup. `memory` is intentionally rejected — it's a tests-
+    // only backend.
+    match recipe.storage.backend.as_str() {
+        "redis" => config.storage_backend = "redis".into(),
+        "fjall" => {
+            config.storage_backend = "fjall".into();
+            config.fjall_data_dir = recipe.storage.data_dir.clone();
+        }
+        other => {
+            return Err(anyhow::anyhow!(
+                "Invalid storage.backend '{}': expected 'redis' or 'fjall'",
+                other
+            ));
+        }
+    }
 
     // Output
     config.config_path = recipe.output.config_path.clone();
@@ -806,6 +869,7 @@ mod tests {
             secrets: SecretsSection::default(),
             security: SecuritySection::default(),
             database: DatabaseSection::default(),
+            storage: StorageSection::default(),
             output: OutputSection::default(),
             install: InstallSection::default(),
             vta: VtaSection::default(),

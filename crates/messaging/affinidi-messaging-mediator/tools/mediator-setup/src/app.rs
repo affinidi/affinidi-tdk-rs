@@ -132,8 +132,10 @@ impl WizardStep {
                 description: "Configure transport security and authentication tokens.".into(),
             },
             Self::Database => StepData {
-                title: format!("Step {num}/{total}: Database"),
-                description: "Enter the Redis connection URL.".into(),
+                title: format!("Step {num}/{total}: Storage Backend"),
+                description: "Choose between Redis (multi-mediator) and Fjall \
+                              (embedded single-node)."
+                    .into(),
             },
             Self::Admin => StepData {
                 title: format!("Step {num}/{total}: Admin Account"),
@@ -259,6 +261,18 @@ pub enum SecurityPhase {
     JwtMode,
 }
 
+/// Sub-phases of the `Database` step. The wizard now asks two
+/// questions: first which storage backend (Redis vs Fjall), then a
+/// backend-specific URL/path. `None` means we're past the selection
+/// and the text-input widget is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabasePhase {
+    /// Choose between `redis` and `fjall`. After confirm the wizard
+    /// transitions to a backend-specific text-input phase
+    /// (represented by `database_phase = None` + `InputMode::TextInput`).
+    SelectBackend,
+}
+
 /// Sub-phases of the top-level `Vta` step picker (before any of the
 /// transport-specific sub-flows take over).
 ///
@@ -361,6 +375,13 @@ pub struct WizardConfig {
     /// `generate` (default) or `provide`. See [`crate::consts::JWT_MODE_GENERATE`].
     pub jwt_mode: String,
     pub database_url: String,
+    /// Storage backend the generated `mediator.toml` selects:
+    /// `"redis"` (default) or `"fjall"`. Mirrors `[storage].backend`
+    /// in the recipe shape and the rendered config.
+    pub storage_backend: String,
+    /// On-disk path for the Fjall data directory. Only meaningful
+    /// when `storage_backend == "fjall"`.
+    pub fjall_data_dir: String,
     pub admin_did_mode: String,
     pub listen_address: String,
     /// HTTP prefix all mediator routes nest under (e.g. `/mediator/v1/`).
@@ -414,6 +435,8 @@ impl Default for WizardConfig {
             vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
+            storage_backend: "redis".into(),
+            fjall_data_dir: "./data/mediator".into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
             api_prefix: DEFAULT_API_PREFIX.into(),
@@ -442,6 +465,11 @@ pub struct WizardApp {
     /// portion is still active (selection list or cert/key text inputs);
     /// `Some(JwtMode)` means the JWT-mode selection is on screen.
     pub security_phase: Option<SecurityPhase>,
+    /// Sub-phase tracker for the `Database` step. `Some(SelectBackend)`
+    /// means the backend-picker list is on screen; `None` means the
+    /// operator has picked a backend and we're collecting the
+    /// backend-specific URL/path via the text-input widget.
+    pub database_phase: Option<DatabasePhase>,
     /// Sub-phase tracker for the `Did` step. Only ever populated when
     /// the operator picked `DID_VTA` and we have an online VTA
     /// session — the wizard then walks the webvh-host selection
@@ -521,6 +549,7 @@ impl WizardApp {
             completed: Vec::new(),
             key_storage_phase: None,
             security_phase: None,
+            database_phase: Some(DatabasePhase::SelectBackend),
             did_phase: None,
             vta_connect: None,
             vta_did_prefill: None,
@@ -1577,13 +1606,11 @@ impl WizardApp {
                 self.current_step = step;
                 self.on_enter_step();
                 self.selection_index = self.default_selection_index();
-                // Set mode based on step type
-                if step == WizardStep::Database {
-                    self.mode = InputMode::TextInput;
-                    self.text_input = Input::new(self.config.database_url.clone());
-                } else {
-                    self.mode = InputMode::Selecting;
-                }
+                // Database now always starts on the backend picker;
+                // previously it jumped directly to the URL text input,
+                // which is no longer valid since the backend choice
+                // hasn't been made yet on a fresh jump-back.
+                self.mode = InputMode::Selecting;
                 self.focus = FocusPanel::Content;
             }
         }
@@ -2038,8 +2065,24 @@ impl WizardApp {
                 }
             }
             WizardStep::Database => {
-                // Database uses text input, but we return empty for the selection fallback
-                vec![]
+                // The backend-picker phase shows two options; once
+                // the operator confirms, the step transitions to a
+                // text-input phase (URL or path) and `selection_options`
+                // is no longer consulted.
+                if self.database_phase == Some(DatabasePhase::SelectBackend) {
+                    vec![
+                        SelectionOption::new(
+                            "Redis",
+                            "External Redis instance — required for multi-mediator clusters",
+                        ),
+                        SelectionOption::new(
+                            "Fjall",
+                            "Embedded LSM store — single-node, no Redis sidecar",
+                        ),
+                    ]
+                } else {
+                    vec![]
+                }
             }
             WizardStep::Admin => {
                 let mut opts = vec![
@@ -2199,7 +2242,17 @@ impl WizardApp {
                 }
             }
             WizardStep::Database => {
-                "Redis is used for message queues, session storage, and forwarding. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
+                if self.database_phase == Some(DatabasePhase::SelectBackend) {
+                    match self.selection_index {
+                        0 => "Redis: multi-mediator clusters with cross-process pub/sub. Pick this when running more than one mediator instance against shared storage, or when an operator already provisions Redis.".into(),
+                        1 => "Fjall: single-node embedded LSM. No Redis sidecar — data lives on disk under data_dir. Recommended for self-hosted deployments and operators who want fewer moving parts.".into(),
+                        _ => String::new(),
+                    }
+                } else if self.config.storage_backend == "fjall" {
+                    "Path on disk where Fjall will keep its data directory. Created if absent. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
+                } else {
+                    "Redis connection URL. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
+                }
             }
             WizardStep::Admin => {
                 if self.config.use_vta {
@@ -2486,9 +2539,23 @@ impl WizardApp {
                 self.enter_jwt_mode_phase();
             }
             WizardStep::Database => {
-                // Database step: confirm text input
-                self.config.database_url = self.text_input.value().to_string();
-                self.advance();
+                // First phase: backend picker. Confirming this branch
+                // sets `storage_backend` and transitions to the
+                // backend-specific text-input phase. The text-input
+                // confirm path then writes either `database_url` (Redis)
+                // or `fjall_data_dir` (Fjall).
+                self.config.storage_backend = match self.selection_index {
+                    0 => "redis".into(),
+                    1 => "fjall".into(),
+                    _ => return,
+                };
+                self.database_phase = None;
+                self.mode = InputMode::TextInput;
+                self.text_input = if self.config.storage_backend == "fjall" {
+                    Input::new(self.config.fjall_data_dir.clone())
+                } else {
+                    Input::new(self.config.database_url.clone())
+                };
             }
             WizardStep::Admin => {
                 // Options list is [generate, paste, (vta,) skip] with
@@ -3085,7 +3152,15 @@ impl WizardApp {
                 }
             }
             WizardStep::Database => {
-                self.config.database_url = self.text_input.value().to_string();
+                // Text-input confirm: save the URL or path against
+                // the right field based on the backend the operator
+                // picked in the prior phase, then advance.
+                let value = self.text_input.value().to_string();
+                if self.config.storage_backend == "fjall" {
+                    self.config.fjall_data_dir = value;
+                } else {
+                    self.config.database_url = value;
+                }
                 self.mode = InputMode::Selecting;
                 self.advance();
             }
@@ -3233,6 +3308,13 @@ impl WizardApp {
             self.vta_intent_choice = None;
             self.vta_stub_notice = None;
         }
+        if self.current_step == WizardStep::Database {
+            // Always start the Database step on the backend picker.
+            // Re-entry via `go_back` from a later step lands here too,
+            // and the caller can then move forward into the URL/path
+            // text-input phase.
+            self.database_phase = Some(DatabasePhase::SelectBackend);
+        }
     }
 
     fn advance(&mut self) {
@@ -3252,12 +3334,20 @@ impl WizardApp {
             self.current_step = next;
             self.on_enter_step();
             self.selection_index = self.default_selection_index();
-            // Database + Output both open in text-input mode; Summary
-            // goes straight to the confirmation screen. Everything
+            // Output opens in text-input mode; Summary goes straight
+            // to the confirmation screen; Database opens on its
+            // backend-picker selection list (the URL/path text input
+            // is reached after the picker is confirmed). Everything
             // else uses the selection-list default.
             if self.current_step == WizardStep::Database {
-                self.mode = InputMode::TextInput;
-                self.text_input = Input::new(self.config.database_url.clone());
+                self.mode = InputMode::Selecting;
+                // Pre-select the operator's last-chosen backend so
+                // re-entry is idempotent.
+                self.selection_index = if self.config.storage_backend == "fjall" {
+                    1
+                } else {
+                    0
+                };
             } else if self.current_step == WizardStep::Output {
                 self.mode = InputMode::TextInput;
                 self.text_input = Input::new(self.config.config_path.clone());
@@ -3337,6 +3427,22 @@ impl WizardApp {
             self.mode = InputMode::Selecting;
             return;
         }
+        // Database step: `Esc` from the text-input phase rewinds to
+        // the backend picker rather than leaving the step. Mirrors the
+        // Vta `SelectTransport → SelectIntent` rewind pattern above.
+        if self.current_step == WizardStep::Database
+            && self.database_phase.is_none()
+            && self.mode == InputMode::TextInput
+        {
+            self.database_phase = Some(DatabasePhase::SelectBackend);
+            self.mode = InputMode::Selecting;
+            self.selection_index = if self.config.storage_backend == "fjall" {
+                1
+            } else {
+                0
+            };
+            return;
+        }
         if self.in_did_subflow() {
             // EnterCustomUrl and EnterMnemonic → back to SelectWebvhHost.
             // SelectWebvhHost → exit the sub-flow entirely and fall
@@ -3413,8 +3519,13 @@ impl WizardApp {
     fn refresh_text_input_mode(&mut self) {
         match self.current_step {
             WizardStep::Database => {
-                self.mode = InputMode::TextInput;
-                self.text_input = Input::new(self.config.database_url.clone());
+                // Database is now two-phase. Landing back here from
+                // a later step always returns to the backend picker
+                // (the URL/path field is reachable by confirming the
+                // picker again). `on_enter_step` already reset
+                // `database_phase` to `SelectBackend`, so leave the
+                // mode as `Selecting`.
+                self.mode = InputMode::Selecting;
             }
             WizardStep::Output => {
                 self.mode = InputMode::TextInput;
@@ -3716,6 +3827,117 @@ mod tests {
         app.advance();
         assert_eq!(app.current_step, WizardStep::Summary);
         assert_eq!(app.mode, InputMode::Confirming);
+    }
+
+    /// Helper: walk forward to the Database step from a fresh wizard.
+    /// Mirrors the steps a real operator goes through, picking
+    /// defaults at each prior selection step.
+    fn advance_to_database_step(app: &mut WizardApp) {
+        while app.current_step != WizardStep::Database {
+            app.advance();
+        }
+    }
+
+    #[test]
+    fn database_step_starts_on_backend_picker() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        assert_eq!(app.current_step, WizardStep::Database);
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::SelectBackend),
+            "Database step must open on the backend picker"
+        );
+        // Both options must be present; the help text differs by
+        // which one is highlighted.
+        let opts = app.current_options();
+        assert_eq!(opts.len(), 2);
+    }
+
+    #[test]
+    fn database_step_redis_choice_transitions_to_url_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+
+        // Redis is at index 0.
+        app.selection_index = 0;
+        app.select_current();
+
+        assert_eq!(app.config.storage_backend, "redis");
+        assert_eq!(app.database_phase, None, "phase clears after pick");
+        assert_eq!(app.mode, InputMode::TextInput);
+        // Text input pre-filled with the existing URL value.
+        assert_eq!(app.text_input.value(), DEFAULT_REDIS_URL);
+    }
+
+    #[test]
+    fn database_step_fjall_choice_transitions_to_path_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+
+        // Fjall is at index 1.
+        app.selection_index = 1;
+        app.select_current();
+
+        assert_eq!(app.config.storage_backend, "fjall");
+        assert_eq!(app.database_phase, None);
+        assert_eq!(app.mode, InputMode::TextInput);
+        // Text input pre-filled with the Fjall path default rather
+        // than the Redis URL — that's the load-bearing assertion: a
+        // typo here would store the Redis URL into `fjall_data_dir`
+        // (or vice versa) on the next confirm.
+        assert_eq!(app.text_input.value(), "./data/mediator");
+    }
+
+    #[test]
+    fn database_step_esc_from_text_input_returns_to_picker() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+
+        app.selection_index = 1; // Fjall
+        app.select_current();
+        assert_eq!(app.mode, InputMode::TextInput);
+
+        // Esc rewinds to the picker rather than leaving the step.
+        app.go_back();
+        assert_eq!(app.current_step, WizardStep::Database);
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(app.database_phase, Some(DatabasePhase::SelectBackend));
+        // Selection_index should reflect the previously chosen backend
+        // so the operator returns to the same highlighted option.
+        assert_eq!(app.selection_index, 1);
+    }
+
+    #[test]
+    fn database_step_text_input_writes_correct_field_per_backend() {
+        // Redis path — operator types a URL.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("redis://prod-host:6379/2".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.storage_backend, "redis");
+        assert_eq!(app.config.database_url, "redis://prod-host:6379/2");
+        assert_eq!(
+            app.config.fjall_data_dir, "./data/mediator",
+            "Fjall path must remain at default when Redis was picked"
+        );
+
+        // Fjall path — operator types a directory path.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        app.text_input = tui_input::Input::new("/var/lib/affinidi-mediator".into());
+        app.confirm_text_input();
+        assert_eq!(app.config.storage_backend, "fjall");
+        assert_eq!(app.config.fjall_data_dir, "/var/lib/affinidi-mediator");
+        assert_eq!(
+            app.config.database_url, DEFAULT_REDIS_URL,
+            "Redis URL must remain at default when Fjall was picked"
+        );
     }
 
     #[test]

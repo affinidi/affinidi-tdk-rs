@@ -136,8 +136,37 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     }
 
     // ── [database] ─────────────────────────────────────────────────────
+    // The legacy `[database]` section is always written so a wizard
+    // run that picks Fjall today and switches to Redis later doesn't
+    // need the operator to fill in a URL from scratch.
     if let Some(db) = doc.get_mut("database") {
         db["database_url"] = toml_edit::value(&config.database_url);
+    }
+
+    // ── [storage] ──────────────────────────────────────────────────────
+    // Storage backend selector — added after the legacy `[database]`
+    // section so the rendered TOML reads top-down: identity, secrets,
+    // (optional) bundled-redis URL, then the actual backend choice.
+    //
+    // - `backend = "redis"` (default): mediator uses `[database]`.
+    // - `backend = "fjall"`: mediator opens an embedded LSM at
+    //   `data_dir`; `[database]` is ignored entirely.
+    {
+        // Find or insert the [storage] table.
+        if doc.get("storage").is_none() {
+            doc["storage"] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let storage = doc.get_mut("storage").expect("just inserted");
+        storage["backend"] = toml_edit::value(&config.storage_backend);
+        if config.storage_backend == "fjall" {
+            storage["data_dir"] = toml_edit::value(&config.fjall_data_dir);
+        } else {
+            // Strip a stale data_dir if the operator switched back to
+            // Redis on a re-run.
+            if let Some(table) = storage.as_table_like_mut() {
+                table.remove("data_dir");
+            }
+        }
     }
 
     // ── [security] ─────────────────────────────────────────────────────
