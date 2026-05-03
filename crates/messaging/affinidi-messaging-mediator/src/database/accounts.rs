@@ -37,6 +37,12 @@ fn _to_account(map: HashMap<String, String>, access_list_count: u32) -> Account 
     account
 }
 
+// These methods are the Redis-backend implementation behind
+// `RedisStore`. On `memory-backend` / `fjall-backend` builds the Redis
+// path is gated out and the compiler reports them as dead, but they
+// remain part of the build matrix that the `redis-backend` feature
+// activates — silence the warning rather than gating each method.
+#[allow(dead_code)]
 impl Database {
     /// Quick and efficient check if an account exists locally in the mediator
     pub(crate) async fn account_exists(&self, did_hash: &str) -> Result<bool, MediatorError> {

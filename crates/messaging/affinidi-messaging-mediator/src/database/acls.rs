@@ -10,6 +10,9 @@ use affinidi_messaging_sdk::protocols::mediator::{
 use redis::{Cmd, Pipeline, Value, from_redis_value};
 use tracing::{Instrument, Level, debug, span, warn};
 
+// Redis-backend implementation behind `RedisStore`. See the comment
+// in `database/accounts.rs` for why `dead_code` is allowed here.
+#[allow(dead_code)]
 impl Database {
     /// Replace the ACL for a given DID
     /// Assumes that the checks on can you change the ACL have already been done

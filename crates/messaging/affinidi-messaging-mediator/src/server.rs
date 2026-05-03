@@ -196,11 +196,17 @@ pub async fn serve_internal(
     }
 
     // When the caller supplies a pre-built store (Memory, Fjall, or
-    // any future backend), we skip the Redis-specific setup path and
-    // wire that store straight into `SharedData`. Background tasks
-    // that take a raw `Database` (statistics, message expiry,
-    // forwarding processor, websocket streaming) are skipped on this
-    // path until they're refactored to take a trait object.
+    // any future backend), skip the Redis-specific bootstrap entirely
+    // and let the trait-based code path own the lifecycle. Background
+    // tasks (statistics, expiry sweep, forwarding processor, websocket
+    // streaming) all consume `Arc<dyn MediatorStore>`, so they run
+    // unchanged regardless of which backend is in use.
+    //
+    // The `database` binding is only consumed by the `RedisStore`
+    // wrapper below, which is gated on `redis-backend`. On memory- or
+    // fjall-only builds the variable is genuinely unused — silence the
+    // warning rather than scatter `#[cfg]` attributes through the body.
+    #[cfg_attr(not(feature = "redis-backend"), allow(unused_variables))]
     let database: Option<Database> = if let Some(store) = &pre_built_store {
         // Initialise the store (no-op for Memory; opens partitions
         // for Fjall; loads Lua + runs migrations for Redis if a

@@ -528,17 +528,6 @@ impl std::fmt::Debug for FjallStore {
     }
 }
 
-// Helper: emit a uniform "not yet implemented" error so subsequent
-// commits land per-method implementations without churning the error
-// shape.
-fn not_yet_implemented(method: &'static str) -> MediatorError {
-    MediatorError::InternalError(
-        501,
-        "fjall".into(),
-        format!("FjallStore::{method} not yet implemented"),
-    )
-}
-
 #[async_trait]
 impl MediatorStore for FjallStore {
     // ─── Bootstrap & health ─────────────────────────────────────────────────
