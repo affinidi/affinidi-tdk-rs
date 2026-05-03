@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::{
     SharedData,
-    database::session::Session,
+    common::session::Session,
     messages::ProcessMessageResponse,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState},
 };

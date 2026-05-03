@@ -10,7 +10,7 @@ use axum::{Json, extract::State};
 use http::StatusCode;
 use tracing::{Instrument, Level, debug, span};
 
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 
 /// Delivers messages to the client for given message_ids
 /// outbound refers to outbound from the mediator perspective

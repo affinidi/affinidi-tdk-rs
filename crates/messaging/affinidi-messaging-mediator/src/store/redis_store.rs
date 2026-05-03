@@ -13,12 +13,10 @@
 //! streaming so multiple in-process subscribers can share one Redis
 //! pubsub bridge.
 
+use crate::common::session::{Session as InnerSession, SessionState as InnerSessionState};
 use crate::database::{
-    Database,
-    forwarding::ForwardQueueEntry as InnerForwardEntry,
-    session::{Session as InnerSession, SessionState as InnerSessionState},
-    stats::MetadataStats as InnerMetadataStats,
-    store::MessageMetaData as InnerMessageMetaData,
+    Database, forwarding::ForwardQueueEntry as InnerForwardEntry,
+    stats::MetadataStats as InnerMetadataStats, store::MessageMetaData as InnerMessageMetaData,
 };
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,

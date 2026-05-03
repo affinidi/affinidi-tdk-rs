@@ -3,7 +3,7 @@ use std::slice;
 use crate::common::time::unix_timestamp_secs;
 
 use super::acls::check_permissions;
-use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
+use crate::{SharedData, common::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;

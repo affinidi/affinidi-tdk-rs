@@ -1,4 +1,4 @@
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 use affinidi_messaging_mediator_common::errors::AppError;
 use affinidi_messaging_sdk::messages::SuccessResponse;
 use axum::{

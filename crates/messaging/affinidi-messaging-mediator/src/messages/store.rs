@@ -1,6 +1,6 @@
 use crate::SharedData;
+use crate::common::session::Session;
 use crate::common::time::unix_timestamp_secs;
-use crate::database::session::Session;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]

@@ -13,7 +13,7 @@
  Alice and Bob then swap messages and create a confidential communication channel between themselves.
 */
 
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{

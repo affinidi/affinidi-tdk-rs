@@ -1,5 +1,5 @@
+use crate::common::session::SessionClaims;
 use crate::common::time::unix_timestamp_secs;
-use crate::database::session::SessionClaims;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
@@ -96,7 +96,7 @@ pub(super) fn _create_refresh_token(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::session::SessionClaims;
+    use crate::common::session::SessionClaims;
     use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
     use ring::signature::{Ed25519KeyPair, KeyPair};
 

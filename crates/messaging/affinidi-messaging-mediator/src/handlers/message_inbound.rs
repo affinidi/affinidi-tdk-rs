@@ -1,4 +1,4 @@
-use crate::{SharedData, database::session::Session, messages::inbound::handle_inbound};
+use crate::{SharedData, common::session::Session, messages::inbound::handle_inbound};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},

@@ -3,7 +3,8 @@ use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
-    database::{forwarding::ForwardQueueEntry, session::Session},
+    common::session::Session,
+    database::forwarding::ForwardQueueEntry,
     messages::{
         ProcessMessageResponse, WrapperType,
         error_response::generate_error_response,

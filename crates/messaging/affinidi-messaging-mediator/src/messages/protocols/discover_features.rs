@@ -1,7 +1,7 @@
 use crate::common::time::unix_timestamp_secs;
 use crate::{
     SharedData,
-    database::session::Session,
+    common::session::Session,
     messages::{ProcessMessageResponse, WrapperType},
 };
 use affinidi_messaging_didcomm::message::Message;

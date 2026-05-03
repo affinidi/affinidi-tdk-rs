@@ -6,7 +6,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::discover_features;
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 #[cfg(feature = "didcomm")]
 use affinidi_did_common::service::Endpoint;
 #[cfg(feature = "didcomm")]

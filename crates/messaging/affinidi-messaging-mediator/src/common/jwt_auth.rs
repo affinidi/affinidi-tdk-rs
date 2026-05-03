@@ -1,6 +1,6 @@
 use crate::{
     SharedData,
-    database::session::{Session, SessionClaims},
+    common::session::{Session, SessionClaims},
 };
 use affinidi_messaging_mediator_common::errors::ErrorResponse;
 use axum::{

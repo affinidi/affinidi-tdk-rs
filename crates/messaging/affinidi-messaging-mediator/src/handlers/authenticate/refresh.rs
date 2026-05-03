@@ -5,7 +5,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
-    database::session::{Session, SessionClaims, SessionState},
+    common::session::{Session, SessionClaims, SessionState},
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
@@ -235,7 +235,7 @@ pub async fn authentication_refresh(
         // Refresh token is valid - check against database and ensure it still exists.
         // Convert from the trait-layer Session to the local Session shape so the rest
         // of this handler keeps comparing against `SessionState` enum variants
-        // imported from `crate::database::session`.
+        // imported from `crate::common::session`.
         let session_check: Session = if let Some(from_did) = &envelope.from_did {
             let s = state
                 .database

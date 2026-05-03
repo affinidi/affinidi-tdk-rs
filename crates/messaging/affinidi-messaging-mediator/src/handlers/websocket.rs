@@ -4,7 +4,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat;
 use crate::{
     SharedData,
-    database::session::Session,
+    common::session::Session,
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
 };

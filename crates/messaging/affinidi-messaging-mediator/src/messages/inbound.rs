@@ -4,7 +4,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
-use crate::{SharedData, database::session::Session, messages::store::store_message};
+use crate::{SharedData, common::session::Session, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
