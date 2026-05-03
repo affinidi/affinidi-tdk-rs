@@ -878,8 +878,6 @@ impl MediatorStore for MemoryStore {
         &self,
         _session: &Session,
         did_hash: &str,
-        remove_outbox: bool,
-        _remove_forwards: bool,
     ) -> Result<bool, MediatorError> {
         // Block protected accounts up-front.
         {
@@ -900,15 +898,10 @@ impl MediatorStore for MemoryStore {
         blocked.set_blocked(true);
         self.set_did_acl(did_hash, &blocked).await?;
 
-        // Outbox: optionally purge messages, then drop the stream key.
-        if remove_outbox {
-            self.purge_folder("", did_hash, Folder::Outbox).await?;
-        } else {
-            self.delete_folder_stream("", did_hash, Folder::Outbox)
-                .await?;
-        }
-
-        // Always purge inbox.
+        // Drop the outbox stream key (without purging downstream copies
+        // already delivered) and purge the inbox.
+        self.delete_folder_stream("", did_hash, Folder::Outbox)
+            .await?;
         self.purge_folder("", did_hash, Folder::Inbox).await?;
 
         // Drop the account, admin set membership, and known-DIDs entry.

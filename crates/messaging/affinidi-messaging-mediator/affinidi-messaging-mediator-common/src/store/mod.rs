@@ -258,16 +258,18 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
 
     /// Remove an account from the mediator.
     ///
-    /// This is a composite operation: it blocks the account, optionally
-    /// purges its inbox/outbox/forwarding queue, strips admin privileges,
-    /// and removes the DID record. Mediator and root-admin accounts cannot
-    /// be removed.
+    /// This is a composite operation: it blocks the account, drops the
+    /// outbox stream key (without purging downstream copies that have
+    /// already been delivered), purges the inbox, strips admin
+    /// privileges, and removes the DID record. Mediator and root-admin
+    /// accounts cannot be removed. Forwarded messages already queued on
+    /// the FORWARD_Q are intentionally left alone — letting them flush
+    /// is preferable to a queue scan, and the protocol exposes no
+    /// option to override.
     async fn account_remove(
         &self,
         session: &Session,
         did_hash: &str,
-        remove_outbox: bool,
-        remove_forwards: bool,
     ) -> Result<bool, MediatorError>;
 
     /// List up to 100 accounts using a server-side cursor.

@@ -497,8 +497,6 @@ impl MediatorStore for RedisStore {
         &self,
         session: &Session,
         did_hash: &str,
-        remove_outbox: bool,
-        remove_forwards: bool,
     ) -> Result<bool, MediatorError> {
         // Synthesize a legacy session — `account_remove` only reads
         // session_id from it for tracing context.
@@ -506,9 +504,7 @@ impl MediatorStore for RedisStore {
             session_id: session.session_id.clone(),
             ..Default::default()
         };
-        self.db
-            .account_remove(&inner_session, did_hash, remove_outbox, remove_forwards)
-            .await
+        self.db.account_remove(&inner_session, did_hash).await
     }
 
     async fn account_list(

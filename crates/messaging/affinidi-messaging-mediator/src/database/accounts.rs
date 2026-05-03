@@ -155,17 +155,19 @@ impl Database {
         .await
     }
 
-    /// Removes an account from the mediator
-    /// - `did_hash` - SHA256 Hash of DID to remove
-    /// - `remove_outbox` - This will remove messages that have not been delivered from this DID to others
-    ///   NOTE: This should only be used as last resort. It is better to let the messages be delivered
-    /// - `remove_forwards` - This will remove messages that are queued to be delivered from this DID via forwarding
+    /// Removes an account from the mediator.
+    /// - `did_hash` — SHA256 hash of the DID to remove.
+    ///
+    /// Drops the outbox stream key (without purging downstream copies
+    /// already delivered), purges the inbox, strips admin privileges,
+    /// removes the DID record. Forwarded messages already queued on
+    /// FORWARD_Q are intentionally left alone — letting them flush is
+    /// preferable to a full queue scan, and the protocol exposes no
+    /// option to override.
     pub(crate) async fn account_remove(
         &self,
         session: &Session,
         did_hash: &str,
-        remove_outbox: bool,
-        remove_forwards: bool,
     ) -> Result<bool, MediatorError> {
         let _span = span!(Level::DEBUG, "account_remove", "did_hash" = did_hash,);
 
@@ -196,24 +198,13 @@ impl Database {
             blocked_acl.set_blocked(true);
             self.set_did_acl(did_hash, &blocked_acl).await?;
 
-            // Step 2 - Remove forwarded messages as required
-            if remove_forwards {
-                // TODO: Implement a way to clear future forward tasks as needed
-            }
+            // Step 2 - Drop the outbox stream key. We don't purge
+            // downstream copies — letting already-queued messages
+            // deliver normally is the documented intent.
+            self.delete_folder_stream(session, did_hash, &Folder::Outbox)
+                .await?;
 
-            // Step 3 - Remove messages from the outbox
-            // This will remove any messages that are queued and still to be delivered to other DIDs
-            if remove_outbox {
-                self.purge_messages(session, did_hash, Folder::Outbox)
-                    .await?;
-            } else {
-                // Just remove the stream key, not the messages in other accounts
-                self.delete_folder_stream(session, did_hash, &Folder::Outbox)
-                    .await?;
-            }
-
-            // Step 4 - Remove messages from the inbox
-            // This will remove any messages that are queued and still to be delivered to this DID
+            // Step 3 - Purge the inbox so future fetches return nothing.
             self.purge_messages(session, did_hash, Folder::Inbox)
                 .await?;
 

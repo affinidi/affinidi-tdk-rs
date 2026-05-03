@@ -1290,8 +1290,6 @@ impl MediatorStore for FjallStore {
         &self,
         _session: &Session,
         did_hash: &str,
-        remove_outbox: bool,
-        _remove_forwards: bool,
     ) -> Result<bool, MediatorError> {
         // Refuse to remove protected accounts up-front.
         if let Some(raw) = self
@@ -1314,14 +1312,10 @@ impl MediatorStore for FjallStore {
         blocked.set_blocked(true);
         self.set_did_acl(did_hash, &blocked).await?;
 
-        // Outbox: optionally purge messages, else just drop the index.
-        if remove_outbox {
-            self.purge_folder("", did_hash, Folder::Outbox).await?;
-        } else {
-            self.delete_folder_stream("", did_hash, Folder::Outbox)
-                .await?;
-        }
-        // Inbox: always purge.
+        // Drop the outbox stream key (without purging downstream copies
+        // already delivered) and purge the inbox.
+        self.delete_folder_stream("", did_hash, Folder::Outbox)
+            .await?;
         self.purge_folder("", did_hash, Folder::Inbox).await?;
 
         // Drop account, admin entry, and access list.

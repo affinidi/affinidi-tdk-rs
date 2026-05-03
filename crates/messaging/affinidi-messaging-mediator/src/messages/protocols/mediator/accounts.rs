@@ -289,7 +289,7 @@ pub(crate) async fn process(
                 }
                 match state
                     .database
-                    .account_remove(&session.to_store_session(), &did_hash, false, false)
+                    .account_remove(&session.to_store_session(), &did_hash)
                     .await
                 {
                     Ok(response) => _generate_response_message(
