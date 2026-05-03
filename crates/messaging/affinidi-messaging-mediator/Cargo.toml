@@ -30,7 +30,7 @@ default = ["didcomm", "redis-backend"]
 ## `memory-backend` are inherently single-process. The mediator binary
 ## refuses to start with multi-instance config when the chosen backend
 ## doesn't support it.
-redis-backend = []
+redis-backend = ["affinidi-messaging-mediator-common/redis-backend"]
 fjall-backend = ["dep:fjall"]
 memory-backend = []
 

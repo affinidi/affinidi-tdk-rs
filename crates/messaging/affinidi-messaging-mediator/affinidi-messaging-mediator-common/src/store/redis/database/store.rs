@@ -1,8 +1,16 @@
 use std::time::Instant;
 
 use super::Database;
-use crate::common::metrics::names;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+
+// Mirror of the metric names declared in the mediator's
+// `common::metrics::names` module — kept as raw strings here so this
+// `database/` impl can live in mediator-common without depending on
+// the mediator's metrics registry.
+mod names {
+    pub const MESSAGE_STORE_DURATION_SECONDS: &str = "message_store_duration_seconds";
+    pub const MESSAGES_STORED_TOTAL: &str = "messages_stored_total";
+}
 use serde::{Deserialize, Serialize};
 use sha256::digest;
 use tracing::{Instrument, Level, debug, event, info, span};

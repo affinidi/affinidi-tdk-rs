@@ -3,19 +3,19 @@
  */
 
 use super::migrations::run_pending_migrations;
-use crate::common::{config::Config, error_codes};
-use crate::store::RedisStore;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+use crate::store::redis::RedisStore;
+use crate::store::redis::init::RedisInitConfig;
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use sha256::digest;
 
 impl RedisStore {
     /// Run schema migrations and seed the mediator + root-admin
     /// accounts. Called once at startup before the trait's
-    /// [`initialize`](affinidi_messaging_mediator_common::store::MediatorStore::initialize)
+    /// [`initialize`](crate::store::MediatorStore::initialize)
     /// hook (which loads Lua functions). Named `initialize_redis` to
     /// avoid colliding with the trait method.
-    pub(crate) async fn initialize_redis(&self, config: &Config) -> Result<(), MediatorError> {
+    pub async fn initialize_redis(&self, config: &RedisInitConfig) -> Result<(), MediatorError> {
         // Run any pending schema migrations
         run_pending_migrations(self, config).await?;
 
@@ -24,7 +24,7 @@ impl RedisStore {
         let mediator_acl =
             MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,BLOCKED").map_err(|e| {
                 MediatorError::ConfigError(
-                    error_codes::CONFIG_ERROR,
+                    12, // CONFIG_ERROR — mirrors mediator::common::error_codes::CONFIG_ERROR
                     "NA".into(),
                     format!("Hardcoded mediator ACL ruleset is invalid: {e}"),
                 )
@@ -41,7 +41,7 @@ impl RedisStore {
         self.setup_admin_account(
             &digest(&config.admin_did),
             AccountType::RootAdmin,
-            &config.security.global_acl_default,
+            &config.global_acl_default,
         )
         .await?;
         Ok(())

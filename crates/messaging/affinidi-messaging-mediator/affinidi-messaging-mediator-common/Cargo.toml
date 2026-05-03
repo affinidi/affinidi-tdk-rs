@@ -18,6 +18,15 @@ repository.workspace = true
 # its deployment target needs; the mediator-setup wizard enables the
 # superset so operators can pick any.
 default = []
+
+# ── Storage backends ────────────────────────────────────────────────
+## `RedisStore` — multi-mediator clusters and the standalone-binary
+## horizontal-scaling story. Brings in the `database/` Redis-implementation
+## modules; consumers that don't enable the feature get only the
+## `MediatorStore` trait + types.
+redis-backend = []
+
+# ── Secret backends ─────────────────────────────────────────────────
 secrets-keyring = ["dep:keyring"]
 secrets-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
 secrets-gcp = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
@@ -87,6 +96,13 @@ futures-util = { version = "0.3", default-features = false, optional = true }
 ## stack; pin to `0.8` so future breaking bumps don't land silently.
 vaultrs = { version = "0.8", default-features = false, features = ["rustls"], optional = true }
 
+# ── Async stream helpers (used by the redis-store pubsub bridge) ─────────
+## Unconditional because `futures-util` was already optional via
+## `secrets-azure`; promote it to non-optional with `default-features = false`
+## so the redis-backend code path picks up `StreamExt::next` without
+## affecting other secret-backend builds.
+tokio-stream = "0.1"
+
 # ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
 
@@ -98,6 +114,12 @@ redis = { version = "1.1", features = [
   "connection-manager",
   "ahash",
 ] }
+
+# ── RedisStore impl helpers (gated by `redis-backend`) ───────────────────
+## Used by `database/{fetch,get,list,stats}.rs` for chunking pipeline replies.
+itertools = "0.14"
+## Constant-time DID-hash comparisons in the redis-store call sites.
+subtle = "2"
 
 # ── TLS (for Redis TLS provider initialization) ─────────────────────────
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }

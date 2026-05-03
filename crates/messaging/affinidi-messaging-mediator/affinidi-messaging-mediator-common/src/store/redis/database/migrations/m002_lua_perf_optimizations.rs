@@ -12,12 +12,12 @@
  * - clean_start_streaming: SPOP batch limit (500)
  */
 
-use crate::common::config::Config;
-use crate::database::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+use crate::store::redis::database::Database;
+use crate::store::redis::init::RedisInitConfig;
 use tracing::info;
 
-pub(crate) async fn up(_db: &Database, _config: &Config) -> Result<(), MediatorError> {
+pub(crate) async fn up(_db: &Database, _config: &RedisInitConfig) -> Result<(), MediatorError> {
     info!("  Lua scripts will be updated via FUNCTION LOAD REPLACE at startup");
     info!("  - store_message: per-DID stream MAXLEN support");
     info!("  - delete_message: admin permission via DID hash (not magic string)");

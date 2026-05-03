@@ -60,6 +60,9 @@ use tokio::sync::broadcast;
 
 pub mod types;
 
+#[cfg(feature = "redis-backend")]
+pub mod redis;
+
 pub use types::{
     DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MessageMetaData,
     MetadataStats, PubSubRecord, Session, SessionClaims, SessionState, StatCounter, StoreHealth,

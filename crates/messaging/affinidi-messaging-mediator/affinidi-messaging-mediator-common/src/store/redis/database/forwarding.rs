@@ -3,11 +3,11 @@
 //! messages that need to be forwarded to remote mediators.
 
 use super::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
 use std::collections::HashMap;
 use tracing::{Level, debug, event, warn};
 
-pub use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
+pub use crate::store::types::ForwardQueueEntry;
 
 impl Database {
     /// Enqueue a message for forwarding to a remote mediator.

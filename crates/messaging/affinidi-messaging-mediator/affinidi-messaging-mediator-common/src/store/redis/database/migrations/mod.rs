@@ -25,9 +25,9 @@ mod runner;
 
 pub(crate) use runner::run_pending_migrations;
 
-use crate::common::config::Config;
-use crate::database::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+use crate::store::redis::database::Database;
+use crate::store::redis::init::RedisInitConfig;
 
 /// Descriptor for a database migration.
 pub(crate) struct MigrationDef {
@@ -44,7 +44,7 @@ pub(crate) struct MigrationDef {
 
 impl MigrationDef {
     /// Run this migration's up function.
-    pub async fn run(&self, db: &Database, config: &Config) -> Result<(), MediatorError> {
+    pub async fn run(&self, db: &Database, config: &RedisInitConfig) -> Result<(), MediatorError> {
         match self.id {
             1 => m001_acl_queue_limit_flags::up(db, config).await,
             2 => m002_lua_perf_optimizations::up(db, config).await,

@@ -22,8 +22,6 @@ use tokio_util::sync::CancellationToken;
 pub mod builder;
 pub mod commands;
 pub mod common;
-#[cfg(feature = "redis-backend")]
-pub mod database;
 #[cfg(feature = "didcomm")]
 pub mod didcomm_compat;
 pub mod handlers;

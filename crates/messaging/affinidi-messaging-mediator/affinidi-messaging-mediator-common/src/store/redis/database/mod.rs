@@ -1,10 +1,10 @@
-//! Redis-specific implementation modules for [`crate::store::RedisStore`].
+//! Redis-specific implementation modules for [`crate::store::redis::RedisStore`].
 //!
 //! Each submodule houses one topic's worth of Redis operations
 //! (accounts, ACLs, sessions, streaming, etc.) implemented as inherent
-//! methods on [`crate::store::RedisStore`]. The
-//! [`MediatorStore`](affinidi_messaging_mediator_common::store::MediatorStore)
-//! trait impl in [`crate::store::redis_store`] delegates to these
+//! methods on [`crate::store::redis::RedisStore`]. The
+//! [`MediatorStore`](crate::store::MediatorStore)
+//! trait impl in [`crate::store::redis::store`] delegates to these
 //! methods. Splitting by topic keeps each file under ~500 lines.
 
 pub mod accounts;
@@ -28,4 +28,4 @@ pub mod streaming;
 /// Compatibility alias preserved during the Database → RedisStore fold.
 /// External callers that still hold `&Database` references see
 /// the same type. New code should use `RedisStore` directly.
-pub use crate::store::RedisStore as Database;
+pub use crate::store::redis::RedisStore as Database;

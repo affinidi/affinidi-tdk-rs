@@ -251,7 +251,12 @@ pub async fn serve_internal(
                 config.database.circuit_breaker_recovery_secs,
                 config.database.functions_file.clone(),
             );
-            store.initialize_redis(&config).await.map_err(|e| {
+            let init_cfg = affinidi_messaging_mediator_common::store::redis::RedisInitConfig {
+                mediator_did_hash: config.mediator_did_hash.clone(),
+                admin_did: config.admin_did.clone(),
+                global_acl_default: config.security.global_acl_default.clone(),
+            };
+            store.initialize_redis(&init_cfg).await.map_err(|e| {
                 error!("Error initializing database: {e}");
                 e
             })?;

@@ -1,4 +1,4 @@
-use affinidi_messaging_mediator_common::{errors::MediatorError, store::types::PubSubRecord};
+use crate::{errors::MediatorError, store::types::PubSubRecord};
 use redis::{Value, from_redis_value};
 use tracing::{Level, debug, error, event};
 

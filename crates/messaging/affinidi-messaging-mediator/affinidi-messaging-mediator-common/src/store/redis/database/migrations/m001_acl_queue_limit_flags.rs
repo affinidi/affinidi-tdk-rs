@@ -5,14 +5,14 @@
  * ACL flags to all existing accounts based on the mediator's default ACL config.
  */
 
-use crate::common::config::Config;
-use crate::database::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+use crate::store::redis::database::Database;
+use crate::store::redis::init::RedisInitConfig;
 use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use tracing::info;
 
-pub(crate) async fn up(db: &Database, config: &Config) -> Result<(), MediatorError> {
-    let default_acl = &config.security.global_acl_default;
+pub(crate) async fn up(db: &Database, config: &RedisInitConfig) -> Result<(), MediatorError> {
+    let default_acl = &config.global_acl_default;
     let send_limit_flag = default_acl.get_self_manage_send_queue_limit();
     let receive_limit_flag = default_acl.get_self_manage_receive_queue_limit();
 

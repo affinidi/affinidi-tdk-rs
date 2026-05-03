@@ -5,8 +5,8 @@
 //! storage). This file only carries the Redis-specific persistence
 //! methods on `Database`.
 
-use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_common::store::types::{Session, SessionState};
+use crate::errors::MediatorError;
+use crate::store::types::{Session, SessionState};
 use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
 use ahash::AHashMap as HashMap;
 use sha256::digest;

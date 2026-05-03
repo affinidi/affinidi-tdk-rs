@@ -1,5 +1,5 @@
 use super::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{
     FetchDeletePolicy, GetMessagesResponse, MessageListElement, fetch::FetchOptions,
 };

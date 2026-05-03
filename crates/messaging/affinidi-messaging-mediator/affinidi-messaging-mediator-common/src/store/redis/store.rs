@@ -12,12 +12,12 @@
 //! broadcast channel for live streaming so multiple in-process
 //! subscribers can share one Redis pubsub bridge.
 
-use crate::common::circuit_breaker::CircuitBreaker;
-use crate::database::{
+use crate::circuit_breaker::CircuitBreaker;
+use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
-use affinidi_messaging_mediator_common::{
+use crate::{
     database::DatabaseHandler,
     errors::MediatorError,
     store::{
@@ -39,7 +39,6 @@ use affinidi_messaging_sdk::{
     },
 };
 use async_trait::async_trait;
-use futures_util::StreamExt;
 use redis::{
     Value,
     aio::{ConnectionManager, MultiplexedConnection},
@@ -47,6 +46,7 @@ use redis::{
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, broadcast};
+use tokio_stream::StreamExt;
 use tracing::{debug, warn};
 
 const PUBSUB_BROADCAST_CAPACITY: usize = 1024;
@@ -58,7 +58,7 @@ const STATIC_TIMESLOT_BATCH: u32 = 100;
 /// breaker for fast-fail when Redis is unavailable. All composite
 /// atomic ops (store/delete/fetch/expire) go through Lua functions
 /// registered on the Redis server. The per-topic inherent methods that
-/// implement those ops live in `crate::database::*`.
+/// implement those ops live in `crate::store::redis::database::*`.
 #[derive(Clone)]
 pub struct RedisStore {
     pub(crate) handler: DatabaseHandler,
@@ -154,7 +154,7 @@ impl std::fmt::Debug for RedisStore {
 // ─── Type conversions ───────────────────────────────────────────────────────
 //
 // The `mediator-common::store::types` module defines a fresh set of
-// types that mirror the legacy ones in `crate::database::*`. The
+// types that mirror the legacy ones in `crate::store::redis::database::*`. The
 // duplication is intentional during the migration: legacy call sites
 // still use the legacy types, the trait uses the new types, and the
 // store impl converts at the boundary. Commit 6 unifies them.

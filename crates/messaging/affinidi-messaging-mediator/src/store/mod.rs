@@ -12,10 +12,7 @@
 //! [`MediatorStore`]: affinidi_messaging_mediator_common::store::MediatorStore
 
 #[cfg(feature = "redis-backend")]
-pub mod redis_store;
-
-#[cfg(feature = "redis-backend")]
-pub use redis_store::RedisStore;
+pub use affinidi_messaging_mediator_common::store::redis::RedisStore;
 
 #[cfg(feature = "fjall-backend")]
 pub mod fjall_store;

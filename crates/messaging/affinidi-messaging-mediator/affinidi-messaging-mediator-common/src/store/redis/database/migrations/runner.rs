@@ -8,9 +8,9 @@
  */
 
 use super::{MigrationDef, all_migrations};
-use crate::common::config::Config;
-use crate::database::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
+use crate::store::redis::database::Database;
+use crate::store::redis::init::RedisInitConfig;
 use semver::Version;
 use std::collections::HashSet;
 use tracing::{info, warn};
@@ -21,7 +21,7 @@ const MIGRATIONS_SET_KEY: &str = "SCHEMA_MIGRATIONS";
 /// Called during mediator startup from database initialization.
 pub(crate) async fn run_pending_migrations(
     db: &Database,
-    config: &Config,
+    config: &RedisInitConfig,
 ) -> Result<(), MediatorError> {
     let migrations = all_migrations();
 
@@ -90,7 +90,7 @@ async fn get_applied_ids(db: &Database) -> Result<HashSet<u32>, MediatorError> {
 /// Record a migration as applied.
 async fn record_migration(db: &Database, id: u32, name: &str) -> Result<(), MediatorError> {
     let mut conn = db.get_connection().await?;
-    let now = crate::common::time::unix_timestamp_secs();
+    let now = crate::time::unix_timestamp_secs();
 
     redis::pipe()
         .cmd("SADD")

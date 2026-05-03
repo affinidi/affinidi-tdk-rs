@@ -1,4 +1,4 @@
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
 use affinidi_messaging_sdk::messages::{Folder, MessageList, MessageListElement};
 use itertools::Itertools;
 use redis::{Value, from_redis_value};

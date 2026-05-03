@@ -1,7 +1,7 @@
 //! Handles scanning, adding and removing DID accounts from the mediator
 use super::Database;
-use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_common::store::types::Session;
+use crate::errors::MediatorError;
+use crate::store::types::Session;
 use affinidi_messaging_sdk::{
     messages::Folder,
     protocols::mediator::{
@@ -332,7 +332,7 @@ impl Database {
     /// a Redis-specific helper in case operator tooling needs the
     /// legacy entry point.
     ///
-    /// [`MediatorStore::account_set_role`]: affinidi_messaging_mediator_common::store::MediatorStore::account_set_role
+    /// [`MediatorStore::account_set_role`]: crate::store::MediatorStore::account_set_role
     #[allow(dead_code)]
     pub(crate) async fn account_change_type(
         &self,

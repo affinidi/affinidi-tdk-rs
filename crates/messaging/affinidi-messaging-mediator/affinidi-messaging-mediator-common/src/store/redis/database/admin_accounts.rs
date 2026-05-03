@@ -1,5 +1,5 @@
 //! Database routines to add/remove/list admin accounts
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use crate::errors::MediatorError;
 use affinidi_messaging_sdk::protocols::mediator::{
     accounts::AccountType,
     acls::MediatorACLSet,
@@ -102,8 +102,8 @@ impl Database {
     /// specific helper for operator tooling that may want a single
     /// pipelined batch.
     ///
-    /// [`MediatorStore::add_admin_accounts`]: affinidi_messaging_mediator_common::store::MediatorStore::add_admin_accounts
-    /// [`setup_admin_account`]: affinidi_messaging_mediator_common::store::MediatorStore::setup_admin_account
+    /// [`MediatorStore::add_admin_accounts`]: crate::store::MediatorStore::add_admin_accounts
+    /// [`setup_admin_account`]: crate::store::MediatorStore::setup_admin_account
     #[allow(dead_code)]
     pub(crate) async fn add_admin_accounts(
         &self,
