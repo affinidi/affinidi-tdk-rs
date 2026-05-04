@@ -2,6 +2,7 @@ pub mod helpers;
 pub mod limits;
 pub mod processors;
 pub mod security;
+pub(crate) mod vta_bootstrap;
 pub mod vta_cache;
 
 pub use limits::*;
@@ -198,6 +199,12 @@ pub struct Config {
     /// `[storage]` section the wizard wrote.
     #[serde(default)]
     pub storage: Option<StorageConfig>,
+    /// Inputs for the periodic VTA refresh task. `Some` only in
+    /// VTA-linked deployments. The task itself is spawned by
+    /// [`crate::server::serve_internal`] alongside the other
+    /// background workers, gated on this field being `Some`.
+    #[serde(skip)]
+    pub vta_refresher: Option<crate::tasks::vta_refresh::VtaRefresher>,
 }
 
 impl fmt::Debug for Config {
@@ -269,6 +276,7 @@ impl Config {
             )),
             operating_keys_loaded: false,
             storage: None,
+            vta_refresher: None,
             security: SecurityConfig::default(secrets_resolver),
             processors: ProcessorsConfig {
                 forwarding: ForwardingConfig::default(),
@@ -494,7 +502,7 @@ impl TryFrom<ConfigRaw> for Config {
                 vta_url = %service_config.auth.url_override.as_deref().unwrap_or("(from DID doc)"),
                 "Starting VTA integration — attempting live fetch with cache fallback"
             );
-            let result = integration::startup(&service_config, &cache)
+            let result = vta_bootstrap::bootstrap_vta(&service_config, &cache, &mediator_secrets)
                 .await
                 .map_err(|e| vta_startup_error(&service_config.context.id, e))?;
             match result.source {
@@ -543,14 +551,24 @@ impl TryFrom<ConfigRaw> for Config {
                 }
             }
 
-            Some(result)
+            // Build the refresher alongside the startup result so the
+            // outer scope can stash it on Config without re-deriving
+            // service_config / ttl_secs.
+            let refresher = crate::tasks::vta_refresh::VtaRefresher::new(
+                service_config.clone(),
+                mediator_secrets.clone(),
+                ttl_secs,
+                secrets_resolver.clone(),
+            );
+
+            Some((result, refresher))
         } else {
             None
         };
 
         // Resolve mediator DID — from VTA startup result (if VTA mode)
         // or the mediator.toml `mediator_did` field (self-hosted mode).
-        let mediator_did = if let Some(ref result) = vta_startup {
+        let mediator_did = if let Some((ref result, _)) = vta_startup {
             result.did.clone()
         } else {
             read_did_config(&raw.mediator_did, &aws_config, "mediator_did").await?
@@ -590,7 +608,7 @@ impl TryFrom<ConfigRaw> for Config {
                 .convert(
                     secrets_resolver.clone(),
                     &mediator_secrets,
-                    vta_startup.as_ref().map(|r| &r.bundle),
+                    vta_startup.as_ref().map(|(r, _)| &r.bundle),
                 )
                 .await?,
             processors: ProcessorsConfig {
@@ -622,6 +640,10 @@ impl TryFrom<ConfigRaw> for Config {
                     .ok()
                     .flatten()
                     .is_some(),
+            // VTA-linked deployments get a periodic refresh task; built
+            // alongside the StartupResult above so the service config
+            // and TTL parsing aren't re-derived here.
+            vta_refresher: vta_startup.as_ref().map(|(_, refresher)| refresher.clone()),
             ..Config::default(secrets_resolver)
         };
 

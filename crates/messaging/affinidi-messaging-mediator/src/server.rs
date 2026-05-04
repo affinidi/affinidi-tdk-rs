@@ -399,6 +399,19 @@ pub async fn serve_internal(
         });
     }
 
+    // VTA secrets refresh — only present when this is a VTA-linked
+    // deployment. Spawns a fire-and-forget loop that refreshes the
+    // cached bundle and runtime resolver on a cadence derived from
+    // the configured `[secrets].cache_ttl`. Also the path that
+    // converges a circular-bootstrapped mediator to a fresh cache
+    // once the listener is live.
+    if let Some(refresher) = config.vta_refresher.clone() {
+        let refresh_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            refresher.run(refresh_token).await;
+        });
+    }
+
     // Streaming task: subscribes via the trait, so it runs on any
     // backend. RedisStore bridges Redis pub/sub into a tokio
     // broadcast; Memory and Fjall feed the broadcast directly.
