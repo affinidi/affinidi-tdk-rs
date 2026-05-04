@@ -10,9 +10,7 @@ use affinidi_messaging_sdk::messages::Folder;
 use ahash::AHashMap as HashMap;
 use tracing::{Instrument, Level, debug, span, warn};
 
-// Redis-backend implementation behind `RedisStore`. See the comment
-// in `database/accounts.rs` for why `dead_code` is allowed here.
-#[allow(dead_code)]
+// Redis-backend implementation behind `RedisStore`.
 impl Database {
     /// Will purge/delete all messages from the database for the given DID and folder
     /// Returns the number of messages purged and the total bytes purged

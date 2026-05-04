@@ -62,16 +62,18 @@ did_method = "vta"
 
 # ── Secrets ─────────────────────────────────────────────────────────────────
 [secrets]
-# storage: where cryptographic keys are stored
-#   "vta://"             — VTA managed with local caching (recommended)
+# storage: where cryptographic keys are stored. The VTA is a *source*
+# of keys, not a storage backend — pick whichever real store the
+# wizard should write the provisioned keys into.
 #   "keyring://"         — OS keyring (macOS Keychain, Linux Secret Service)
 #   "aws_secrets://"     — AWS Secrets Manager
 #   "gcp_secrets://"     — Google Cloud Secret Manager
 #   "azure_keyvault://"  — Azure Key Vault
 #   "vault://"           — HashiCorp Vault
-#   "file://"            — local file (conf/secrets.json) — NOT secure
-#   "string://"          — inline in config — NOT secure, dev/CI only
-storage = "vta://"
+#   "file://"            — local JSON file; pair with `?encrypt=1` for
+#                          AES-256-GCM + Argon2id envelope encryption.
+#                          Plain `file://` is dev-only.
+storage = "keyring://"
 
 
 # ── Security ────────────────────────────────────────────────────────────────

@@ -10,9 +10,7 @@ use tracing::{Instrument, Level, debug, info, span};
 
 use super::Database;
 
-// Redis-backend implementation behind `RedisStore`. See the comment
-// in `database/accounts.rs` for why `dead_code` is allowed here.
-#[allow(dead_code)]
+// Redis-backend implementation behind `RedisStore`.
 impl Database {
     /// Ensures that the mediator admin account is correctly configured and set up.
     /// It does not do any cleanup or maintenance of other admin accounts.
