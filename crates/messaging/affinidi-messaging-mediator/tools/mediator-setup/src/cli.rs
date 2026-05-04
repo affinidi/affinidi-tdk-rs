@@ -196,15 +196,35 @@ impl std::fmt::Display for DidMethod {
 /// removed in the unified-secrets refactor — inline private keys in TOML
 /// are unsafe even for CI. `vta://` was never a backend (the VTA is a
 /// *source* of keys); pick whichever real store will hold them.
+///
+/// The CLI flag picks the backend *kind* and falls back to the per-backend
+/// defaults baked into [`crate::consts`] (region, project, vault name,
+/// etc.). For per-key configuration that isn't the default — a custom AWS
+/// region, a sovereign-cloud Azure URL, a Vault endpoint that isn't on
+/// localhost — use a recipe TOML via `--from <file>` instead. The recipe
+/// schema is in [`crate::recipe`] and documented in `docs/setup-guide.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SecretStorage {
     /// Local file (file://) — dev only, requires explicit confirmation
     /// in interactive mode.
     File,
-    /// OS Keyring (keyring://)
+    /// OS Keyring (keyring://) — uses [`crate::consts::DEFAULT_KEYRING_SERVICE`].
     Keyring,
-    /// AWS Secrets Manager (aws_secrets://)
+    /// AWS Secrets Manager (aws_secrets://) — uses
+    /// [`crate::consts::DEFAULT_AWS_REGION`] and namespace.
     Aws,
+    /// GCP Secret Manager (gcp_secrets://) — uses
+    /// [`crate::consts::DEFAULT_GCP_PROJECT`] and namespace.
+    /// Authenticates via Application Default Credentials.
+    Gcp,
+    /// Azure Key Vault (azure_keyvault://) — uses
+    /// [`crate::consts::DEFAULT_AZURE_VAULT`]. Authenticates via the
+    /// `DeveloperToolsCredential` chain (Azure CLI, etc.).
+    Azure,
+    /// HashiCorp Vault KV v2 (vault://) — uses
+    /// [`crate::consts::DEFAULT_VAULT_ENDPOINT`] and mount.
+    /// Authenticates via the `VAULT_TOKEN` env var.
+    Vault,
 }
 
 impl std::fmt::Display for SecretStorage {
@@ -213,6 +233,9 @@ impl std::fmt::Display for SecretStorage {
             Self::File => write!(f, "file://"),
             Self::Keyring => write!(f, "keyring://"),
             Self::Aws => write!(f, "aws_secrets://"),
+            Self::Gcp => write!(f, "gcp_secrets://"),
+            Self::Azure => write!(f, "azure_keyvault://"),
+            Self::Vault => write!(f, "vault://"),
         }
     }
 }
@@ -248,5 +271,42 @@ impl std::fmt::Display for AdminMode {
             Self::Generate => write!(f, "Generate did:key"),
             Self::Skip => write!(f, "Skip"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_storage_renders_url_prefix_for_each_variant() {
+        // The CLI flag value goes straight into `config.secret_storage`
+        // via this Display impl (see main.rs around the
+        // `args.secret_storage` plumbing). Each variant must render
+        // exactly the URL prefix the config_writer matches against in
+        // `build_secrets_backend_url`, otherwise the wizard would
+        // silently fall through to the keyring fallback.
+        assert_eq!(SecretStorage::File.to_string(), "file://");
+        assert_eq!(SecretStorage::Keyring.to_string(), "keyring://");
+        assert_eq!(SecretStorage::Aws.to_string(), "aws_secrets://");
+        assert_eq!(SecretStorage::Gcp.to_string(), "gcp_secrets://");
+        assert_eq!(SecretStorage::Azure.to_string(), "azure_keyvault://");
+        assert_eq!(SecretStorage::Vault.to_string(), "vault://");
+    }
+
+    #[test]
+    fn secret_storage_clap_value_enum_accepts_all_six_kebab_names() {
+        // Regression: clap derives kebab-case names from `Gcp`/`Azure`/
+        // `Vault`. If anyone renames the variants the CLI flag would
+        // silently change, breaking CI scripts. Locking the names in.
+        use clap::ValueEnum;
+        let variants: Vec<_> = SecretStorage::value_variants()
+            .iter()
+            .map(|v| v.to_possible_value().unwrap().get_name().to_string())
+            .collect();
+        assert_eq!(
+            variants,
+            vec!["file", "keyring", "aws", "gcp", "azure", "vault"]
+        );
     }
 }

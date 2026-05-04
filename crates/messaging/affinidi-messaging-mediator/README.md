@@ -92,17 +92,18 @@ Available CLI options:
 | `--protocol` | `didcomm`, `tsp` | `didcomm` |
 | `--did-method` | `peer`, `webvh`, `vta` | per deployment |
 | `--public-url` | URL string | (required for webvh) |
-| `--secret-storage` | `file`, `keyring`, `aws` | per deployment |
+| `--secret-storage` | `file`, `keyring`, `aws`, `gcp`, `azure`, `vault` | per deployment |
 | `--ssl` | `none`, `self-signed` | `none` |
 | `--database-url` | Redis URL | `redis://127.0.0.1/` |
 | `--admin` | `generate`, `skip` | `generate` |
 | `--listen-address` | `ip:port` | `0.0.0.0:7037` |
 | `-c, --config` | file path | `conf/mediator.toml` |
 
-The `--secret-storage` shortcut covers the three most common
-backends. To pick GCP Secret Manager, Azure Key Vault, or
-HashiCorp Vault non-interactively, use a recipe TOML and
-`mediator-setup --from <recipe>`. See
+`--secret-storage` picks the backend kind and uses the per-backend
+defaults baked into the wizard (region, project, vault name, etc.).
+For non-default per-key configuration — a custom AWS region, a
+sovereign-cloud Azure URL, a self-hosted Vault endpoint — use a
+recipe TOML and `mediator-setup --from <recipe>`. See
 [`docs/setup-guide.md`](docs/setup-guide.md) for the recipe schema.
 
 ## Feature Flags
