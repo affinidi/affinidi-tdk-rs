@@ -29,6 +29,10 @@ pub struct MessageStatus {
     pub received_count: i64,
     pub received_bytes: i64,
     pub sent_count: i64,
+    /// Mirror of the `/admin/status` JSON schema. Not currently
+    /// rendered in the UI, but kept on the wire-shape struct so
+    /// `serde_json` doesn't drop it during round-trip.
+    #[allow(dead_code)]
     pub sent_bytes: i64,
     pub deleted_count: i64,
 }

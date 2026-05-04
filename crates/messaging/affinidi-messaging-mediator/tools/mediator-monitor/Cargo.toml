@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Real-time TUI monitoring dashboard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 publish = false
 
 [[bin]]
