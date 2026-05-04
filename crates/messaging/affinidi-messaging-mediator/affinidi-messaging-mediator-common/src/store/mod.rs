@@ -722,22 +722,40 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// Default impl does this as `delete(old) + put(new)` since session
     /// IDs are unguessable; backends with `RENAME` semantics can
     /// override for atomicity.
+    ///
+    /// `did` is the **raw DID string** (e.g. `did:peer:2.*`), not the
+    /// SHA-256 hash. The default impl re-reads the old session via
+    /// [`get_session`](Self::get_session), which expects the raw DID
+    /// to join the session record with the matching `DID:` account
+    /// row; passing a hash here silently corrupts the rewritten session
+    /// (`session.did = ""`) and downstream auth checks fail with an
+    /// empty session DID.
     async fn update_session_authenticated(
         &self,
         old_session_id: &str,
         new_session_id: &str,
-        did_hash: &str,
+        did: &str,
         refresh_token_hash: &str,
     ) -> Result<(), MediatorError> {
+        let did_hash = sha256::digest(did);
         let mut session = self
-            .get_session(old_session_id, did_hash)
+            .get_session(old_session_id, did)
             .await
             .unwrap_or_else(|_| Session {
                 session_id: new_session_id.to_string(),
-                did_hash: did_hash.to_string(),
+                did: did.to_string(),
+                did_hash: did_hash.clone(),
                 ..Default::default()
             });
         session.session_id = new_session_id.to_string();
+        // Defensive: if get_session returned a session with an empty
+        // `did` (e.g. from a partially-populated legacy record), fill
+        // it from our authenticated input so the rewritten session is
+        // never blank-DID.
+        if session.did.is_empty() {
+            session.did = did.to_string();
+            session.did_hash = did_hash;
+        }
         session.state = SessionState::Authenticated;
         session.authenticated = true;
         session.refresh_token_hash = Some(refresh_token_hash.to_string());

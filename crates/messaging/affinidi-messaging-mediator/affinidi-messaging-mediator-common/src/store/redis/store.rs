@@ -507,6 +507,35 @@ impl MediatorStore for RedisStore {
         Ok(session_into_new(inner, refresh))
     }
 
+    /// Override the trait default with the legacy atomic RENAME path.
+    ///
+    /// The trait default reads via `get_session` then writes via
+    /// `put_session`, which works but loses the original session's
+    /// fields if the read fails (e.g., on schema drift). Redis can do
+    /// this atomically with `RENAME` + a single `HSET` for the changed
+    /// fields, preserving every field of the original session record
+    /// without re-reading it. That's also exactly what the 0.13.x
+    /// mediator did, so this keeps the wire-level Redis behaviour
+    /// identical across the upgrade.
+    async fn update_session_authenticated(
+        &self,
+        old_session_id: &str,
+        new_session_id: &str,
+        did: &str,
+        refresh_token_hash: &str,
+    ) -> Result<(), MediatorError> {
+        let did_hash = sha256::digest(did);
+        // Inherent method on RedisStore (in `database/session.rs`)
+        // that issues RENAME + HSET in one pipelined transaction.
+        self.update_session_authenticated(
+            old_session_id,
+            new_session_id,
+            &did_hash,
+            refresh_token_hash,
+        )
+        .await
+    }
+
     async fn delete_session(&self, session_id: &str) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
         let sid = format!("SESSION:{session_id}");

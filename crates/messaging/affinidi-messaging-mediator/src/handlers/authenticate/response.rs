@@ -407,13 +407,17 @@ pub async fn authentication_response(
             refresh_expires_at,
         };
 
-        // Set the session state to Authorized and store refresh token hash
+        // Set the session state to Authorized and store refresh token hash.
+        // Pass the raw DID — the trait impl computes its hash internally.
+        // Passing a hash here would cause `get_session` to look up the
+        // wrong `DID:<sha256(did_hash)>` key and silently overwrite the
+        // session with an empty-DID record.
         state
             .database
             .update_session_authenticated(
                 &old_sid,
                 &session.session_id,
-                &digest(&session.did),
+                &session.did,
                 &refresh_token_hash,
             )
             .await

@@ -1749,6 +1749,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_auth_rename_preserves_did() {
+        // Full challenge → authenticated rename flow. Catches the bug
+        // where `update_session_authenticated` rewrites the session
+        // with an empty `did` because the trait default passed
+        // did_hash to get_session (which expects raw did) and the
+        // resulting "not found" error was swallowed by `unwrap_or_else`.
+        let store = MemoryStore::new();
+        let did = "did:peer:test-auth-rename";
+        let challenge_id = "challenge-sid";
+        let new_id = "authed-sid";
+
+        // Pre-create the account so get_session can join successfully.
+        store
+            .account_add("dummy", &MediatorACLSet::default(), None)
+            .await
+            .expect("account_add");
+
+        // Step 1: challenge — write a ChallengeSent session with did set.
+        let challenge_session = Session {
+            session_id: challenge_id.into(),
+            challenge: "abc".into(),
+            state: SessionState::ChallengeSent,
+            did: did.into(),
+            did_hash: digest(did),
+            ..Default::default()
+        };
+        store
+            .put_session(&challenge_session, Duration::from_secs(900))
+            .await
+            .expect("put challenge session");
+
+        // Step 2: promote to Authenticated under a new session_id.
+        store
+            .update_session_authenticated(challenge_id, new_id, did, "refresh-hash-xyz")
+            .await
+            .expect("update_session_authenticated");
+
+        // Step 3: read the new session and assert did is preserved.
+        let got = store
+            .get_session(new_id, did)
+            .await
+            .expect("get authenticated session");
+        assert_eq!(got.session_id, new_id);
+        assert_eq!(
+            got.did, did,
+            "did must survive update_session_authenticated"
+        );
+        assert_eq!(
+            got.did_hash,
+            digest(did),
+            "did_hash must survive update_session_authenticated"
+        );
+        assert_eq!(got.state, SessionState::Authenticated);
+        assert_eq!(got.refresh_token_hash.as_deref(), Some("refresh-hash-xyz"));
+    }
+
+    #[tokio::test]
     async fn session_expires_lazily() {
         let store = MemoryStore::new();
         let session = Session {
