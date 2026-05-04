@@ -8,11 +8,11 @@ const DEFAULT_PORT: u16 = 7037;
 /// `docker compose up` brings up a self-contained mediator + Redis
 /// stack — no external Redis required.
 pub fn generate_dockerfile(config: &WizardConfig, output_dir: &str) -> anyhow::Result<()> {
-    let features = build_features(config);
-    let features_flag = if features.len() == 1 && features[0] == "didcomm" {
-        String::new()
-    } else {
+    let features = config.cargo_features();
+    let features_flag = if config.needs_explicit_features() {
         format!(" --no-default-features --features {}", features.join(","))
+    } else {
+        String::new()
     };
     let port = listen_port(&config.listen_address).unwrap_or(DEFAULT_PORT);
 
@@ -154,31 +154,10 @@ fn listen_port(listen_address: &str) -> Option<u16> {
     listen_address.rsplit_once(':')?.1.parse().ok()
 }
 
-fn build_features(config: &WizardConfig) -> Vec<&'static str> {
-    let mut features = Vec::new();
-
-    if config.didcomm_enabled {
-        features.push("didcomm");
-    }
-    if config.tsp_enabled {
-        features.push("tsp");
-    }
-
-    match config.secret_storage.as_str() {
-        "keyring://" => features.push("secrets-keyring"),
-        "aws_secrets://" => features.push("secrets-aws"),
-        "gcp_secrets://" => features.push("secrets-gcp"),
-        "azure_keyvault://" => features.push("secrets-azure"),
-        "vault://" => features.push("secrets-vault"),
-        _ => {}
-    }
-
-    features
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn extracts_port_from_ipv4_listen_address() {
@@ -191,5 +170,99 @@ mod tests {
         assert_eq!(listen_port("0.0.0.0"), None);
         assert_eq!(listen_port(""), None);
         assert_eq!(listen_port("0.0.0.0:notaport"), None);
+    }
+
+    #[test]
+    fn dockerfile_for_default_config_uses_default_features() {
+        // Default config (didcomm + redis, no explicit secret backend)
+        // matches the mediator crate's default features, so the wizard
+        // must NOT pass `--no-default-features` — that's what produces
+        // the simplest, most cache-friendly Docker build.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = WizardConfig::default();
+        generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
+
+        let dockerfile = fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+        assert!(
+            !dockerfile.contains("--no-default-features"),
+            "default config shouldn't override default features:\n{dockerfile}"
+        );
+        assert!(dockerfile.contains("cargo build --release -p affinidi-messaging-mediator"));
+    }
+
+    #[test]
+    fn dockerfile_for_fjall_backend_includes_fjall_feature() {
+        // Regression: an earlier `build_features` impl forgot to add
+        // the storage backend, so a Fjall wizard run produced a
+        // Dockerfile that built a binary with no backend at all.
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = WizardConfig::default();
+        cfg.storage_backend = "fjall".into();
+        generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
+
+        let dockerfile = fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+        assert!(
+            dockerfile.contains("--no-default-features"),
+            "non-default backend choice must override defaults:\n{dockerfile}"
+        );
+        assert!(
+            dockerfile.contains("fjall-backend"),
+            "Fjall config must enable fjall-backend feature:\n{dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains("redis-backend"),
+            "Fjall config must not enable redis-backend:\n{dockerfile}"
+        );
+    }
+
+    #[test]
+    fn dockerfile_for_redis_with_secret_backend_keeps_redis() {
+        // Regression: `redis-backend` is a default feature; when the
+        // wizard added a non-default secret backend it triggered
+        // `--no-default-features` which silently dropped the storage
+        // backend. The fix re-asserts redis-backend explicitly so the
+        // binary still has its backend.
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = WizardConfig::default();
+        cfg.secret_storage = "aws_secrets://".into();
+        generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
+
+        let dockerfile = fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
+        assert!(dockerfile.contains("--no-default-features"));
+        assert!(
+            dockerfile.contains("redis-backend"),
+            "Redis config must explicitly re-enable redis-backend when \
+             --no-default-features is in effect:\n{dockerfile}"
+        );
+        assert!(dockerfile.contains("secrets-aws"));
+    }
+
+    #[test]
+    fn compose_for_redis_includes_redis_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = WizardConfig::default();
+        generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
+        let compose = fs::read_to_string(dir.path().join("docker-compose.yml")).unwrap();
+        assert!(compose.contains("redis:"));
+        assert!(compose.contains("redis:7-alpine"));
+        assert!(compose.contains("DATABASE_URL: redis://redis:6379/"));
+    }
+
+    #[test]
+    fn compose_for_fjall_skips_redis_service() {
+        // Regression: Fjall is single-node; the compose file must NOT
+        // bundle a Redis sidecar (would be wasted resources) and must
+        // mount a named volume for the LSM data directory so state
+        // survives `docker compose down`.
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = WizardConfig::default();
+        cfg.storage_backend = "fjall".into();
+        generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
+        let compose = fs::read_to_string(dir.path().join("docker-compose.yml")).unwrap();
+        assert!(
+            !compose.contains("redis:7-alpine"),
+            "Fjall compose must not bundle Redis:\n{compose}"
+        );
+        assert!(compose.contains("mediator-data:"));
     }
 }

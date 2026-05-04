@@ -417,12 +417,13 @@ async fn run_from_recipe(
     // without leaving a dangling binding.
     drop(vta_session);
 
-    let features = build_features(&config);
+    let features = config.cargo_features();
+    let needs_explicit = config.needs_explicit_features();
 
     // Auto-install if recipe says so
     if recipe.install.enabled {
         let install_root = recipe.install.path.as_deref();
-        let install_args = build_install_args(&features, install_root);
+        let install_args = build_install_args(&features, needs_explicit, install_root);
         let install_cmd = format!("cargo {}", install_args.join(" "));
 
         let workspace_root = find_workspace_root();
@@ -463,8 +464,14 @@ async fn run_from_recipe(
             }
         }
     } else {
-        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
-        let build_cmd = format!("cargo {}", build_cargo_args(&features).join(" "));
+        let install_cmd = format!(
+            "cargo {}",
+            build_install_args(&features, needs_explicit, None).join(" ")
+        );
+        let build_cmd = format!(
+            "cargo {}",
+            build_cargo_args(&features, needs_explicit).join(" ")
+        );
         println!("  \x1b[1mTo install:\x1b[0m\n    \x1b[36m{install_cmd}\x1b[0m\n");
         println!("  \x1b[1mTo build from source:\x1b[0m\n    \x1b[36m{build_cmd}\x1b[0m\n");
     }
@@ -1415,30 +1422,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> anyhow
 }
 
 /// Build the feature flags list based on wizard config choices.
-fn build_features(config: &app::WizardConfig) -> Vec<&'static str> {
-    let mut features = Vec::new();
-
-    if config.didcomm_enabled {
-        features.push("didcomm");
-    }
-    if config.tsp_enabled {
-        features.push("tsp");
-    }
-
-    match config.secret_storage.as_str() {
-        STORAGE_KEYRING => features.push("secrets-keyring"),
-        STORAGE_AWS => features.push("secrets-aws"),
-        STORAGE_GCP => features.push("secrets-gcp"),
-        STORAGE_AZURE => features.push("secrets-azure"),
-        STORAGE_VAULT => features.push("secrets-vault"),
-        _ => {}
-    }
-
-    features
-}
-
-/// Build the cargo build arguments for the mediator.
-fn build_cargo_args(features: &[&str]) -> Vec<String> {
+/// Build the cargo build arguments for the mediator. `needs_explicit`
+/// must come from [`app::WizardConfig::needs_explicit_features`] so
+/// `--no-default-features` is set if and only if the wizard's choices
+/// differ from the mediator crate's defaults.
+fn build_cargo_args(features: &[&str], needs_explicit: bool) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
         "--release".to_string(),
@@ -1446,7 +1434,7 @@ fn build_cargo_args(features: &[&str]) -> Vec<String> {
         "affinidi-messaging-mediator".to_string(),
     ];
 
-    if features.len() > 1 || (features.len() == 1 && features[0] != "didcomm") {
+    if needs_explicit {
         args.push("--no-default-features".to_string());
         args.push("--features".to_string());
         args.push(features.join(","));
@@ -1559,15 +1547,22 @@ fn inline_select(prompt: &str, options: &[&str], default: usize) -> Option<usize
     }
 }
 
-/// Build the `cargo install` arguments for the mediator.
-fn build_install_args(features: &[&str], install_root: Option<&str>) -> Vec<String> {
+/// Build the `cargo install` arguments for the mediator. `needs_explicit`
+/// must come from [`app::WizardConfig::needs_explicit_features`] so
+/// `--no-default-features` is set if and only if the wizard's choices
+/// differ from the mediator crate's defaults.
+fn build_install_args(
+    features: &[&str],
+    needs_explicit: bool,
+    install_root: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "install".to_string(),
         "--path".to_string(),
         "crates/messaging/affinidi-messaging-mediator".to_string(),
     ];
 
-    if features.len() > 1 || (features.len() == 1 && features[0] != "didcomm") {
+    if needs_explicit {
         args.push("--no-default-features".to_string());
         args.push("--features".to_string());
         args.push(features.join(","));
@@ -1629,8 +1624,9 @@ fn print_run_command(config_path: &str, install_location: &str) {
 
 /// Offer to install the mediator after configuration.
 fn offer_build_and_guidance(config: &app::WizardConfig) {
-    let features = build_features(config);
-    let build_args = build_cargo_args(&features);
+    let features = config.cargo_features();
+    let needs_explicit = config.needs_explicit_features();
+    let build_args = build_cargo_args(&features, needs_explicit);
     let build_cmd = format!("cargo {}", build_args.join(" "));
 
     // Try to find workspace root
@@ -1644,7 +1640,10 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     let build_dir = if let Some(root) = workspace_root {
         root
     } else {
-        let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
+        let install_cmd = format!(
+            "cargo {}",
+            build_install_args(&features, needs_explicit, None).join(" ")
+        );
         println!("  \x1b[33mCannot find workspace root.\x1b[0m");
         print_manual_instructions(&install_cmd, &build_cmd, config);
         print_final_summary(config);
@@ -1663,7 +1662,10 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
 
     match choice {
         Some(1) => {
-            let install_cmd = format!("cargo {}", build_install_args(&features, None).join(" "));
+            let install_cmd = format!(
+                "cargo {}",
+                build_install_args(&features, needs_explicit, None).join(" ")
+            );
             print_manual_instructions(&install_cmd, &build_cmd, config);
             print_final_summary(config);
             return;
@@ -1699,7 +1701,7 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
         None
     };
 
-    let install_args = build_install_args(&features, install_root.as_deref());
+    let install_args = build_install_args(&features, needs_explicit, install_root.as_deref());
     let install_cmd = format!("cargo {}", install_args.join(" "));
 
     let install_location = install_root
@@ -1753,6 +1755,14 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
 /// Print manual build/run instructions when auto-install is skipped or fails.
 fn print_manual_instructions(install_cmd: &str, build_cmd: &str, config: &app::WizardConfig) {
     let abs_config = resolve_config_path(&config.config_path);
+    let run_features_flag = if config.needs_explicit_features() {
+        format!(
+            " --no-default-features --features {}",
+            config.cargo_features().join(",")
+        )
+    } else {
+        String::new()
+    };
 
     println!("  \x1b[1mOption 1 — Install (recommended):\x1b[0m");
     println!("    \x1b[36m{install_cmd}\x1b[0m");
@@ -1761,7 +1771,7 @@ fn print_manual_instructions(install_cmd: &str, build_cmd: &str, config: &app::W
     println!("  \x1b[1mOption 2 — Build and run from source:\x1b[0m");
     println!("    \x1b[36m{build_cmd}\x1b[0m");
     println!(
-        "    \x1b[36mcargo run --release -p affinidi-messaging-mediator -- -c {abs_config}\x1b[0m"
+        "    \x1b[36mcargo run --release -p affinidi-messaging-mediator{run_features_flag} -- -c {abs_config}\x1b[0m"
     );
 }
 

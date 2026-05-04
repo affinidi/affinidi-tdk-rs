@@ -402,6 +402,60 @@ impl WizardConfig {
             (false, false) => "None (invalid)".into(),
         }
     }
+
+    /// Compute the Cargo `--features` list for the mediator binary
+    /// implied by this wizard configuration. Used by every
+    /// build/install/run-command emitter (Dockerfile, `cargo install`,
+    /// `cargo build`, `cargo run`) so all paths stay in lockstep.
+    ///
+    /// Always emits exactly one storage backend feature
+    /// (`redis-backend` or `fjall-backend`) and exactly one protocol
+    /// feature (`didcomm`, optionally plus `tsp`). The mediator's
+    /// default features are `["didcomm", "redis-backend"]`, so callers
+    /// must pair this with `--no-default-features` whenever the list
+    /// differs from those defaults — otherwise the secret-storage
+    /// feature picked here would be silently combined with the default
+    /// backend instead of the one the operator chose.
+    pub fn cargo_features(&self) -> Vec<&'static str> {
+        let mut features = Vec::new();
+
+        if self.didcomm_enabled {
+            features.push("didcomm");
+        }
+        if self.tsp_enabled {
+            features.push("tsp");
+        }
+
+        features.push(match self.storage_backend.as_str() {
+            "fjall" => "fjall-backend",
+            // Anything else (incl. blank legacy recipes) → redis. The
+            // recipe parser also defaults to "redis", so this branch
+            // primarily covers WizardConfig::default() before the
+            // Database step has run.
+            _ => "redis-backend",
+        });
+
+        match self.secret_storage.as_str() {
+            "keyring://" => features.push("secrets-keyring"),
+            "aws_secrets://" => features.push("secrets-aws"),
+            "gcp_secrets://" => features.push("secrets-gcp"),
+            "azure_keyvault://" => features.push("secrets-azure"),
+            "vault://" => features.push("secrets-vault"),
+            _ => {}
+        }
+
+        features
+    }
+
+    /// Whether [`Self::cargo_features`] differs from the mediator's
+    /// own default features (`["didcomm", "redis-backend"]`). Callers
+    /// use this to decide whether to pass `--no-default-features` —
+    /// when it returns `false`, plain `cargo build -p
+    /// affinidi-messaging-mediator` is sufficient.
+    pub fn needs_explicit_features(&self) -> bool {
+        let features = self.cargo_features();
+        features.as_slice() != ["didcomm", "redis-backend"]
+    }
 }
 
 impl Default for WizardConfig {
@@ -3787,6 +3841,80 @@ mod tests {
         assert_eq!(cfg.config_path, DEFAULT_CONFIG_PATH);
         assert_eq!(cfg.database_url, DEFAULT_REDIS_URL);
         assert_eq!(cfg.listen_address, DEFAULT_LISTEN_ADDR);
+    }
+
+    #[test]
+    fn cargo_features_default_matches_crate_defaults() {
+        // Default WizardConfig with no secret backend chosen yet
+        // should still emit a valid feature set, and
+        // needs_explicit_features must return false so the wizard
+        // doesn't pass `--no-default-features` for the trivial case.
+        let cfg = WizardConfig::default();
+        assert_eq!(cfg.cargo_features(), vec!["didcomm", "redis-backend"]);
+        assert!(!cfg.needs_explicit_features());
+    }
+
+    #[test]
+    fn cargo_features_fjall_backend_emits_fjall_feature() {
+        // Regression: docker.rs's old `build_features` never added a
+        // storage backend feature, so a Fjall wizard run produced a
+        // Dockerfile that built the mediator without `fjall-backend`
+        // (and without `redis-backend` either, when paired with any
+        // secret-storage feature that triggered `--no-default-features`).
+        let mut cfg = WizardConfig::default();
+        cfg.storage_backend = "fjall".into();
+        assert_eq!(cfg.cargo_features(), vec!["didcomm", "fjall-backend"]);
+        assert!(cfg.needs_explicit_features());
+    }
+
+    #[test]
+    fn cargo_features_redis_with_secret_backend_keeps_redis() {
+        // The original bug: `redis-backend` was a default feature, so
+        // when any non-default secret backend was chosen the wizard
+        // emitted `--no-default-features --features didcomm,secrets-aws`
+        // and the resulting binary had NO storage backend at all. The
+        // fix re-asserts `redis-backend` explicitly when secrets-X is
+        // set, so the binary still has its backend.
+        let mut cfg = WizardConfig::default();
+        cfg.secret_storage = "aws_secrets://".into();
+        assert_eq!(
+            cfg.cargo_features(),
+            vec!["didcomm", "redis-backend", "secrets-aws"]
+        );
+        assert!(cfg.needs_explicit_features());
+    }
+
+    #[test]
+    fn cargo_features_fjall_with_secret_backend_uses_fjall() {
+        let mut cfg = WizardConfig::default();
+        cfg.storage_backend = "fjall".into();
+        cfg.secret_storage = "vault://".into();
+        assert_eq!(
+            cfg.cargo_features(),
+            vec!["didcomm", "fjall-backend", "secrets-vault"]
+        );
+        assert!(cfg.needs_explicit_features());
+    }
+
+    #[test]
+    fn cargo_features_unknown_backend_falls_back_to_redis() {
+        // Defensive: a malformed recipe with an unrecognised backend
+        // string shouldn't produce a binary with no storage at all.
+        // Default to redis-backend so the mediator at least starts.
+        let mut cfg = WizardConfig::default();
+        cfg.storage_backend = "totally-not-a-real-backend".into();
+        assert_eq!(cfg.cargo_features(), vec!["didcomm", "redis-backend"]);
+    }
+
+    #[test]
+    fn cargo_features_tsp_protocol_included() {
+        let mut cfg = WizardConfig::default();
+        cfg.tsp_enabled = true;
+        assert_eq!(
+            cfg.cargo_features(),
+            vec!["didcomm", "tsp", "redis-backend"]
+        );
+        assert!(cfg.needs_explicit_features());
     }
 
     // ── WizardApp state machine ────────────────────────────────────────
