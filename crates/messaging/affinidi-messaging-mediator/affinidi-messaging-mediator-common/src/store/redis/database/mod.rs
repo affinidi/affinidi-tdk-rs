@@ -18,8 +18,6 @@ pub(crate) mod initialization;
 pub mod list;
 pub(crate) mod messages;
 pub(crate) mod migrations;
-#[cfg(feature = "didcomm")]
-pub(crate) mod oob_discovery;
 pub mod session;
 pub mod stats;
 pub mod store;
