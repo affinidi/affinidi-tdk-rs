@@ -427,11 +427,7 @@ mod tests {
     async fn create_atm_with_secrets(secrets: Vec<Secret>) -> ATM {
         use affinidi_tdk_common::config::TDKConfig;
         let config = ATMConfig::builder().build().unwrap();
-        let tdk_cfg = TDKConfig::builder()
-            .with_load_environment(false)
-            .with_use_atm(false)
-            .build()
-            .unwrap();
+        let tdk_cfg = TDKConfig::headless().unwrap();
         let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         for secret in &secrets {
             tdk.secrets_resolver().insert(secret.clone()).await;
@@ -905,11 +901,7 @@ mod tests {
     /// Creates an ATM instance with default config (unpack_forwards=true).
     async fn create_atm() -> ATM {
         let config = ATMConfig::builder().build().unwrap();
-        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
-            .with_load_environment(false)
-            .with_use_atm(false)
-            .build()
-            .unwrap();
+        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::headless().unwrap();
         let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         ATM::new(config, tdk).await.unwrap()
     }
@@ -920,11 +912,7 @@ mod tests {
             .with_unpack_forwards(false)
             .build()
             .unwrap();
-        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::builder()
-            .with_load_environment(false)
-            .with_use_atm(false)
-            .build()
-            .unwrap();
+        let tdk_cfg = affinidi_tdk_common::config::TDKConfig::headless().unwrap();
         let tdk = Arc::new(TDKSharedState::new(tdk_cfg).await.unwrap());
         ATM::new(config, tdk).await.unwrap()
     }

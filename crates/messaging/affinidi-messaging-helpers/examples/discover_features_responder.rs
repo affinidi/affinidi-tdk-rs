@@ -55,18 +55,11 @@ async fn main() -> Result<(), ATMError> {
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // Instantiate TDK
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
 
     // Configure tracing
     let subscriber = tracing_subscriber::fmt()
@@ -79,7 +72,7 @@ async fn main() -> Result<(), ATMError> {
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Profile: {}", environment_name).to_string(),
+            format!("Alice not found in Profile: {environment_name}").to_string(),
         ));
     };
 
@@ -100,18 +93,18 @@ async fn main() -> Result<(), ATMError> {
     println!("Advertising features:");
     println!("  Protocols:");
     for p in &features.protocols {
-        println!("    {}", p);
+        println!("    {p}");
     }
     if !features.goal_codes.is_empty() {
         println!("  Goal codes:");
         for g in &features.goal_codes {
-            println!("    {}", g);
+            println!("    {g}");
         }
     }
     if !features.headers.is_empty() {
         println!("  Headers:");
         for h in &features.headers {
-            println!("    {}", h);
+            println!("    {h}");
         }
     }
 
@@ -129,7 +122,7 @@ async fn main() -> Result<(), ATMError> {
         .await?;
 
     let (my_did, _) = alice.dids()?;
-    println!("\nListening as: {}", my_did);
+    println!("\nListening as: {my_did}");
     println!("Waiting for discover-features queries (Ctrl+C to stop)...\n");
 
     // Enable WebSocket for live message streaming
@@ -180,6 +173,6 @@ async fn main() -> Result<(), ATMError> {
         atm.send_message(&alice, &packed_msg, &disclosure_id, false, true)
             .await?;
 
-        println!("Sent disclosure response to: {}", from_did);
+        println!("Sent disclosure response to: {from_did}");
     }
 }

@@ -1,0 +1,179 @@
+name: checks-storage
+# Matrix check for the mediator's swappable storage backends.
+#
+# `redis-backend` is the default and is exercised by `checks.yaml`
+# (which spins up a Redis service container via `useRedis: true`).
+# This workflow covers the **non-default** backends and a combined
+# build, so a missing `cfg(feature = "...-backend")` gate, a stale
+# stubbed method, or a broken cross-backend integration surfaces in
+# CI rather than at deploy time.
+#
+# Per-backend job:
+#   cargo check  --no-default-features --features didcomm,<backend>
+#   cargo test   --no-default-features --features didcomm,<backend>
+#                --lib store::<short>_store
+#
+# Plus a "kitchen sink" job that compiles the mediator with every
+# backend feature enabled at once. Catches accidental name collisions
+# between feature-gated modules.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    paths:
+      - "crates/messaging/affinidi-messaging-mediator/**"
+      - "crates/messaging/affinidi-messaging-test-mediator/**"
+      - ".github/workflows/checks-storage.yaml"
+
+env:
+  # Keep `--cfg tracing_unstable` to match the main pipeline so the
+  # `valuable` feature on `tracing` resolves consistently.
+  RUSTFLAGS: "--cfg tracing_unstable"
+
+jobs:
+  backend-matrix:
+    name: ${{ matrix.backend.short }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend:
+          - short: memory
+            feature: memory-backend
+            test_module: memory_store
+          - short: fjall
+            feature: fjall-backend
+            test_module: fjall_store
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps for aws_lc_rs + keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: storage-${{ matrix.backend.short }}
+
+      - name: cargo check --no-default-features --features didcomm,${{ matrix.backend.feature }}
+        run: |
+          cargo check \
+            -p affinidi-messaging-mediator \
+            --no-default-features \
+            --features "didcomm,${{ matrix.backend.feature }}"
+
+      - name: cargo test ${{ matrix.backend.short }} backend
+        # Run only the per-backend store tests rather than the full
+        # mediator suite — most other tests assume the Redis-backed
+        # default and aren't gated on the storage feature.
+        run: |
+          cargo test \
+            -p affinidi-messaging-mediator \
+            --no-default-features \
+            --features "didcomm,${{ matrix.backend.feature }}" \
+            --lib \
+            "store::${{ matrix.backend.test_module }}"
+
+  test-mediator-e2e:
+    # The e2e fixture defaults to MemoryStore now; this job confirms
+    # the integration suite runs end-to-end without Redis. Catches
+    # the regression where someone accidentally re-introduces a
+    # Redis dependency in the SDK fixture or environment plumbing.
+    name: test-mediator (memory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-mediator-e2e-memory
+
+      - name: cargo test -p affinidi-messaging-test-mediator --tests
+        run: |
+          cargo test \
+            -p affinidi-messaging-test-mediator \
+            --tests
+
+  test-mediator-e2e-fjall:
+    # Same e2e suite as the memory job, this time against the on-disk
+    # Fjall backend. The fixture wraps each store in a tempfile::TempDir
+    # so partition files don't leak between tests.
+    name: test-mediator (fjall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-mediator-e2e-fjall
+
+      - name: cargo test -p affinidi-messaging-test-mediator --features fjall-backend --tests
+        run: |
+          cargo test \
+            -p affinidi-messaging-test-mediator \
+            --features fjall-backend \
+            --tests
+
+  all-backends-compile:
+    # Compile the mediator with every backend feature enabled at
+    # once. Doesn't run any tests — the test commands per-backend
+    # above already do that — but a successful build here proves
+    # the feature-gated modules don't conflict (duplicate symbols,
+    # incompatible deps, etc.) when bundled together.
+    name: all-backends compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: all-backends-compile
+
+      - name: cargo check --features redis-backend,fjall-backend,memory-backend
+        run: |
+          cargo check \
+            -p affinidi-messaging-mediator \
+            --no-default-features \
+            --features "didcomm,redis-backend,fjall-backend,memory-backend"

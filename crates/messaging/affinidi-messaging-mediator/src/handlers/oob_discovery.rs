@@ -13,7 +13,7 @@
  Alice and Bob then swap messages and create a confidential communication channel between themselves.
 */
 
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
@@ -59,13 +59,18 @@ pub async fn oob_invite_handler(
         .into());
     }
 
+    // The trait takes the already-encoded invitation + an absolute
+    // expiry timestamp. Compute both up-front so backends don't have
+    // to know about DIDComm `Message` shape.
+    let invite_b64 = match crate::store::encode_oob_invite(&body) {
+        Ok(b) => b,
+        Err(e) => return Err(e.into()),
+    };
+    let expires_at = crate::store::oob_expires_at(&body, state.config.limits.oob_invite_ttl as u64);
+
     let oob_id = match state
         .database
-        .oob_discovery_store(
-            &session.did_hash,
-            &body,
-            state.config.limits.oob_invite_ttl as u64,
-        )
+        .oob_discovery_store(&session.did_hash, &invite_b64, expires_at)
         .await
     {
         Ok(oob_id) => oob_id,

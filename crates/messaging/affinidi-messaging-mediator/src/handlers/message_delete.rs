@@ -1,5 +1,8 @@
-use crate::{SharedData, database::session::Session};
-use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
+use crate::{SharedData, common::session::Session};
+use affinidi_messaging_mediator_common::{
+    errors::{AppError, MediatorError, SuccessResponse},
+    store::DeletionAuthority,
+};
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
     DeleteMessageRequest, DeleteMessageResponse, GenericDataStruct,
@@ -67,10 +70,14 @@ pub async fn message_delete_handler(
         let mut deleted: DeleteMessageResponse = DeleteMessageResponse::default();
 
         for message in &body.message_ids {
-            let result = state
+            let result: Result<(), MediatorError> = state
                 .database
-                .handler
-                .delete_message(Some(&session.session_id), &session.did_hash, message, None)
+                .delete_message(
+                    message,
+                    DeletionAuthority::Owner {
+                        did_hash: session.did_hash.clone(),
+                    },
+                )
                 .await;
 
             match result {

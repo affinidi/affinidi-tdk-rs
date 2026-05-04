@@ -15,7 +15,7 @@ use subtle::ConstantTimeEq;
 use tracing::{Instrument, span, warn};
 use uuid::Uuid;
 
-use crate::{SharedData, database::session::Session, messages::ProcessMessageResponse};
+use crate::{SharedData, common::session::Session, messages::ProcessMessageResponse};
 
 use super::acls::check_admin_signature;
 

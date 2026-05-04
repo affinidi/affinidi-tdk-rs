@@ -199,11 +199,7 @@ mod tests {
 
         async fn tdk() -> TDK {
             TDK::new(
-                TDKConfig::builder()
-                    .with_load_environment(false)
-                    .with_use_atm(false)
-                    .build()
-                    .expect("config builds"),
+                TDKConfig::headless().expect("config builds"),
                 #[cfg(feature = "messaging")]
                 None,
             )

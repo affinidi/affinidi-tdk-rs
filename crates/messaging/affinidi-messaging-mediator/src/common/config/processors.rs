@@ -1,12 +1,10 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
-use affinidi_messaging_mediator_processors::message_expiry_cleanup::config::{
-    MessageExpiryCleanupConfig, MessageExpiryCleanupConfigRaw,
-};
+pub use affinidi_messaging_mediator_common::tasks::forwarding::ForwardingConfig;
 use ahash::AHashSet as HashSet;
 use serde::{Deserialize, Serialize};
 
 /// Processor configuration for the mediator
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ProcessorsConfig {
     pub forwarding: ForwardingConfig,
     pub message_expiry_cleanup: MessageExpiryCleanupConfig,
@@ -18,59 +16,40 @@ pub(crate) struct ProcessorsConfigRaw {
     pub message_expiry_cleanup: MessageExpiryCleanupConfigRaw,
 }
 
-/// DIDComm routing and forwarding configuration
+/// Configuration for the in-process message expiry sweep. The standalone
+/// `message_expiry_cleanup` binary in `affinidi-messaging-mediator-processors`
+/// has its own config — they're intentionally not shared because the
+/// standalone binary is Redis-only by design and runs in a separate process.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ForwardingConfig {
+pub struct MessageExpiryCleanupConfig {
     pub enabled: bool,
-    pub future_time_limit: u64,
-    pub external_forwarding: bool,
-    pub report_errors: bool,
-    pub blocked_forwarding: HashSet<String>,
-    /// Sliding window in seconds for tracking message rate per remote endpoint
-    pub rate_window_seconds: u64,
-    /// If messages per 10 seconds >= this threshold, prefer WebSocket over REST
-    pub ws_threshold_msgs_per_10s: u64,
-    /// Seconds of idle time before disconnecting a WebSocket to a remote mediator
-    pub ws_idle_timeout_seconds: u64,
-    /// Number of messages to read per batch from FORWARD_Q
-    pub batch_size: usize,
-    /// Maximum number of retry attempts for failed forwarding
-    pub max_retries: u32,
-    /// Initial backoff delay in milliseconds for retry
-    pub initial_backoff_ms: u64,
-    /// Maximum backoff delay in milliseconds for retry
-    pub max_backoff_ms: u64,
-    /// Redis consumer group name for forwarding processors
-    pub consumer_group: String,
-    /// Whether to accept invalid TLS certificates when forwarding to remote mediators.
-    /// MUST be false in production. Only set to true for local development/testing.
-    pub accept_invalid_certs: bool,
-    /// Maximum number of hops a forwarded message can make before being dropped.
-    /// Prevents forwarding loops between mediators.
-    pub max_hops: u32,
 }
 
-impl Default for ForwardingConfig {
+impl Default for MessageExpiryCleanupConfig {
     fn default() -> Self {
-        ForwardingConfig {
-            enabled: true,
-            future_time_limit: 86400,
-            external_forwarding: true,
-            report_errors: true,
-            blocked_forwarding: HashSet::new(),
-            rate_window_seconds: 300,
-            ws_threshold_msgs_per_10s: 1,
-            ws_idle_timeout_seconds: 60,
-            batch_size: 50,
-            max_retries: 5,
-            initial_backoff_ms: 1000,
-            max_backoff_ms: 60000,
-            consumer_group: "forwarding".to_string(),
-            accept_invalid_certs: false,
-            max_hops: 10,
-        }
+        MessageExpiryCleanupConfig { enabled: true }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct MessageExpiryCleanupConfigRaw {
+    pub enabled: String,
+}
+
+impl std::convert::TryFrom<MessageExpiryCleanupConfigRaw> for MessageExpiryCleanupConfig {
+    type Error = MediatorError;
+
+    fn try_from(raw: MessageExpiryCleanupConfigRaw) -> Result<Self, Self::Error> {
+        Ok(MessageExpiryCleanupConfig {
+            enabled: raw.enabled.parse().unwrap_or(true),
+        })
+    }
+}
+
+// `ForwardingConfig` (the typed shape) lives in `mediator-common`
+// alongside `ForwardingProcessor` so the standalone forwarding binary
+// can construct it. `ForwardingConfigRaw` (this file) is the wizard's
+// all-strings TOML format and stays here.
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ForwardingConfigRaw {

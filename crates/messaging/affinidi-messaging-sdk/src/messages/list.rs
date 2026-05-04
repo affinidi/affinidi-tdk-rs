@@ -2,13 +2,22 @@ use super::{Folder, MessageList};
 use crate::{ATM, errors::ATMError, messages::SuccessResponse, profiles::ATMProfile};
 use sha256::digest;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{Instrument, Level, debug, span};
+
+/// Per-request HTTP timeout for mediator REST calls. Bounded so that an
+/// unreachable mediator surfaces a TransportError in seconds rather than
+/// blocking the caller for the OS-level TCP RTO (~30–60s on macOS).
+const MEDIATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl ATM {
     /// Returns a list of messages that are stored in the ATM
     /// # Parameters
     /// - `did`: The DID to list messages for
     /// - `folder`: The folder to list messages from
+    ///
+    /// Each request is bounded by a 15-second timeout; an unreachable
+    /// mediator returns `ATMError::TransportError` rather than hanging.
     pub async fn list_messages(
         &self,
         profile: &Arc<ATMProfile>,
@@ -44,6 +53,7 @@ impl ATM {
                 ))
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
+                .timeout(MEDIATOR_REQUEST_TIMEOUT)
                 .send()
                 .await
                 .map_err(|e| {

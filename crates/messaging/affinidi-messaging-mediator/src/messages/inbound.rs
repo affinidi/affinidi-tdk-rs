@@ -1,10 +1,10 @@
 #[cfg(feature = "didcomm")]
 use crate::common::time::unix_timestamp_secs;
 #[cfg(feature = "didcomm")]
-use crate::didcomm_compat::{self, MetaEnvelope};
+use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
-use crate::{SharedData, database::session::Session, messages::store::store_message};
+use crate::{SharedData, common::session::Session, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
@@ -82,12 +82,12 @@ async fn handle_inbound_didcomm(
             Some(to_did) => {
                 if to_did == &state.config.mediator_did {
                     // Message is to the mediator
-                    let (msg, metadata) = match didcomm_compat::unpack(
-                        message,
-                        &state.did_resolver,
-                        &*state.config.security.mediator_secrets,
-                    )
-                    .await
+                    let (msg, metadata) = match envelope
+                        .unpack(
+                            &state.did_resolver,
+                            &*state.config.security.mediator_secrets,
+                        )
+                        .await
                     {
                         Ok(ok) => ok,
                         Err(e) => {

@@ -1,0 +1,144 @@
+use std::time::Instant;
+
+use super::Database;
+use crate::errors::MediatorError;
+
+// Mirror of the metric names declared in the mediator's
+// `common::metrics::names` module — kept as raw strings here so this
+// `database/` impl can live in mediator-common without depending on
+// the mediator's metrics registry.
+mod names {
+    pub const MESSAGE_STORE_DURATION_SECONDS: &str = "message_store_duration_seconds";
+    pub const MESSAGES_STORED_TOTAL: &str = "messages_stored_total";
+}
+use serde::{Deserialize, Serialize};
+use sha256::digest;
+use tracing::{Instrument, Level, debug, event, info, span};
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MessageMetaData {
+    pub bytes: usize,
+    pub to_did_hash: String,
+    pub from_did_hash: Option<String>,
+    pub timestamp: u128,
+}
+
+impl Database {
+    /// Stores a message in the database
+    /// Returns the message_id (hash of the message)
+    /// - expires_at: The timestamp at which the message expires (since epoch in seconds)
+    /// - `from_hash`: The hash of the DID of the sender
+    /// - `queue_maxlen`: Max entries per RECEIVE_Q/SEND_Q stream (0 = unlimited)
+    pub async fn store_message(
+        &self,
+        session_id: &str,
+        message: &str,
+        to_did_hash: &str,
+        from_hash: Option<&str>,
+        expires_at: u64,
+        queue_maxlen: usize,
+    ) -> Result<String, MediatorError> {
+        let _span = span!(Level::DEBUG, "store_message", session_id = session_id);
+        async move {
+            let message_hash = digest(message.as_bytes());
+
+            let from_hash = from_hash.unwrap_or("ANONYMOUS");
+            debug!(
+                "trying to store msg_id({}), from_hash({:?}) to_hash({}), bytes({})",
+                message_hash,
+                from_hash,
+                to_did_hash,
+                message.len()
+            );
+
+            let start = Instant::now();
+            let mut conn = self.get_connection().await?;
+            let mut cmd = redis::cmd("FCALL");
+            cmd.arg("store_message")
+                .arg(1)
+                .arg(&message_hash)
+                .arg(message)
+                .arg(expires_at)
+                .arg(message.len())
+                .arg(to_did_hash)
+                .arg(from_hash);
+            if queue_maxlen > 0 {
+                cmd.arg(queue_maxlen);
+            }
+            cmd.exec_async(&mut conn).await.map_err(|err| {
+                event!(Level::ERROR, "Couldn't store message in database: {}", err);
+                MediatorError::DatabaseError(
+                    14,
+                    session_id.into(),
+                    format!("Couldn't store message in database: {err}"),
+                )
+            })?;
+
+            metrics::histogram!(names::MESSAGE_STORE_DURATION_SECONDS)
+                .record(start.elapsed().as_secs_f64());
+            metrics::counter!(names::MESSAGES_STORED_TOTAL).increment(1);
+
+            info!(
+                "Message hash({}) from({}) to({}) stored in database",
+                message_hash, from_hash, to_did_hash
+            );
+
+            Ok(message_hash)
+        }
+        .instrument(_span)
+        .await
+    }
+
+    /// Retrieves the message MetaData for a given message hash
+    /// - session_id: The session_id for the request
+    /// - message_hash: The hash of the message to retrieve
+    pub async fn get_message_metadata(
+        &self,
+        session_id: &str,
+        message_hash: &str,
+    ) -> Result<MessageMetaData, MediatorError> {
+        let _span = span!(
+            Level::DEBUG,
+            "get_message_metadata",
+            session_id = session_id,
+            message_hash = message_hash
+        );
+        async move {
+            let mut conn = self.get_connection().await?;
+            let metadata: String = redis::cmd("HGET")
+                .arg("MESSAGE_STORE")
+                .arg(["METADATA:", message_hash].concat())
+                .query_async(&mut conn)
+                .await
+                .map_err(|err| {
+                    event!(
+                        Level::ERROR,
+                        "Couldn't get message metadata from database: {}",
+                        err
+                    );
+                    MediatorError::DatabaseError(
+                        14,
+                        session_id.into(),
+                        format!("Couldn't get message metadata from database: {err}"),
+                    )
+                })?;
+
+            let metadata: MessageMetaData = serde_json::from_str(&metadata).map_err(|err| {
+                event!(
+                    Level::ERROR,
+                    "Couldn't parse message metadata from database: {}",
+                    err
+                );
+                MediatorError::DatabaseError(
+                    22,
+                    session_id.into(),
+                    format!("Couldn't parse message metadata from database: {err}"),
+                )
+            })?;
+
+            Ok(metadata)
+        }
+        .instrument(_span)
+        .await
+    }
+}

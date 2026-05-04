@@ -554,7 +554,14 @@ impl WebSocketTransport {
         let builder = ClientRequestBuilder::new(uri)
             .with_header("Authorization", ["Bearer ", &tokens.access_token].concat());
 
-        let (web_socket, _) = super::proxy::connect_websocket(builder, &host, port).await?;
+        let (web_socket, _) = super::proxy::connect_websocket(builder, &host, port)
+            .await
+            .map_err(|e| {
+                ATMError::TransportError(format!(
+                    "Profile '{}' → mediator {} websocket {} ({}:{}): {}",
+                    self.profile.inner.alias, mediator.did, address, host, port, e
+                ))
+            })?;
 
         debug!("Completed websocket connection");
 

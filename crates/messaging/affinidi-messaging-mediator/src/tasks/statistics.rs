@@ -1,6 +1,9 @@
-use crate::database::{Database, stats::MetadataStats};
-use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::{
+    errors::MediatorError,
+    store::{MediatorStore, types::MetadataStats},
+};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::field::valuable;
 use tracing::{Instrument, Level, debug, info, span};
@@ -8,7 +11,7 @@ use tracing::{Instrument, Level, debug, info, span};
 /// Periodically logs statistics about the database.
 /// Is spawned as a task from main().
 pub async fn statistics(
-    database: Database,
+    database: Arc<dyn MediatorStore>,
     tags: HashMap<String, String>,
 ) -> Result<(), MediatorError> {
     let _span = span!(Level::INFO, "statistics");

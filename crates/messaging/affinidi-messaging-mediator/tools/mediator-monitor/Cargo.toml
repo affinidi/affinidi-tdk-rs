@@ -1,0 +1,43 @@
+[package]
+name = "affinidi-messaging-mediator-monitor"
+version = "0.1.0"
+description = "Real-time TUI monitoring dashboard for Affinidi Messaging Mediator"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mediator-monitor"
+path = "src/main.rs"
+
+[dependencies]
+# ── TUI Framework ────────────────────────────────────────────────────────
+## Bumped in lockstep with mediator-setup + text-client (ratatui 0.29
+## pins unicode-width = "=0.2.0", so every workspace consumer has to
+## move together).
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
+
+# ── Async Runtime ────────────────────────────────────────────────────────
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+
+# ── HTTP Client (polls mediator /admin/status endpoint) ──────────────────
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# ── Serialization ────────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ── Error Handling ───────────────────────────────────────────────────────
+anyhow = "1"
+
+# ── Time Formatting ──────────────────────────────────────────────────────
+chrono = "0.4"
+
+[lints]
+workspace = true

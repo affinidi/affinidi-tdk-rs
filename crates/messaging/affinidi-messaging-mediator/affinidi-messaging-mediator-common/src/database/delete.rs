@@ -6,20 +6,23 @@ use super::DatabaseHandler;
 use crate::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
-use tracing::{Instrument, Level, debug, info, span};
+use tracing::{Instrument, Level, debug, info, span, warn};
 
 impl DatabaseHandler {
-    /// Deletes a message in the database
-    /// - session_id: Some(authentication session ID)
-    /// - did_hash: DID of the delete requestor (can be `ADMIN` if the mediator is deleting the message, i.e. Expired Message cleanup)
-    /// - message_hash: sha256 hash of the message to delete
-    /// - request_msg_id: ID of the requesting message (if applicable)
+    /// Deletes a message in the database.
+    ///
+    /// The Lua `delete_message` function performs an ownership check:
+    /// the requesting DID must be the message's TO, FROM, or match
+    /// the `admin_did_hash` (for system operations like expiry cleanup).
+    ///
+    /// Returns specific errors for not-found and permission-denied cases.
     pub async fn delete_message(
         &self,
         session_id: Option<&str>,
         did_hash: &str,
         message_hash: &str,
         request_msg_id: Option<&str>,
+        admin_did_hash: Option<&str>,
     ) -> Result<(), MediatorError> {
         let _span = span!(
             Level::INFO,
@@ -30,58 +33,92 @@ impl DatabaseHandler {
         );
         async move {
             let mut conn = self.get_async_connection().await?;
-            let response: String = redis::cmd("FCALL")
-                .arg("delete_message")
+            let mut cmd = redis::cmd("FCALL");
+            cmd.arg("delete_message")
                 .arg(1)
                 .arg(message_hash)
-                .arg(did_hash)
-                .query_async(&mut conn)
-                .await
-                .map_err(|err| {
-                    // TODO: Should check the response from the function and have better error handling
-                    MediatorError::problem_with_log(
-                        10,
+                .arg(did_hash);
+            if let Some(admin_hash) = admin_did_hash {
+                cmd.arg(admin_hash);
+            }
+            let result: Result<String, redis::RedisError> = cmd.query_async(&mut conn).await;
+
+            match result {
+                Ok(response) if response == "OK" => {
+                    info!("Successfully deleted message_hash({})", message_hash);
+                    Ok(())
+                }
+                Ok(response) => {
+                    // Lua returned a non-OK status (shouldn't happen with current script)
+                    warn!(
+                        "delete_message returned unexpected status: {} for message_hash({})",
+                        response, message_hash
+                    );
+                    Err(MediatorError::problem_with_log(
+                        11,
                         "NA",
                         request_msg_id.map(|s| s.to_string()),
                         ProblemReportSorter::Warning,
                         ProblemReportScope::Message,
-                        "database.message.delete.error",
-                        "Couldn't delete message_hash ({1}). Reason: {2}",
-                        vec![message_hash.to_string(), err.to_string()],
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        format!("Couldn't delete message_hash ({message_hash}). Reason: {err}"),
-                    )
-                })?;
+                        "database.message.delete.status",
+                        "delete returned unexpected status ({1}) for message ({2})",
+                        vec![response.to_string(), message_hash.to_string()],
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("delete returned unexpected status ({response}) for message ({message_hash})"),
+                    ))
+                }
+                Err(err) => {
+                    let err_str = err.to_string();
 
-            debug!(
-                "{}did_hash({}) message_id({}). database response: ({})",
-                if let Some(session_id) = session_id {
-                    format!("{session_id}: ")
-                } else {
-                    "".to_string()
-                },
-                did_hash,
-                message_hash,
-                response
-            );
-
-            if response != "OK" {
-                // TODO: As above - better handling of error response from the function
-                Err(MediatorError::problem_with_log(
-                    11,
-                    "NA",
-                    request_msg_id.map(|s| s.to_string()),
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "database.message.delete.status",
-                    "delete function returned not being OK. Status: {1}",
-                    vec![response.to_string()],
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!("delete function returned not being OK. Status: {response}"),
-                ))
-            } else {
-                info!("Successfully deleted",);
-                Ok(())
+                    // Parse Lua error responses for specific handling
+                    if err_str.contains("NOT_FOUND") {
+                        debug!(
+                            "Message not found for deletion: message_hash({})",
+                            message_hash
+                        );
+                        Err(MediatorError::problem(
+                            10,
+                            "NA",
+                            request_msg_id.map(|s| s.to_string()),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "database.message.delete.not_found",
+                            "Message ({1}) not found",
+                            vec![message_hash.to_string()],
+                            StatusCode::NOT_FOUND,
+                        ))
+                    } else if err_str.contains("PERMISSION_DENIED") {
+                        warn!(
+                            "Permission denied deleting message_hash({}) by did_hash({})",
+                            message_hash, did_hash
+                        );
+                        Err(MediatorError::problem(
+                            10,
+                            "NA",
+                            request_msg_id.map(|s| s.to_string()),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "database.message.delete.permission_denied",
+                            "Not authorized to delete message ({1})",
+                            vec![message_hash.to_string()],
+                            StatusCode::FORBIDDEN,
+                        ))
+                    } else {
+                        // Generic database error
+                        Err(MediatorError::problem_with_log(
+                            10,
+                            "NA",
+                            request_msg_id.map(|s| s.to_string()),
+                            ProblemReportSorter::Warning,
+                            ProblemReportScope::Message,
+                            "database.message.delete.error",
+                            "Couldn't delete message_hash ({1}). Reason: {2}",
+                            vec![message_hash.to_string(), err_str],
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("Couldn't delete message_hash ({message_hash}). Reason: {err}"),
+                        ))
+                    }
+                }
             }
         }
         .instrument(_span)

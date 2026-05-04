@@ -3,7 +3,7 @@ use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
-    database::{forwarding::ForwardQueueEntry, session::Session},
+    common::session::Session,
     messages::{
         ProcessMessageResponse, WrapperType,
         error_response::generate_error_response,
@@ -13,6 +13,7 @@ use crate::{
 use affinidi_did_common::Document;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -468,7 +469,16 @@ pub(crate) async fn process(
                 }
         } else if let Some(ref json_val) = attachment.data.json {
                 if attachment.data.jws.is_some() {
-                    // TODO: Implement JWS verification
+                    // JSON-with-JWS attachments would need a full
+                    // verification path: parse the protected header,
+                    // resolve the kid via the DID resolver, extract
+                    // the Ed25519 verification key, then verify before
+                    // forwarding. Until that lands, we reject rather
+                    // than forward untrusted signed payloads. Most
+                    // DIDComm clients use base64-encoded encrypted
+                    // attachments instead, which don't require this
+                    // path. Tracked as future work in PR #286's
+                    // follow-up section.
                     return Err(MediatorError::problem(
                         66,
                         &session.session_id,
@@ -495,8 +505,7 @@ pub(crate) async fn process(
                                 vec![e.to_string()],
                                 StatusCode::BAD_REQUEST,
                                 format!(
-                                    "Invalid attachment JSON schema. Reason: {}",
-                                    e
+                                    "Invalid attachment JSON schema. Reason: {e}"
                                 ),
                             ));
                         }
@@ -653,7 +662,7 @@ pub(crate) async fn process(
                 let now_ms = unix_timestamp_millis();
 
                 // Get the sender's full DID for problem reports
-                let from_did = msg.from.clone().unwrap_or_default();
+                let from_did = msg.from.as_deref().unwrap_or("").to_string();
 
                 let entry = ForwardQueueEntry {
                     stream_id: String::new(), // Set by Redis on XADD

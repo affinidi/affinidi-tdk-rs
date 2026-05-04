@@ -9,7 +9,7 @@ use tracing::{debug, info, span};
 use uuid::Uuid;
 
 use crate::{
-    database::session::Session,
+    common::session::Session,
     messages::{ProcessMessageResponse, WrapperType},
 };
 

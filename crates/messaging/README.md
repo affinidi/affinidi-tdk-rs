@@ -51,40 +51,51 @@ mediator routes and stores messages but **cannot** read their content.
 - Docker (for Redis)
 - Redis 8.0+
 
-### 1. Start Redis
+### 1. Start the storage backend
+
+For Redis-backed deployments (the default; required for
+multi-mediator clusters):
 
 ```bash
 docker run --name=redis-local --publish=6379:6379 --hostname=redis \
   --restart=on-failure --detach redis:latest
 ```
 
+For single-node deployments you can skip this step and pick the
+embedded **Fjall** backend in the wizard's Database step — Fjall
+stores its data in a local directory and needs no sidecar.
+
 ### 2. Configure the Mediator
 
-Run from the `affinidi-messaging` directory:
+Run the interactive setup wizard:
 
 ```bash
-cargo run --bin setup_environment
+cargo run --bin mediator-setup
 ```
 
-This generates:
-- Mediator DID and secrets
-- Administration DID and secrets
-- SSL certificates for local development
-- Optionally, test user DIDs
+The wizard generates the mediator DID and secrets, the admin
+credential, optional self-signed SSL certificates, and a
+ready-to-run `mediator.toml`. See the mediator's
+[setup guide](./affinidi-messaging-mediator/docs/setup-guide.md)
+for the full operator walkthrough including online VTA, sealed-mint,
+and sealed-export flows.
 
 ### 3. Start the Mediator
 
+The wizard prints the exact build/run commands for your chosen
+features when it finishes. The default DIDComm + Redis build is:
+
 ```bash
-cd affinidi-messaging-mediator
-export REDIS_URL=redis://@localhost:6379
-cargo run
+cargo run --release -p affinidi-messaging-mediator -- \
+  -c conf/mediator.toml
 ```
 
 ### 4. Run Examples
 
 Go to [affinidi-messaging-helpers](./affinidi-messaging-helpers/) to explore
 available examples including trust pings, sending/receiving messages, and message
-pickup.
+pickup. Examples expect a hand-written `environments.json` — the helpers
+crate's README documents the schema.
 
 ## Related Crates
 

@@ -70,13 +70,13 @@ async fn test_mediator_server() {
         .await
         .unwrap();
     let alice_secrets_resolver = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{}#key-1", ALICE_DID), &ALICE_V1).expect("Couldn't create Key"),
-        Secret::from_str(&format!("{}#key-2", ALICE_DID), &ALICE_E1).expect("Couldn't create Key"),
+        Secret::from_str(&format!("{ALICE_DID}#key-1"), &ALICE_V1).expect("Couldn't create Key"),
+        Secret::from_str(&format!("{ALICE_DID}#key-2"), &ALICE_E1).expect("Couldn't create Key"),
     ])
     .await;
     let bob_secrets_resolver = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{}#key-1", BOB_DID), &BOB_V1).expect("Couldn't create Key"),
-        Secret::from_str(&format!("{}#key-2", BOB_DID), &BOB_E1).expect("Couldn't create Key"),
+        Secret::from_str(&format!("{BOB_DID}#key-1"), &BOB_V1).expect("Couldn't create Key"),
+        Secret::from_str(&format!("{BOB_DID}#key-2"), &BOB_E1).expect("Couldn't create Key"),
     ])
     .await;
 
@@ -381,7 +381,7 @@ async fn test_mediator_server() {
 }
 
 async fn _start_mediator_server() {
-    tokio::spawn(async move { start().await });
+    tokio::spawn(async move { start("conf/mediator.toml").await });
     println!("Server running");
 }
 
@@ -407,7 +407,7 @@ fn init_client(config: ATMConfig) -> Client {
 }
 
 async fn _well_known(client: Client) -> String {
-    let well_known_did_atm_api = format!("{}/.well-known/did", MEDIATOR_API);
+    let well_known_did_atm_api = format!("{MEDIATOR_API}/.well-known/did");
 
     let res = client
         .get(well_known_did_atm_api)
@@ -418,7 +418,7 @@ async fn _well_known(client: Client) -> String {
 
     let status = res.status();
     assert_eq!(status, 200);
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     let body = res.text().await.unwrap();
 
     let body = serde_json::from_str::<SuccessResponse<String>>(&body)
@@ -436,9 +436,9 @@ async fn _well_known(client: Client) -> String {
 
 async fn _authenticate_challenge(client: Client, did: &str) -> AuthenticationChallenge {
     let res = client
-        .post(format!("{}/authenticate/challenge", MEDIATOR_API))
+        .post(format!("{MEDIATOR_API}/authenticate/challenge"))
         .header("Content-Type", "application/json")
-        .body(format!("{{\"did\": \"{}\"}}", did).to_string())
+        .body(format!("{{\"did\": \"{did}\"}}").to_string())
         .send()
         .await
         .unwrap();
@@ -487,32 +487,31 @@ where
     .await
     .map_err(|e| {
         ATMError::MsgSendError(format!(
-            "Couldn't pack authentication response message: {:?}",
-            e
+            "Couldn't pack authentication response message: {e:?}"
         ))
     })
     .unwrap();
 
     let res = client
-        .post(format!("{}/authenticate", MEDIATOR_API))
+        .post(format!("{MEDIATOR_API}/authenticate"))
         .header("Content-Type", "application/json")
         .body(auth_msg)
         .send()
         .await
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not post authentication response: {:?}", e))
+            ATMError::TransportError(format!("Could not post authentication response: {e:?}"))
         })
         .unwrap();
 
     let status = res.status();
-    println!("Authentication response: status({})", status);
+    println!("Authentication response: status({status})");
 
     let body = res.text().await.unwrap();
 
-    assert!(status.is_success(), "Received status code: {}", status);
+    assert!(status.is_success(), "Received status code: {status}");
 
     if !status.is_success() {
-        println!("Failed to get authentication response. Body: {:?}", body);
+        println!("Failed to get authentication response. Body: {body:?}");
         panic!("Failed to get authentication response");
     }
     let body = serde_json::from_str::<SuccessResponse<AuthorizationResponse>>(&body).unwrap();
@@ -533,7 +532,7 @@ async fn _send_inbound_message(
     let msg = message.to_owned();
 
     let res = client
-        .post(format!("{}/inbound", MEDIATOR_API))
+        .post(format!("{MEDIATOR_API}/inbound"))
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", tokens.access_token))
         .body(msg)
@@ -542,7 +541,7 @@ async fn _send_inbound_message(
         .unwrap();
 
     let status = res.status();
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     assert_eq!(status, expected_status_code);
 
     let body = res.text().await.unwrap();
@@ -559,29 +558,29 @@ async fn _outbound_message(
 ) -> GetMessagesResponse {
     let body = serde_json::to_string(messages)
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not serialize get message request: {:?}", e))
+            ATMError::TransportError(format!("Could not serialize get message request: {e:?}"))
         })
         .unwrap();
 
     let res = client
-        .post(format!("{}/outbound", MEDIATOR_API))
+        .post(format!("{MEDIATOR_API}/outbound"))
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", tokens.access_token))
         .body(body)
         .send()
         .await
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not send get_messages request: {:?}", e))
+            ATMError::TransportError(format!("Could not send get_messages request: {e:?}"))
         })
         .unwrap();
 
     let status = res.status();
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     assert_eq!(status, expected_status_code);
     let body = res
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))
+        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))
         .unwrap();
 
     let body = serde_json::from_str::<SuccessResponse<GetMessagesResponse>>(&body)
@@ -602,12 +601,12 @@ async fn _outbound_message(
 
     if !list.get_errors.is_empty() {
         for (msg, err) in &list.get_errors {
-            println!("failed get: msg({}) error({})", msg, err);
+            println!("failed get: msg({msg}) error({err})");
         }
     }
     if !list.delete_errors.is_empty() {
         for (msg, err) in &list.delete_errors {
-            println!("failed delete: msg({}) error({})", msg, err);
+            println!("failed delete: msg({msg}) error({err})");
         }
     }
     list
@@ -633,18 +632,18 @@ async fn list_messages(
         .send()
         .await
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not send list_messages request: {:?}", e))
+            ATMError::TransportError(format!("Could not send list_messages request: {e:?}"))
         })
         .unwrap();
 
     let status = res.status();
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     assert_eq!(status, expected_status_code);
 
     let body = res
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))
+        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))
         .unwrap();
 
     let body = serde_json::from_str::<SuccessResponse<MessageList>>(&body)
@@ -667,32 +666,31 @@ async fn _fetch_messages(
     let body = serde_json::to_string(options)
         .map_err(|e| {
             ATMError::TransportError(format!(
-                "Could not serialize fetch_message() options: {:?}",
-                e
+                "Could not serialize fetch_message() options: {e:?}"
             ))
         })
         .unwrap();
 
     let res = client
-        .post(format!("{}/fetch", MEDIATOR_API))
+        .post(format!("{MEDIATOR_API}/fetch"))
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", tokens.access_token))
         .body(body)
         .send()
         .await
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not send list_messages request: {:?}", e))
+            ATMError::TransportError(format!("Could not send list_messages request: {e:?}"))
         })
         .unwrap();
 
     let status = res.status();
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     assert_eq!(status, expected_status_code);
 
     let body = res
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))
+        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))
         .unwrap();
 
     let body = serde_json::from_str::<SuccessResponse<GetMessagesResponse>>(&body)
@@ -714,33 +712,30 @@ async fn _delete_messages(
 ) -> DeleteMessageResponse {
     let msg = serde_json::to_string(messages)
         .map_err(|e| {
-            ATMError::TransportError(format!(
-                "Could not serialize delete message request: {:?}",
-                e
-            ))
+            ATMError::TransportError(format!("Could not serialize delete message request: {e:?}"))
         })
         .unwrap();
 
     let res = client
-        .delete(format!("{}/delete", MEDIATOR_API))
+        .delete(format!("{MEDIATOR_API}/delete"))
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", tokens.access_token))
         .body(msg)
         .send()
         .await
         .map_err(|e| {
-            ATMError::TransportError(format!("Could not send delete_messages request: {:?}", e))
+            ATMError::TransportError(format!("Could not send delete_messages request: {e:?}"))
         })
         .unwrap();
 
     let status = res.status();
-    println!("API response: status({})", status);
+    println!("API response: status({status})");
     assert_eq!(status, expected_status_code);
 
     let body = res
         .text()
         .await
-        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {:?}", e)))
+        .map_err(|e| ATMError::TransportError(format!("Couldn't get body: {e:?}")))
         .unwrap();
 
     let body = serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body)
@@ -755,7 +750,7 @@ async fn _delete_messages(
 
     if !list.errors.is_empty() {
         for (msg, err) in &list.errors {
-            println!("failed: msg({}) error({})", msg, err);
+            println!("failed: msg({msg}) error({err})");
         }
         panic!("Failed to delete above messages")
     }
@@ -772,7 +767,7 @@ fn _generate_secrets() {
     let source_path = "../affinidi-messaging-mediator/conf/secrets.json-generated";
 
     match fs::copy(source_path, SECRETS_PATH) {
-        Ok(_) => println!("Copied {} to {}", source_path, SECRETS_PATH),
+        Ok(_) => println!("Copied {source_path} to {SECRETS_PATH}"),
         Err(e) => panic!("Failed with error: {e:?}"),
     };
 }

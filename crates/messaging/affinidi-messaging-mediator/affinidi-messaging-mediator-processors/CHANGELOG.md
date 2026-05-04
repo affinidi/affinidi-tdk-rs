@@ -2,6 +2,20 @@
 
 ## Changelog history
 
+## 24th April 2026
+
+### 0.13.0
+
+- **CHORE:** Bumped internal pin on
+  `affinidi-messaging-mediator-common` to `0.13` (new cloud
+  backends + schema change on `AdminCredential`). Processor code
+  itself is unchanged apart from the `lru` dep bump below — the
+  version bump exists to move the workspace in lockstep.
+- **CHORE:** `lru` dependency `0.12 → 0.17`. Five major bumps,
+  but the `LruCache::new(NonZeroUsize)` / `get` / `get_mut` /
+  `put` signatures used by the forwarding processor stayed stable
+  across the span; no code change needed.
+
 ## 28th March 2026
 
 ### 0.12.3

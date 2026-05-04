@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.12.4"
-description = "Affinidi Messaging Mediator Common Library"
+version = "0.13.0"
+description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
 homepage.workspace = true
@@ -12,22 +12,159 @@ readme = "README.md"
 rust-version.workspace = true
 repository.workspace = true
 
+[features]
+# Each backend is opt-in so downstream consumers compile without pulling
+# the whole cloud-SDK world. The mediator binary enables whichever backends
+# its deployment target needs; the mediator-setup wizard enables the
+# superset so operators can pick any.
+default = []
+
+# ── Storage backends ────────────────────────────────────────────────
+## `RedisStore` — multi-mediator clusters and the standalone-binary
+## horizontal-scaling story. Brings in the `database/` Redis-implementation
+## modules; consumers that don't enable the feature get only the
+## `MediatorStore` trait + types.
+redis-backend = []
+
+# ── Secret backends ─────────────────────────────────────────────────
+secrets-keyring = ["dep:keyring"]
+secrets-aws = ["dep:aws-config", "dep:aws-sdk-secretsmanager"]
+secrets-gcp = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax"]
+secrets-azure = [
+  "dep:azure_security_keyvault_secrets",
+  "dep:azure_identity",
+  "dep:azure_core",
+]
+secrets-vault = ["dep:vaultrs"]
+
 [dependencies]
+# ── Affinidi Crates ──────────────────────────────────────────────────────
+## SDK message types, problem reports, and protocol definitions
 affinidi-messaging-sdk = { path = "../../affinidi-messaging-sdk", version = "0.17" }
+
+# ── Secrets module: core ─────────────────────────────────────────────────
+async-trait = "0.1"
+base64 = "0.22"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+# ── Secrets module: cache integrity (HMAC-SHA256 keyed via HKDF from the
+## admin credential's private key) + freshness ──────────────────────────
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+humantime = "2"
+
+# ── Secrets module: file:// envelope encryption (`?encrypt=1`) ──────────
+## AES-256-GCM with 12-byte nonces per write; passphrase-derived key via
+## Argon2id. Always built — file backend is in `default = []`-friendly
+## territory and these crates are tiny + zero-dep beyond `aes` / `cipher`.
+aes-gcm = "0.10"
+argon2 = "0.5"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+# ── Secrets module: optional backends ────────────────────────────────────
+keyring = { version = "3", features = ["apple-native", "linux-native"], optional = true }
+aws-config = { version = "1", optional = true }
+aws-sdk-secretsmanager = { version = "1", optional = true }
+## GCP Secret Manager (official googleapis/google-cloud-rust crate).
+## gRPC client via tonic; uses rustls (via `default-rustls-provider`)
+## so it joins the workspace TLS story without pulling native-tls.
+## Auth flows through google-cloud-gax's ADC chain
+## (GOOGLE_APPLICATION_CREDENTIALS, workload identity, etc.).
+google-cloud-secretmanager-v1 = { version = "1.8", optional = true }
+## Transitive dep of `google-cloud-secretmanager-v1`; reached directly
+## so the GCP backend can classify errors by their rpc::Code (NotFound,
+## Unavailable, ResourceExhausted, …) without string-matching the
+## Display form.
+google-cloud-gax = { version = "1.9", optional = true }
+## Azure Key Vault Secrets (official Microsoft crate). Paired with
+## `azure_identity` for the credential chain. Both pulled with
+## default-features kept on — they already target rustls via
+## `azure_core::http::RustlsClient` on recent versions.
+azure_security_keyvault_secrets = { version = "0.14", optional = true }
+azure_identity = { version = "0.35", optional = true }
+azure_core = { version = "0.35", optional = true }
+## Pager iteration over Azure's `list_secret_properties` Stream — only the
+## `TryStreamExt::try_next` adapter is used. Now also used by the
+## forwarding processor below, so it's no longer optional. The
+## `secrets-azure` feature still depends on it but the dep is
+## unconditionally enabled.
+## (Unified declaration lives further down in the dependency block.)
+## HashiCorp Vault KV v2 (rustify-based async REST client). Token auth
+## via VAULT_TOKEN env. Default features bring in the rustls HTTP
+## stack; pin to `0.8` so future breaking bumps don't land silently.
+vaultrs = { version = "0.8", default-features = false, features = ["rustls"], optional = true }
+
+# ── Async stream helpers (used by the redis-store pubsub bridge) ─────────
+## Unconditional because `futures-util` was already optional via
+## `secrets-azure`; promote it to non-optional with `default-features = false`
+## so the redis-backend code path picks up `StreamExt::next` without
+## affecting other secret-backend builds.
+tokio-stream = "0.1"
+
+# ── Forwarding processor deps (used by `tasks::forwarding::processor`) ──
+## HTTP / WS delivery to remote mediators + sink/stream traits used by
+## the connection pools. The processor itself is gated on
+## `redis-backend`, so memory- and fjall-only consumers don't pull
+## these in at runtime — but cargo can't conditionally enable a
+## non-optional dep, so the deps stay declared here unconditionally
+## (cheap when the processor module is gated out: the compiler still
+## elides the unused crates from the link step).
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["rustls-tls-native-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+# ── Web Framework (for HTTP status codes and WebSocket types) ────────────
 axum = { version = "0.8", features = ["ws"] }
-rand = "0.10"
-redis = { version = "1", features = [
+
+# ── Database ─────────────────────────────────────────────────────────────
+## Auto-reconnecting multiplexed Redis connection with TLS support
+redis = { version = "1.1", features = [
   "tokio-rustls-comp",
   "tls-rustls-insecure",
   "connection-manager",
   "ahash",
 ] }
-rustls = { version = "0.23", default-features = false, features = [
-  "aws_lc_rs",
-  "tls12",
-] }
-semver = "1"
+
+# ── RedisStore impl helpers (gated by `redis-backend`) ───────────────────
+## Used by `database/{fetch,get,list,stats}.rs` for chunking pipeline replies.
+itertools = "0.14"
+## Constant-time DID-hash comparisons in the redis-store call sites.
+subtle = "2"
+
+# ── TLS (for Redis TLS provider initialization) ─────────────────────────
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "tls12"] }
+
+# ── Async Runtime (for tokio::time::sleep in retry loops) ────────────────
+tokio = { workspace = true, features = ["time"] }
+
+# ── Serialization ────────────────────────────────────────────────────────
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+
+# ── Utilities ────────────────────────────────────────────────────────────
+ahash = { version = "0.8", features = ["serde"] }
+num-format = "0.4"
+rand = "0.10"
+semver = "1"
+sha256 = "1"
 thiserror = "2"
 tracing = { version = "0.1", features = ["valuable"] }
+
+# ── Metrics ──────────────────────────────────────────────────────────────
+## CircuitBreaker emits a gauge + counter for ops. Records to whichever
+## global recorder the binary installs (the mediator installs Prometheus
+## via the `init_metrics` setup; standalone binaries that don't install
+## a recorder get no-op metric writes).
+metrics = "0.24"
+
+[dev-dependencies]
+tempfile = "3"
+## `test-util` enables `start_paused`, used by the secrets/retry tests
+## to skip the exponential-backoff delays without sleeping for real.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

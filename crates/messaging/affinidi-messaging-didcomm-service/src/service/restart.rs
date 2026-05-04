@@ -43,36 +43,61 @@ impl Listener {
         let restart_policy = self.config.restart_policy.clone();
 
         let listener_id = self.config.id.clone();
+        let shutdown = self.shutdown.clone();
 
         loop {
-            let was_success = if let Err(e) = self.connect().await {
-                warn!(profile = %alias, error = %e, "Failed to connect");
+            if shutdown.is_cancelled() {
+                debug!(profile = %alias, "Listener shutting down before connect attempt");
                 let _ = self.events_tx.send(ListenerEvent::Disconnected {
                     listener_id: listener_id.clone(),
-                    error: Some(e.to_string()),
+                    error: None,
                 });
-                false
-            } else {
-                let result = self.listen().await;
+                break;
+            }
 
-                if self.shutdown.is_cancelled() {
-                    debug!(profile = %alias, "Listener shutting down");
+            let connect_res = tokio::select! {
+                res = self.connect() => res,
+                _ = shutdown.cancelled() => {
+                    debug!(profile = %alias, "Connect aborted by shutdown");
                     let _ = self.events_tx.send(ListenerEvent::Disconnected {
                         listener_id: listener_id.clone(),
                         error: None,
                     });
                     break;
                 }
+            };
 
-                if let Err(ref e) = result {
-                    warn!(profile = %alias, error = %e, "Listener failed");
+            let was_success = match connect_res {
+                Err(e) => {
+                    warn!(profile = %alias, error = %e, "Failed to connect");
                     let _ = self.events_tx.send(ListenerEvent::Disconnected {
                         listener_id: listener_id.clone(),
                         error: Some(e.to_string()),
                     });
+                    false
                 }
+                Ok(()) => {
+                    let result = self.listen().await;
 
-                result.is_ok()
+                    if self.shutdown.is_cancelled() {
+                        debug!(profile = %alias, "Listener shutting down");
+                        let _ = self.events_tx.send(ListenerEvent::Disconnected {
+                            listener_id: listener_id.clone(),
+                            error: None,
+                        });
+                        break;
+                    }
+
+                    if let Err(ref e) = result {
+                        warn!(profile = %alias, error = %e, "Listener failed");
+                        let _ = self.events_tx.send(ListenerEvent::Disconnected {
+                            listener_id: listener_id.clone(),
+                            error: Some(e.to_string()),
+                        });
+                    }
+
+                    result.is_ok()
+                }
             };
 
             let count = restart_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
@@ -85,7 +110,13 @@ impl Listener {
                         attempt: count,
                         delay,
                     });
-                    tokio::time::sleep(delay).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(delay) => {}
+                        _ = shutdown.cancelled() => {
+                            debug!(profile = %alias, "Restart backoff aborted by shutdown");
+                            break;
+                        }
+                    }
                 }
                 ShouldRestart::Stop => {
                     if !was_success

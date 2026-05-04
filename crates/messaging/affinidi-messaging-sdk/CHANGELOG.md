@@ -22,6 +22,12 @@
   .with_use_atm(false).build()?` + `TDKSharedState::new`, replacing the
   removed `TDKSharedState::default().await`.
 
+## [0.16.5] - 2026-04-25
+
+### Fixed
+
+- `ATM::list_messages` and `ATM::delete_messages_direct` now apply a 15-second per-request HTTP timeout. Previously the calls were unbounded and would block for the OS-level TCP RTO (~30–60s on macOS) when the mediator was unreachable, contributing to slow shutdowns in downstream consumers that wrap them in their own connect path.
+
 ## [0.16.3] - 2026-04-15
 
 ### Fixed

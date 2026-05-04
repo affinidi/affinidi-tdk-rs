@@ -1,0 +1,159 @@
+[package]
+name = "affinidi-messaging-mediator-setup"
+version = "0.1.0"
+description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "mediator-setup"
+path = "src/main.rs"
+
+[features]
+## Default build speaks every secret backend the mediator runtime
+## supports. Operators who want a slimmer binary can disable default
+## features and select only the backends they need, e.g.
+## `cargo install affinidi-messaging-mediator-setup \
+##     --no-default-features --features secrets-aws`.
+default = [
+  "secrets-keyring",
+  "secrets-aws",
+  "secrets-gcp",
+  "secrets-azure",
+  "secrets-vault",
+]
+secrets-keyring = ["affinidi-messaging-mediator-common/secrets-keyring"]
+secrets-aws = ["affinidi-messaging-mediator-common/secrets-aws"]
+secrets-gcp = ["affinidi-messaging-mediator-common/secrets-gcp"]
+secrets-azure = ["affinidi-messaging-mediator-common/secrets-azure"]
+secrets-vault = ["affinidi-messaging-mediator-common/secrets-vault"]
+
+[dependencies]
+# ── TUI Framework ────────────────────────────────────────────────────────
+## Workspace-wide pin — ratatui 0.29 carries `unicode-width = "=0.2.0"`
+## so every workspace consumer of ratatui (here, text-client,
+## mediator-monitor) must move together. Bumped in coordination.
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+tui-input = { version = "0.15", features = ["ratatui-crossterm"] }
+
+# ── CLI ──────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
+
+# ── Async Runtime ────────────────────────────────────────────────────────
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = "0.1"
+
+# ── Config / Serialization ──────────────────────────────────────────────
+toml = "1"
+toml_edit = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+url = "2"
+
+# ── Affinidi TDK (DID generation, secrets, crypto) ──────────────────────
+## Uses did-peer feature for did:peer generation. Does NOT depend on the
+## mediator crate itself — only writes config files the mediator reads.
+affinidi-tdk = { path = "../../../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-secrets-resolver = { path = "../../../../core/affinidi-secrets-resolver" }
+## did:key helpers used by the sealed-handoff full-setup path to derive
+## the `client_did` from the ephemeral Ed25519 pubkey when signing a
+## VP-framed `provision_integration::BootstrapRequest`. Small, no cycles.
+affinidi-crypto = "0.1"
+
+# ── Mediator unified secret backend ─────────────────────────────────────
+## Shared secrets module (open_store, MediatorSecrets, well-known keys)
+## lives in mediator-common. The wizard provisions admin credential, JWT
+## secret, and operating keys directly into the chosen backend so the
+## mediator finds them at startup without any inline config plumbing.
+## Backend selection flows through the wizard's own `secrets-*` features
+## declared at the top of this file; no hardcoded list here.
+affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", default-features = false }
+
+# ── DID:webvh ────────────────────────────────────────────────────────────
+didwebvh-rs = "0.5"
+
+# ── VTA Integration ──────────────────────────────────────────────────────
+## provision-client: orchestration layer that drives setup-key minting,
+##                   transport selection, connection testing, and sealed-bundle
+##                   opening for first-boot integration provisioning.
+##                   Transitively pulls in `session` (which pulls `client` /
+##                   `didcomm`) and `provision-integration` (which pulls
+##                   `sealed-transfer`), so this single feature covers the
+##                   wizard's online VTA flow plus the sealed-handoff bundle
+##                   handling in `sealed_handoff.rs`.
+vta-sdk = { version = "0.5", features = ["provision-client"] }
+
+# ── DID Resolution ───────────────────────────────────────────────────────
+## Used to resolve the VTA's DID document and extract VTARest /
+## DIDCommMessaging service endpoints without the operator having to paste
+## URLs.
+affinidi-did-resolver-cache-sdk = { path = "../../../../identity/affinidi-did-resolver-cache-sdk" }
+
+# ── HTTP ─────────────────────────────────────────────────────────────────
+## Used for REST fallback + future trust-ping of service endpoints.
+## Must match vta-sdk's reqwest major so &Client types line up in auth_light.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+
+# ── Random ───────────────────────────────────────────────────────────────
+## Used to generate the ephemeral setup keypair seed. Matches the
+## workspace-wide `rand = "0.10"` pin used by mediator-common.
+rand = "0.10"
+
+# ── Clipboard ────────────────────────────────────────────────────────────
+## `arboard` copies the bootstrap request JSON onto the system clipboard
+## so operators don't have to fight terminal mouse selection across the
+## wizard's two-panel layout. Same crate + pattern as `openvtc-cli2`.
+arboard = "3"
+
+# ── Crypto / SSL ─────────────────────────────────────────────────────────
+## ring: JWT secret generation (Ed25519 PKCS8)
+ring = { version = "0.17", features = ["std"] }
+## rcgen: self-signed SSL certificate generation (local dev only)
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+sha256 = "1"
+
+# ── Error Handling ───────────────────────────────────────────────────────
+anyhow = "1"
+thiserror = "2"
+
+# ── Date / Time ──────────────────────────────────────────────────────────
+## `chrono::Duration` is the freshness-window type on VP-signed
+## `provision-integration` bootstrap requests. `clock` adds
+## `Utc::now()` for the print-on-exit recap's ISO-8601 timestamp.
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+## Parses `MEDIATOR_BOOTSTRAP_SEED_TTL` env var ("24h", "7d", etc.)
+## for the sealed-handoff sweeper.
+humantime = "2"
+
+# ── Logging ──────────────────────────────────────────────────────────────
+tracing = "0.1"
+
+[dev-dependencies]
+## Test fixtures from `provision_client::test_helpers` (e.g.
+## `sample_provision_result`) used by exit-recap and main.rs tests.
+## Additive — `cargo test` unions [dependencies] + [dev-dependencies]
+## features, so this lands the `test-support` flag without affecting
+## release builds.
+vta-sdk = { version = "0.5", features = ["test-support"] }
+## Used by setup_key persistence tests to create scoped temporary paths.
+tempfile = "3"
+## Required by `bootstrap_headless` tests that mutate CWD via
+## `std::env::set_current_dir` — tests run in parallel threads by
+## default and the global CWD is shared, so the double-run detector
+## could race against an unrelated test's artefacts. `#[serial]`
+## forces affected tests to run one at a time.
+serial_test = "3"
+## Sealed-handoff tests construct `ProducerAssertion` values with
+## `producer_did` as a did:key — uses the `affinidi-crypto` dep
+## already declared in `[dependencies]`.
+## In-process HTTP mock for the REST attempt unit tests — stubs the
+## VTA's `/auth/challenge` and `/auth/` endpoints so we can verify
+## the wrapper returns the right `AttemptOutcome` without a live VTA.
+wiremock = "0.6"
+
+[lints]
+workspace = true

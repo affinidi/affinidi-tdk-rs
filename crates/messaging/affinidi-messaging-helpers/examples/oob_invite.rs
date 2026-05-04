@@ -34,7 +34,7 @@ async fn main() -> Result<(), ATMError> {
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
@@ -45,22 +45,15 @@ async fn main() -> Result<(), ATMError> {
     tracing::subscriber::set_global_default(subscriber).expect("Logging failed, exiting...");
 
     // Instantiate TDK
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
 
     let alice = if let Some(alice) = environment.profiles().get("Alice") {
         tdk.add_profile(alice).await;
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Profile: {}", environment_name).to_string(),
+            format!("Alice not found in Profile: {environment_name}").to_string(),
         ));
     };
 
@@ -78,7 +71,7 @@ async fn main() -> Result<(), ATMError> {
 
     let oob_id = atm.oob_discovery().create_invite(&alice, None).await?;
 
-    println!("oob_id = {}", oob_id);
+    println!("oob_id = {oob_id}");
     println!();
 
     let endpoint = match &*alice.inner.mediator {
@@ -89,7 +82,7 @@ async fn main() -> Result<(), ATMError> {
     };
 
     let url = [&endpoint, "/oob?_oobid=", &oob_id].concat();
-    println!("Attempting to retrieve an invitation: {}", url);
+    println!("Attempting to retrieve an invitation: {url}");
     let invitation = atm.oob_discovery().retrieve_invite(&url).await?;
 
     println!(
@@ -100,7 +93,7 @@ async fn main() -> Result<(), ATMError> {
     println!();
     let del_response = atm.oob_discovery().delete_invite(&alice, &oob_id).await?;
 
-    println!("Delete response: deleted? {}", del_response);
+    println!("Delete response: deleted? {del_response}");
 
     Ok(())
 }

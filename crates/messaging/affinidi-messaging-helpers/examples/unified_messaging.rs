@@ -28,7 +28,7 @@ async fn demo_conversation(
     alice_id: &str,
     bob_id: &str,
 ) {
-    println!("\n─── {} ───", protocol_name);
+    println!("\n─── {protocol_name} ───");
     println!("Protocol: {}", alice.protocol());
 
     // Step 1: Check relationship state

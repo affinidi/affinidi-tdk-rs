@@ -31,15 +31,8 @@ struct Args {
 async fn main() -> Result<(), ATMError> {
     // Create a new ATM Client
     let config = ATMConfig::builder();
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
     let atm = ATM::new(config.build()?, tdk).await?;
 
     // Load the DIDComm message
@@ -55,13 +48,12 @@ async fn main() -> Result<(), ATMError> {
     };
 
     let mut file = File::open(&raw_message).map_err(|e| {
-        ATMError::ConfigError(format!("Can't open file ({}). Reason: {}", raw_message, e))
+        ATMError::ConfigError(format!("Can't open file ({raw_message}). Reason: {e}"))
     })?;
     let mut didcomm_raw_message = String::new();
     file.read_to_string(&mut didcomm_raw_message).map_err(|e| {
         ATMError::ConfigError(format!(
-            "Couldn't read file ({}) contents. Reason: {}",
-            raw_message, e
+            "Couldn't read file ({raw_message}) contents. Reason: {e}"
         ))
     })?;
 
@@ -75,7 +67,7 @@ async fn main() -> Result<(), ATMError> {
     let jwe: Jwe = serde_json::from_str(&didcomm_raw_message).map_err(|e| {
         ATMError::DidcommError(
             "NA".to_string(),
-            format!("Couldn't parse JWE envelope: {}", e),
+            format!("Couldn't parse JWE envelope: {e}"),
         )
     })?;
 
@@ -96,7 +88,7 @@ async fn main() -> Result<(), ATMError> {
         return Ok(());
     };
 
-    println!("{}", style(format!("\t  To DID: {}", to_did)).cyan());
+    println!("{}", style(format!("\t  To DID: {to_did}")).cyan());
     println!(
         "{}",
         style(format!(
@@ -115,8 +107,7 @@ async fn main() -> Result<(), ATMError> {
     println!(
         "{}",
         style(format!(
-            "Copy and Paste the JSON Secrets for {}. Press <ENTER> to terminate input",
-            to_did
+            "Copy and Paste the JSON Secrets for {to_did}. Press <ENTER> to terminate input"
         ))
         .green(),
     );
@@ -129,7 +120,7 @@ async fn main() -> Result<(), ATMError> {
                 raw_secrets.push_str(&line);
             }
             Err(e) => {
-                println!("Error reading input: {:?}", e);
+                println!("Error reading input: {e:?}");
                 break;
             }
         }
@@ -138,10 +129,7 @@ async fn main() -> Result<(), ATMError> {
     let secrets: Vec<Secret> = match serde_json::from_str(&raw_secrets) {
         Ok(secrets) => secrets,
         Err(e) => {
-            println!(
-                "{}",
-                style(format!("Error converting secrets: {}", e)).red()
-            );
+            println!("{}", style(format!("Error converting secrets: {e}")).red());
             return Ok(());
         }
     };
@@ -156,9 +144,9 @@ async fn main() -> Result<(), ATMError> {
     println!("{}", style("DIDComm Message").green());
     println!();
 
-    println!("{}", style(format!("{:#?}", meta)).yellow());
+    println!("{}", style(format!("{meta:#?}")).yellow());
     println!();
-    println!("{}", style(format!("{:#?}", inner_message)).green());
+    println!("{}", style(format!("{inner_message:#?}")).green());
 
     // >>>>> Additional processing of the message can be done here <<<<<
 
@@ -177,7 +165,7 @@ async fn main() -> Result<(), ATMError> {
                     match serde_json::to_string(json_val) {
                         Ok(data) => data,
                         Err(e) => {
-                            println!("{}", style(format!("Error converting JSON: {}", e)).red());
+                            println!("{}", style(format!("Error converting JSON: {e}")).red());
                             return Ok(());
                         }
                     }

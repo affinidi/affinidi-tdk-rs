@@ -2,8 +2,12 @@ use super::super::message_inbound::InboundMessage;
 use super::AuthenticationChallenge;
 use super::helpers::{_create_access_token, _create_refresh_token, create_random_string};
 use crate::common::time::unix_timestamp_secs;
-use crate::didcomm_compat::{self, MetaEnvelope};
-use crate::{SharedData, common::acl_checks::ACLCheck, database::session::SessionState};
+use crate::didcomm_compat::MetaEnvelope;
+use crate::{
+    SharedData,
+    common::acl_checks::ACLCheck,
+    common::session::{Session, SessionState},
+};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
     messages::{
@@ -145,12 +149,12 @@ pub async fn authentication_response(
         };
 
         // Unpack the message
-        let (msg, unpack_metadata) = match didcomm_compat::unpack(
-            &s,
-            &state.did_resolver,
-            &*state.config.security.mediator_secrets,
-        )
-        .await
+        let (msg, unpack_metadata) = match envelope
+            .unpack(
+                &state.did_resolver,
+                &*state.config.security.mediator_secrets,
+            )
+            .await
         {
             Ok(ok) => ok,
             Err(e) => {
@@ -310,13 +314,14 @@ pub async fn authentication_response(
             )
         })?;
 
-        // Retrieve the session info from the database
-        let mut session = match state
+        // Retrieve the session info from the database. Convert from
+        // the trait-layer Session to the local Session shape.
+        let mut session: Session = match state
             .database
             .get_session(&challenge.session_id, &from_did)
             .await
         {
-            Ok(session) => session,
+            Ok(session) => session.into(),
             Err(e) => {
                 return Err(MediatorError::problem_with_log(
                     14,
@@ -402,13 +407,17 @@ pub async fn authentication_response(
             refresh_expires_at,
         };
 
-        // Set the session state to Authorized and store refresh token hash
+        // Set the session state to Authorized and store refresh token hash.
+        // Pass the raw DID — the trait impl computes its hash internally.
+        // Passing a hash here would cause `get_session` to look up the
+        // wrong `DID:<sha256(did_hash)>` key and silently overwrite the
+        // session with an empty-DID record.
         state
             .database
             .update_session_authenticated(
                 &old_sid,
                 &session.session_id,
-                &digest(&session.did),
+                &session.did,
                 &refresh_token_hash,
             )
             .await

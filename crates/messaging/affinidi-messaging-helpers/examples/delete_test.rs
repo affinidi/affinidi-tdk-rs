@@ -64,7 +64,7 @@ async fn main() -> Result<(), ATMError> {
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Environment: {}", environment_name).to_string(),
+            format!("Alice not found in Environment: {environment_name}").to_string(),
         ));
     };
 
@@ -88,7 +88,7 @@ async fn main() -> Result<(), ATMError> {
         bob
     } else {
         return Err(ATMError::ConfigError(
-            format!("Bob not found in Environment: {}", environment_name).to_string(),
+            format!("Bob not found in Environment: {environment_name}").to_string(),
         ));
     };
     let atm_bob = atm
@@ -260,7 +260,7 @@ async fn main() -> Result<(), ATMError> {
         )
         .await?;
 
-    println!("Delete fake message: {:#?}", response);
+    println!("Delete fake message: {response:#?}");
 
     // Try to delete a real message
     let response = atm
@@ -272,7 +272,7 @@ async fn main() -> Result<(), ATMError> {
         )
         .await?;
 
-    println!("Deleted real message: {:#?}", response);
+    println!("Deleted real message: {response:#?}");
 
     Ok(())
 }

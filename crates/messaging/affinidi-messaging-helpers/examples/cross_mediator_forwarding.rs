@@ -99,7 +99,7 @@ async fn main() -> Result<(), ATMError> {
 
     let alice_mediator_did = tdk_alice.mediator.clone().unwrap_or_default();
     println!("Alice DID: {}", atm_alice.inner.did);
-    println!("Alice mediator: {}", alice_mediator_did);
+    println!("Alice mediator: {alice_mediator_did}");
 
     // --- Setup Bob's TDK and mediator ---
     let bob_tdk = TDK::new(
@@ -131,7 +131,7 @@ async fn main() -> Result<(), ATMError> {
 
     let bob_mediator_did = tdk_bob.mediator.clone().unwrap_or_default();
     println!("Bob DID: {}", atm_bob.inner.did);
-    println!("Bob mediator: {}", bob_mediator_did);
+    println!("Bob mediator: {bob_mediator_did}");
     println!();
 
     if alice_mediator_did == bob_mediator_did {

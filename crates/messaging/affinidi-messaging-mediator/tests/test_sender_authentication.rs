@@ -42,14 +42,14 @@ async fn setup() -> (DIDCacheClient, SimpleSecretsResolver, SimpleSecretsResolve
         .unwrap();
 
     let alice_secrets = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{}#key-1", ALICE_DID), &ALICE_V1).expect("Alice V1 key"),
-        Secret::from_str(&format!("{}#key-2", ALICE_DID), &ALICE_E1).expect("Alice E1 key"),
+        Secret::from_str(&format!("{ALICE_DID}#key-1"), &ALICE_V1).expect("Alice V1 key"),
+        Secret::from_str(&format!("{ALICE_DID}#key-2"), &ALICE_E1).expect("Alice E1 key"),
     ])
     .await;
 
     let bob_secrets = SimpleSecretsResolver::new(&[
-        Secret::from_str(&format!("{}#key-1", BOB_DID), &BOB_V1).expect("Bob V1 key"),
-        Secret::from_str(&format!("{}#key-2", BOB_DID), &BOB_E1).expect("Bob E1 key"),
+        Secret::from_str(&format!("{BOB_DID}#key-1"), &BOB_V1).expect("Bob V1 key"),
+        Secret::from_str(&format!("{BOB_DID}#key-2"), &BOB_E1).expect("Bob E1 key"),
     ])
     .await;
 

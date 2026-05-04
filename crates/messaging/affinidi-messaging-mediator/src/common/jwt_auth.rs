@@ -1,6 +1,6 @@
 use crate::{
     SharedData,
-    database::session::{Session, SessionClaims},
+    common::session::{Session, SessionClaims},
 };
 use affinidi_messaging_mediator_common::errors::ErrorResponse;
 use axum::{
@@ -144,7 +144,7 @@ where
         let did_hash = digest(&did);
 
         // Everything has passed token wise - expensive database operations happen here
-        let mut saved_session = state
+        let mut saved_session: Session = state
             .database
             .get_session(&session_id, &did)
             .await
@@ -156,7 +156,25 @@ where
                 AuthError::InternalServerError(format!(
                     "Couldn't get session from database! Reason: {e}"
                 ))
-            })?;
+            })?
+            .into();
+
+        // Defence in depth: the session record's DID must match the
+        // JWT's `sub`. If they diverge, the session was either created
+        // with a different DID (storage corruption, replay across
+        // tenants) or get_session returned a partially populated
+        // record (legacy data, schema drift). Either way the handler
+        // would silently see the wrong DID — surface as InvalidToken
+        // here so the failure is loud and the client re-authenticates.
+        if saved_session.did != did {
+            warn!(
+                session_id = %session_id,
+                jwt_did = %did,
+                session_did = %saved_session.did,
+                "JWT sub does not match session DID — rejecting"
+            );
+            return Err(AuthError::InvalidToken);
+        }
 
         // Check if ACL is satisfied
         if saved_session.acls.get_blocked() {

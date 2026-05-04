@@ -1,4 +1,4 @@
-use crate::{SharedData, database::session::Session};
+use crate::{SharedData, common::session::Session};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
@@ -57,8 +57,11 @@ pub async fn message_list_handler(
             .into());
         }
 
-        // Check that the DID hash matches the session DID
-        // TODO: In the future, add support for lists of DID's owned by the session owner
+        // Sessions are scoped to a single authenticated DID — listing
+        // is allowed only for that DID. Multi-DID listing (one session
+        // owner aggregating across several DIDs) would need a session-
+        // owner concept above the DID and an owner→DIDs index in the
+        // store; tracked in PR #286's follow-up section.
         if session
             .did_hash
             .as_bytes()

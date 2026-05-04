@@ -3,7 +3,7 @@ use super::{AuthenticationChallenge, ChallengeBody};
 use crate::{
     SharedData,
     common::acl_checks::ACLCheck,
-    database::session::{Session, SessionState},
+    common::session::{Session, SessionState},
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::{
@@ -23,6 +23,26 @@ pub async fn authentication_challenge(
     State(state): State<SharedData>,
     Json(body): Json<ChallengeBody>,
 ) -> Result<(StatusCode, Json<SuccessResponse<AuthenticationChallenge>>), AppError> {
+    // Reject empty / non-DID-shaped requests up-front. An empty `did`
+    // would otherwise be persisted into a SESSION record, propagate
+    // through the JWT, and surface downstream as
+    // `e.p.authorization.did.session_mismatch` on the WebSocket — by
+    // which point it's hard to localise. Catch it at the door.
+    if !body.did.starts_with("did:") {
+        return Err(MediatorError::problem(
+            29,
+            "",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authentication.challenge.invalid_did",
+            "Challenge body must include a `did:`-shaped DID",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        )
+        .into());
+    }
+
     let session = Session {
         session_id: create_random_string(12),
         challenge: create_random_string(32),
@@ -33,6 +53,7 @@ pub async fn authentication_challenge(
         acls: MediatorACLSet::default(), // this will be updated later
         account_type: AccountType::Standard,
         expires_at: 0,
+        refresh_token_hash: None,
     };
     let _span = span!(
         Level::DEBUG,
@@ -77,7 +98,10 @@ pub async fn authentication_challenge(
                 .await?;
         }
 
-        state.database.create_session(&session).await?;
+        state
+            .database
+            .create_session(&session.to_store_session())
+            .await?;
 
         metrics::counter!(crate::common::metrics::names::AUTH_CHALLENGES_TOTAL).increment(1);
         debug!("Challenge sent to {}", session.did);

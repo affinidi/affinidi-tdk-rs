@@ -56,6 +56,34 @@ impl TDKConfig {
         TDKConfigBuilder::default()
     }
 
+    /// Build a "headless" config: no on-disk environment, no auto-ATM.
+    ///
+    /// Shorthand for the test / embedded / sidecar pattern where the host
+    /// wires up profiles and ATM directly rather than through disk-backed
+    /// configuration. Equivalent to:
+    ///
+    /// ```
+    /// use affinidi_tdk_common::config::TDKConfig;
+    ///
+    /// let cfg = TDKConfig::builder()
+    ///     .with_load_environment(false)
+    ///     .with_use_atm(false)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TDKError::Config`] if [`TDKConfigBuilder::build`] fails.
+    /// `build` is currently infallible; the `Result` shape is preserved for
+    /// forward compatibility.
+    pub fn headless() -> Result<TDKConfig, TDKError> {
+        Self::builder()
+            .with_load_environment(false)
+            .with_use_atm(false)
+            .build()
+    }
+
     /// Pre-built DID resolver, if one was supplied to the builder.
     pub fn did_resolver(&self) -> Option<&DIDCacheClient> {
         self.did_resolver.as_ref()

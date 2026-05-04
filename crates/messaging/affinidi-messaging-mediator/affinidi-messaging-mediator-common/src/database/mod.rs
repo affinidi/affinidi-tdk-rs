@@ -6,7 +6,8 @@ use redis::AsyncConnectionConfig;
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection, PubSub};
 
 use semver::{Version, VersionReq};
-use std::{thread::sleep, time::Duration};
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{Level, event, info, warn};
 
 pub mod config;
@@ -32,13 +33,6 @@ impl DatabaseHandler {
     /// that the Redis server version is compatible. Retries on connection failure.
     pub async fn new(config: &DatabaseConfig) -> Result<Self, MediatorError> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
-        if config.database_pool_size != 0 {
-            warn!(
-                "database_pool_size ({}) is deprecated and ignored; using multiplexed connection",
-                config.database_pool_size
-            );
-        }
 
         let client = redis::Client::open(config.database_url.as_str()).map_err(|err| {
             MediatorError::problem_with_log(
@@ -71,7 +65,7 @@ impl DatabaseHandler {
                 Err(err) => {
                     event!(Level::WARN, "Error connecting to database: {}", err);
                     event!(Level::WARN, "Retrying database connection in 10 seconds");
-                    sleep(Duration::from_secs(10));
+                    sleep(Duration::from_secs(10)).await;
                 }
             }
         };
@@ -102,13 +96,16 @@ impl DatabaseHandler {
                         err
                     );
                     event!(Level::WARN, "Retrying database connection in 10 seconds");
-                    sleep(Duration::from_secs(10));
+                    sleep(Duration::from_secs(10)).await;
                 }
             }
         }
 
         // Check the version of Redis Server
         database.check_server_version().await?;
+
+        // Warn if Redis connection has no authentication
+        database.check_auth_warning(&config.database_url);
 
         Ok(database)
     }
@@ -288,6 +285,46 @@ impl DatabaseHandler {
                 vec![],
                 StatusCode::INTERNAL_SERVER_ERROR,
             ))
+        }
+    }
+
+    /// Log a warning if the Redis connection URL has no authentication configured.
+    /// Local connections (127.0.0.1, localhost, unix sockets) get a softer warning.
+    fn check_auth_warning(&self, url: &str) {
+        let is_tls = url.starts_with("rediss://");
+        let is_local = url.contains("127.0.0.1")
+            || url.contains("localhost")
+            || url.contains("[::1]")
+            || url.starts_with("unix://");
+
+        // Check for password in URL: redis://:password@host or redis://user:pass@host
+        let has_auth = url.contains('@');
+
+        if !has_auth {
+            if is_local {
+                warn!(
+                    "Redis connection has no authentication (password). \
+                     This is acceptable for local development but should be \
+                     secured with requirepass or ACLs for any shared environment."
+                );
+            } else {
+                warn!(
+                    "SECURITY WARNING: Redis connection has no authentication! \
+                     Configure a password: redis://:yourpassword@host:port/ \
+                     or use Redis ACLs. Unauthenticated remote Redis is a critical security risk."
+                );
+            }
+        }
+
+        if !is_tls && !is_local {
+            warn!(
+                "Redis connection is not using TLS (rediss://). \
+                 For production deployments, use rediss:// to encrypt data in transit."
+            );
+        }
+
+        if is_tls {
+            info!("Redis TLS connection detected (rediss://)");
         }
     }
 }

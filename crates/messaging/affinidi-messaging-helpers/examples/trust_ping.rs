@@ -51,18 +51,11 @@ async fn main() -> Result<(), ATMError> {
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // Instantiate TDK
-    let tdk = Arc::new(
-        TDKSharedState::new(
-            affinidi_tdk::common::config::TDKConfig::builder()
-                .with_load_environment(false)
-                .with_use_atm(false)
-                .build()?,
-        )
-        .await?,
-    );
+    let tdk =
+        Arc::new(TDKSharedState::new(affinidi_tdk::common::config::TDKConfig::headless()?).await?);
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
@@ -77,7 +70,7 @@ async fn main() -> Result<(), ATMError> {
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Profile: {}", environment_name).to_string(),
+            format!("Alice not found in Profile: {environment_name}").to_string(),
         ));
     };
 
