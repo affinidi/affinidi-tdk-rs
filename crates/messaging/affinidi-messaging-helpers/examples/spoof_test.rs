@@ -42,7 +42,7 @@ async fn main() -> Result<(), ATMError> {
         "default".to_string()
     };
 
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::fmt()
@@ -71,7 +71,7 @@ async fn main() -> Result<(), ATMError> {
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Environment: {}", environment_name).to_string(),
+            format!("Alice not found in Environment: {environment_name}").to_string(),
         ));
     };
 
@@ -95,7 +95,7 @@ async fn main() -> Result<(), ATMError> {
         bob
     } else {
         return Err(ATMError::ConfigError(
-            format!("Bob not found in Environment: {}", environment_name).to_string(),
+            format!("Bob not found in Environment: {environment_name}").to_string(),
         ));
     };
     let atm_bob = atm
@@ -118,7 +118,7 @@ async fn main() -> Result<(), ATMError> {
         mallory
     } else {
         return Err(ATMError::ConfigError(
-            format!("Mallory not found in Environment: {}", environment_name).to_string(),
+            format!("Mallory not found in Environment: {environment_name}").to_string(),
         ));
     };
 
@@ -209,10 +209,7 @@ async fn main() -> Result<(), ATMError> {
 
     let msg_id = msg.id.clone();
 
-    println!(
-        "Plaintext Message from Mallory to Bob msg_id({}):\n {:#?}",
-        msg_id, msg
-    );
+    println!("Plaintext Message from Mallory to Bob msg_id({msg_id}):\n {msg:#?}");
     println!();
 
     let packed_msg = atm
@@ -246,10 +243,7 @@ async fn main() -> Result<(), ATMError> {
         )
         .await?;
 
-    println!(
-        "Forwarded message from Mallory to Mediator:\n{:#?}",
-        forward_msg
-    );
+    println!("Forwarded message from Mallory to Mediator:\n{forward_msg:#?}");
     println!();
 
     // Send the message

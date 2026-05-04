@@ -50,8 +50,7 @@ fn parse_feature_type(s: &str) -> Result<FeatureType, ATMError> {
         "goal-code" | "goal_code" => Ok(FeatureType::GoalCode),
         "header" => Ok(FeatureType::Header),
         other => Err(ATMError::ConfigError(format!(
-            "Unknown feature type: '{}'. Expected: protocol, goal-code, or header",
-            other
+            "Unknown feature type: '{other}'. Expected: protocol, goal-code, or header"
         ))),
     }
 }
@@ -72,7 +71,7 @@ async fn main() -> Result<(), ATMError> {
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // Instantiate TDK
     let tdk =
@@ -89,7 +88,7 @@ async fn main() -> Result<(), ATMError> {
         bob
     } else {
         return Err(ATMError::ConfigError(
-            format!("Bob not found in Profile: {}", environment_name).to_string(),
+            format!("Bob not found in Profile: {environment_name}").to_string(),
         ));
     };
 

@@ -103,7 +103,7 @@ async fn main() -> Result<(), ATMError> {
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
-                format!("Error getting ADMIN account: {}", e).to_string(),
+                format!("Error getting ADMIN account: {e}").to_string(),
             ));
         }
     }
@@ -114,7 +114,7 @@ async fn main() -> Result<(), ATMError> {
         mallory
     } else {
         return Err(ATMError::ConfigError(
-            format!("Mallory not found in Profile: {}", environment_name).to_string(),
+            format!("Mallory not found in Profile: {environment_name}").to_string(),
         ));
     };
     let atm_mallory = atm
@@ -143,7 +143,7 @@ async fn main() -> Result<(), ATMError> {
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
-                format!("Error getting Mallory account: {}", e).to_string(),
+                format!("Error getting Mallory account: {e}").to_string(),
             ));
         }
     }
@@ -233,7 +233,7 @@ async fn main() -> Result<(), ATMError> {
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
-                format!("Error getting Mallory account: {}", e).to_string(),
+                format!("Error getting Mallory account: {e}").to_string(),
             ));
         }
     }
@@ -293,7 +293,7 @@ async fn main() -> Result<(), ATMError> {
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
-                format!("Error getting Mallory account: {}", e).to_string(),
+                format!("Error getting Mallory account: {e}").to_string(),
             ));
         }
     }
@@ -362,7 +362,7 @@ async fn main() -> Result<(), ATMError> {
         }
         Err(e) => {
             return Err(ATMError::ConfigError(
-                format!("Error getting Mallory account: {}", e).to_string(),
+                format!("Error getting Mallory account: {e}").to_string(),
             ));
         }
     }

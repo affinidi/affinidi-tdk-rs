@@ -505,8 +505,7 @@ pub(crate) async fn process(
                                 vec![e.to_string()],
                                 StatusCode::BAD_REQUEST,
                                 format!(
-                                    "Invalid attachment JSON schema. Reason: {}",
-                                    e
+                                    "Invalid attachment JSON schema. Reason: {e}"
                                 ),
                             ));
                         }

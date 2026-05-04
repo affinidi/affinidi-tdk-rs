@@ -154,24 +154,6 @@ fn listen_port(listen_address: &str) -> Option<u16> {
     listen_address.rsplit_once(':')?.1.parse().ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_port_from_ipv4_listen_address() {
-        assert_eq!(listen_port("0.0.0.0:7037"), Some(7037));
-        assert_eq!(listen_port("127.0.0.1:8080"), Some(8080));
-    }
-
-    #[test]
-    fn returns_none_for_unparseable_input() {
-        assert_eq!(listen_port("0.0.0.0"), None);
-        assert_eq!(listen_port(""), None);
-        assert_eq!(listen_port("0.0.0.0:notaport"), None);
-    }
-}
-
 fn build_features(config: &WizardConfig) -> Vec<&'static str> {
     let mut features = Vec::new();
 
@@ -192,4 +174,22 @@ fn build_features(config: &WizardConfig) -> Vec<&'static str> {
     }
 
     features
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_port_from_ipv4_listen_address() {
+        assert_eq!(listen_port("0.0.0.0:7037"), Some(7037));
+        assert_eq!(listen_port("127.0.0.1:8080"), Some(8080));
+    }
+
+    #[test]
+    fn returns_none_for_unparseable_input() {
+        assert_eq!(listen_port("0.0.0.0"), None);
+        assert_eq!(listen_port(""), None);
+        assert_eq!(listen_port("0.0.0.0:notaport"), None);
+    }
 }

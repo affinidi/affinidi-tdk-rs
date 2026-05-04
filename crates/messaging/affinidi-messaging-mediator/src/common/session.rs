@@ -169,7 +169,7 @@ impl Session {
             did_hash: self.did_hash.clone(),
             authenticated: self.authenticated,
             acls: self.acls.clone(),
-            account_type: self.account_type.clone(),
+            account_type: self.account_type,
             expires_at: self.expires_at,
             refresh_token_hash: self.refresh_token_hash.clone(),
         }

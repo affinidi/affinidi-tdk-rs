@@ -160,21 +160,11 @@ impl std::fmt::Debug for RedisStore {
 // store impl converts at the boundary. Commit 6 unifies them.
 
 fn session_state_into_new(s: SessionState) -> SessionState {
-    match s {
-        SessionState::Unknown => SessionState::Unknown,
-        SessionState::ChallengeSent => SessionState::ChallengeSent,
-        SessionState::Authenticated => SessionState::Authenticated,
-        SessionState::Blocked => SessionState::Blocked,
-    }
+    s
 }
 
 fn session_state_into_old(s: SessionState) -> SessionState {
-    match s {
-        SessionState::Unknown => SessionState::Unknown,
-        SessionState::ChallengeSent => SessionState::ChallengeSent,
-        SessionState::Authenticated => SessionState::Authenticated,
-        SessionState::Blocked => SessionState::Blocked,
-    }
+    s
 }
 
 fn session_into_new(inner: Session, refresh_token_hash: Option<String>) -> Session {

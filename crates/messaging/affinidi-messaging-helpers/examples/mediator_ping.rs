@@ -47,7 +47,7 @@ async fn main() -> Result<(), ATMError> {
 
     let environment =
         TDKEnvironments::fetch_from_file(args.path_environments.as_deref(), &environment_name)?;
-    println!("Using Environment: {}", environment_name);
+    println!("Using Environment: {environment_name}");
 
     // Instantiate TDK
     let tdk =
@@ -66,7 +66,7 @@ async fn main() -> Result<(), ATMError> {
         alice
     } else {
         return Err(ATMError::ConfigError(
-            format!("Alice not found in Profile: {}", environment_name).to_string(),
+            format!("Alice not found in Profile: {environment_name}").to_string(),
         ));
     };
 
@@ -91,7 +91,7 @@ async fn main() -> Result<(), ATMError> {
             return Ok(());
         }
     };
-    println!("Mediator = {}", mediator_did);
+    println!("Mediator = {mediator_did}");
 
     // Ready to send a trust-ping to ATM
     let start = SystemTime::now();

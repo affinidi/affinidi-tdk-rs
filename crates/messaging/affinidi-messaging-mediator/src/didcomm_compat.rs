@@ -105,16 +105,15 @@ impl MetaEnvelope {
                 }
 
                 // Fallback: try apu header for sender DID
-                if from_did.is_none() {
-                    if let Some(apu) = header.get("apu").and_then(|a| a.as_str())
-                        && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
-                        && let Ok(apu_str) = String::from_utf8(apu_bytes)
-                        && let Some(hash_pos) = apu_str.find('#')
-                    {
-                        let did = apu_str[..hash_pos].to_string();
-                        from_did = Some(did.clone());
-                        sender_did = Some(did);
-                    }
+                if from_did.is_none()
+                    && let Some(apu) = header.get("apu").and_then(|a| a.as_str())
+                    && let Ok(apu_bytes) = BASE64_URL_SAFE_NO_PAD.decode(apu)
+                    && let Ok(apu_str) = String::from_utf8(apu_bytes)
+                    && let Some(hash_pos) = apu_str.find('#')
+                {
+                    let did = apu_str[..hash_pos].to_string();
+                    from_did = Some(did.clone());
+                    sender_did = Some(did);
                 }
             }
 

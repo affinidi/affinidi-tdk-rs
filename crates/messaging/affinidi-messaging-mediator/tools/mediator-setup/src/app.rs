@@ -3576,23 +3576,20 @@ impl WizardApp {
         if !self.current_step.is_multi_select() {
             return;
         }
-        match self.current_step {
-            WizardStep::Protocol => {
-                let was_didcomm = self.config.didcomm_enabled;
-                let was_tsp = self.config.tsp_enabled;
-                match self.selection_index {
-                    0 => self.config.didcomm_enabled = !self.config.didcomm_enabled,
-                    1 => self.config.tsp_enabled = !self.config.tsp_enabled,
-                    _ => {}
-                }
-                // Never let the operator deselect everything — revert the
-                // toggle if the result would leave zero protocols enabled.
-                if !self.config.didcomm_enabled && !self.config.tsp_enabled {
-                    self.config.didcomm_enabled = was_didcomm;
-                    self.config.tsp_enabled = was_tsp;
-                }
+        if self.current_step == WizardStep::Protocol {
+            let was_didcomm = self.config.didcomm_enabled;
+            let was_tsp = self.config.tsp_enabled;
+            match self.selection_index {
+                0 => self.config.didcomm_enabled = !self.config.didcomm_enabled,
+                1 => self.config.tsp_enabled = !self.config.tsp_enabled,
+                _ => {}
             }
-            _ => {}
+            // Never let the operator deselect everything — revert the
+            // toggle if the result would leave zero protocols enabled.
+            if !self.config.didcomm_enabled && !self.config.tsp_enabled {
+                self.config.didcomm_enabled = was_didcomm;
+                self.config.tsp_enabled = was_tsp;
+            }
         }
     }
 

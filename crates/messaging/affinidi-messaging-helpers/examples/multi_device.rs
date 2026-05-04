@@ -82,7 +82,7 @@ async fn main() -> Result<(), ATMError> {
     ];
 
     let packed_msg = pack_encrypted_authcrypt(&msg, alice_kid, &alice_private, &recipients_ref)
-        .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{}", e)))?;
+        .map_err(|e| ATMError::DidcommError("pack".to_string(), format!("{e}")))?;
 
     info!(
         "Packed encrypted+signed message from Alice to Bob:\n{}",
@@ -97,10 +97,10 @@ async fn main() -> Result<(), ATMError> {
         &bob_device1_private,
         Some(&alice_private.public_key()),
     )
-    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{}", e)))?;
+    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
     let unpacked1 = Message::from_json(&decrypted1.plaintext)
-        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
+        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{e}")))?;
     info!(
         "Message unpacked successfully with device 1: {}",
         unpacked1.body
@@ -114,10 +114,10 @@ async fn main() -> Result<(), ATMError> {
         &bob_device2_private,
         Some(&alice_private.public_key()),
     )
-    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{}", e)))?;
+    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
     let unpacked2 = Message::from_json(&decrypted2.plaintext)
-        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
+        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{e}")))?;
     info!(
         "Message unpacked successfully with device 2: {}",
         unpacked2.body
@@ -131,10 +131,10 @@ async fn main() -> Result<(), ATMError> {
         &bob_device3_private,
         Some(&alice_private.public_key()),
     )
-    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{}", e)))?;
+    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
     let unpacked3 = Message::from_json(&decrypted3.plaintext)
-        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{}", e)))?;
+        .map_err(|e| ATMError::DidcommError("parse".to_string(), format!("{e}")))?;
     info!(
         "Message unpacked successfully with device 3: {}",
         unpacked3.body
@@ -149,7 +149,7 @@ async fn main() -> Result<(), ATMError> {
         Some(&alice_private.public_key()),
         None,
     )
-    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{}", e)))?;
+    .map_err(|e| ATMError::DidcommError("unpack".to_string(), format!("{e}")))?;
 
     match result {
         unpack::UnpackResult::Encrypted {

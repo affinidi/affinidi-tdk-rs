@@ -179,6 +179,120 @@ for the detailed list)
 - **FIX:** Container Dockerfile's `EXPOSE` line now uses the port
   derived from `listen_address` instead of the hardcoded `7037`.
 
+**Pluggable storage abstraction**
+- **FEAT:** `MediatorStore` trait in `affinidi-messaging-mediator-common`
+  with three concrete impls — `RedisStore` (default, multi-mediator
+  clusters), `FjallStore` (embedded LSM, single-node persistence,
+  no Redis sidecar), `MemoryStore` (tests, in-process integration).
+  `SharedData.database` is now `Arc<dyn MediatorStore>`; handler
+  code is backend-agnostic.
+- **FEAT:** `MediatorBuilder` / `MediatorHandle` API for embedded
+  callers — spin the mediator up without TOML, without CWD
+  assumptions, with a real bound URL surfaced even when binding
+  to `:0`. TLS optional. Non-published
+  `affinidi-messaging-test-mediator` crate provides
+  `TestMediator::spawn()` defaulting to Memory.
+- **FEAT:** Every background task — statistics, forwarding processor,
+  websocket streaming, message expiry sweep — runs against
+  `Arc<dyn MediatorStore>`. The standalone `mediator-processors`
+  binaries stay Redis-only by design (Redis Streams consumer
+  groups + atomic SPOP coordination across hosts) and are
+  documented as horizontal-scaling tooling for Redis deployments.
+- **FEAT:** Per-backend CI matrix
+  (`.github/workflows/checks-storage.yaml`) plus
+  `test-mediator (memory)` and `test-mediator (fjall)` e2e jobs.
+- **FEAT:** Wizard's Database step picks Redis (URL) or Fjall
+  (data dir); generated `docker-compose.yml` switches between the
+  bundled-Redis stack and a single-container Fjall stack.
+- **CHANGED:** **BREAKING** for out-of-tree handlers: anything
+  taking `&Database` directly needs `&dyn MediatorStore` (or
+  `Arc<dyn MediatorStore>`).
+- **CHANGED:** `mediator` no longer depends on
+  `affinidi-messaging-mediator-processors`; in-process workloads
+  run through `MediatorStore` instead.
+
+**Deployment-feedback hardening (4 May 2026)**
+
+A first-customer rollout from 0.13.x → 0.14.x surfaced six
+production issues in the auth/session/VTA-bootstrap chain. All
+fixed without a version bump; the section below documents what
+changed so operators upgrading from 0.13.x can correlate log lines
+to fixes.
+
+- **FIX (auth):** `update_session_authenticated`'s trait default
+  passed a SHA-256 hash to `get_session` (which expects the raw
+  DID), so the read-modify-write fell through to a
+  `Session::default()` substitute and wrote `did = ""` over the
+  real session. Every subsequent JWT auth read back an empty DID
+  and every WebSocket inbound message tripped
+  `e.p.authorization.did.session_mismatch`. Fixed by renaming the
+  trait param to `did`, computing the hash internally, plus a
+  defensive blank-DID-fill from input. RedisStore overrides the
+  trait default with the legacy atomic `RENAME` + `HSET` path
+  (same wire behaviour as 0.13.x). Added
+  `session_auth_rename_preserves_did` regression test.
+- **FIX (auth):** `update_refresh_token_hash` and
+  `get_refresh_token_hash` had the same bug class — trait
+  defaults called `get_session(session_id, "")` with an empty
+  DID, then `unwrap_or_else(|_| Session::default())` substituted
+  `state = Unknown`, and `put_session` wrote that corrupt default
+  back. Result: spurious `Error parsing role_type!` warnings on
+  `/authenticate/refresh`, then 500 on the next `/ws` connect.
+  Fixed by overriding both methods on `RedisStore` to call the
+  inherent single-field `HSET refresh_token_hash` /
+  `HGET refresh_token_hash` paths directly. Added
+  `refresh_token_rotation_preserves_did_and_state` test.
+- **FIX (auth):** Three defence-in-depth additions for empty/legacy
+  session DIDs — `handlers/authenticate/challenge.rs` rejects
+  non-`did:`-shaped `did` with HTTP 400; `common/jwt_auth.rs`
+  validates `saved_session.did == jwt.sub` after `get_session`
+  and rejects with `InvalidToken` on mismatch (cross-tenant
+  replay guard); `tasks/websocket_streaming.rs` refuses to
+  register a streaming client whose `did` or `did_hash` is empty
+  and closes the upstream channel. Strengthened the existing
+  `session_lifecycle` round-trip test in MemoryStore + FjallStore
+  to assert `did` and `did_hash` survive `put_session` /
+  `get_session`.
+- **FIX (data migration):** Pre-0.13 mediators didn't write
+  `ROLE_TYPE` on user account records. New migration
+  `m003_backfill_role_type` scans every account via the
+  `account_list` cursor and writes `ROLE_TYPE = "Standard"` on
+  records where the field is missing. Idempotent and safe during
+  rolling restart.
+- **FIX (session recovery):** `get_session` now detects
+  unparseable `state` values (e.g. `Unknown` left over from
+  pre-fix runs), deletes the corrupt SESSION record in place,
+  and returns HTTP 401 instead of 503. Clients re-authenticate
+  cleanly on the next refresh attempt rather than looping on the
+  same stale record.
+- **FEAT (VTA bootstrap):** Boot-time circular-dependency
+  detection for self-mediated VTA setups (the VTA's
+  `DIDCommMessaging` service routes through this very mediator,
+  causing a DIDComm-to-self deadlock).
+  `common/config/vta_bootstrap.rs` adds a probe that compares
+  the cached mediator DID against the VTA's
+  `service.DIDCommMessaging.mediator_did`. On match: skip the
+  live VTA fetch, boot from cache (or force `PreferRest` if no
+  cache). Probe failures degrade silently to default `Auto`
+  startup — the probe must never block boot.
+- **FEAT (VTA freshness):** Periodic VTA refresh task in
+  `tasks/vta_refresh.rs` — fire-and-forget background loop,
+  cadence `clamp(cache_ttl/4, 5min, 1h)` (default 6h when
+  `cache_ttl == 0`). Two roles: keeps the cache within TTL during
+  long uptimes (was written once at boot, never refreshed), and
+  re-fetches once the listener is up after a circular-bootstrap
+  cache-only boot so DIDComm-to-self resolves cleanly.
+- **FEAT (operator UX):** Multi-line operator recovery playbook
+  printed to stderr when the mediator can't boot because the
+  VTA is unreachable AND no usable cached bundle exists. Three
+  concrete recovery paths (restore connectivity / sealed-export
+  reprovision via `vta contexts reprovision` / greenfield
+  re-setup) with the exact `mediator-setup` command lines.
+  Bypasses `RUST_LOG` filtering so the message reaches the
+  operator regardless of log configuration on a terminal failure.
+- **CHORE:** Dropped the `vta-sdk` workspace-level path override.
+  Published 0.5 has the same surface; pulling from crates.io.
+
 **Earlier work (16 April — Wizard / Monitoring / Redis perf)**
 - **FEAT:** Interactive TUI setup wizard (`mediator-setup`) replacing three
   fragmented tools (setup_environment, generate_mediator_config, mediator-setup-vta)

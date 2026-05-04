@@ -504,7 +504,7 @@ pub async fn serve_internal(
                 .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
-        .layer(RequestBodyLimitLayer::new(config.limits.http_size as usize))
+        .layer(RequestBodyLimitLayer::new(config.limits.http_size))
         .layer(RateLimitLayer::new(rate_limiter))
         .layer(RequestIdLayer::new())
         .route(

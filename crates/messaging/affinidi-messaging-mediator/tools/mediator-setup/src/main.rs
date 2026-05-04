@@ -329,10 +329,11 @@ async fn run_from_recipe(
     // unless the operator opts in. This matches the interactive flow so
     // recipe-driven CI can't silently rotate live keys.
     let target = std::path::Path::new(&config.config_path);
-    if let Some(setup) = reprovision::inspect_existing(target).await? {
-        if setup.is_provisioned() && !force_reprovision {
-            reprovision::refuse_overwrite(target, &setup);
-        }
+    if let Some(setup) = reprovision::inspect_existing(target).await?
+        && setup.is_provisioned()
+        && !force_reprovision
+    {
+        reprovision::refuse_overwrite(target, &setup);
     }
 
     // Check if database URL needs credentials — allow env var override
@@ -455,10 +456,10 @@ async fn run_from_recipe(
                 print_run_command(&config.config_path, &install_location);
             }
             Ok(exit) => {
-                anyhow::bail!("cargo install failed with exit code: {}", exit);
+                anyhow::bail!("cargo install failed with exit code: {exit}");
             }
             Err(e) => {
-                anyhow::bail!("Failed to run cargo: {}", e);
+                anyhow::bail!("Failed to run cargo: {e}");
             }
         }
     } else {
@@ -588,43 +589,38 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                 | KeyCode::Home
         )
         && app.in_sealed_handoff_subflow()
+        && let Some(state) = app.sealed_handoff.as_mut()
+        && state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated
     {
-        if let Some(state) = app.sealed_handoff.as_mut() {
-            if state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated {
-                // Primary command hotkey: `p` for AdminOnly
-                // (pnm contexts bootstrap), `v` for FullSetup
-                // (vta bootstrap provision-integration). `f` copies
-                // the fallback command when one exists (AdminOnly's
-                // raw `vta bootstrap seal` invocation).
-                //
-                // Scroll keys: one line (arrows) or 10 lines (Page).
-                // 10 is a compromise between "obvious jump" and "don't
-                // shoot past useful content in one keystroke"; the
-                // panel is about 40–60 rendered lines typically.
-                const PAGE: u16 = 10;
-                match code {
-                    KeyCode::Char('c') | KeyCode::Char('C') => {
-                        state.copy_request_to_clipboard();
-                    }
-                    KeyCode::Char('p')
-                    | KeyCode::Char('P')
-                    | KeyCode::Char('v')
-                    | KeyCode::Char('V') => {
-                        state.copy_primary_command_to_clipboard();
-                    }
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        state.copy_fallback_command_to_clipboard();
-                    }
-                    KeyCode::Up => state.scroll_request_up(1),
-                    KeyCode::Down => state.scroll_request_down(1),
-                    KeyCode::PageUp => state.scroll_request_up(PAGE),
-                    KeyCode::PageDown => state.scroll_request_down(PAGE),
-                    KeyCode::Home => state.scroll_request_home(),
-                    _ => unreachable!("outer matches! guards the code space"),
-                }
-                return;
+        // Primary command hotkey: `p` for AdminOnly
+        // (pnm contexts bootstrap), `v` for FullSetup
+        // (vta bootstrap provision-integration). `f` copies
+        // the fallback command when one exists (AdminOnly's
+        // raw `vta bootstrap seal` invocation).
+        //
+        // Scroll keys: one line (arrows) or 10 lines (Page).
+        // 10 is a compromise between "obvious jump" and "don't
+        // shoot past useful content in one keystroke"; the
+        // panel is about 40–60 rendered lines typically.
+        const PAGE: u16 = 10;
+        match code {
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                state.copy_request_to_clipboard();
             }
+            KeyCode::Char('p') | KeyCode::Char('P') | KeyCode::Char('v') | KeyCode::Char('V') => {
+                state.copy_primary_command_to_clipboard();
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                state.copy_fallback_command_to_clipboard();
+            }
+            KeyCode::Up => state.scroll_request_up(1),
+            KeyCode::Down => state.scroll_request_down(1),
+            KeyCode::PageUp => state.scroll_request_up(PAGE),
+            KeyCode::PageDown => state.scroll_request_down(PAGE),
+            KeyCode::Home => state.scroll_request_home(),
+            _ => unreachable!("outer matches! guards the code space"),
         }
+        return;
     }
 
     // Bare `c` / `C` on the online-VTA AwaitingAcl screen copies the
@@ -633,13 +629,11 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
     // regardless of InputMode.
     if !modifiers.contains(KeyModifiers::CONTROL)
         && matches!(code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && let Some(state) = app.vta_connect.as_mut()
+        && state.phase == crate::vta::ConnectPhase::AwaitingAcl
     {
-        if let Some(state) = app.vta_connect.as_mut() {
-            if state.phase == crate::vta::ConnectPhase::AwaitingAcl {
-                state.copy_acl_command_to_clipboard();
-                return;
-            }
-        }
+        state.copy_acl_command_to_clipboard();
+        return;
     }
 
     // Bare `c` / `b` on the wizard's final Summary screen copy the
@@ -679,24 +673,22 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
                 | KeyCode::Char('a')
                 | KeyCode::Char('A')
         )
+        && let Some(state) = app.vta_connect.as_mut()
+        && state.phase == crate::vta::ConnectPhase::Connected
     {
-        if let Some(state) = app.vta_connect.as_mut() {
-            if state.phase == crate::vta::ConnectPhase::Connected {
-                match code {
-                    KeyCode::Char('v') | KeyCode::Char('V') => {
-                        state.copy_vta_did_to_clipboard();
-                    }
-                    KeyCode::Char('m') | KeyCode::Char('M') => {
-                        state.copy_mediator_did_to_clipboard();
-                    }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
-                        state.copy_admin_did_to_clipboard();
-                    }
-                    _ => unreachable!("outer matches! guards the code space"),
-                }
-                return;
+        match code {
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                state.copy_vta_did_to_clipboard();
             }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                state.copy_mediator_did_to_clipboard();
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                state.copy_admin_did_to_clipboard();
+            }
+            _ => unreachable!("outer matches! guards the code space"),
         }
+        return;
     }
 
     match app.mode {
@@ -866,109 +858,6 @@ fn build_did_secrets_bundle(
 
     // AdminOnly — no VTA-provisioned integration DID to cache.
     None
-}
-
-#[cfg(test)]
-mod cache_bundle_tests {
-    use super::build_did_secrets_bundle;
-    use crate::vta::VtaSession;
-    use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
-    use vta_sdk::credentials::CredentialBundle;
-    use vta_sdk::did_secrets::SecretEntry;
-    use vta_sdk::keys::KeyType;
-
-    #[test]
-    fn full_provision_projects_to_signing_plus_ka_bundle() {
-        // TemplateBootstrap path: mediator DID + typed signing/ka key
-        // pair. Must land as two SecretEntries with the correct
-        // discriminants (Ed25519 for signing, X25519 for key-agreement)
-        // and the raw multibase passthrough.
-        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result(
-            /*rolled_over=*/ true,
-        );
-        let session = VtaSession::full(
-            "prod-mediator".into(),
-            "did:webvh:vta.example.com".into(),
-            Some("https://vta.example.com".into()),
-            None,
-            provision,
-        );
-
-        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
-        assert_eq!(bundle.did, "did:webvh:integration.example.com");
-        assert_eq!(bundle.secrets.len(), 2);
-        assert!(matches!(bundle.secrets[0].key_type, KeyType::Ed25519));
-        assert!(matches!(bundle.secrets[1].key_type, KeyType::X25519));
-        // Multibase passthrough — the runtime's `Secret::from_multibase`
-        // is the one doing the actual key decode, so we round-trip the
-        // string verbatim.
-        assert_eq!(bundle.secrets[0].private_key_multibase, "zPrivateSample");
-        assert_eq!(bundle.secrets[1].private_key_multibase, "zKaPrivate");
-    }
-
-    #[test]
-    fn admin_only_yields_no_bundle() {
-        // AdminOnly session doesn't carry a VTA-provisioned integration
-        // DID — the mediator brought its own. Nothing to cache; the
-        // helper must signal that explicitly so the caller doesn't
-        // write a malformed bundle keyed to the admin DID.
-        let session = VtaSession::admin_only(
-            "prod-mediator".into(),
-            "did:webvh:vta.example.com".into(),
-            None,
-            None,
-            "did:key:z6MkAdmin".into(),
-            "zAdminPrivate".into(),
-        );
-        assert!(build_did_secrets_bundle(&session).is_none());
-    }
-
-    #[test]
-    fn context_export_passes_through_secret_entries() {
-        // OfflineExport path: ContextProvisionBundle already has a
-        // flat Vec<SecretEntry> (including whatever key types the VTA
-        // chose), so the projection is a direct copy.
-        let did_view = ProvisionedDid {
-            id: "did:webvh:mediator.example.com".into(),
-            did_document: None,
-            log_entry: None,
-            secrets: vec![
-                SecretEntry {
-                    key_id: "did:webvh:mediator.example.com#key-0".into(),
-                    key_type: KeyType::Ed25519,
-                    private_key_multibase: "zSigning".into(),
-                },
-                SecretEntry {
-                    key_id: "did:webvh:mediator.example.com#key-1".into(),
-                    key_type: KeyType::X25519,
-                    private_key_multibase: "zKa".into(),
-                },
-            ],
-        };
-        let ctx_bundle = ContextProvisionBundle {
-            context_id: "prod-mediator".into(),
-            context_name: "Prod mediator".into(),
-            vta_url: None,
-            vta_did: Some("did:webvh:vta.example.com".into()),
-            credential: CredentialBundle::new(
-                "did:key:z6MkAdmin",
-                "zAdminPrivate",
-                "did:webvh:vta.example.com",
-            ),
-            admin_did: "did:key:z6MkAdmin".into(),
-            did: Some(did_view),
-        };
-        let session = VtaSession::context_export("prod-mediator".into(), ctx_bundle);
-
-        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
-        assert_eq!(bundle.did, "did:webvh:mediator.example.com");
-        assert_eq!(bundle.secrets.len(), 2);
-        assert_eq!(
-            bundle.secrets[0].key_id,
-            "did:webvh:mediator.example.com#key-0"
-        );
-        assert_eq!(bundle.secrets[1].private_key_multibase, "zKa");
-    }
 }
 
 /// Write a `did.jsonl` log entry next to the mediator's config file
@@ -1573,12 +1462,11 @@ fn find_workspace_root() -> Option<PathBuf> {
 
     loop {
         let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
-                if contents.contains("[workspace]") {
-                    return Some(dir);
-                }
-            }
+        if cargo_toml.exists()
+            && let Ok(contents) = std::fs::read_to_string(&cargo_toml)
+            && contents.contains("[workspace]")
+        {
+            return Some(dir);
         }
 
         if !dir.pop() {
@@ -1593,10 +1481,10 @@ fn resolve_config_path(config_path: &str) -> String {
     if Path::new(config_path).is_absolute() {
         return config_path.to_string();
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(abs) = cwd.join(config_path).canonicalize() {
-            return abs.to_string_lossy().into_owned();
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(abs) = cwd.join(config_path).canonicalize()
+    {
+        return abs.to_string_lossy().into_owned();
     }
     config_path.to_string()
 }
@@ -1638,9 +1526,7 @@ fn inline_select(prompt: &str, options: &[&str], default: usize) -> Option<usize
             }
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if selected > 0 {
-                        selected -= 1;
-                    }
+                    selected = selected.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if selected < options.len() - 1 {
@@ -1794,7 +1680,7 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
     let default_bin = format!("{cargo_home}/bin");
 
     println!();
-    print!("  \x1b[1mInstall location\x1b[0m [{}]: ", default_bin);
+    print!("  \x1b[1mInstall location\x1b[0m [{default_bin}]: ");
     let _ = io::stdout().flush();
 
     let mut path_input = String::new();
@@ -1850,10 +1736,7 @@ fn offer_build_and_guidance(config: &app::WizardConfig) {
             print_run_command(&config.config_path, &install_location);
         }
         Ok(exit) => {
-            eprintln!(
-                "\n  \x1b[31m\u{2718} Install failed (exit code: {})\x1b[0m",
-                exit
-            );
+            eprintln!("\n  \x1b[31m\u{2718} Install failed (exit code: {exit})\x1b[0m");
             eprintln!("  Check the output above for errors. You can retry with:");
             eprintln!("    cd {} && {}", build_dir.display(), install_cmd);
         }
@@ -1947,4 +1830,107 @@ fn print_final_summary(config: &app::WizardConfig) {
     );
 
     println!();
+}
+
+#[cfg(test)]
+mod cache_bundle_tests {
+    use super::build_did_secrets_bundle;
+    use crate::vta::VtaSession;
+    use vta_sdk::context_provision::{ContextProvisionBundle, ProvisionedDid};
+    use vta_sdk::credentials::CredentialBundle;
+    use vta_sdk::did_secrets::SecretEntry;
+    use vta_sdk::keys::KeyType;
+
+    #[test]
+    fn full_provision_projects_to_signing_plus_ka_bundle() {
+        // TemplateBootstrap path: mediator DID + typed signing/ka key
+        // pair. Must land as two SecretEntries with the correct
+        // discriminants (Ed25519 for signing, X25519 for key-agreement)
+        // and the raw multibase passthrough.
+        let provision = vta_sdk::provision_client::test_helpers::sample_provision_result(
+            /*rolled_over=*/ true,
+        );
+        let session = VtaSession::full(
+            "prod-mediator".into(),
+            "did:webvh:vta.example.com".into(),
+            Some("https://vta.example.com".into()),
+            None,
+            provision,
+        );
+
+        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
+        assert_eq!(bundle.did, "did:webvh:integration.example.com");
+        assert_eq!(bundle.secrets.len(), 2);
+        assert!(matches!(bundle.secrets[0].key_type, KeyType::Ed25519));
+        assert!(matches!(bundle.secrets[1].key_type, KeyType::X25519));
+        // Multibase passthrough — the runtime's `Secret::from_multibase`
+        // is the one doing the actual key decode, so we round-trip the
+        // string verbatim.
+        assert_eq!(bundle.secrets[0].private_key_multibase, "zPrivateSample");
+        assert_eq!(bundle.secrets[1].private_key_multibase, "zKaPrivate");
+    }
+
+    #[test]
+    fn admin_only_yields_no_bundle() {
+        // AdminOnly session doesn't carry a VTA-provisioned integration
+        // DID — the mediator brought its own. Nothing to cache; the
+        // helper must signal that explicitly so the caller doesn't
+        // write a malformed bundle keyed to the admin DID.
+        let session = VtaSession::admin_only(
+            "prod-mediator".into(),
+            "did:webvh:vta.example.com".into(),
+            None,
+            None,
+            "did:key:z6MkAdmin".into(),
+            "zAdminPrivate".into(),
+        );
+        assert!(build_did_secrets_bundle(&session).is_none());
+    }
+
+    #[test]
+    fn context_export_passes_through_secret_entries() {
+        // OfflineExport path: ContextProvisionBundle already has a
+        // flat Vec<SecretEntry> (including whatever key types the VTA
+        // chose), so the projection is a direct copy.
+        let did_view = ProvisionedDid {
+            id: "did:webvh:mediator.example.com".into(),
+            did_document: None,
+            log_entry: None,
+            secrets: vec![
+                SecretEntry {
+                    key_id: "did:webvh:mediator.example.com#key-0".into(),
+                    key_type: KeyType::Ed25519,
+                    private_key_multibase: "zSigning".into(),
+                },
+                SecretEntry {
+                    key_id: "did:webvh:mediator.example.com#key-1".into(),
+                    key_type: KeyType::X25519,
+                    private_key_multibase: "zKa".into(),
+                },
+            ],
+        };
+        let ctx_bundle = ContextProvisionBundle {
+            context_id: "prod-mediator".into(),
+            context_name: "Prod mediator".into(),
+            vta_url: None,
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            credential: CredentialBundle::new(
+                "did:key:z6MkAdmin",
+                "zAdminPrivate",
+                "did:webvh:vta.example.com",
+            ),
+            admin_did: "did:key:z6MkAdmin".into(),
+            did: Some(did_view),
+        };
+        let session = VtaSession::context_export("prod-mediator".into(), ctx_bundle);
+
+        let bundle = build_did_secrets_bundle(&session).expect("bundle projected");
+        assert_eq!(bundle.did, "did:webvh:mediator.example.com");
+        assert_eq!(bundle.secrets.len(), 2);
+        assert_eq!(
+            bundle.secrets[0].key_id,
+            "did:webvh:mediator.example.com#key-0"
+        );
+        assert_eq!(bundle.secrets[1].private_key_multibase, "zKa");
+    }
 }

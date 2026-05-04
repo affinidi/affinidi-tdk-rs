@@ -91,13 +91,13 @@ impl FileStore {
     }
 
     fn save_locked(&self, file: &StoreFile) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|e| SecretStoreError::Io {
-                    backend: BACKEND_LABEL,
-                    source: e,
-                })?;
-            }
+        if let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|e| SecretStoreError::Io {
+                backend: BACKEND_LABEL,
+                source: e,
+            })?;
         }
         let body = serde_json::to_vec_pretty(file)?;
         let mut opts = fs::OpenOptions::new();

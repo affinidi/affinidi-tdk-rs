@@ -218,10 +218,10 @@ impl DrivingPrivilege {
 
         let get_text = |key: &str| -> Option<String> {
             entries.iter().find_map(|(k, v)| {
-                if let (ciborium::Value::Text(k_str), ciborium::Value::Text(v_str)) = (k, v) {
-                    if k_str == key {
-                        return Some(v_str.clone());
-                    }
+                if let (ciborium::Value::Text(k_str), ciborium::Value::Text(v_str)) = (k, v)
+                    && k_str == key
+                {
+                    return Some(v_str.clone());
                 }
                 None
             })
@@ -231,16 +231,15 @@ impl DrivingPrivilege {
             .ok_or_else(|| MdocError::MissingField("vehicle_category_code".into()))?;
 
         let codes = entries.iter().find_map(|(k, v)| {
-            if let ciborium::Value::Text(k_str) = k {
-                if k_str == "codes" {
-                    if let ciborium::Value::Array(arr) = v {
-                        let parsed: Result<Vec<DrivingPrivilegeCode>> = arr
-                            .iter()
-                            .map(DrivingPrivilegeCode::from_cbor_value)
-                            .collect();
-                        return Some(parsed);
-                    }
-                }
+            if let ciborium::Value::Text(k_str) = k
+                && k_str == "codes"
+                && let ciborium::Value::Array(arr) = v
+            {
+                let parsed: Result<Vec<DrivingPrivilegeCode>> = arr
+                    .iter()
+                    .map(DrivingPrivilegeCode::from_cbor_value)
+                    .collect();
+                return Some(parsed);
             }
             None
         });
@@ -293,10 +292,10 @@ impl DrivingPrivilegeCode {
 
         let get_text = |key: &str| -> Option<String> {
             entries.iter().find_map(|(k, v)| {
-                if let (ciborium::Value::Text(k_str), ciborium::Value::Text(v_str)) = (k, v) {
-                    if k_str == key {
-                        return Some(v_str.clone());
-                    }
+                if let (ciborium::Value::Text(k_str), ciborium::Value::Text(v_str)) = (k, v)
+                    && k_str == key
+                {
+                    return Some(v_str.clone());
                 }
                 None
             })

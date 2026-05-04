@@ -103,11 +103,11 @@ where
                     Ok(decoded) => match String::from_utf8(decoded) {
                         Ok(decoded) => decoded,
                         Err(e) => {
-                            panic!("{:?}", e);
+                            panic!("{e:?}");
                         }
                     },
                     Err(e) => {
-                        panic!("{:?}", e);
+                        panic!("{e:?}");
                     }
                 };
 
@@ -119,7 +119,7 @@ where
                         response.push((m, u))
                     }
                     Err(e) => {
-                        panic!("{:?}", e);
+                        panic!("{e:?}");
                     }
                 };
             } else {

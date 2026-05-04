@@ -941,7 +941,7 @@ impl MediatorStore for FjallStore {
 
         let entries: Vec<((u64, u64), StoredStreamEntry)> = {
             let mut buf = Vec::new();
-            for guard in self.inbox.range(start_key..=end_key).take(limit as usize) {
+            for guard in self.inbox.range(start_key..=end_key).take(limit) {
                 let (key, value) = guard
                     .into_inner()
                     .map_err(|e| Self::db_err("fetch_messages:range", e))?;
@@ -953,10 +953,10 @@ impl MediatorStore for FjallStore {
                 };
                 // Skip the start_id itself when start is provided
                 // (exclusive lower bound).
-                if let Some(s) = start {
-                    if sid == s {
-                        continue;
-                    }
+                if let Some(s) = start
+                    && sid == s
+                {
+                    continue;
                 }
                 let entry: StoredStreamEntry = Self::decode(&value)?;
                 buf.push((sid, entry));
@@ -969,8 +969,7 @@ impl MediatorStore for FjallStore {
                 .messages
                 .get(entry.msg_id.as_bytes())
                 .map_err(|e| Self::db_err("fetch_messages:messages.get", e))?
-                .map(|v| Self::decode::<StoredMessage>(&v).ok().map(|s| s.body))
-                .flatten();
+                .and_then(|v| Self::decode::<StoredMessage>(&v).ok().map(|s| s.body));
 
             let mut element = MessageListElement {
                 msg_id: entry.msg_id.clone(),
@@ -1389,7 +1388,7 @@ impl MediatorStore for FjallStore {
             Some(v) => Self::decode(&v)?,
             None => StoredAccount::default(),
         };
-        record.role = account_type.clone();
+        record.role = *account_type;
 
         let mut batch = self.db.batch();
         batch.insert(&self.accounts, did_hash.as_bytes(), Self::encode(&record)?);
@@ -2079,7 +2078,7 @@ impl MediatorStore for FjallStore {
             );
             if let Some(raw) = self
                 .forward_queue
-                .get(encode_stream_id(sid.0, sid.1).to_vec())
+                .get(encode_stream_id(sid.0, sid.1))
                 .map_err(|e| Self::db_err("forward_queue_autoclaim:fetch", e))?
             {
                 let entry: ForwardQueueEntry = Self::decode(&raw)?;

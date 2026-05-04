@@ -637,9 +637,9 @@ impl ForwardingProcessor {
         msg: &ForwardQueueEntry,
     ) -> Result<(), String> {
         let inbound_url = if endpoint_url.ends_with('/') {
-            format!("{}inbound", endpoint_url)
+            format!("{endpoint_url}inbound")
         } else {
-            format!("{}/inbound", endpoint_url)
+            format!("{endpoint_url}/inbound")
         };
 
         let response = self
@@ -650,7 +650,7 @@ impl ForwardingProcessor {
             .body(msg.message.clone())
             .send()
             .await
-            .map_err(|e| format!("Connection error to {}: {}", inbound_url, e))?;
+            .map_err(|e| format!("Connection error to {inbound_url}: {e}"))?;
 
         let status = response.status();
         if status.is_success() {
@@ -658,8 +658,7 @@ impl ForwardingProcessor {
         } else {
             let body = response.text().await.unwrap_or_default();
             Err(format!(
-                "Remote mediator {} returned HTTP {}: {}",
-                inbound_url, status, body
+                "Remote mediator {inbound_url} returned HTTP {status}: {body}"
             ))
         }
     }
@@ -706,7 +705,7 @@ impl ForwardingProcessor {
 
         let (ws_stream, _response) = tokio_tungstenite::connect_async(&ws_url)
             .await
-            .map_err(|e| format!("WebSocket connect to {} failed: {}", ws_url, e))?;
+            .map_err(|e| format!("WebSocket connect to {ws_url} failed: {e}"))?;
 
         info!("WebSocket connected to {} (pool)", endpoint_url);
 
@@ -717,7 +716,7 @@ impl ForwardingProcessor {
         writer
             .send(ws_msg)
             .await
-            .map_err(|e| format!("WebSocket send to {} failed: {}", ws_url, e))?;
+            .map_err(|e| format!("WebSocket send to {ws_url} failed: {e}"))?;
 
         // Store the connection in the pool for reuse
         // We drop the reader side — we're only using WebSocket for sending.
@@ -742,9 +741,9 @@ impl ForwardingProcessor {
             .replace("http://", "ws://");
 
         if ws_base.ends_with('/') {
-            format!("{}ws", ws_base)
+            format!("{ws_base}ws")
         } else {
-            format!("{}/ws", ws_base)
+            format!("{ws_base}/ws")
         }
     }
 
@@ -824,8 +823,8 @@ mod tests {
         let mut tracker = EndpointRateTracker::new(60);
         let rate = tracker.record_and_rate(10);
         // 10 messages in 60 second window = 10/60 * 10 = ~1.667 msgs/10s
-        assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
-        assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
+        assert!(rate > 1.0, "rate should be > 1.0, got {rate}");
+        assert!(rate < 2.0, "rate should be < 2.0, got {rate}");
     }
 
     #[test]
@@ -835,8 +834,8 @@ mod tests {
         tracker.record_and_rate(5);
         let rate = tracker.current_rate();
         // 10 messages in 60 second window
-        assert!(rate > 1.0, "rate should be > 1.0, got {}", rate);
-        assert!(rate < 2.0, "rate should be < 2.0, got {}", rate);
+        assert!(rate > 1.0, "rate should be > 1.0, got {rate}");
+        assert!(rate < 2.0, "rate should be < 2.0, got {rate}");
     }
 
     #[test]

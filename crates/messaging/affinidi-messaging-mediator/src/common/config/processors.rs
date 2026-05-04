@@ -4,19 +4,10 @@ use ahash::AHashSet as HashSet;
 use serde::{Deserialize, Serialize};
 
 /// Processor configuration for the mediator
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ProcessorsConfig {
     pub forwarding: ForwardingConfig,
     pub message_expiry_cleanup: MessageExpiryCleanupConfig,
-}
-
-impl Default for ProcessorsConfig {
-    fn default() -> Self {
-        Self {
-            forwarding: ForwardingConfig::default(),
-            message_expiry_cleanup: MessageExpiryCleanupConfig::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

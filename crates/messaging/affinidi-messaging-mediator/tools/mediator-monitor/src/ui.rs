@@ -291,6 +291,6 @@ fn format_bytes(bytes_per_sec: f64) -> String {
     } else if bytes_per_sec >= 1_024.0 {
         format!("{:.1} KB/s", bytes_per_sec / 1_024.0)
     } else {
-        format!("{:.0} B/s", bytes_per_sec)
+        format!("{bytes_per_sec:.0} B/s")
     }
 }

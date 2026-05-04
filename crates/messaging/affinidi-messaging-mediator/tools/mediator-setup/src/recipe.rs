@@ -294,22 +294,13 @@ impl Default for OutputSection {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct InstallSection {
     /// Whether to run `cargo install` after generating config
     #[serde(default)]
     pub enabled: bool,
     /// Custom install root (passed as `cargo install --root <path>`)
     pub path: Option<String>,
-}
-
-impl Default for InstallSection {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            path: None,
-        }
-    }
 }
 
 /// Normalise a raw `vta_mode` string from a recipe into the canonical
@@ -332,14 +323,8 @@ fn normalise_vta_mode(raw: Option<&str>) -> anyhow::Result<String> {
         // nobody's written `"sealed"` to mean anything else.
         VTA_MODE_SEALED_LEGACY => VTA_MODE_SEALED_MINT.into(),
         other => anyhow::bail!(
-            "Invalid deployment.vta_mode '{}': expected one of '{}', '{}', '{}' \
-             (or legacy '{}' which maps to '{}')",
-            other,
-            VTA_MODE_ONLINE,
-            VTA_MODE_SEALED_MINT,
-            VTA_MODE_SEALED_EXPORT,
-            VTA_MODE_SEALED_LEGACY,
-            VTA_MODE_SEALED_MINT,
+            "Invalid deployment.vta_mode '{other}': expected one of '{VTA_MODE_ONLINE}', '{VTA_MODE_SEALED_MINT}', '{VTA_MODE_SEALED_EXPORT}' \
+             (or legacy '{VTA_MODE_SEALED_LEGACY}' which maps to '{VTA_MODE_SEALED_MINT}')",
         ),
     })
 }
@@ -347,9 +332,9 @@ fn normalise_vta_mode(raw: Option<&str>) -> anyhow::Result<String> {
 /// Load a build recipe from a TOML file.
 pub fn load(path: &str) -> anyhow::Result<BuildRecipe> {
     let contents = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("Cannot read build recipe '{}': {}", path, e))?;
+        .map_err(|e| anyhow::anyhow!("Cannot read build recipe '{path}': {e}"))?;
     let recipe: BuildRecipe = toml::from_str(&contents)
-        .map_err(|e| anyhow::anyhow!("Invalid build recipe '{}': {}", path, e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid build recipe '{path}': {e}"))?;
     Ok(recipe)
 }
 
@@ -363,8 +348,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         "server" => DEPLOYMENT_SERVER.into(),
         "container" => DEPLOYMENT_CONTAINER.into(),
         other => anyhow::bail!(
-            "Invalid deployment.type '{}': expected 'local', 'server', or 'container'",
-            other
+            "Invalid deployment.type '{other}': expected 'local', 'server', or 'container'"
         ),
     };
 
@@ -430,7 +414,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         match proto.as_str() {
             "didcomm" => config.didcomm_enabled = true,
             "tsp" => config.tsp_enabled = true,
-            other => anyhow::bail!("Invalid protocol '{}': expected 'didcomm' or 'tsp'", other),
+            other => anyhow::bail!("Invalid protocol '{other}': expected 'didcomm' or 'tsp'"),
         }
     }
     if !config.didcomm_enabled && !config.tsp_enabled {
@@ -444,8 +428,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         "did:webvh" | "webvh" => DID_WEBVH.into(),
         "import" => DID_IMPORT.into(),
         other => anyhow::bail!(
-            "Invalid identity.did_method '{}': expected 'vta', 'did:peer', 'did:webvh', or 'import'",
-            other
+            "Invalid identity.did_method '{other}': expected 'vta', 'did:peer', 'did:webvh', or 'import'"
         ),
     };
 
@@ -478,8 +461,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
             SSL_EXISTING.into()
         }
         other => anyhow::bail!(
-            "Invalid security.ssl '{}': expected 'none', 'self-signed', or 'existing'",
-            other
+            "Invalid security.ssl '{other}': expected 'none', 'self-signed', or 'existing'"
         ),
     };
 
@@ -491,18 +473,16 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
             ADMIN_PASTE.into()
         }
         other => anyhow::bail!(
-            "Invalid security.admin '{}': expected 'generate', 'skip', or 'import'",
-            other
+            "Invalid security.admin '{other}': expected 'generate', 'skip', or 'import'"
         ),
     };
 
     config.jwt_mode = match recipe.security.jwt_mode.as_str() {
         "generate" | "" => JWT_MODE_GENERATE.into(),
         "provide" => JWT_MODE_PROVIDE.into(),
-        other => anyhow::bail!(
-            "Invalid security.jwt_mode '{}': expected 'generate' or 'provide'",
-            other
-        ),
+        other => {
+            anyhow::bail!("Invalid security.jwt_mode '{other}': expected 'generate' or 'provide'")
+        }
     };
 
     // Database
@@ -520,8 +500,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         }
         other => {
             return Err(anyhow::anyhow!(
-                "Invalid storage.backend '{}': expected 'redis' or 'fjall'",
-                other
+                "Invalid storage.backend '{other}': expected 'redis' or 'fjall'"
             ));
         }
     }
@@ -731,17 +710,12 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
     // parse error.
     if raw.starts_with(STORAGE_STRING) {
         anyhow::bail!(
-            "secrets.storage '{}' is no longer supported — use '{}' (with optional encryption) instead",
-            raw,
-            STORAGE_FILE
+            "secrets.storage '{raw}' is no longer supported — use '{STORAGE_FILE}' (with optional encryption) instead"
         );
     }
     if raw.starts_with(STORAGE_VTA) {
         anyhow::bail!(
-            "secrets.storage '{}' is no longer supported — VTA is a key source, not a backend; choose a real store ({}, {}, …)",
-            raw,
-            STORAGE_KEYRING,
-            STORAGE_AWS
+            "secrets.storage '{raw}' is no longer supported — VTA is a key source, not a backend; choose a real store ({STORAGE_KEYRING}, {STORAGE_AWS}, …)"
         );
     }
 
@@ -751,15 +725,7 @@ fn apply_secrets_storage(raw: &str, config: &mut WizardConfig) -> anyhow::Result
     use affinidi_messaging_mediator_common::secrets::{BackendUrl, parse_url};
     let parsed = parse_url(raw).map_err(|e| {
         anyhow::anyhow!(
-            "Invalid secrets.storage '{}': {} (expected one of {}, {}, {}, {}, {}, {})",
-            raw,
-            e,
-            STORAGE_FILE,
-            STORAGE_KEYRING,
-            STORAGE_AWS,
-            STORAGE_GCP,
-            STORAGE_AZURE,
-            STORAGE_VAULT,
+            "Invalid secrets.storage '{raw}': {e} (expected one of {STORAGE_FILE}, {STORAGE_KEYRING}, {STORAGE_AWS}, {STORAGE_GCP}, {STORAGE_AZURE}, {STORAGE_VAULT})",
         )
     })?;
     match parsed {

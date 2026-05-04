@@ -73,12 +73,12 @@ pub struct DatabaseStatus {
 /// Mask password in Redis URL for display.
 fn mask_redis_url(url: &str) -> String {
     // redis://:password@host → redis://:***@host
-    if let Some(at_pos) = url.find('@') {
-        if let Some(colon_pos) = url[..at_pos].rfind(':') {
-            let scheme_end = url.find("://").map(|p| p + 3).unwrap_or(0);
-            if colon_pos >= scheme_end {
-                return format!("{}***{}", &url[..colon_pos + 1], &url[at_pos..]);
-            }
+    if let Some(at_pos) = url.find('@')
+        && let Some(colon_pos) = url[..at_pos].rfind(':')
+    {
+        let scheme_end = url.find("://").map(|p| p + 3).unwrap_or(0);
+        if colon_pos >= scheme_end {
+            return format!("{}***{}", &url[..colon_pos + 1], &url[at_pos..]);
         }
     }
     url.to_string()

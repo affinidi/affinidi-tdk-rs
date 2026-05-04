@@ -174,17 +174,16 @@ async fn bootstrap_if_needed(
         // Mark all migrations that would have already been applied at this version
         let mut seeded = HashSet::new();
         for migration in migrations {
-            if let Some(lv) = migration.legacy_version {
-                if let Ok(migration_ver) = Version::parse(lv) {
-                    if legacy_ver >= migration_ver {
-                        info!(
-                            "  Seeding migration {} ({}) — already applied at legacy version {}",
-                            migration.id, migration.name, lv
-                        );
-                        record_migration(db, migration.id, migration.name).await?;
-                        seeded.insert(migration.id);
-                    }
-                }
+            if let Some(lv) = migration.legacy_version
+                && let Ok(migration_ver) = Version::parse(lv)
+                && legacy_ver >= migration_ver
+            {
+                info!(
+                    "  Seeding migration {} ({}) — already applied at legacy version {}",
+                    migration.id, migration.name, lv
+                );
+                record_migration(db, migration.id, migration.name).await?;
+                seeded.insert(migration.id);
             }
         }
 

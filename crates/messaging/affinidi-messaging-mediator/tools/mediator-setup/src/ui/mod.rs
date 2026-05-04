@@ -199,11 +199,11 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
     // top/bottom split would squeeze the producer commands into six
     // lines and clip them. Branch before the split so we keep a
     // single Rect to work with.
-    if let Some(state) = app.sealed_handoff.as_ref() {
-        if state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated {
-            render_sealed_request(frame, area, state);
-            return;
-        }
+    if let Some(state) = app.sealed_handoff.as_ref()
+        && state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated
+    {
+        render_sealed_request(frame, area, state);
+        return;
     }
 
     // Split right panel: options area + info box

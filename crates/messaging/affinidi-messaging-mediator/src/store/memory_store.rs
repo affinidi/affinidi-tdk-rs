@@ -544,7 +544,7 @@ impl MediatorStore for MemoryStore {
             send_id: record.send_id.map(format_stream_id),
             receive_id: Some(format_stream_id(record.receive_id)),
             size: record.bytes as u64,
-            timestamp: (record.timestamp_ms / 1) as u64,
+            timestamp: record.timestamp_ms as u64,
             to_address: Some(record.to_did_hash.clone()),
             from_address: record.from_did_hash.clone(),
             msg: Some(record.body.clone()),
@@ -657,7 +657,7 @@ impl MediatorStore for MemoryStore {
             };
             stream
                 .range((lower, std::ops::Bound::Unbounded))
-                .take(limit as usize)
+                .take(limit)
                 .map(|(k, v)| (*k, v.clone()))
                 .collect()
         };
@@ -821,7 +821,7 @@ impl MediatorStore for MemoryStore {
             let did_hash = digest(did);
             if let Some(account) = state.accounts.get(&did_hash) {
                 session.acls = account.acls.clone();
-                session.account_type = account.role.clone();
+                session.account_type = account.role;
             }
         }
         Ok(session)
@@ -882,14 +882,14 @@ impl MediatorStore for MemoryStore {
         // Block protected accounts up-front.
         {
             let state = self.state.lock().await;
-            if let Some(record) = state.accounts.get(did_hash) {
-                if record.role == AccountType::Mediator || record.role == AccountType::RootAdmin {
-                    return Err(MediatorError::InternalError(
-                        18,
-                        "memory".into(),
-                        "Cannot remove the mediator or root admin account".into(),
-                    ));
-                }
+            if let Some(record) = state.accounts.get(did_hash)
+                && (record.role == AccountType::Mediator || record.role == AccountType::RootAdmin)
+            {
+                return Err(MediatorError::InternalError(
+                    18,
+                    "memory".into(),
+                    "Cannot remove the mediator or root admin account".into(),
+                ));
             }
         }
 
@@ -956,7 +956,7 @@ impl MediatorStore for MemoryStore {
     ) -> Result<(), MediatorError> {
         let mut state = self.state.lock().await;
         let record = state.accounts.entry(did_hash.to_string()).or_default();
-        record.role = account_type.clone();
+        record.role = *account_type;
         if account_type.is_admin() {
             state.admins.insert(did_hash.to_string());
         } else {
@@ -1180,7 +1180,7 @@ impl MediatorStore for MemoryStore {
         if !state.admins.contains(did_hash) {
             return Ok(false);
         }
-        let role = state.accounts.get(did_hash).map(|r| r.role.clone());
+        let role = state.accounts.get(did_hash).map(|r| r.role);
         Ok(matches!(
             role,
             Some(AccountType::Admin) | Some(AccountType::RootAdmin)
@@ -1212,7 +1212,7 @@ impl MediatorStore for MemoryStore {
             let role = state
                 .accounts
                 .get(did)
-                .map(|r| r.role.clone())
+                .map(|r| r.role)
                 .unwrap_or(AccountType::Unknown);
             accounts.push(AdminAccount {
                 did_hash: did.clone(),
@@ -1444,12 +1444,12 @@ impl MediatorStore for MemoryStore {
             .unwrap_or_default();
         let mut out = Vec::with_capacity(stale_ids.len());
         for id in stale_ids {
-            if let Some(group) = state.forward_groups.get_mut(group_name) {
-                if let Some(claim) = group.pending.get_mut(&id) {
-                    claim.consumer = consumer_name.to_string();
-                    claim.claimed_at = now;
-                    claim.delivery_count += 1;
-                }
+            if let Some(group) = state.forward_groups.get_mut(group_name)
+                && let Some(claim) = group.pending.get_mut(&id)
+            {
+                claim.consumer = consumer_name.to_string();
+                claim.claimed_at = now;
+                claim.delivery_count += 1;
             }
             if let Some(entry) = state.forward_queue.get(&id) {
                 out.push(entry.clone());
