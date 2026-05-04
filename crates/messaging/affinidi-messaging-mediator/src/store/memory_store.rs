@@ -1806,6 +1806,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_token_rotation_preserves_did_and_state() {
+        // Catches the bug where `update_refresh_token_hash`'s trait
+        // default did `get_session(session_id, "")` (empty did →
+        // ROLE_TYPE missing on `DID:<sha256("")>`), the resulting
+        // Err was caught by `unwrap_or_else`, a default Session was
+        // substituted (state=Unknown, did=""), and `put_session`
+        // wrote that corrupt default back.
+        let store = MemoryStore::new();
+        let did = "did:peer:refresh-test";
+        let sid = "auth-sid-1";
+
+        let session = Session {
+            session_id: sid.into(),
+            challenge: "abc".into(),
+            state: SessionState::Authenticated,
+            did: did.into(),
+            did_hash: digest(did),
+            authenticated: true,
+            refresh_token_hash: Some("hash-1".into()),
+            ..Default::default()
+        };
+        store
+            .put_session(&session, Duration::from_secs(86_400))
+            .await
+            .expect("put");
+
+        // Rotate the refresh-token hash. Must NOT corrupt did/state.
+        store
+            .update_refresh_token_hash(sid, "hash-2")
+            .await
+            .expect("update_refresh_token_hash");
+
+        let got = store.get_session(sid, did).await.expect("get");
+        assert_eq!(got.did, did, "did must survive refresh-hash rotation");
+        assert_eq!(
+            got.state,
+            SessionState::Authenticated,
+            "state must stay Authenticated"
+        );
+        assert_eq!(got.refresh_token_hash.as_deref(), Some("hash-2"));
+
+        // Reading the field directly must also work without spurious errors.
+        let read = store
+            .get_refresh_token_hash(sid)
+            .await
+            .expect("get_refresh_token_hash");
+        assert_eq!(read.as_deref(), Some("hash-2"));
+    }
+
+    #[tokio::test]
     async fn session_expires_lazily() {
         let store = MemoryStore::new();
         let session = Session {

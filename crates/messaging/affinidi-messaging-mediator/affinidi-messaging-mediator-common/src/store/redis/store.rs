@@ -536,6 +536,41 @@ impl MediatorStore for RedisStore {
         .await
     }
 
+    /// Override the trait default to issue a targeted `HSET` instead
+    /// of the read-modify-write pattern. The trait default calls
+    /// `self.get_session(session_id, "")` (empty did) which:
+    /// 1. Looks up `DID:<sha256("")>` for the role-type join — never
+    ///    matches a real account, fires a `role_type missing`
+    ///    warning, and returns Err.
+    /// 2. The trait default's `unwrap_or_else` then substitutes a
+    ///    `Session::default()` whose `state` is `Unknown`.
+    /// 3. `put_session` writes the corrupt default back, so the
+    ///    next read fails with `Unknown session state: (Unknown)`.
+    /// Skip the round trip entirely — the inherent does a single
+    /// `HSET refresh_token_hash`.
+    async fn update_refresh_token_hash(
+        &self,
+        session_id: &str,
+        refresh_token_hash: &str,
+    ) -> Result<(), MediatorError> {
+        // Inherent method on RedisStore (in `database/session.rs`).
+        self.update_refresh_token_hash(session_id, refresh_token_hash)
+            .await
+    }
+
+    /// Override the trait default to read the field directly via
+    /// `HGET` instead of loading the whole session. Same reason as
+    /// `update_refresh_token_hash` above: the trait default's
+    /// `get_session(session_id, "")` fires a spurious
+    /// `role_type missing` warning on every refresh check.
+    async fn get_refresh_token_hash(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, MediatorError> {
+        // Inherent method on RedisStore (in `database/session.rs`).
+        self.get_refresh_token_hash(session_id).await
+    }
+
     async fn delete_session(&self, session_id: &str) -> Result<(), MediatorError> {
         let mut conn = self.get_connection().await?;
         let sid = format!("SESSION:{session_id}");
