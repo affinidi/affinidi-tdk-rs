@@ -95,7 +95,35 @@ impl Database {
         }
 
         if let Some(state) = session_db.get("state") {
-            session.state = state.try_into()?;
+            match SessionState::try_from(state) {
+                Ok(parsed) => session.state = parsed,
+                Err(_) => {
+                    // Corrupt session record — typically left over
+                    // from a pre-0.14.x mediator that wrote `Unknown`
+                    // via the buggy `update_refresh_token_hash` /
+                    // `update_session_authenticated` paths. The session
+                    // is irrecoverable; delete it so a stale JWT
+                    // doesn't keep tripping this on every refresh, and
+                    // surface as "not found" so the client knows to
+                    // re-authenticate instead of seeing a 503.
+                    warn!(
+                        session_id = %session_id,
+                        state = %state,
+                        "Session has unparseable state — deleting corrupt record \
+                         and asking the client to re-authenticate"
+                    );
+                    let mut con_del = self.get_connection().await?;
+                    let _: Result<(), _> = redis::cmd("DEL")
+                        .arg(format!("SESSION:{session_id}"))
+                        .query_async(&mut con_del)
+                        .await;
+                    return Err(MediatorError::Unauthorized(
+                        20,
+                        session_id.into(),
+                        "Session record was corrupt; please re-authenticate".into(),
+                    ));
+                }
+            }
         } else {
             warn!("Session ({}): No state found", session_id);
             return Err(MediatorError::SessionError(

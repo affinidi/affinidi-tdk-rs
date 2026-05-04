@@ -332,7 +332,99 @@ fn vta_startup_error(context: &str, err: VtaIntegrationError) -> MediatorError {
         error = %err,
         "VTA startup failed terminally — mediator cannot boot"
     );
+    if matches!(
+        err,
+        VtaIntegrationError::NoCachedSecrets | VtaIntegrationError::Vta(_)
+    ) {
+        print_vta_recovery_playbook(context);
+    }
     MediatorError::ConfigError(12, "NA".into(), detail)
+}
+
+/// Print an operator-facing recovery playbook to stderr when the
+/// mediator can't boot because the cached VTA bundle is gone (or stale)
+/// AND the VTA is unreachable.
+///
+/// The block is intentionally formatted for `journalctl` / `docker logs`
+/// readability: a banner that's easy to spot in a wall of structured
+/// log output, followed by numbered steps with concrete commands. We
+/// write to stderr (not via `tracing`) so the message survives any
+/// `RUST_LOG` filter — the operator needs this regardless of log
+/// configuration when the process is about to exit.
+fn print_vta_recovery_playbook(context: &str) {
+    eprintln!(
+        "
+================================================================================
+  MEDIATOR CANNOT START — VTA UNREACHABLE AND NO USABLE CACHE
+================================================================================
+
+  Context: {context}
+
+  The mediator could not contact the VTA AND has no fresh cached secret
+  bundle to fall back on. To recover, request fresh credentials from the
+  VTA admin / Personal Network Manager (PNM) and re-seed this mediator's
+  cache. Pick whichever path matches your situation:
+
+  ──────────────────────────────────────────────────────────────────────
+  OPTION A — Restore VTA connectivity (fastest)
+  ──────────────────────────────────────────────────────────────────────
+
+    If the VTA outage is transient (network blip, VTA host restarting,
+    DNS hiccup, etc.) the simplest fix is to restore connectivity and
+    restart the mediator. The next successful VTA call will re-seed the
+    cache automatically.
+
+      1. Confirm reachability from this host:
+           curl -fsS <vta-url>/healthz
+      2. Restart the mediator once the VTA is responding.
+
+  ──────────────────────────────────────────────────────────────────────
+  OPTION B — Re-provision credentials (sealed-export mode)
+  ──────────────────────────────────────────────────────────────────────
+
+    Use this when the existing context on the VTA is intact but this
+    mediator's local cache and/or secrets are gone (e.g. lost host,
+    wiped disk, expired keyring). Sealed-export reissues the bundle
+    without minting a new DID — your mediator's identity stays the
+    same.
+
+    You'll need the original setup recipe (`recipe.toml`) used to
+    deploy this mediator, with `vta_mode = \"sealed-export\"`. If it's
+    been lost, see Option C.
+
+      1. On the mediator host, regenerate a request:
+           mediator-setup --from <recipe.toml> --force-reprovision
+
+      2. Hand the resulting request file to your VTA admin. On the VTA
+         host, they run:
+           vta contexts reprovision --id {context} \\
+             --recipient <request.json> \\
+             --output <bundle.armor>
+
+      3. Copy `bundle.armor` back to the mediator host and finalise:
+           mediator-setup --from <recipe.toml> --bundle <bundle.armor>
+
+      4. Restart the mediator.
+
+  ──────────────────────────────────────────────────────────────────────
+  OPTION C — Greenfield re-setup
+  ──────────────────────────────────────────────────────────────────────
+
+    Use this only when the context itself is gone on the VTA side, or
+    you want to start over with a new mediator DID. This MINTS A NEW
+    IDENTITY — clients will need to re-authenticate against the new
+    DID.
+
+      mediator-setup
+
+    Pick `Full setup — VTA mints my mediator DID` and follow the
+    prompts. See docs/setup-guide.md for the full walkthrough.
+
+  ──────────────────────────────────────────────────────────────────────
+  More: docs/setup-guide.md (sections 'Online' and 'Sealed-export')
+================================================================================
+"
+    );
 }
 
 #[async_trait]
