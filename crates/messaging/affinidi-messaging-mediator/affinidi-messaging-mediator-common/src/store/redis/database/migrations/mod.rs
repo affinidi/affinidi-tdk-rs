@@ -21,6 +21,7 @@
 
 pub(crate) mod m001_acl_queue_limit_flags;
 pub(crate) mod m002_lua_perf_optimizations;
+pub(crate) mod m003_backfill_role_type;
 mod runner;
 
 pub(crate) use runner::run_pending_migrations;
@@ -48,6 +49,7 @@ impl MigrationDef {
         match self.id {
             1 => m001_acl_queue_limit_flags::up(db, config).await,
             2 => m002_lua_perf_optimizations::up(db, config).await,
+            3 => m003_backfill_role_type::up(db, config).await,
             _ => Err(MediatorError::InternalError(
                 17,
                 "migrations".into(),
@@ -77,6 +79,12 @@ pub(crate) fn all_migrations() -> Vec<MigrationDef> {
             name: "lua_perf_optimizations",
             description: "Lua script performance and security optimizations (no data changes)",
             legacy_version: Some("0.14.0"),
+        },
+        MigrationDef {
+            id: 3,
+            name: "backfill_role_type",
+            description: "Backfill ROLE_TYPE = Standard on legacy DID records that pre-date the role-type schema",
+            legacy_version: None,
         },
     ]
 }

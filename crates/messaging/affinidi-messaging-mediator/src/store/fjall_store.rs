@@ -2537,11 +2537,13 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let store = FjallStore::open(dir.path()).expect("open");
 
+        let did = "did:peer:test";
+        let did_hash = hash(did);
         let session = Session {
             session_id: "sid-1".into(),
             challenge: "abc".into(),
-            did: "did:peer:test".into(),
-            did_hash: hash("did:peer:test"),
+            did: did.into(),
+            did_hash: did_hash.clone(),
             ..Default::default()
         };
         store
@@ -2549,15 +2551,20 @@ mod tests {
             .await
             .expect("put");
 
-        let got = store
-            .get_session("sid-1", "did:peer:test")
-            .await
-            .expect("get");
+        let got = store.get_session("sid-1", did).await.expect("get");
         assert_eq!(got.session_id, "sid-1");
         assert_eq!(got.challenge, "abc");
+        // Regression guard: did/did_hash must round-trip. A backend
+        // that loses these fields silently misroutes WebSocket
+        // messages and breaks the JWT auth → handler hand-off.
+        assert_eq!(got.did, did, "did must round-trip through put/get");
+        assert_eq!(
+            got.did_hash, did_hash,
+            "did_hash must round-trip through put/get"
+        );
 
         store.delete_session("sid-1").await.expect("delete");
-        let missing = store.get_session("sid-1", "did:peer:test").await;
+        let missing = store.get_session("sid-1", did).await;
         assert!(missing.is_err(), "deleted session must error");
     }
 

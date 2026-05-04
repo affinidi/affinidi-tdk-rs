@@ -1716,12 +1716,14 @@ mod tests {
     #[tokio::test]
     async fn session_lifecycle() {
         let store = MemoryStore::new();
+        let did = "did:peer:test";
+        let did_hash = digest(did);
         let session = Session {
             session_id: "sid-1".into(),
             challenge: "abc".into(),
             state: SessionState::ChallengeSent,
-            did: "did:peer:test".into(),
-            did_hash: digest("did:peer:test"),
+            did: did.into(),
+            did_hash: did_hash.clone(),
             ..Default::default()
         };
         store
@@ -1729,15 +1731,20 @@ mod tests {
             .await
             .expect("put");
 
-        let got = store
-            .get_session("sid-1", "did:peer:test")
-            .await
-            .expect("get");
+        let got = store.get_session("sid-1", did).await.expect("get");
         assert_eq!(got.session_id, "sid-1");
         assert_eq!(got.challenge, "abc");
+        // Regression guard: did/did_hash must round-trip. A backend that
+        // loses these fields silently misroutes WebSocket messages and
+        // breaks the JWT auth → handler hand-off.
+        assert_eq!(got.did, did, "did must round-trip through put/get");
+        assert_eq!(
+            got.did_hash, did_hash,
+            "did_hash must round-trip through put/get"
+        );
 
         store.delete_session("sid-1").await.expect("delete");
-        let missing = store.get_session("sid-1", "did:peer:test").await;
+        let missing = store.get_session("sid-1", did).await;
         assert!(missing.is_err(), "deleted session must error");
     }
 

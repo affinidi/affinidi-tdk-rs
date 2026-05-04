@@ -272,6 +272,24 @@ impl StreamingTask {
         new_session_id: &str,
         did: &str,
     ) {
+        // Defensive guard: an empty `did` means the upstream session
+        // arrived without an authenticated DID populated. Registering
+        // it would index this client under
+        // `did_hash = sha256("") = e3b0c44...` and silently misroute
+        // every subsequent message. Refuse and log loudly so the
+        // upstream auth bug surfaces immediately.
+        if did.is_empty() || value.did_hash.is_empty() {
+            error!(
+                session = new_session_id,
+                did_hash = %value.did_hash,
+                "Refusing to register streaming client with empty DID — \
+                 the upstream session is missing its authenticated DID. \
+                 Closing the channel."
+            );
+            let _ = client_tx.send(WebSocketCommands::Close).await;
+            return;
+        }
+
         if let Some((channel, old_session_id, _)) = clients.get(&value.did_hash) {
             warn!(
                 did = did,

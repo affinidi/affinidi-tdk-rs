@@ -23,6 +23,26 @@ pub async fn authentication_challenge(
     State(state): State<SharedData>,
     Json(body): Json<ChallengeBody>,
 ) -> Result<(StatusCode, Json<SuccessResponse<AuthenticationChallenge>>), AppError> {
+    // Reject empty / non-DID-shaped requests up-front. An empty `did`
+    // would otherwise be persisted into a SESSION record, propagate
+    // through the JWT, and surface downstream as
+    // `e.p.authorization.did.session_mismatch` on the WebSocket — by
+    // which point it's hard to localise. Catch it at the door.
+    if !body.did.starts_with("did:") {
+        return Err(MediatorError::problem(
+            29,
+            "",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authentication.challenge.invalid_did",
+            "Challenge body must include a `did:`-shaped DID",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        )
+        .into());
+    }
+
     let session = Session {
         session_id: create_random_string(12),
         challenge: create_random_string(32),
