@@ -196,8 +196,10 @@ mod tests {
         // the storage backend, so a Fjall wizard run produced a
         // Dockerfile that built a binary with no backend at all.
         let dir = tempfile::tempdir().unwrap();
-        let mut cfg = WizardConfig::default();
-        cfg.storage_backend = "fjall".into();
+        let cfg = WizardConfig {
+            storage_backend: "fjall".into(),
+            ..Default::default()
+        };
         generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
 
         let dockerfile = fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
@@ -223,8 +225,10 @@ mod tests {
         // backend. The fix re-asserts redis-backend explicitly so the
         // binary still has its backend.
         let dir = tempfile::tempdir().unwrap();
-        let mut cfg = WizardConfig::default();
-        cfg.secret_storage = "aws_secrets://".into();
+        let cfg = WizardConfig {
+            secret_storage: "aws_secrets://".into(),
+            ..Default::default()
+        };
         generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
 
         let dockerfile = fs::read_to_string(dir.path().join("Dockerfile")).unwrap();
@@ -255,8 +259,10 @@ mod tests {
         // mount a named volume for the LSM data directory so state
         // survives `docker compose down`.
         let dir = tempfile::tempdir().unwrap();
-        let mut cfg = WizardConfig::default();
-        cfg.storage_backend = "fjall".into();
+        let cfg = WizardConfig {
+            storage_backend: "fjall".into(),
+            ..Default::default()
+        };
         generate_dockerfile(&cfg, dir.path().to_str().unwrap()).unwrap();
         let compose = fs::read_to_string(dir.path().join("docker-compose.yml")).unwrap();
         assert!(

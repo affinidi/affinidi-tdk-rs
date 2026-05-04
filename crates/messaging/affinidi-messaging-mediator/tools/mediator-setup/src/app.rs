@@ -3861,8 +3861,10 @@ mod tests {
         // Dockerfile that built the mediator without `fjall-backend`
         // (and without `redis-backend` either, when paired with any
         // secret-storage feature that triggered `--no-default-features`).
-        let mut cfg = WizardConfig::default();
-        cfg.storage_backend = "fjall".into();
+        let cfg = WizardConfig {
+            storage_backend: "fjall".into(),
+            ..Default::default()
+        };
         assert_eq!(cfg.cargo_features(), vec!["didcomm", "fjall-backend"]);
         assert!(cfg.needs_explicit_features());
     }
@@ -3875,8 +3877,10 @@ mod tests {
         // and the resulting binary had NO storage backend at all. The
         // fix re-asserts `redis-backend` explicitly when secrets-X is
         // set, so the binary still has its backend.
-        let mut cfg = WizardConfig::default();
-        cfg.secret_storage = "aws_secrets://".into();
+        let cfg = WizardConfig {
+            secret_storage: "aws_secrets://".into(),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.cargo_features(),
             vec!["didcomm", "redis-backend", "secrets-aws"]
@@ -3886,9 +3890,11 @@ mod tests {
 
     #[test]
     fn cargo_features_fjall_with_secret_backend_uses_fjall() {
-        let mut cfg = WizardConfig::default();
-        cfg.storage_backend = "fjall".into();
-        cfg.secret_storage = "vault://".into();
+        let cfg = WizardConfig {
+            storage_backend: "fjall".into(),
+            secret_storage: "vault://".into(),
+            ..Default::default()
+        };
         assert_eq!(
             cfg.cargo_features(),
             vec!["didcomm", "fjall-backend", "secrets-vault"]
@@ -3901,15 +3907,19 @@ mod tests {
         // Defensive: a malformed recipe with an unrecognised backend
         // string shouldn't produce a binary with no storage at all.
         // Default to redis-backend so the mediator at least starts.
-        let mut cfg = WizardConfig::default();
-        cfg.storage_backend = "totally-not-a-real-backend".into();
+        let cfg = WizardConfig {
+            storage_backend: "totally-not-a-real-backend".into(),
+            ..Default::default()
+        };
         assert_eq!(cfg.cargo_features(), vec!["didcomm", "redis-backend"]);
     }
 
     #[test]
     fn cargo_features_tsp_protocol_included() {
-        let mut cfg = WizardConfig::default();
-        cfg.tsp_enabled = true;
+        let cfg = WizardConfig {
+            tsp_enabled: true,
+            ..Default::default()
+        };
         assert_eq!(
             cfg.cargo_features(),
             vec!["didcomm", "tsp", "redis-backend"]

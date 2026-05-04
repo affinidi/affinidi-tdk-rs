@@ -11,7 +11,10 @@ participants.
 
 ## Quick Start
 
-### 1. Start Redis
+### 1. Start the storage backend (Redis-only — Fjall is embedded)
+
+If you picked Fjall in the wizard, skip this step — Fjall stores
+its data in a local directory and needs no sidecar. For Redis:
 
 ```bash
 docker run --name=redis-local --publish=6379:6379 --hostname=redis \
@@ -31,16 +34,20 @@ The interactive TUI guides you through:
 1. **Deployment type** — local dev, headless server, or container
 2. **Protocol** — DIDComm v2 (recommended) or TSP (experimental)
 3. **DID configuration** — did:peer, did:webvh, or VTA-managed
-4. **Key storage** — inline, file, OS keyring, AWS Secrets Manager, or VTA
+4. **Key storage** — file (`?encrypt=1` opt-in), OS keyring, AWS
+   Secrets Manager, GCP Secret Manager, Azure Key Vault, or
+   HashiCorp Vault
 5. **SSL/TLS** — none (use a proxy), existing certs, or self-signed
-6. **Database** — Redis connection URL
+6. **Database** — Redis URL (multi-node cluster) or Fjall data
+   directory (single-node embedded LSM, no sidecar)
 7. **Admin account** — generate did:key, paste existing, or skip
 
 The wizard generates:
 - `conf/mediator.toml` — full configuration with real cryptographic material
-- `conf/secrets.json` — mediator secrets (if using `file://` storage)
 - `conf/keys/` — SSL certificates (if using self-signed)
 - Admin DID and private key (displayed on screen — save securely)
+- Per-key secret-backend entries pushed into your chosen backend
+  (no inline secrets in `mediator.toml`)
 
 ### 3. Build and Run
 
@@ -85,37 +92,83 @@ Available CLI options:
 | `--protocol` | `didcomm`, `tsp` | `didcomm` |
 | `--did-method` | `peer`, `webvh`, `vta` | per deployment |
 | `--public-url` | URL string | (required for webvh) |
-| `--secret-storage` | `inline`, `file`, `keyring`, `aws`, `vta` | per deployment |
+| `--secret-storage` | `file`, `keyring`, `aws` | per deployment |
 | `--ssl` | `none`, `self-signed` | `none` |
 | `--database-url` | Redis URL | `redis://127.0.0.1/` |
 | `--admin` | `generate`, `skip` | `generate` |
 | `--listen-address` | `ip:port` | `0.0.0.0:7037` |
 | `-c, --config` | file path | `conf/mediator.toml` |
 
+The `--secret-storage` shortcut covers the three most common
+backends. To pick GCP Secret Manager, Azure Key Vault, or
+HashiCorp Vault non-interactively, use a recipe TOML and
+`mediator-setup --from <recipe>`. See
+[`docs/setup-guide.md`](docs/setup-guide.md) for the recipe schema.
+
 ## Feature Flags
 
-Protocol and integration support is controlled via Cargo feature flags.
+The mediator's behaviour is composed from Cargo features in three
+groups: **protocol**, **storage backend**, and **secret backend**.
+At least one storage backend and (for any non-trivial deployment) at
+least one secret backend must be enabled. Defaults are
+`didcomm + redis-backend`.
+
+### Protocol
 
 | Feature | Default | Description |
 |---|---|---|
-| `didcomm` | Yes | DIDComm v2 protocol support |
-| `tsp` | No | Trust Spanning Protocol support (experimental) |
-| `vta-aws-secrets` | No | VTA credential storage via AWS Secrets Manager |
-| `vta-keyring` | No | VTA credential storage via OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service) |
+| `didcomm` | Yes | DIDComm v2 — production protocol |
+| `tsp` | No | Trust Spanning Protocol — experimental |
+
+### Storage backend (pick one)
+
+| Feature | Default | Use case |
+|---|---|---|
+| `redis-backend` | Yes | Multi-mediator clusters; cross-process pub/sub |
+| `fjall-backend` | No | Single-node persistence; embedded LSM, no sidecar |
+| `memory-backend` | No | Tests and in-process integration only |
+
+### Secret backend (pick one for production)
+
+| Feature | Default | Backend |
+|---|---|---|
+| (built-in) | always | `file://` (optionally `?encrypt=1` for AES-256-GCM + Argon2id) |
+| `secrets-keyring` | No | OS keychain (`keyring://`) — macOS Keychain, Windows Credential Manager, Linux Secret Service |
+| `secrets-aws` | No | AWS Secrets Manager (`aws_secrets://`) |
+| `secrets-gcp` | No | GCP Secret Manager (`gcp_secrets://`) |
+| `secrets-azure` | No | Azure Key Vault (`azure_keyvault://`) |
+| `secrets-vault` | No | HashiCorp Vault KV v2 (`vault://`) |
+
+The wizard automatically picks the right feature set and writes the
+exact `cargo build` / `cargo install` / Dockerfile commands when it
+finishes — most operators don't need to memorise these.
+
+### Example builds
 
 ```bash
-# DIDComm only (default)
+# Default — DIDComm + Redis, file:// or built-in keyring
 cargo build -p affinidi-messaging-mediator
 
-# With VTA keyring support (needed when config uses keyring:// credentials)
-cargo build -p affinidi-messaging-mediator --features vta-keyring
+# Embedded single-node deployment (Fjall + keyring)
+cargo build -p affinidi-messaging-mediator \
+  --no-default-features \
+  --features didcomm,fjall-backend,secrets-keyring
 
-# With VTA AWS support
-cargo build -p affinidi-messaging-mediator --features vta-aws-secrets
+# Multi-cluster with AWS Secrets Manager
+cargo build -p affinidi-messaging-mediator \
+  --no-default-features \
+  --features didcomm,redis-backend,secrets-aws
 
-# TSP only
-cargo build -p affinidi-messaging-mediator --no-default-features --features tsp
+# TSP-only build (still needs a storage backend)
+cargo build -p affinidi-messaging-mediator \
+  --no-default-features \
+  --features tsp,redis-backend
 ```
+
+Picking `--no-default-features` always means you must list at least
+one protocol feature and one storage backend feature explicitly —
+otherwise the binary won't compile or won't have anywhere to keep
+state.
 
 ## Architecture
 
@@ -217,11 +270,13 @@ upgrade path.
 cargo run --bin mediator-setup
 ```
 
-At the **Key Storage** step the wizard offers `keyring://`,
-`aws_secrets://`, `file://` (with an opt-in `?encrypt=1` envelope
-encryption flag), and reserved-but-unimplemented slots for GCP / Azure
-/ Vault. `vta://` is no longer a backend option — the VTA is a key
-*source*, not a store.
+At the **Key Storage** step the wizard offers all six backends:
+`keyring://`, `aws_secrets://`, `gcp_secrets://`,
+`azure_keyvault://`, `vault://`, and `file://` (with an opt-in
+`?encrypt=1` envelope-encryption flag for AES-256-GCM + Argon2id).
+`vta://` is not a backend — the VTA is a key *source*, not a
+store; its provisioned bundle is written into whichever real
+backend you pick here.
 
 ### VTA Integration (Centralized Key Management)
 

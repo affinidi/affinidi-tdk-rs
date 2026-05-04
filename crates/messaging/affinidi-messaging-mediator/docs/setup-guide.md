@@ -447,6 +447,3 @@ any existing keys).
 - [Bootstrap wire-format design brief](https://github.com/OpenVTC/verifiable-trust-infrastructure/blob/main/docs/bootstrap-provision-integration.md)
   — what's inside a sealed bundle, the AEAD / HPKE binding, the
   producer assertion schema
-- [`vta-setup-guide.md`](./vta-setup-guide.md) — the TUI-focused
-  equivalent of this guide, covering the same modes from the
-  interactive-wizard perspective
