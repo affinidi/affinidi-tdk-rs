@@ -5,7 +5,6 @@ use affinidi_messaging_mediator_common::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::field::valuable;
 use tracing::{Instrument, Level, debug, info, span};
 
 /// Periodically logs statistics about the database.
@@ -28,7 +27,7 @@ pub async fn statistics(
             let delta = stats.delta(&previous_stats);
             info!(
                 event_type = "UpdateStats",
-                tags = valuable(&tags),
+                ?tags,
                 received_bytes = stats.received_bytes,
                 sent_bytes = stats.sent_bytes,
                 deleted_bytes = stats.deleted_bytes,
@@ -45,7 +44,7 @@ pub async fn statistics(
 
             info!(
                 event_type = "UpdateDeltaStats",
-                tags = valuable(&tags),
+                ?tags,
                 received_bytes = delta.received_bytes,
                 sent_bytes = delta.sent_bytes,
                 deleted_bytes = delta.deleted_bytes,
