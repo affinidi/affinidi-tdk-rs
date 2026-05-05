@@ -75,8 +75,16 @@
 #![deny(rust_2018_idioms)]
 #![warn(missing_docs)]
 
+pub mod acl;
 pub mod environment;
 pub use environment::{TestEnvironment, TestEnvironmentError, TestUser};
+
+// Re-exports so consumers don't have to add a direct dep on
+// mediator-common just to construct an `acl_mode(...)` argument or
+// inspect a `MediatorACLSet` returned by `get_acl(...)`.
+pub use affinidi_messaging_mediator_common::types::acls::{
+    ACLError, AccessListModeType, MediatorACLSet,
+};
 
 use std::{
     net::{SocketAddr, TcpListener},
@@ -91,7 +99,6 @@ use affinidi_messaging_mediator_common::{
     MediatorSecrets, errors::MediatorError, secrets::backends::MemoryStore as SecretsMemoryStore,
     store::MediatorStore,
 };
-use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{
     DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
@@ -120,6 +127,13 @@ pub enum TestMediatorError {
     /// The underlying mediator returned an error.
     #[error(transparent)]
     Mediator(#[from] MediatorError),
+    /// An ACL bit-setter rejected an operation, or a preset
+    /// constructor surfaced one. In practice the presets in
+    /// [`crate::acl`] never fail (they pass `admin = true`); this
+    /// variant exists so future tightening of the production setters
+    /// surfaces here rather than via panic.
+    #[error("ACL operation failed: {0}")]
+    Acl(#[from] ACLError),
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -138,6 +152,29 @@ impl TestMediator {
     /// default in-memory store and an ephemeral 127.0.0.1 port.
     pub async fn spawn() -> Result<TestMediatorHandle, TestMediatorError> {
         Self::builder().spawn().await
+    }
+
+    /// Generate a fresh `did:peer:2` identity (Ed25519 verification +
+    /// X25519 key agreement) suitable for use as the mediator's admin
+    /// DID via [`TestMediatorBuilder::admin_identity`]. Mirrors the
+    /// `add_user` flow, minus the secrets-resolver insertion — the
+    /// admin's secrets stay with the caller. Pair with
+    /// [`TestEnvironment::add_admin`] to wire up an SDK profile that
+    /// authenticates as admin.
+    ///
+    /// The returned [`AdminIdentity`] can be cloned freely; the same
+    /// identity can drive multiple test-mediator instances or external
+    /// SDK clients.
+    pub fn random_admin_identity() -> Result<AdminIdentity, TestMediatorError> {
+        let (did, secrets) = DID::generate_did_peer(
+            vec![
+                (PeerKeyRole::Verification, KeyType::Ed25519),
+                (PeerKeyRole::Encryption, KeyType::X25519),
+            ],
+            None,
+        )
+        .map_err(|e| TestMediatorError::DidGeneration(e.to_string()))?;
+        Ok(AdminIdentity { did, secrets })
     }
 
     /// Spawn a default test mediator and pre-create one
@@ -188,6 +225,43 @@ pub struct TestMediatorUser {
     pub secrets: Vec<Secret>,
 }
 
+impl TestMediatorUser {
+    /// SHA-256 hash of the DID string — the canonical key shape used
+    /// by the mediator's account / ACL / queue stores. Pass this to
+    /// admin-protocol calls (e.g. `acls_set`, `access_list_add`,
+    /// `account_remove`) that operate on hashed DIDs.
+    pub fn did_hash(&self) -> String {
+        digest(&self.did)
+    }
+}
+
+/// A stable admin identity for the test mediator. The `did` is set
+/// as the mediator's `admin_did` (via
+/// [`TestMediatorBuilder::admin_identity`]) and the `secrets` are
+/// returned to the caller so they can sign DIDComm messages and
+/// HTTP-auth challenges as admin.
+///
+/// Construct via [`TestMediator::random_admin_identity`] for a
+/// freshly generated `did:peer:2`. Build your own when a test needs
+/// a stable DID across runs (e.g. to reuse cached resolver state).
+///
+/// **Secrets ownership.** The `secrets` field stays with the caller.
+/// Unlike [`TestMediatorHandle::add_user`], the test-mediator does
+/// **not** insert these into its own server-side secrets resolver
+/// (that resolver holds the mediator's operating keys, not its
+/// admin's). The admin authenticates via DID resolution + signature
+/// verification of the HTTP-auth challenge, so the private key never
+/// crosses the fixture boundary. Pass the secrets to whatever
+/// DIDComm or SDK auth client you're driving from the test —
+/// [`TestEnvironment::add_admin`] handles this for you.
+#[derive(Debug, Clone)]
+pub struct AdminIdentity {
+    /// `did:peer:2.*` admin DID.
+    pub did: String,
+    /// Verification + key-agreement secrets for `did`.
+    pub secrets: Vec<Secret>,
+}
+
 /// Configuration knobs for the test mediator.
 ///
 /// All fields have sensible defaults for the most common test scenario:
@@ -209,6 +283,35 @@ pub struct TestMediatorBuilder {
     /// here — the WS upgrade handler refuses connections from sessions
     /// without the LOCAL ACL bit set.
     local_dids: Vec<String>,
+    /// Public service URLs to forward to `MediatorBuilder::local_endpoints`
+    /// (mediator 0.15.0+). Empty by default; set this when the mediator
+    /// is reachable via additional hostnames or ports beyond
+    /// `listen_addr`.
+    local_endpoints: Vec<String>,
+    /// Override for `SecurityConfig.mediator_acl_mode`. `None` keeps the
+    /// production default (`ExplicitDeny`).
+    acl_mode: Option<AccessListModeType>,
+    /// Override for `SecurityConfig.global_acl_default`. `None` keeps the
+    /// production default (`MediatorACLSet::default()`).
+    global_acl_default: Option<MediatorACLSet>,
+    /// Override for `SecurityConfig.local_direct_delivery_allowed`.
+    local_direct_delivery_allowed: Option<bool>,
+    /// Override for `SecurityConfig.local_direct_delivery_allow_anon`.
+    local_direct_delivery_allow_anon: Option<bool>,
+    /// Override for `SecurityConfig.block_anonymous_outer_envelope`.
+    block_anonymous_outer_envelope: Option<bool>,
+    /// Override for `SecurityConfig.force_session_did_match`.
+    force_session_did_match: Option<bool>,
+    /// Override for `SecurityConfig.block_remote_admin_msgs`.
+    block_remote_admin_msgs: Option<bool>,
+    /// Override for `SecurityConfig.jwt_access_expiry` (seconds).
+    jwt_access_expiry_secs: Option<u64>,
+    /// Override for `SecurityConfig.jwt_refresh_expiry` (seconds).
+    jwt_refresh_expiry_secs: Option<u64>,
+    /// Stable admin identity for the mediator. `None` mints the
+    /// historical opaque `did:key:z6Mk{uuid}` shape with no usable
+    /// secrets — suitable for tests that don't authenticate as admin.
+    admin_identity: Option<AdminIdentity>,
     /// Temp directory backing a Fjall store, kept alive for the lifetime
     /// of the resulting handle so the partition files don't get cleaned
     /// up while the mediator is still using them.
@@ -226,6 +329,17 @@ impl Default for TestMediatorBuilder {
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
+            local_endpoints: Vec::new(),
+            acl_mode: None,
+            global_acl_default: None,
+            local_direct_delivery_allowed: None,
+            local_direct_delivery_allow_anon: None,
+            block_anonymous_outer_envelope: None,
+            force_session_did_match: None,
+            block_remote_admin_msgs: None,
+            jwt_access_expiry_secs: None,
+            jwt_refresh_expiry_secs: None,
+            admin_identity: None,
             #[cfg(feature = "fjall-backend")]
             fjall_dir: None,
         }
@@ -325,6 +439,107 @@ impl TestMediatorBuilder {
         self
     }
 
+    // ─── ACL / security knobs ────────────────────────────────────────
+
+    /// Override the mediator's access-list mode. Defaults to
+    /// `ExplicitDeny` (matching `SecurityConfig::default`). Set to
+    /// `ExplicitAllow` to simulate an allowlist deployment, where DIDs
+    /// without an explicit `LOCAL` ACL bit are rejected.
+    pub fn acl_mode(mut self, mode: AccessListModeType) -> Self {
+        self.acl_mode = Some(mode);
+        self
+    }
+
+    /// Override the global ACL applied to any DID that authenticates
+    /// without a pre-existing account. Pair with [`crate::acl`]
+    /// presets (`acl::allow_all()`, `acl::deny_all()`) for the common
+    /// cases, or build a [`MediatorACLSet`] directly via
+    /// `MediatorACLSet::default()` plus the bit setters for fine-grained
+    /// control. Defaults to `MediatorACLSet::default()`.
+    pub fn global_acl_default(mut self, acls: MediatorACLSet) -> Self {
+        self.global_acl_default = Some(acls);
+        self
+    }
+
+    /// Override `local_direct_delivery_allowed` and
+    /// `local_direct_delivery_allow_anon`. Defaults match
+    /// `SecurityConfig` (both `false`).
+    pub fn local_direct_delivery(mut self, allowed: bool, allow_anon: bool) -> Self {
+        self.local_direct_delivery_allowed = Some(allowed);
+        self.local_direct_delivery_allow_anon = Some(allow_anon);
+        self
+    }
+
+    /// Override `block_anonymous_outer_envelope`. Defaults to the
+    /// production value (the headless config currently keeps anon
+    /// envelopes enabled).
+    pub fn block_anonymous_outer_envelope(mut self, block: bool) -> Self {
+        self.block_anonymous_outer_envelope = Some(block);
+        self
+    }
+
+    /// Override `force_session_did_match`. Defaults to the production
+    /// value.
+    pub fn force_session_did_match(mut self, force: bool) -> Self {
+        self.force_session_did_match = Some(force);
+        self
+    }
+
+    /// Override `block_remote_admin_msgs`. Defaults to the production
+    /// value.
+    pub fn block_remote_admin_msgs(mut self, block: bool) -> Self {
+        self.block_remote_admin_msgs = Some(block);
+        self
+    }
+
+    /// Override JWT expiries. Defaults: 900 s access, 86 400 s refresh.
+    /// Useful for testing token-refresh flows by shrinking access
+    /// expiry to a few seconds.
+    pub fn jwt_expiry(mut self, access: std::time::Duration, refresh: std::time::Duration) -> Self {
+        self.jwt_access_expiry_secs = Some(access.as_secs());
+        self.jwt_refresh_expiry_secs = Some(refresh.as_secs());
+        self
+    }
+
+    // ─── Routing / endpoint config ───────────────────────────────────
+
+    /// Declare additional URLs at which the mediator is reachable.
+    /// Forwarded to `MediatorBuilder::local_endpoints` (mediator
+    /// 0.15.0+) so the routing-2.0 self-loopback handler treats
+    /// forwards to those URLs as local. The bind address is always
+    /// treated as local — only set this when the mediator is reachable
+    /// via additional hostnames or ports beyond the bind address.
+    pub fn local_endpoints<I, S>(mut self, endpoints: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.local_endpoints
+            .extend(endpoints.into_iter().map(Into::into));
+        self
+    }
+
+    // ─── Admin identity ──────────────────────────────────────────────
+
+    /// Use a specific admin identity. Defaults to a random
+    /// `did:key:z6Mk{uuid}` shape with no usable secrets — fine for
+    /// tests that don't authenticate as admin. Pass an
+    /// [`AdminIdentity`] (see [`TestMediator::random_admin_identity`])
+    /// when admin-protocol or account-management tests need to sign
+    /// as admin.
+    ///
+    /// **Secrets are NOT inserted into the mediator's secrets resolver.**
+    /// The caller owns `identity.secrets`. The mediator authenticates
+    /// the admin via DID resolution (peer:2 resolves locally) and
+    /// signature verification of the HTTP-auth challenge — the private
+    /// key never crosses the fixture boundary. Pass the secrets to
+    /// whatever DIDComm or SDK auth client you're driving from the
+    /// test ([`TestEnvironment::add_admin`] handles this for you).
+    pub fn admin_identity(mut self, identity: AdminIdentity) -> Self {
+        self.admin_identity = Some(identity);
+        self
+    }
+
     /// Run this test mediator against an on-disk Fjall backend instead
     /// of the default in-memory store. The data lives in a temporary
     /// directory tied to the resulting handle — when the handle drops,
@@ -363,7 +578,13 @@ impl TestMediatorBuilder {
 
         let (mediator_did, mediator_secrets, secrets_resolver) =
             generate_mediator_identity(&service_uri).await?;
-        let admin_did = format!("did:key:z6Mk{}", uuid::Uuid::new_v4().simple());
+        // Honor an operator-supplied admin identity if present —
+        // otherwise fall back to the historical opaque shape so tests
+        // that don't authenticate as admin keep working unchanged.
+        let admin_did = match self.admin_identity.as_ref() {
+            Some(id) => id.did.clone(),
+            None => format!("did:key:z6Mk{}", uuid::Uuid::new_v4().simple()),
+        };
 
         // JWT signing key — Ed25519 PKCS8, same shape as the production
         // path's `JWT_SECRET` well-known.
@@ -378,6 +599,36 @@ impl TestMediatorBuilder {
         security.jwt_encoding_key = jwt_encoding_key;
         security.jwt_decoding_key = jwt_decoding_key;
         security.use_ssl = false;
+        // Apply Option-typed overrides — `None` keeps the headless
+        // default, so behavior for callers that don't touch these
+        // setters is unchanged from earlier releases.
+        if let Some(mode) = self.acl_mode {
+            security.mediator_acl_mode = mode;
+        }
+        if let Some(acls) = self.global_acl_default.clone() {
+            security.global_acl_default = acls;
+        }
+        if let Some(b) = self.local_direct_delivery_allowed {
+            security.local_direct_delivery_allowed = b;
+        }
+        if let Some(b) = self.local_direct_delivery_allow_anon {
+            security.local_direct_delivery_allow_anon = b;
+        }
+        if let Some(b) = self.block_anonymous_outer_envelope {
+            security.block_anonymous_outer_envelope = b;
+        }
+        if let Some(b) = self.force_session_did_match {
+            security.force_session_did_match = b;
+        }
+        if let Some(b) = self.block_remote_admin_msgs {
+            security.block_remote_admin_msgs = b;
+        }
+        if let Some(secs) = self.jwt_access_expiry_secs {
+            security.jwt_access_expiry = secs;
+        }
+        if let Some(secs) = self.jwt_refresh_expiry_secs {
+            security.jwt_refresh_expiry = secs;
+        }
 
         // Disable processors that aren't useful in most tests.
         let mut processors =
@@ -406,6 +657,7 @@ impl TestMediatorBuilder {
             .security(security)
             .processors(processors)
             .streaming_enabled(self.enable_streaming)
+            .local_endpoints(self.local_endpoints.clone())
             .tls(TlsMode::Plain)
             .start(token.clone())
             .await?;
@@ -530,7 +782,27 @@ impl TestMediatorHandle {
         &self,
         alias: impl Into<String>,
     ) -> Result<TestMediatorUser, TestMediatorError> {
-        let alias = alias.into();
+        self.mint_user(alias.into(), acl::allow_all()).await
+    }
+
+    /// Mint a fresh `did:peer:2.*` user (same shape as [`add_user`])
+    /// but register it with `acls` instead of the typed `ALLOW_ALL`
+    /// preset. Useful for testing denied paths without reaching into
+    /// the underlying store.
+    pub async fn add_user_with_acl(
+        &self,
+        alias: impl Into<String>,
+        acls: MediatorACLSet,
+    ) -> Result<TestMediatorUser, TestMediatorError> {
+        self.mint_user(alias.into(), acls).await
+    }
+
+    /// Common implementation for [`add_user`] and [`add_user_with_acl`].
+    async fn mint_user(
+        &self,
+        alias: String,
+        acls: MediatorACLSet,
+    ) -> Result<TestMediatorUser, TestMediatorError> {
         let (did, secrets) = DID::generate_did_peer(
             vec![
                 (PeerKeyRole::Verification, KeyType::Ed25519),
@@ -541,13 +813,40 @@ impl TestMediatorHandle {
         .map_err(|e| TestMediatorError::DidGeneration(e.to_string()))?;
 
         self.secrets_resolver.insert_vec(&secrets).await;
-        self.register_local_did(&did).await?;
+        register_local_did_with_acl(&self.store, &did, &acls).await?;
 
         Ok(TestMediatorUser {
             did,
             alias,
             secrets,
         })
+    }
+
+    /// Replace a registered DID's ACL bitmask. Goes directly through
+    /// the underlying [`MediatorStore::set_did_acl`] — no admin session
+    /// is required, no permission checks run. Tests use this to
+    /// simulate ACL changes mid-flow ("mint user, run code, revoke
+    /// ACL, run more code") without round-tripping through the
+    /// admin protocol.
+    ///
+    /// Note this is the **fixture bypass** path. To validate that the
+    /// production mediator-administration protocol enforces
+    /// admin-only ACL changes correctly, drive
+    /// `env.atm.protocols().mediator().acls().acls_set(...)` from an
+    /// admin-authenticated SDK profile (see
+    /// [`TestEnvironment::add_admin`]) and use [`Self::get_acl`] to
+    /// read back the result.
+    pub async fn set_acl(&self, did: &str, acls: MediatorACLSet) -> Result<(), TestMediatorError> {
+        let did_hash = digest(did);
+        self.store.set_did_acl(&did_hash, &acls).await?;
+        Ok(())
+    }
+
+    /// Read the current ACL bitmask for `did`. Returns `None` when the
+    /// DID has no account record on the mediator.
+    pub async fn get_acl(&self, did: &str) -> Result<Option<MediatorACLSet>, TestMediatorError> {
+        let did_hash = digest(did);
+        Ok(self.store.get_did_acl(&did_hash).await?)
     }
 }
 
@@ -672,31 +971,30 @@ async fn generate_mediator_identity(
     Ok((did, secrets, Arc::new(resolver)))
 }
 
-/// Insert a single DID into the mediator's account store as a LOCAL,
-/// non-admin, ALLOW_ALL account. Idempotent — a DID that already has
-/// an account record is left untouched.
-///
-/// Uses the `ALLOW_ALL` ruleset so the registered DID can fully
-/// exercise the mediator (send / receive / forward / WS upgrade)
-/// without being granted admin role. Tests that want stricter ACLs
-/// can register the DID directly via the underlying store.
-async fn register_local_did(
+/// Insert a single DID into the mediator's account store with the
+/// supplied ACL bitmask. Idempotent — a DID that already has an
+/// account record is left untouched.
+async fn register_local_did_with_acl(
     store: &Arc<dyn MediatorStore>,
     did: &str,
+    acls: &MediatorACLSet,
 ) -> Result<(), TestMediatorError> {
-    let acls = MediatorACLSet::from_string_ruleset("ALLOW_ALL").map_err(|e| {
-        TestMediatorError::Mediator(MediatorError::ConfigError(
-            12,
-            "test-mediator".into(),
-            format!("failed to build ALLOW_ALL ACL set: {e}"),
-        ))
-    })?;
     let did_hash = digest(did);
     if store.account_exists(&did_hash).await? {
         return Ok(());
     }
-    store.account_add(&did_hash, &acls, None).await?;
+    store.account_add(&did_hash, acls, None).await?;
     Ok(())
+}
+
+/// Convenience wrapper: register `did` with the typed `acl::allow_all()`
+/// preset. Mirrors the historical "register as LOCAL ALLOW_ALL" flow
+/// without going through string-ruleset parsing.
+async fn register_local_did(
+    store: &Arc<dyn MediatorStore>,
+    did: &str,
+) -> Result<(), TestMediatorError> {
+    register_local_did_with_acl(store, did, &acl::allow_all()).await
 }
 
 /// Insert each DID via [`register_local_did`]. Used by the builder to

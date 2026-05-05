@@ -788,8 +788,11 @@ fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Optio
 }
 
 /// Parse `uri` and return `true` when its `(host, port)` matches any
-/// entry in `self_authorities`. Hostnames are compared case-insensitively;
-/// the URL's port falls back to the scheme default (80/443) when omitted.
+/// entry in `self_authorities`. Hostnames are normalized via
+/// [`crate::server::normalize_host`] (strips outer `[ ]` from IPv6
+/// literals, lowercases) so the lookup matches the form inserted by
+/// [`crate::server::compute_self_authorities`]. Port falls back to the
+/// scheme default via [`crate::server::default_port_for`].
 /// Returns `false` for unparseable URLs or schemes without a default port.
 fn uri_points_at_self(
     uri: &str,
@@ -801,25 +804,26 @@ fn uri_points_at_self(
     let Some(host) = url.host_str() else {
         return false;
     };
-    let Some(port) = url.port().or_else(|| match url.scheme() {
-        "http" | "ws" => Some(80),
-        "https" | "wss" => Some(443),
-        _ => None,
-    }) else {
+    let Some(port) = crate::server::default_port_for(&url) else {
         return false;
     };
-    self_authorities.contains(&(host.to_ascii_lowercase(), port))
+    self_authorities.contains(&(crate::server::normalize_host(host), port))
 }
 
 #[cfg(test)]
 mod tests {
     use super::uri_points_at_self;
+    use crate::server::{compute_self_authorities_from, normalize_host};
     use std::collections::HashSet;
 
+    /// Build an authorities set the same way `compute_self_authorities`
+    /// does — normalizing each host — so tests stay consistent with the
+    /// production insertion path. Tests that want to assert the
+    /// normalization itself should use `compute_self_authorities_from`.
     fn authorities(entries: &[(&str, u16)]) -> HashSet<(String, u16)> {
         entries
             .iter()
-            .map(|(host, port)| ((*host).to_string(), *port))
+            .map(|(host, port)| (normalize_host(host), *port))
             .collect()
     }
 
@@ -845,6 +849,12 @@ mod tests {
     fn ws_url_with_default_port_matches() {
         let auth = authorities(&[("mediator.example.com", 80)]);
         assert!(uri_points_at_self("ws://mediator.example.com/ws", &auth));
+    }
+
+    #[test]
+    fn wss_url_with_default_port_matches() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self("wss://mediator.example.com/ws", &auth));
     }
 
     #[test]
@@ -881,5 +891,149 @@ mod tests {
     fn empty_authority_set_never_matches() {
         let auth = authorities(&[]);
         assert!(!uri_points_at_self("http://127.0.0.1:7037/", &auth));
+    }
+
+    // ── IPv6 ─────────────────────────────────────────────────────────────
+
+    /// `Url::host_str()` returns IPv6 literals wrapped in brackets
+    /// (`"[::1]"`), but `SocketAddr::ip().to_string()` returns them bare
+    /// (`"::1"`). Both forms must funnel through `normalize_host` so a
+    /// bracketed URL host matches a bare authority key.
+    #[test]
+    fn ipv6_bracketed_url_matches_bare_authority() {
+        let auth = authorities(&[("::1", 7037)]);
+        assert!(uri_points_at_self("http://[::1]:7037/mediator/v1/", &auth));
+    }
+
+    /// And the reverse — a bracketed authority entry (e.g. one already
+    /// pre-normalized by the operator) must also match a bracketed URL.
+    #[test]
+    fn ipv6_bracketed_authority_matches_bracketed_url() {
+        let auth = authorities(&[("[::1]", 7037)]);
+        assert!(uri_points_at_self("http://[::1]:7037/mediator/v1/", &auth));
+    }
+
+    /// Full IPv6 address with default https port (no explicit port in URL).
+    #[test]
+    fn ipv6_full_address_with_default_port_matches() {
+        let auth = authorities(&[("2001:db8::1", 443)]);
+        assert!(uri_points_at_self(
+            "https://[2001:db8::1]/mediator/v1/",
+            &auth
+        ));
+    }
+
+    /// Different IPv6 address must not match.
+    #[test]
+    fn ipv6_different_address_does_not_match() {
+        let auth = authorities(&[("::1", 7037)]);
+        assert!(!uri_points_at_self(
+            "http://[2001:db8::1]:7037/mediator/v1/",
+            &auth
+        ));
+    }
+
+    // ── URI shape variants — query, path, fragment ──────────────────────
+
+    /// Path components are irrelevant to authority matching.
+    #[test]
+    fn path_does_not_affect_match() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self(
+            "https://mediator.example.com/very/deep/path/",
+            &auth
+        ));
+    }
+
+    /// Query strings are irrelevant.
+    #[test]
+    fn query_does_not_affect_match() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self(
+            "https://mediator.example.com/mediator/v1/?foo=bar&baz=1",
+            &auth
+        ));
+    }
+
+    /// Fragments are irrelevant.
+    #[test]
+    fn fragment_does_not_affect_match() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self(
+            "https://mediator.example.com/mediator/v1/#section",
+            &auth
+        ));
+    }
+
+    /// Scheme without a known default port (and no explicit port) is rejected.
+    #[test]
+    fn unknown_scheme_without_explicit_port_does_not_match() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(!uri_points_at_self(
+            "ftp://mediator.example.com/mediator/v1/",
+            &auth
+        ));
+    }
+
+    // ── compute_self_authorities_from integration ──────────────────────
+
+    /// `listen_address` and `local_endpoints` together populate the
+    /// authority set with normalized keys.
+    #[test]
+    fn compute_self_authorities_combines_bind_and_endpoints() {
+        let auth = compute_self_authorities_from(
+            "127.0.0.1:7037",
+            &["https://mediator.example.com".to_string()],
+        );
+        assert!(auth.contains(&("127.0.0.1".to_string(), 7037)));
+        assert!(auth.contains(&("mediator.example.com".to_string(), 443)));
+        assert_eq!(auth.len(), 2);
+    }
+
+    /// IPv6 listen_address round-trips: a `[::1]`-shaped DID-Doc URI
+    /// finds the `"::1"` authority cached from the bind address. This
+    /// is the regression test for the IPv6 host-normalization bug.
+    #[test]
+    fn ipv6_listen_address_round_trips_through_authorities() {
+        let auth = compute_self_authorities_from("[::1]:7037", &[]);
+        assert!(uri_points_at_self("http://[::1]:7037/mediator/v1/", &auth));
+    }
+
+    /// Full IPv6 listen_address with operator-declared bracketed alias —
+    /// both should normalize to the same key set.
+    #[test]
+    fn compute_self_authorities_normalizes_ipv6_endpoints() {
+        let auth = compute_self_authorities_from(
+            "[2001:db8::1]:7037",
+            &["http://[2001:db8::1]:7037".to_string()],
+        );
+        // Single entry — the bracketed endpoint normalizes to match the bind.
+        assert_eq!(auth.len(), 1);
+        assert!(auth.contains(&("2001:db8::1".to_string(), 7037)));
+    }
+
+    /// Malformed `local_endpoints` entries are skipped, not fatal.
+    #[test]
+    fn compute_self_authorities_skips_malformed_endpoints() {
+        let auth = compute_self_authorities_from(
+            "127.0.0.1:7037",
+            &[
+                "not-a-url".to_string(),
+                "ftp://no-default-port-known/".to_string(),
+                "https://valid.example.com".to_string(),
+            ],
+        );
+        // Only the bind address + the one valid HTTPS endpoint survive.
+        assert!(auth.contains(&("127.0.0.1".to_string(), 7037)));
+        assert!(auth.contains(&("valid.example.com".to_string(), 443)));
+        assert_eq!(auth.len(), 2);
+    }
+
+    /// An empty bind + empty endpoints yields an empty authority set,
+    /// which by construction never matches anything.
+    #[test]
+    fn compute_self_authorities_with_empty_inputs_is_empty() {
+        let auth = compute_self_authorities_from("", &[]);
+        assert!(auth.is_empty());
     }
 }

@@ -71,7 +71,9 @@ affinidi-crypto = "0.1"
 ## mediator finds them at startup without any inline config plumbing.
 ## Backend selection flows through the wizard's own `secrets-*` features
 ## declared at the top of this file; no hardcoded list here.
-affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", default-features = false }
+affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator-common", default-features = false, features = [
+  "server",
+] }
 
 # ── DID:webvh ────────────────────────────────────────────────────────────
 didwebvh-rs = "0.5"

@@ -2,6 +2,16 @@
 
 ## Changelog history
 
+## 5th May 2026
+
+### 0.13.1
+
+- **CHORE:** Bumped internal pin on
+  `affinidi-messaging-mediator-common` to `0.15` to track the
+  feature-gating rework. The processors enable `redis-backend`
+  (which now implies the `server` umbrella), so no source change
+  is needed.
+
 ## 24th April 2026
 
 ### 0.13.0

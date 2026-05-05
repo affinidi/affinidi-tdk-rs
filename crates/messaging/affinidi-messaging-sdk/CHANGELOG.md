@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.18.1] - 2026-05-05
+
+### Changed
+
+- `From<ACLError> for ATMError` now includes a wildcard arm because
+  `mediator-common 0.15.0` marked `ACLError` as `#[non_exhaustive]`.
+  Future ACL variants surface as `ATMError::ACLConfigError` until
+  the SDK adds a more specific mapping. No behavior change for
+  existing `Config` and `Denied` variants.
+- Bumped `mediator-common` caret pin to `"0.15"` to pick up the
+  feature-gating rework. The SDK already takes
+  `default-features = false`, so this build no longer pulls
+  `axum`, `redis`, or `aes-gcm`/`argon2` via mediator-common.
+
 ## [0.18.0] - 2026-05-05
 
 ### Breaking

@@ -77,6 +77,22 @@ admin_did = "did://did:peer:2.Vz6MkksX9huJxJwvLtj9vc3gXbT2m1WVy4Uoi3ssEiSSH2ZYJ.
 ### When enabled, adds a did:web route at /.well-known/did.json
 did_web_self_hosted = "file://./conf/did.jsonl"
 
+### Public service URL(s) at which this mediator is reachable. The
+### Routing 2.0 forward handler uses these (plus `listen_address`) to
+### detect when an outbound forward's next hop is itself, and short-
+### circuits to local delivery instead of opening a remote socket.
+###
+### When `listen_address` is bound to a wildcard (`0.0.0.0` / `::`)
+### — which is the default — DID-Doc service URIs will never literally
+### match the bind address, so set this to the public URL(s) you publish
+### in the mediator's DID Doc. Each entry must be a parseable URL with
+### scheme + host (port optional; falls back to the scheme default).
+###
+### Hostnames are compared case-insensitively; IPv6 literals are
+### normalized so a bracketed URL form (`http://[::1]:7037`) matches a
+### bind address recorded as `::1`.
+# local_endpoints = ["https://mediator.example.com", "https://mediator.example.com:7037"]
+
 ### ****************************************************************************************************************************
 ### Database configuration
 ### ****************************************************************************************************************************
