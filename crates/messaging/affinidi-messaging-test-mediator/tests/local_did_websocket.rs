@@ -78,24 +78,56 @@ async fn local_did_completes_websocket_authentication() {
 }
 
 #[tokio::test]
-async fn local_dids_setter_accepts_iterable() {
-    // Just exercise the IntoIterator setter — registration is
-    // covered by the round-trip test above.
+async fn local_dids_setter_registers_each_did() {
+    // Verify the IntoIterator setter actually registers every DID it
+    // receives (not just the first). Each DID independently completes
+    // the JWT auth + WS upgrade through its own SDK profile — if any
+    // one weren't registered as LOCAL, its `profile_add(_, true)`
+    // would surface the 403 as a transport error.
     init_tracing();
     if skip_if_no_redis() {
         return;
     }
 
-    let dids = vec![
-        "did:key:z6MkExample1".to_string(),
-        "did:key:z6MkExample2".to_string(),
-    ];
+    let users: Vec<_> = (0..3)
+        .map(|i| {
+            let (did, secrets) = DID::generate_did_peer(
+                vec![
+                    (PeerKeyRole::Verification, KeyType::Ed25519),
+                    (PeerKeyRole::Encryption, KeyType::X25519),
+                ],
+                None,
+            )
+            .expect("generate user DID");
+            (format!("User{i}"), did, secrets)
+        })
+        .collect();
+
     let mediator = TestMediator::builder()
-        .local_dids(dids)
+        .local_dids(users.iter().map(|(_, did, _)| did.clone()))
         .spawn()
         .await
         .expect("spawn with iterable local_dids");
 
-    mediator.shutdown();
-    let _ = mediator.join().await;
+    let env = TestEnvironment::new(mediator)
+        .await
+        .expect("wire test environment");
+
+    for (alias, did, secrets) in &users {
+        env.tdk.secrets_resolver().insert_vec(secrets).await;
+        let profile = ATMProfile::new(
+            &env.atm,
+            Some(alias.clone()),
+            did.clone(),
+            Some(env.mediator.did().to_string()),
+        )
+        .await
+        .expect("create profile");
+        env.atm
+            .profile_add(&profile, true)
+            .await
+            .unwrap_or_else(|err| panic!("profile_add for {alias} failed: {err:?}"));
+    }
+
+    env.shutdown().await.expect("env shutdown");
 }

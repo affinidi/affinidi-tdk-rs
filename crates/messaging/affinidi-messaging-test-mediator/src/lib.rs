@@ -14,9 +14,7 @@
 //!
 //! #[tokio::test]
 //! async fn end_to_end_round_trip() {
-//!     let mediator = TestMediator::builder()
-//!         .redis_url("redis://localhost:6379")
-//!         .spawn()
+//!     let mediator = TestMediator::spawn()
 //!         .await
 //!         .expect("test mediator spawn");
 //!
@@ -28,6 +26,21 @@
 //!     mediator.join().await.unwrap();
 //! }
 //! ```
+//!
+//! Tests that authenticate a non-admin client over WebSocket must
+//! pre-register the client's DID — the WS handler refuses upgrades
+//! without the LOCAL ACL bit, and the fixture's default
+//! `global_acl_default` doesn't grant it on first auth:
+//!
+//! ```ignore
+//! let mediator = TestMediator::builder()
+//!     .local_did(client_did.clone())
+//!     .spawn()
+//!     .await
+//!     .expect("spawn");
+//! ```
+//!
+//! See [`TestMediatorBuilder::local_did`] / [`TestMediatorBuilder::local_dids`].
 //!
 //! # Storage backends
 //!
