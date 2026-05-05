@@ -104,6 +104,7 @@ Secure, private messaging built on [DIDComm v2](https://identity.foundation/didc
 | [`affinidi-messaging-didcomm`](./crates/affinidi-messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation for Rust |
 | [`affinidi-messaging-core`](./crates/affinidi-messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits |
 | [`affinidi-messaging-mediator`](./crates/affinidi-messaging/affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP via feature flags) |
+| [`affinidi-messaging-test-mediator`](./crates/affinidi-messaging/affinidi-messaging-test-mediator/) | Embedded mediator fixture for integration tests |
 | [`affinidi-messaging-helpers`](./crates/affinidi-messaging/affinidi-messaging-helpers/) | Setup tools, environment config, and examples |
 | [`affinidi-messaging-text-client`](./crates/affinidi-messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
 
@@ -191,6 +192,80 @@ let config = Config::builder()
     .build()?;
 let mut atm = ATM::new(config, vec![]).await?;
 atm.send_ping("did:peer:2...", true, true).await?;
+```
+
+## Using affinidi-* crates from outside this workspace
+
+This workspace's root `Cargo.toml` defines a non-trivial
+[`[patch.crates-io]` table](./Cargo.toml#L85). Cargo's patch tables
+are only honoured by the workspace that *defines* them — when an
+external repository depends on any affinidi-* crate via a git rev or
+local path, that consumer must replicate the same patch table
+verbatim, or different parts of the dependency closure will end up
+resolving the affinidi-* crates from a mix of crates.io and the
+git/path source. Type-graph divergence shows up as confusing trait
+mismatches at compile time (`expected MediatorACLSet, found
+MediatorACLSet`).
+
+This is a known cargo limitation — see
+[rust-lang/cargo#4452](https://github.com/rust-lang/cargo/issues/4452).
+
+### Recommended path: depend on crates.io releases
+
+The simplest approach is to depend on published versions only:
+
+```toml
+[dependencies]
+affinidi-tdk = "0.7"
+affinidi-messaging-sdk = "0.17"
+
+[dev-dependencies]
+affinidi-messaging-test-mediator = "0.1"
+```
+
+No patch table is needed — cargo resolves a single version of each
+affinidi-* crate from crates.io and the type graph is unified by
+construction.
+
+### When you must use a git rev (unreleased fixes)
+
+If you need a patch that hasn't reached crates.io yet, pin the
+relevant affinidi-* crates to the same git rev, *and* mirror the
+workspace's patch table so transitive deps go through the same rev:
+
+```toml
+[patch.crates-io]
+# Pick a single rev that all affinidi-* deps resolve through.
+# Bump this when you bump any affinidi-* dep above.
+affinidi-secrets-resolver = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-did-resolver-cache-sdk = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-did-common = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-crypto = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-encoding = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-data-integrity = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-messaging-didcomm = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-messaging-sdk = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-messaging-mediator = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-messaging-mediator-common = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-did-authentication = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-tdk-common = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-tdk = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-meeting-place = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-tsp = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+affinidi-did-web = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+did-scid = { git = "https://github.com/affinidi/affinidi-tdk-rs", rev = "<rev>" }
+```
+
+The rev must match — and stay matched — to the version constraints
+in your own `[dependencies]`. If you bump `affinidi-tdk` above, bump
+the rev too; otherwise cargo may fall back to crates.io for crates
+not in the patch table.
+
+A regenerator helper is provided to emit the patch block for a
+specific commit on this repo:
+
+```bash
+./tools/generate-consumer-patch.sh <git-rev>
 ```
 
 ## Support & Feedback
