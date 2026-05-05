@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.14.0"
+version = "0.14.1"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -146,8 +146,8 @@ futures-util = "0.3"
 ## Prometheus metrics via /metrics endpoint
 metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
-tracing = { version = "0.1", features = ["valuable"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "valuable"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 # ── Rate Limiting & Resilience ───────────────────────────────────────────
 ## Per-IP and per-DID rate limiting (in-memory, not distributed)

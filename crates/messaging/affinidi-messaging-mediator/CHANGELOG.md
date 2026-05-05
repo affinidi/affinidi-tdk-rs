@@ -2,6 +2,31 @@
 
 ## Changelog history
 
+## 5th May 2026
+
+### 0.14.1 — Drop `--cfg tracing_unstable` requirement
+
+The statistics task previously logged its `tags` HashMap as a
+`valuable::Valuable` field, which required the unstable `valuable`
+support in `tracing-core` and forced every consumer to set
+`rustflags = ["--cfg", "tracing_unstable"]` in their own
+`.cargo/config.toml`. Now the tags are logged via standard `Debug`
+formatting (`?tags`), so the cfg flag is no longer needed.
+
+- Removed `valuable` features from the `tracing` and
+  `tracing-subscriber` dependencies.
+- Removed the workspace and crate-level `.cargo/config.toml` files
+  that set `--cfg tracing_unstable`.
+- External consumers of the mediator crate can drop the same
+  `.cargo/config.toml` from their own repositories.
+
+The user-facing log shape is unchanged in spirit; tags now render
+as Debug output instead of a structured object. Operators relying
+on machine-parseable tag fields in JSON logs should switch to
+including the relevant tag values as individual `info!` fields if
+they need typed access — none of the affinidi-* deployments did so
+when this change landed.
+
 ## 24th April 2026
 
 ### 0.14.0 — Setup Wizard, Monitoring, Unified Secret Backend
