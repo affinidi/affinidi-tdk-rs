@@ -78,12 +78,14 @@ use affinidi_messaging_mediator_common::{
     MediatorSecrets, errors::MediatorError, secrets::backends::MemoryStore as SecretsMemoryStore,
     store::MediatorStore,
 };
+use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{
     DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
 };
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::{rand::SystemRandom, signature::Ed25519KeyPair, signature::KeyPair};
+use sha256::digest;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -141,6 +143,11 @@ pub struct TestMediatorBuilder {
     enable_forwarding: bool,
     enable_message_expiry: bool,
     enable_streaming: bool,
+    /// Additional DIDs to register as LOCAL accounts at startup. Tests
+    /// that authenticate over WebSocket must include their client DID
+    /// here — the WS upgrade handler refuses connections from sessions
+    /// without the LOCAL ACL bit set.
+    local_dids: Vec<String>,
     /// Temp directory backing a Fjall store, kept alive for the lifetime
     /// of the resulting handle so the partition files don't get cleaned
     /// up while the mediator is still using them.
@@ -156,6 +163,7 @@ impl Default for TestMediatorBuilder {
             enable_forwarding: false,
             enable_message_expiry: false,
             enable_streaming: true,
+            local_dids: Vec::new(),
             #[cfg(feature = "fjall-backend")]
             fjall_dir: None,
         }
@@ -206,6 +214,36 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Register `did` as a LOCAL account on the mediator at startup.
+    ///
+    /// The mediator's WebSocket handler refuses upgrades unless the
+    /// authenticated session has the LOCAL ACL bit. By default, a DID
+    /// that authenticates against the test mediator is auto-registered
+    /// with `global_acl_default` — which has `local = false` for the
+    /// test fixture. Tests that need to open a WS connection from a
+    /// non-admin DID must register that DID here so it lands in the
+    /// account store with the LOCAL bit set.
+    ///
+    /// Repeated calls accumulate. The DID is stored as the raw
+    /// `did:`-shaped string; the SHA-256 hash used by the account
+    /// store is computed at spawn time.
+    pub fn local_did(mut self, did: impl Into<String>) -> Self {
+        self.local_dids.push(did.into());
+        self
+    }
+
+    /// Register multiple DIDs as LOCAL accounts. See [`local_did`].
+    ///
+    /// [`local_did`]: Self::local_did
+    pub fn local_dids<I, S>(mut self, dids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.local_dids.extend(dids.into_iter().map(Into::into));
+        self
+    }
+
     /// Run this test mediator against an on-disk Fjall backend instead
     /// of the default in-memory store. The data lives in a temporary
     /// directory tied to the resulting handle — when the handle drops,
@@ -230,6 +268,14 @@ impl TestMediatorBuilder {
     /// Spawn the mediator and wait until it's listening. Returns the
     /// handle once the listener is bound and ready.
     pub async fn spawn(self) -> Result<TestMediatorHandle, TestMediatorError> {
+        // Pick the rustls + jsonwebtoken default `CryptoProvider`s
+        // before any handshake has a chance to run. When a downstream
+        // test crate transitively activates the `rust_crypto` feature
+        // alongside the mediator's `aws_lc_rs`, rustls refuses to pick
+        // a default and panics on first use; installing here is
+        // idempotent and removes that boilerplate from consumers.
+        install_default_crypto_provider();
+
         let bound_addr = bind_ephemeral_listener(self.listen_addr)?;
         let api_prefix = "/mediator/v1/".to_string();
         let service_uri = format!("http://{bound_addr}{api_prefix}");
@@ -262,6 +308,9 @@ impl TestMediatorBuilder {
         // shared or persistent backend pass their own via `store()`.
         let store: Arc<dyn MediatorStore> =
             self.store.unwrap_or_else(|| Arc::new(MemoryStore::new()));
+        // Hold a clone so we can register pre-declared local DIDs after
+        // the mediator has finished initialising the store.
+        let store_for_local_accounts = store.clone();
 
         let token = CancellationToken::new();
         let inner = MediatorBuilder::new(secrets_resolver.clone())
@@ -278,6 +327,12 @@ impl TestMediatorBuilder {
             .tls(TlsMode::Plain)
             .start(token.clone())
             .await?;
+
+        // Register caller-supplied DIDs as LOCAL accounts so they can
+        // complete the WebSocket upgrade after authenticating. The
+        // store is initialised by `MediatorBuilder::start` above, so
+        // `account_add` is safe to call here regardless of backend.
+        register_local_dids(&store_for_local_accounts, &self.local_dids).await?;
 
         Ok(TestMediatorHandle {
             inner,
@@ -372,6 +427,28 @@ impl std::fmt::Debug for TestMediatorHandle {
     }
 }
 
+// ─── Crypto provider bootstrap ───────────────────────────────────────────────
+
+/// Install rustls' `aws_lc_rs` provider as the process-wide default,
+/// idempotently. Safe to call multiple times — once a default is
+/// registered, subsequent calls are no-ops.
+///
+/// Test crates that depend on both this fixture (which builds against
+/// `aws_lc_rs`) and another crate that activates the `rust_crypto`
+/// rustls provider end up with two providers in the feature graph and
+/// no automatic default; rustls panics on the first handshake. Calling
+/// this once at process start (or letting `TestMediator::spawn` call
+/// it for you) resolves the ambiguity.
+///
+/// Also installs jsonwebtoken's `aws_lc_rs` provider for the same
+/// reason. Errors from already-installed providers are ignored.
+pub fn install_default_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+    let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
+}
+
 // ─── Internals ───────────────────────────────────────────────────────────────
 
 /// Bind an ephemeral listener, capture the address, then drop it so
@@ -458,6 +535,39 @@ async fn generate_mediator_identity(
     // we'd have to track and join — overkill for a test fixture.
 
     Ok((did, secrets, Arc::new(resolver)))
+}
+
+/// Insert each DID into the mediator's account store as a LOCAL,
+/// non-admin account. Idempotent — a DID that already has an account
+/// record is left untouched, matching the auto-registration path used
+/// by the JWT challenge handler.
+///
+/// Uses the `ALLOW_ALL` ruleset so the registered DID can fully
+/// exercise the mediator (send / receive / forward / WS upgrade)
+/// without being granted admin role. Tests that want stricter ACLs
+/// can register the DID directly via the underlying store.
+async fn register_local_dids(
+    store: &Arc<dyn MediatorStore>,
+    dids: &[String],
+) -> Result<(), TestMediatorError> {
+    if dids.is_empty() {
+        return Ok(());
+    }
+    let acls = MediatorACLSet::from_string_ruleset("ALLOW_ALL").map_err(|e| {
+        TestMediatorError::Mediator(MediatorError::ConfigError(
+            12,
+            "test-mediator".into(),
+            format!("failed to build ALLOW_ALL ACL set: {e}"),
+        ))
+    })?;
+    for did in dids {
+        let did_hash = digest(did);
+        if store.account_exists(&did_hash).await? {
+            continue;
+        }
+        store.account_add(&did_hash, &acls, None).await?;
+    }
+    Ok(())
 }
 
 /// Generate a fresh Ed25519 keypair for JWT signing. Mirrors the
