@@ -7,7 +7,7 @@
 
 use crate::errors::MediatorError;
 use crate::store::types::{Session, SessionState};
-use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
+use crate::types::{accounts::AccountType, acls::MediatorACLSet};
 use ahash::AHashMap as HashMap;
 use sha256::digest;
 use tracing::{debug, warn};

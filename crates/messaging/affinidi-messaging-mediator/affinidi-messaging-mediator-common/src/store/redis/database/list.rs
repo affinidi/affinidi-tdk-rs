@@ -1,5 +1,5 @@
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::messages::{Folder, MessageList, MessageListElement};
+use crate::types::messages::{Folder, MessageList, MessageListElement};
 use itertools::Itertools;
 use redis::{Value, from_redis_value};
 use tracing::{Instrument, Level, event, span};

@@ -35,7 +35,7 @@ path = "src/forwarding/main.rs"
 ## Standalone binaries here are Redis-only by design, so the
 ## `redis-backend` feature is always enabled. The unified processor
 ## logic now lives in this crate; no duplicated implementation here.
-affinidi-messaging-mediator-common = { version = "0.13", path = "../affinidi-messaging-mediator-common", features = ["redis-backend"] }
+affinidi-messaging-mediator-common = { version = "0.14", path = "../affinidi-messaging-mediator-common", features = ["redis-backend"] }
 
 # ── CLI ──────────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }

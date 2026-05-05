@@ -8,7 +8,7 @@
 use crate::errors::MediatorError;
 use crate::store::redis::database::Database;
 use crate::store::redis::init::RedisInitConfig;
-use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+use crate::types::acls::MediatorACLSet;
 use tracing::info;
 
 pub(crate) async fn up(db: &Database, config: &RedisInitConfig) -> Result<(), MediatorError> {

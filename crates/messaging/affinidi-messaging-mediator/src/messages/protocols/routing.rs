@@ -24,6 +24,7 @@ use http::StatusCode;
 use serde::Deserialize;
 use sha256::digest;
 use tracing::{Instrument, debug, info, span, warn};
+use url::Url;
 
 // Reads the body of an incoming forward message
 #[derive(Default, Deserialize)]
@@ -733,10 +734,15 @@ pub(crate) async fn process(
 /// Returns `Some(endpoint_url)` if the next hop should be forwarded to a remote mediator,
 /// or `None` if the next hop is local to this mediator.
 ///
-/// A DIDCommMessaging service with a `uri` field pointing to this mediator's DID
-/// means the recipient uses this mediator — so it's local.
-/// A `uri` pointing elsewhere (an HTTP/HTTPS URL) means the message should be
-/// forwarded to that remote mediator endpoint.
+/// A DIDCommMessaging service is treated as local when:
+/// - the `uri` is this mediator's DID, OR
+/// - the `uri` is an HTTP/HTTPS/WS/WSS URL whose `(host, port)` matches
+///   one of the authorities recorded in `state.self_authorities`
+///   (the bind address plus any operator-declared `local_endpoints`).
+///
+/// Anything else with an HTTP-shaped URI is treated as a remote mediator
+/// and forwarded; non-HTTP URIs that don't match a known authority are
+/// treated as local (preserving the original conservative default).
 fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Option<String> {
     for service in &next_doc.service {
         if !service.type_.contains(&"DIDCommMessaging".to_string()) {
@@ -753,8 +759,25 @@ fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Optio
                 return None;
             }
 
-            // If the service endpoint is an HTTP(S) URL, it's a remote mediator
-            if uri_clean.starts_with("http://") || uri_clean.starts_with("https://") {
+            // If the service endpoint is an HTTP(S)/WS(S) URL, decide
+            // local-vs-remote by comparing its authority against the
+            // mediator's known self-authorities. URLs that point back
+            // at this instance (different hostname, same address; or a
+            // public alias declared via `local_endpoints`) are
+            // collapsed to local delivery instead of being relayed
+            // through FORWARD_Q to themselves.
+            if uri_clean.starts_with("http://")
+                || uri_clean.starts_with("https://")
+                || uri_clean.starts_with("ws://")
+                || uri_clean.starts_with("wss://")
+            {
+                if uri_points_at_self(uri_clean, &state.self_authorities) {
+                    debug!(
+                        "Service endpoint {} resolves to a self-authority — treating as local",
+                        uri_clean
+                    );
+                    return None;
+                }
                 return Some(uri_clean.to_string());
             }
         }
@@ -762,4 +785,101 @@ fn service_endpoint_for_remote(state: &SharedData, next_doc: &Document) -> Optio
 
     // No DIDCommMessaging service found with a remote endpoint — treat as local
     None
+}
+
+/// Parse `uri` and return `true` when its `(host, port)` matches any
+/// entry in `self_authorities`. Hostnames are compared case-insensitively;
+/// the URL's port falls back to the scheme default (80/443) when omitted.
+/// Returns `false` for unparseable URLs or schemes without a default port.
+fn uri_points_at_self(
+    uri: &str,
+    self_authorities: &std::collections::HashSet<(String, u16)>,
+) -> bool {
+    let Ok(url) = Url::parse(uri) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let Some(port) = url.port().or_else(|| match url.scheme() {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
+    }) else {
+        return false;
+    };
+    self_authorities.contains(&(host.to_ascii_lowercase(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uri_points_at_self;
+    use std::collections::HashSet;
+
+    fn authorities(entries: &[(&str, u16)]) -> HashSet<(String, u16)> {
+        entries
+            .iter()
+            .map(|(host, port)| ((*host).to_string(), *port))
+            .collect()
+    }
+
+    #[test]
+    fn http_url_matches_listen_address_authority() {
+        let auth = authorities(&[("127.0.0.1", 7037)]);
+        assert!(uri_points_at_self(
+            "http://127.0.0.1:7037/mediator/v1/",
+            &auth
+        ));
+    }
+
+    #[test]
+    fn https_url_with_default_port_matches() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self(
+            "https://mediator.example.com/mediator/v1/",
+            &auth
+        ));
+    }
+
+    #[test]
+    fn ws_url_with_default_port_matches() {
+        let auth = authorities(&[("mediator.example.com", 80)]);
+        assert!(uri_points_at_self("ws://mediator.example.com/ws", &auth));
+    }
+
+    #[test]
+    fn host_comparison_is_case_insensitive() {
+        let auth = authorities(&[("mediator.example.com", 443)]);
+        assert!(uri_points_at_self("https://Mediator.Example.COM/", &auth));
+    }
+
+    #[test]
+    fn different_host_does_not_match() {
+        let auth = authorities(&[("127.0.0.1", 7037)]);
+        assert!(!uri_points_at_self(
+            "http://other.mediator.example.com:7037/",
+            &auth
+        ));
+    }
+
+    #[test]
+    fn different_port_does_not_match() {
+        let auth = authorities(&[("127.0.0.1", 7037)]);
+        assert!(!uri_points_at_self(
+            "http://127.0.0.1:8080/mediator/v1/",
+            &auth
+        ));
+    }
+
+    #[test]
+    fn unparseable_uri_does_not_match() {
+        let auth = authorities(&[("127.0.0.1", 7037)]);
+        assert!(!uri_points_at_self("not a url", &auth));
+    }
+
+    #[test]
+    fn empty_authority_set_never_matches() {
+        let auth = authorities(&[]);
+        assert!(!uri_points_at_self("http://127.0.0.1:7037/", &auth));
+    }
 }

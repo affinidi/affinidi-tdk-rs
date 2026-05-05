@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.13.0"
+version = "0.14.0"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -38,10 +38,6 @@ secrets-azure = [
 secrets-vault = ["dep:vaultrs"]
 
 [dependencies]
-# ── Affinidi Crates ──────────────────────────────────────────────────────
-## SDK message types, problem reports, and protocol definitions
-affinidi-messaging-sdk = { path = "../../affinidi-messaging-sdk", version = "0.17" }
-
 # ── Secrets module: core ─────────────────────────────────────────────────
 async-trait = "0.1"
 base64 = "0.22"
@@ -143,6 +139,9 @@ tokio = { workspace = true, features = ["time"] }
 # ── Serialization ────────────────────────────────────────────────────────
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+
+# ── Protocol-vocabulary types: regex used by `ProblemReport::interpolation` ─
+regex = "1"
 
 # ── Utilities ────────────────────────────────────────────────────────────
 ahash = { version = "0.8", features = ["serde"] }

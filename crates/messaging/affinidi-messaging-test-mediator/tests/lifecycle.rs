@@ -72,6 +72,57 @@ async fn add_user_creates_distinct_dids() {
     env.shutdown().await.expect("env shutdown");
 }
 
+/// `TestMediator::with_users` returns the handle plus one user per
+/// alias, in order, each with a distinct `did:peer` and key material
+/// already registered on the mediator. This is the non-ATM consumer
+/// shortcut for the routing-2.0 wiring.
+#[tokio::test]
+async fn with_users_returns_pre_registered_participants() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let (mediator, users) = TestMediator::with_users(["alice", "bob"])
+        .await
+        .expect("with_users");
+
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].alias, "alice");
+    assert_eq!(users[1].alias, "bob");
+    assert!(users[0].did.starts_with("did:peer:2."));
+    assert!(users[1].did.starts_with("did:peer:2."));
+    assert_ne!(users[0].did, users[1].did);
+    assert_eq!(users[0].secrets.len(), 2);
+    assert_eq!(users[1].secrets.len(), 2);
+
+    mediator.shutdown();
+    mediator.join().await.expect("mediator joins");
+}
+
+/// `register_local_did` is idempotent: calling it twice with the same
+/// DID does not error. Guards against accidental panics or duplicate
+/// account-creation failures when callers register defensively.
+#[tokio::test]
+async fn register_local_did_is_idempotent() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::spawn().await.expect("spawn");
+    let alice = mediator.add_user("alice").await.expect("add alice");
+
+    // Re-registering the same DID must succeed silently.
+    mediator
+        .register_local_did(&alice.did)
+        .await
+        .expect("re-register alice");
+
+    mediator.shutdown();
+    mediator.join().await.expect("mediator joins");
+}
+
 /// `/healthchecker` answers without authentication. This is the most
 /// minimal "the HTTP server is up" probe.
 #[tokio::test]

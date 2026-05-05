@@ -6,7 +6,7 @@
 use super::Database;
 use crate::errors::MediatorError;
 use crate::store::types::Session;
-use affinidi_messaging_sdk::messages::Folder;
+use crate::types::messages::Folder;
 use ahash::AHashMap as HashMap;
 use tracing::{Instrument, Level, debug, span, warn};
 

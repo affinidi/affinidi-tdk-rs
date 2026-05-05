@@ -1,6 +1,6 @@
 //! Database routines to add/remove/list admin accounts
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::protocols::mediator::{
+use crate::types::{
     accounts::AccountType,
     acls::MediatorACLSet,
     administration::{AdminAccount, MediatorAdminList},

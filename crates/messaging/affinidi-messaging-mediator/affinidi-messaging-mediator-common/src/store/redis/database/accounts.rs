@@ -2,12 +2,10 @@
 use super::Database;
 use crate::errors::MediatorError;
 use crate::store::types::Session;
-use affinidi_messaging_sdk::{
+use crate::types::{
+    accounts::{Account, AccountType, MediatorAccountList},
+    acls::MediatorACLSet,
     messages::Folder,
-    protocols::mediator::{
-        accounts::{Account, AccountType, MediatorAccountList},
-        acls::MediatorACLSet,
-    },
 };
 use ahash::AHashMap as HashMap;
 use redis::Pipeline;

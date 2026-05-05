@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.14.1"
+version = "0.15.0"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -60,7 +60,7 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 
 [dependencies]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.17" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13", optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
@@ -70,7 +70,7 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Shared types: DatabaseHandler, errors, config structs, secret storage.
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
-affinidi-messaging-mediator-common = { version = "0.13", path = "affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.14", path = "affinidi-messaging-mediator-common" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,

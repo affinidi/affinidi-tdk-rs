@@ -54,6 +54,16 @@ pub struct ServerConfig {
     pub api_prefix: String,
     pub admin_did: String,
     pub did_web_self_hosted: Option<String>,
+    /// Additional URL aliases the mediator should treat as
+    /// pointing at *itself* when resolving a routing-2.0 next-hop.
+    /// Each entry is a full URL (e.g. `"https://mediator.example.com"`);
+    /// host + port are extracted and compared against the next-hop's
+    /// service endpoint. `listen_address` is automatically included,
+    /// so this is only needed when the mediator is reachable via
+    /// hostnames or ports that differ from its bind address (e.g.,
+    /// behind a load balancer or reverse proxy).
+    #[serde(default)]
+    pub local_endpoints: Vec<String>,
 }
 
 /// Live streaming configuration
@@ -166,6 +176,13 @@ pub struct Config {
     pub mediator_did_log: Option<String>,
     pub admin_did: String,
     pub api_prefix: String,
+    /// Operator-declared URL aliases the mediator considers local. See
+    /// [`ServerConfig::local_endpoints`]. Used by the routing 2.0
+    /// forward handler to short-circuit when a next-hop's DIDComm
+    /// service URI points back at this mediator under a different
+    /// hostname (e.g., LB-fronted deployments).
+    #[serde(default)]
+    pub local_endpoints: Vec<String>,
     pub streaming_enabled: bool,
     pub streaming_uuid: String,
     pub database: DatabaseConfig,
@@ -260,6 +277,7 @@ impl Config {
             mediator_did_doc: None,
             mediator_did_log: None,
             admin_did: "".into(),
+            local_endpoints: Vec::new(),
             database: DatabaseConfig::default(),
             streaming_enabled: true,
             streaming_uuid: "".into(),
@@ -685,6 +703,7 @@ impl TryFrom<ConfigRaw> for Config {
             listen_address: raw.server.listen_address,
             mediator_did,
             admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did").await?,
+            local_endpoints: raw.server.local_endpoints,
             database: raw.database.try_into()?,
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(

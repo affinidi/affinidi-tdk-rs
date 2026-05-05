@@ -5,6 +5,7 @@ pub mod secrets;
 pub mod store;
 pub mod tasks;
 pub mod time;
+pub mod types;
 
 pub use secrets::backends::{PASSPHRASE_ENV, PASSPHRASE_FILE_ENV};
 pub use secrets::well_known::OPERATING_SECRETS;

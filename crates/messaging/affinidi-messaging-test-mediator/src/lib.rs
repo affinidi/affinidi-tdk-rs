@@ -139,6 +139,53 @@ impl TestMediator {
     pub async fn spawn() -> Result<TestMediatorHandle, TestMediatorError> {
         Self::builder().spawn().await
     }
+
+    /// Spawn a default test mediator and pre-create one
+    /// [`TestMediatorUser`] per supplied alias. Each user is a
+    /// `did:peer:2.*` whose DIDComm service endpoint is the mediator's
+    /// DID (the routing 2.0 shape — see the README's "Local vs.
+    /// remote routing" section), already registered with the mediator
+    /// as a LOCAL, `ALLOW_ALL` account, and whose key material is
+    /// inserted into the mediator's secrets resolver so callers can
+    /// pack and unpack messages without any extra wiring.
+    ///
+    /// Returns the mediator handle alongside the users in the same
+    /// order the aliases were passed. For ATM-based scenarios that
+    /// also want a wired-up SDK client, use
+    /// [`TestEnvironment::add_user`] instead.
+    pub async fn with_users<I, S>(
+        aliases: I,
+    ) -> Result<(TestMediatorHandle, Vec<TestMediatorUser>), TestMediatorError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let handle = Self::spawn().await?;
+        let mut users = Vec::new();
+        for alias in aliases {
+            users.push(handle.add_user(alias).await?);
+        }
+        Ok((handle, users))
+    }
+}
+
+/// One participant returned by [`TestMediator::with_users`] /
+/// [`TestMediatorHandle::add_user`].
+///
+/// Owns its own `did:peer` and key material. Already registered on
+/// the mediator (LOCAL, ALLOW_ALL) and inserted into the mediator's
+/// secrets resolver, so a caller only needs to plug `did` and
+/// `secrets` into whatever DIDComm stack they're testing.
+#[derive(Debug, Clone)]
+pub struct TestMediatorUser {
+    /// `did:peer:2.*` whose DIDComm service URI is the mediator's DID.
+    pub did: String,
+    /// Human-readable alias (e.g. `"alice"`).
+    pub alias: String,
+    /// Verification + key-agreement secrets for `did`. Already
+    /// inserted into the mediator's shared secrets resolver — copy
+    /// elsewhere only if you need a separate resolver.
+    pub secrets: Vec<Secret>,
 }
 
 /// Configuration knobs for the test mediator.
@@ -154,6 +201,7 @@ pub struct TestMediatorBuilder {
     store: Option<Arc<dyn MediatorStore>>,
     listen_addr: Option<SocketAddr>,
     enable_forwarding: bool,
+    enable_external_forwarding: bool,
     enable_message_expiry: bool,
     enable_streaming: bool,
     /// Additional DIDs to register as LOCAL accounts at startup. Tests
@@ -174,6 +222,7 @@ impl Default for TestMediatorBuilder {
             store: None,
             listen_addr: None,
             enable_forwarding: false,
+            enable_external_forwarding: true,
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
@@ -208,6 +257,25 @@ impl TestMediatorBuilder {
     /// Runs against any backend via the `MediatorStore` trait.
     pub fn enable_forwarding(mut self, enabled: bool) -> Self {
         self.enable_forwarding = enabled;
+        self
+    }
+
+    /// Enable forwarding to *remote* mediators when the next-hop DID
+    /// resolves to a non-local service endpoint. Defaults to **on**
+    /// (matching `ForwardingConfig::default`).
+    ///
+    /// Set to `false` for tests that want every `routing/2.0/forward`
+    /// to fall through to local delivery regardless of what the
+    /// next-hop's DID Document says — useful when test user DIDs were
+    /// generated with the mediator's HTTP URL as the service endpoint
+    /// (instead of the mediator's DID), since the routing handler would
+    /// otherwise classify them as remote and push them onto FORWARD_Q.
+    ///
+    /// Has no effect unless [`enable_forwarding`] is also `true`.
+    ///
+    /// [`enable_forwarding`]: Self::enable_forwarding
+    pub fn enable_external_forwarding(mut self, enabled: bool) -> Self {
+        self.enable_external_forwarding = enabled;
         self
     }
 
@@ -315,6 +383,7 @@ impl TestMediatorBuilder {
         let mut processors =
             affinidi_messaging_mediator::common::config::ProcessorsConfig::default();
         processors.forwarding.enabled = self.enable_forwarding;
+        processors.forwarding.external_forwarding = self.enable_external_forwarding;
         processors.message_expiry_cleanup.enabled = self.enable_message_expiry;
 
         // Default to a fresh in-memory store. Tests that want a
@@ -351,6 +420,7 @@ impl TestMediatorBuilder {
             inner,
             secrets_resolver,
             mediator_secrets,
+            store: store_for_local_accounts,
             #[cfg(feature = "fjall-backend")]
             _fjall_dir: self.fjall_dir,
         })
@@ -363,6 +433,12 @@ pub struct TestMediatorHandle {
     inner: MediatorHandle,
     secrets_resolver: Arc<ThreadedSecretsResolver>,
     mediator_secrets: Vec<Secret>,
+    /// Live reference to the account/message store, kept so callers
+    /// can register additional local DIDs after spawn (see
+    /// [`Self::register_local_did`]). Cloned from the same `Arc` the
+    /// mediator runs against, so writes here are visible to the
+    /// running mediator immediately.
+    store: Arc<dyn MediatorStore>,
     /// Backing temp dir for the Fjall store (when applicable). Held
     /// alongside the handle so the partition files survive as long as
     /// the mediator is using them, and get cleaned up on drop.
@@ -426,6 +502,52 @@ impl TestMediatorHandle {
     /// Wait for the mediator to exit. Consumes the handle.
     pub async fn join(self) -> Result<(), MediatorError> {
         self.inner.join().await
+    }
+
+    /// Register `did` as a LOCAL, ALLOW_ALL account on the running
+    /// mediator. Idempotent — a DID that already has an account
+    /// record is left untouched.
+    ///
+    /// This is the runtime counterpart to
+    /// [`TestMediatorBuilder::local_did`]: use it after spawn when the
+    /// caller didn't yet know the mediator's DID at builder time
+    /// (since user DIDs typically advertise the mediator DID as their
+    /// service endpoint, and the mediator DID isn't generated until
+    /// `spawn`).
+    pub async fn register_local_did(&self, did: &str) -> Result<(), TestMediatorError> {
+        register_local_did(&self.store, did).await
+    }
+
+    /// Generate a fresh `did:peer:2.*` whose DIDComm service URI is
+    /// this mediator's DID, register it as a LOCAL ALLOW_ALL account,
+    /// insert its secrets into the mediator's resolver, and return
+    /// the user.
+    ///
+    /// The post-spawn counterpart to [`TestMediator::with_users`].
+    /// Use this when a test needs to add participants incrementally
+    /// rather than declaring them up front.
+    pub async fn add_user(
+        &self,
+        alias: impl Into<String>,
+    ) -> Result<TestMediatorUser, TestMediatorError> {
+        let alias = alias.into();
+        let (did, secrets) = DID::generate_did_peer(
+            vec![
+                (PeerKeyRole::Verification, KeyType::Ed25519),
+                (PeerKeyRole::Encryption, KeyType::X25519),
+            ],
+            Some(self.did().to_string()),
+        )
+        .map_err(|e| TestMediatorError::DidGeneration(e.to_string()))?;
+
+        self.secrets_resolver.insert_vec(&secrets).await;
+        self.register_local_did(&did).await?;
+
+        Ok(TestMediatorUser {
+            did,
+            alias,
+            secrets,
+        })
     }
 }
 
@@ -550,22 +672,18 @@ async fn generate_mediator_identity(
     Ok((did, secrets, Arc::new(resolver)))
 }
 
-/// Insert each DID into the mediator's account store as a LOCAL,
-/// non-admin account. Idempotent — a DID that already has an account
-/// record is left untouched, matching the auto-registration path used
-/// by the JWT challenge handler.
+/// Insert a single DID into the mediator's account store as a LOCAL,
+/// non-admin, ALLOW_ALL account. Idempotent — a DID that already has
+/// an account record is left untouched.
 ///
 /// Uses the `ALLOW_ALL` ruleset so the registered DID can fully
 /// exercise the mediator (send / receive / forward / WS upgrade)
 /// without being granted admin role. Tests that want stricter ACLs
 /// can register the DID directly via the underlying store.
-async fn register_local_dids(
+async fn register_local_did(
     store: &Arc<dyn MediatorStore>,
-    dids: &[String],
+    did: &str,
 ) -> Result<(), TestMediatorError> {
-    if dids.is_empty() {
-        return Ok(());
-    }
     let acls = MediatorACLSet::from_string_ruleset("ALLOW_ALL").map_err(|e| {
         TestMediatorError::Mediator(MediatorError::ConfigError(
             12,
@@ -573,12 +691,23 @@ async fn register_local_dids(
             format!("failed to build ALLOW_ALL ACL set: {e}"),
         ))
     })?;
+    let did_hash = digest(did);
+    if store.account_exists(&did_hash).await? {
+        return Ok(());
+    }
+    store.account_add(&did_hash, &acls, None).await?;
+    Ok(())
+}
+
+/// Insert each DID via [`register_local_did`]. Used by the builder to
+/// register DIDs declared via [`TestMediatorBuilder::local_did`] /
+/// [`TestMediatorBuilder::local_dids`] before returning the handle.
+async fn register_local_dids(
+    store: &Arc<dyn MediatorStore>,
+    dids: &[String],
+) -> Result<(), TestMediatorError> {
     for did in dids {
-        let did_hash = digest(did);
-        if store.account_exists(&did_hash).await? {
-            continue;
-        }
-        store.account_add(&did_hash, &acls, None).await?;
+        register_local_did(store, did).await?;
     }
     Ok(())
 }

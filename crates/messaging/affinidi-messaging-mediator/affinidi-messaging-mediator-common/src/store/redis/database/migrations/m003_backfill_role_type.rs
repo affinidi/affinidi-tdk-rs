@@ -23,7 +23,7 @@
 use crate::errors::MediatorError;
 use crate::store::redis::database::Database;
 use crate::store::redis::init::RedisInitConfig;
-use affinidi_messaging_sdk::protocols::mediator::accounts::AccountType;
+use crate::types::accounts::AccountType;
 use tracing::info;
 
 pub(crate) async fn up(db: &Database, _config: &RedisInitConfig) -> Result<(), MediatorError> {

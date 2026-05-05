@@ -15,7 +15,7 @@ use axum::extract::{FromRef, FromRequestParts};
 use chrono::{DateTime, Utc};
 use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthError};
 use http::request::Parts;
-use std::{fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
+use std::{collections::HashSet, fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
@@ -54,6 +54,12 @@ pub struct SharedData {
     pub did_rate_limiter: DidRateLimiter,
     /// Cancellation token for coordinated graceful shutdown of all background tasks.
     pub shutdown_token: CancellationToken,
+    /// Pre-computed `(host, port)` set used by the routing 2.0 forward
+    /// handler to short-circuit when a next-hop's DIDComm service URI
+    /// resolves back to this mediator. Populated from
+    /// `config.listen_address` plus any operator-declared
+    /// `config.local_endpoints` aliases.
+    pub self_authorities: Arc<HashSet<(String, u16)>>,
 }
 
 impl Debug for SharedData {

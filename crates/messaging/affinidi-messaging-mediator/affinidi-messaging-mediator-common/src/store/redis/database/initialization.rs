@@ -6,7 +6,7 @@ use super::migrations::run_pending_migrations;
 use crate::errors::MediatorError;
 use crate::store::redis::RedisStore;
 use crate::store::redis::init::RedisInitConfig;
-use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
+use crate::types::{accounts::AccountType, acls::MediatorACLSet};
 use sha256::digest;
 
 impl RedisStore {

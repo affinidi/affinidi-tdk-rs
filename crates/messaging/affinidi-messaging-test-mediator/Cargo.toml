@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -27,8 +27,8 @@ fjall-backend = ["affinidi-messaging-mediator/fjall-backend", "dep:tempfile"]
 ## is publishable to crates.io while still using the in-tree path for
 ## workspace dev-builds. Pins follow the workspace's caret-pin policy
 ## (major.minor only) so transitive patch fixes resolve automatically.
-affinidi-messaging-mediator = { version = "0.14", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
-affinidi-messaging-mediator-common = { version = "0.13", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator = { version = "0.15", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
+affinidi-messaging-mediator-common = { version = "0.14", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 
 # ── Optional: Fjall on-disk backend support (gated on `fjall-backend`) ──
 ## Wraps each FjallStore in a temp directory that's cleaned up when the
@@ -42,7 +42,7 @@ affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secre
 affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 
 # ── SDK client (for the e2e test environment) ───────────────────────────
-affinidi-messaging-sdk = { version = "0.17", path = "../affinidi-messaging-sdk" }
+affinidi-messaging-sdk = { version = "0.18", path = "../affinidi-messaging-sdk" }
 
 # ── JWT signing key generation for the test mediator's session tokens ───
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }

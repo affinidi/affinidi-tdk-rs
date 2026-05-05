@@ -347,6 +347,27 @@ impl MediatorBuilder {
         self
     }
 
+    /// Declare URL aliases the mediator should treat as pointing at
+    /// itself when classifying a routing 2.0 next-hop's service
+    /// endpoint as local vs. remote. The bind address from
+    /// [`listen_addr`] is always considered local; use this for
+    /// additional public-facing hostnames (e.g. when fronted by a
+    /// load balancer or reverse proxy).
+    ///
+    /// Each entry is parsed as a URL — `http://`, `https://`, `ws://`,
+    /// and `wss://` are all accepted. Only the host and port are
+    /// retained for comparison.
+    ///
+    /// [`listen_addr`]: Self::listen_addr
+    pub fn local_endpoints<I, S>(mut self, endpoints: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config.local_endpoints = endpoints.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Set the streaming task UUID. Defaults to a random `Uuid::new_v4`
     /// generated in [`MediatorBuilder::new`]. Override only when tests
     /// need a deterministic value.

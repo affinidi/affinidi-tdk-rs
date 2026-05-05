@@ -65,6 +65,87 @@ async fn alice_sends_to_bob() {
 }
 ```
 
+## Local vs. remote routing
+
+A common footgun for callers wiring up their own DIDs against the
+test mediator: **the recipient's DIDComm service URI must be the
+mediator's DID, not the mediator's HTTP URL**.
+
+Routing 2.0 (`messagepickup/3.0` + `routing/2.0`) treats the
+service URI as a logical pointer. When the mediator processes a
+`forward` envelope it looks up the next-hop DID Document and asks:
+
+- service URI matches *my own DID* → store locally, deliver via
+  pickup or live stream;
+- service URI is an HTTP(S) URL pointing somewhere else → enqueue
+  on `FORWARD_Q` and the forwarding processor relays to that remote
+  mediator.
+
+If a test user's DID advertises `http://127.0.0.1:NNNN/mediator/v1/`
+as its service URI — even when that URL belongs to *this* mediator —
+the routing handler classifies it as remote and pushes the message
+into `FORWARD_Q`, where it tries (and usually fails) to relay back
+to itself. Symptoms: messages disappear into the queue, pickup
+never returns them, and tests hang on a missing delivery.
+
+**The right shape for a user DID:**
+
+```text
+did:peer:2.{recipient keys}.S{service entry pointing at <mediator's DID>}
+```
+
+The mediator's own DID Document then resolves the HTTP/WS endpoints
+for the network round-trip — exactly one hop, locally delivered.
+
+The fixture's helpers all follow this shape:
+
+```rust,ignore
+// One-shot: spawn + pre-create users.
+let (mediator, users) = TestMediator::with_users(["alice", "bob"])
+    .await
+    .unwrap();
+let alice = &users[0]; // alice.did points at mediator.did() as its service
+```
+
+```rust,ignore
+// Add users incrementally after spawn.
+let mediator = TestMediator::spawn().await.unwrap();
+let alice = mediator.add_user("alice").await.unwrap();
+```
+
+Both register the user as `LOCAL, ALLOW_ALL` on the mediator and
+insert the user's secrets into the mediator's resolver, so callers
+can pack/unpack messages without further wiring.
+
+If you need to drive the mediator with externally-created DIDs, mint
+them yourself with the mediator's DID as their DIDComm service URI
+and call [`TestMediatorHandle::register_local_did`] to land the
+account record:
+
+```rust,ignore
+let (did, secrets) = generate_my_did(mediator.did())?;
+mediator.register_local_did(&did).await.unwrap();
+```
+
+### Escape hatch: disable external forwarding
+
+When a test legitimately wants to drive forwarding-shaped messages
+through the mediator without the relay step (for example, when
+exercising `routing/2.0/forward` in isolation), flip
+[`TestMediatorBuilder::enable_external_forwarding`] to `false`.
+Every `forward` then falls through to local delivery regardless of
+what the next-hop DID Document says — useful as a stop-gap, but it
+does not exercise the production forwarding path.
+
+```rust,ignore
+let mediator = TestMediator::builder()
+    .enable_forwarding(true)
+    .enable_external_forwarding(false)
+    .spawn()
+    .await
+    .unwrap();
+```
+
 ## Authenticating non-admin DIDs over WebSocket
 
 The mediator's WebSocket handler refuses upgrades unless the
@@ -131,5 +212,7 @@ The crates.io build is self-consistent and needs no patches.
 [`affinidi-messaging-mediator`]: https://crates.io/crates/affinidi-messaging-mediator
 [`TestMediatorBuilder::store`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/struct.TestMediatorBuilder.html#method.store
 [`TestMediatorBuilder::fjall_backend`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/struct.TestMediatorBuilder.html#method.fjall_backend
+[`TestMediatorBuilder::enable_external_forwarding`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/struct.TestMediatorBuilder.html#method.enable_external_forwarding
+[`TestMediatorHandle::register_local_did`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/struct.TestMediatorHandle.html#method.register_local_did
 [`TestEnvironment`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/struct.TestEnvironment.html
 [`install_default_crypto_provider`]: https://docs.rs/affinidi-messaging-test-mediator/latest/affinidi_messaging_test_mediator/fn.install_default_crypto_provider.html
