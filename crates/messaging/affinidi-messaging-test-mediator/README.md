@@ -68,7 +68,7 @@ async fn alice_sends_to_bob() {
 ## Local vs. remote routing
 
 A common footgun for callers wiring up their own DIDs against the
-test mediator: **the recipient's DIDComm service URI must be the
+test mediator: **the recipient's DIDComm service URI should be the
 mediator's DID, not the mediator's HTTP URL**.
 
 Routing 2.0 (`messagepickup/3.0` + `routing/2.0`) treats the
@@ -77,16 +77,20 @@ service URI as a logical pointer. When the mediator processes a
 
 - service URI matches *my own DID* → store locally, deliver via
   pickup or live stream;
-- service URI is an HTTP(S) URL pointing somewhere else → enqueue
-  on `FORWARD_Q` and the forwarding processor relays to that remote
-  mediator.
+- service URI is an HTTP(S)/WS(S) URL whose `(host, port)` matches
+  the mediator's bind address (or any operator-declared
+  `local_endpoints` alias) → also stored locally;
+- service URI is an HTTP(S)/WS(S) URL pointing somewhere else →
+  enqueue on `FORWARD_Q` and the forwarding processor relays to that
+  remote mediator.
 
-If a test user's DID advertises `http://127.0.0.1:NNNN/mediator/v1/`
-as its service URI — even when that URL belongs to *this* mediator —
-the routing handler classifies it as remote and pushes the message
-into `FORWARD_Q`, where it tries (and usually fails) to relay back
-to itself. Symptoms: messages disappear into the queue, pickup
-never returns them, and tests hang on a missing delivery.
+The bind-address match is a defensive measure (added in mediator
+0.15.0) so a self-pointing URL doesn't loop through `FORWARD_Q`.
+But hostname-fronted deployments (load balancers, public DNS)
+still need an explicit alias declared via `MediatorBuilder::local_endpoints`
+or the `[server.local_endpoints]` config — and using the mediator's
+DID as the service URI sidesteps the whole question, which is why
+the test-mediator helpers default to that shape.
 
 **The right shape for a user DID:**
 

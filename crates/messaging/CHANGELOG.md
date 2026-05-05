@@ -8,6 +8,79 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 5th May 2026
+
+### Test Mediator (0.2.0)
+
+Third-party-friendly ergonomics + the routing-2.0 self-loopback fix
+that prompted them, shipped together so the version bumps line up.
+
+- **FEAT:** `TestMediatorBuilder::enable_external_forwarding(bool)` —
+  surface the existing `ForwardingConfig::external_forwarding` knob.
+  When `false`, every `routing/2.0/forward` falls through to local
+  delivery regardless of the next-hop's service URI.
+- **FEAT:** `TestMediatorHandle::register_local_did(&self, did)` and
+  `TestMediatorHandle::add_user(alias)` — runtime counterparts to the
+  existing builder-time `local_did(...)` setter. Solves the
+  chicken-and-egg between "user DIDs need the mediator's DID" and
+  "the mediator DID isn't generated until `spawn`".
+- **FEAT:** `TestMediator::with_users(["alice", "bob"])` — convenience
+  that spawns the mediator and returns pre-registered users whose
+  DIDComm service URI is the mediator's DID (the routing-2.0 shape,
+  not the HTTP URL). Available for non-ATM consumers; the existing
+  `TestEnvironment::add_user` covers the ATM-based path.
+- **FIX:** `TestEnvironment::add_user` now uses the mediator's DID
+  as the user DID's service URI, not the mediator's HTTP URL. The
+  HTTP-URL shape silently broke forwarding-enabled tests by
+  classifying every user as a remote next-hop and pushing forwards
+  into `FORWARD_Q`.
+- **DOCS:** New "Local vs. remote routing" section in the README
+  spelling out the service-endpoint-shape rule and the helpers.
+
+### Mediator (0.15.0)
+
+- **FIX:** Routing-2.0 forward handler now treats a service URI as
+  local when its `(host, port)` matches the mediator's bind address
+  or any operator-declared alias — closing a loop where a
+  self-pointing HTTP URL would push forwards onto `FORWARD_Q`
+  endlessly. Hostnames compared case-insensitively; ports fall back
+  to scheme defaults (80/443) for http/https/ws/wss.
+- **FEAT:** New `[server.local_endpoints]` TOML config + matching
+  `MediatorBuilder::local_endpoints` setter for declaring URL aliases
+  the mediator should treat as local. Needed only for deployments
+  behind load balancers / reverse proxies where the public URL's
+  host:port differs from `listen_address`.
+
+### SDK (0.18.0)
+
+- **BREAKING:** `MediatorACLSet::*` fallible methods now return
+  `Result<_, ACLError>` instead of `Result<_, ATMError>`. `ACLError`
+  is a lightweight enum (`Config(String)` / `Denied(String)`) that
+  lives in `affinidi-messaging-mediator-common::types::acls`. Callers
+  using `?` against `ATMError` are unaffected — `From<ACLError> for
+  ATMError` is provided. Match-on-variant callers need
+  `.map_err(ATMError::from)` or to match `ACLError` directly.
+- **CHORE:** Mediator-protocol vocabulary types relocated out of this
+  crate into `affinidi-messaging-mediator-common::types::*` and
+  re-exported from their original SDK paths. Affected types:
+  `MediatorACLSet`, `AccessListModeType`, `Account`, `AccountType`,
+  `MediatorAccountList`, `AdminAccount`, `MediatorAdminList`,
+  `Folder`, `MessageList`, `MessageListElement`, `GetMessagesResponse`,
+  `FetchDeletePolicy`, `FetchOptions`, `ProblemReport*`, ACL-handler /
+  admin request + response shapes. The dependency arrow now points
+  sdk → mediator-common (was the other way around).
+
+### Mediator Common (0.14.0)
+
+- **FEAT:** New `types::*` module owning the storage-trait–facing
+  protocol vocabulary previously sourced from the SDK. Storage
+  backends now compile against this crate alone — no SDK dependency
+  required.
+- **FEAT:** `ACLError` enum introduced as the return type of
+  `MediatorACLSet::*` (replacing `ATMError` from the SDK).
+- **CHORE:** Dropped `affinidi-messaging-sdk` dependency; flipped
+  the direction so the SDK depends on this crate.
+
 ## 1st April 2026
 
 ### DIDComm Service (0.1.4)

@@ -2,6 +2,43 @@
 
 ## Changelog history
 
+## 5th May 2026
+
+### 0.14.0 — Protocol-vocabulary types relocated here
+
+The mediator's `MediatorStore` trait used to import its protocol
+vocabulary (`MediatorACLSet`, `Account`, `Folder`, `ProblemReport`,
+…) from `affinidi-messaging-sdk` — wrong direction; storage backends
+shouldn't depend on the client SDK. Those types now live here, and
+the SDK depends on this crate to re-export them at their original
+public paths.
+
+- **FEAT:** New `crate::types::*` module owning the storage-trait–facing
+  vocabulary:
+  - `types::acls` — `MediatorACLSet`, `AccessListModeType`, plus a new
+    lightweight `ACLError` enum (`Config(String)` / `Denied(String)`)
+    that replaces `ATMError` as the return type of `MediatorACLSet::*`
+    fallible methods.
+  - `types::accounts` — `Account`, `AccountType`, `MediatorAccountList`,
+    `MediatorAccountRequest`, `AccountChangeQueueLimitsResponse`.
+  - `types::acls_handler` — `MediatorACL*Response`,
+    `MediatorAccessList*Response`, `MediatorACLRequest`,
+    `MediatorACLExpanded`.
+  - `types::administration` — `MediatorAdminList`, `AdminAccount`,
+    `MediatorAdminRequest`.
+  - `types::messages` — `Folder`, `MessageList`, `MessageListElement`,
+    `GetMessagesResponse`, `FetchDeletePolicy`, `FetchOptions`,
+    `GenericDataStruct`.
+  - `types::problem_report` — `ProblemReport`, `ProblemReportSorter`,
+    `ProblemReportScope`.
+- **CHORE:** Dropped the `affinidi-messaging-sdk` dependency. The
+  dependency arrow now points sdk → common.
+- **CHORE:** Added `regex` dependency (used by `ProblemReport::interpolation`).
+
+Storage-trait implementors (`RedisStore`, `MemoryStore`, `FjallStore`,
+plus any third-party backend) now reference `crate::types::*` directly
+instead of importing from the SDK.
+
 ## 24th April 2026
 
 ### 0.13.0 — Unified Secret Backend

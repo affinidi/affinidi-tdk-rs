@@ -4,6 +4,36 @@
 
 ## 5th May 2026
 
+### 0.15.0 — Self-loopback routing fix + `local_endpoints` config
+
+Fixes a subtle routing-2.0 bug where a `forward` envelope whose
+next-hop DID Document advertised an HTTP/WS URL pointing back at
+*this* mediator (different hostname, same port; or via a load
+balancer) was treated as remote and pushed onto `FORWARD_Q` —
+where it tried (and usually failed) to relay back to itself.
+
+- **FEAT:** `service_endpoint_for_remote` (routing 2.0 forward
+  handler) now treats a service URI as local when its
+  `(host, port)` matches the mediator's bind address or any
+  operator-declared alias. Hostnames are compared
+  case-insensitively; the URL's port falls back to the
+  scheme-default (80/443) when omitted.
+- **FEAT:** New `[server.local_endpoints]` TOML field accepting a
+  list of full URLs (`http://`, `https://`, `ws://`, `wss://`) to
+  declare as local. The bind address is always treated as local, so
+  this is only needed when the mediator is reachable via hostnames
+  or ports that differ from its `listen_address` — e.g. behind a
+  load balancer or reverse proxy.
+- **FEAT:** `MediatorBuilder::local_endpoints` mirror of the config
+  field for embedding callers (test mediator, custom binaries).
+- **CHORE:** New `SharedData::self_authorities` field caches the
+  parsed `(host, port)` set at startup so the routing hot path
+  doesn't re-parse on every forward.
+- **CHANGED:** Bumped `affinidi-messaging-mediator-common` pin from
+  `0.13` to `0.14` (relocated protocol-vocabulary types) and
+  `affinidi-messaging-sdk` pin from `0.17` to `0.18` (consequent
+  signature change to `MediatorACLSet::*` returning `ACLError`).
+
 ### 0.14.1 — Drop `--cfg tracing_unstable` requirement
 
 The statistics task previously logged its `tags` HashMap as a
