@@ -497,9 +497,17 @@ impl SealedHandoffState {
                 cmd
             }
             VtaIntent::FullSetup => format!(
+                // `--create-context` is idempotent on the VTA: if the
+                // context already exists, the flag is a no-op; if it
+                // doesn't, the producer creates it before minting
+                // instead of erroring. Always emitting it covers the
+                // air-gapped first-run case (operator hasn't pre-created
+                // the context on the VTA host) without penalising
+                // re-runs.
                 "vta bootstrap provision-integration \
                  --request {} \
                  --context {} \
+                 --create-context \
                  --assertion pinned-only \
                  --out bundle.armor",
                 file, self.context_id,
@@ -1026,6 +1034,7 @@ mod tests {
         assert!(cmd.starts_with("vta bootstrap provision-integration"));
         assert!(cmd.contains("--request bootstrap-request-vp.json"));
         assert!(cmd.contains("--context prod-mediator"));
+        assert!(cmd.contains("--create-context"));
         assert!(cmd.contains("--assertion pinned-only"));
         assert!(cmd.contains("--out bundle.armor"));
         // Sanity: FullSetup has no fallback.

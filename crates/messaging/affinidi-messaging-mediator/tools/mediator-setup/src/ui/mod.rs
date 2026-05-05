@@ -323,7 +323,11 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     chunks[0],
                     "Sealed handoff — webvh server (optional)",
                     "Pin a webvh hosting server for this DID's log (optional).",
-                    None,
+                    Some(
+                        "Precondition: the id must already exist on the VTA — \
+                         register it first with `vta webvh add-server --id <id> \
+                         --did <webvh-did>` on the VTA host.",
+                    ),
                     &app.text_input,
                     "webvh-prod-1",
                     &hint,
