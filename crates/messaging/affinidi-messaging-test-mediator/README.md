@@ -170,6 +170,144 @@ let mediator = TestMediator::builder()
 Then the SDK's `profile_add(_, /* live_stream */ true)` flow completes
 the JWT handshake and opens the WebSocket without hitting the 403.
 
+For finer control over per-user ACLs, use
+[`add_user_with_acl`](TestMediatorHandle::add_user_with_acl) (see
+"Simulating different ACL modes" below).
+
+## Simulating different ACL modes
+
+Production deployments configure the mediator with a few interrelated
+ACL knobs:
+
+- `mediator_acl_mode` — `ExplicitDeny` (denylist; default) or
+  `ExplicitAllow` (allowlist).
+- `global_acl_default` — the `MediatorACLSet` applied to any DID that
+  authenticates without a pre-existing account.
+- per-DID `MediatorACLSet` — overrides the global default for
+  registered accounts.
+
+The fixture exposes typed setters for all three. **Defaults match
+`SecurityConfig::default`** so tests that don't touch these knobs are
+unaffected; today's `ExplicitDeny` + `MediatorACLSet::default()` +
+per-user `ALLOW_ALL` shape is preserved.
+
+```rust,ignore
+use affinidi_messaging_test_mediator::{
+    AccessListModeType, TestMediator, acl,
+};
+
+// Allowlist deployment + strict global default. Non-registered DIDs
+// authenticate fine but every send/receive permission is denied until
+// an admin grants them.
+let mediator = TestMediator::builder()
+    .acl_mode(AccessListModeType::ExplicitAllow)
+    .global_acl_default(acl::deny_all())
+    .spawn()
+    .await
+    .expect("spawn");
+
+// Mint alice with a custom per-DID ACL — typed presets cover the
+// common cases; build a `MediatorACLSet` directly for finer control.
+let alice = mediator
+    .add_user_with_acl("alice", acl::allow_all())
+    .await
+    .expect("add alice");
+
+// Revoke mid-flow without going through the admin protocol — the
+// fixture-bypass path. Use this when you're testing client behavior
+// against a denied path, not the admin protocol itself.
+mediator
+    .set_acl(&alice.did, acl::deny_all())
+    .await
+    .expect("set_acl");
+
+// Read back via the same bypass path.
+let observed = mediator
+    .get_acl(&alice.did)
+    .await
+    .expect("get_acl")
+    .expect("alice has ACL record");
+assert_eq!(observed.to_u64(), acl::deny_all().to_u64());
+```
+
+The [`acl`](crate::acl) module exports `allow_all()` and `deny_all()`
+as typed equivalents of the production string presets. For
+fine-grained ACLs, build a `MediatorACLSet` directly via
+`MediatorACLSet::default()` plus the bit setters — both
+[`MediatorACLSet`] and [`AccessListModeType`] are re-exported from
+this crate so consumers don't need a direct dep on
+`affinidi-messaging-mediator-common`.
+
+Other security flags exposed on the builder for completeness:
+[`local_direct_delivery`](TestMediatorBuilder::local_direct_delivery),
+[`block_anonymous_outer_envelope`](TestMediatorBuilder::block_anonymous_outer_envelope),
+[`force_session_did_match`](TestMediatorBuilder::force_session_did_match),
+[`block_remote_admin_msgs`](TestMediatorBuilder::block_remote_admin_msgs),
+[`jwt_expiry`](TestMediatorBuilder::jwt_expiry),
+[`local_endpoints`](TestMediatorBuilder::local_endpoints).
+
+## Admin protocol tests
+
+The mediator's admin DID is configured at startup via
+`MediatorBuilder::admin_did`. By default the fixture mints an opaque
+`did:key:z6Mk{uuid}` shape with no usable secrets — fine for tests that
+don't authenticate as admin. To drive the mediator-administration
+protocol from a real SDK client, mint a usable admin identity and
+attach it to the builder:
+
+```rust,ignore
+use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator, acl};
+
+// Step 1 — mint admin DID + secrets. The same `AdminIdentity` value
+// can drive multiple test-mediator instances if needed.
+let admin = TestMediator::random_admin_identity().expect("admin identity");
+
+// Step 2 — pin the mediator to that admin.
+let mediator = TestMediator::builder()
+    .admin_identity(admin.clone())
+    .spawn()
+    .await
+    .expect("spawn");
+let env = TestEnvironment::new(mediator).await.expect("env new");
+
+// Step 3 — wire an SDK profile authenticated as that admin. The
+// admin's secrets are inserted into the SDK resolver here (so it can
+// sign auth challenges); they are NOT inserted into the mediator's
+// own server-side resolver.
+let admin_user = env.add_admin(admin).await.expect("add_admin");
+
+// Step 4 — drive the admin-protocol surface. The protocol takes
+// hashed DIDs, exposed on TestUser / TestMediatorUser as
+// `did_hash()`.
+let alice = env.add_user("alice").await.expect("add alice");
+env.atm
+    .protocols()
+    .mediator()
+    .acls()
+    .acls_set(&env.atm, &admin_user.profile, &alice.did_hash(), &acl::deny_all())
+    .await
+    .expect("admin acls_set");
+
+// Step 5 — verify via the fixture-bypass read path. Independent
+// verification of a write that went through the protocol.
+let observed = env
+    .mediator
+    .get_acl(&alice.did)
+    .await
+    .expect("get_acl")
+    .expect("alice has ACL record");
+assert_eq!(observed.to_u64(), acl::deny_all().to_u64());
+```
+
+**Secrets ownership.** `AdminIdentity::secrets` stays with the caller.
+[`add_admin`](TestEnvironment::add_admin) inserts them into the SDK's
+secrets resolver so the SDK can sign on the admin's behalf. The
+mediator's own server-side secrets resolver is **not** touched — that
+resolver holds the mediator's operating keys, not its admin's. The
+admin authenticates via DID resolution + signature verification of
+the HTTP-auth challenge, so the private key never crosses the fixture
+boundary.
+
 ## Crypto provider
 
 The fixture installs rustls' `aws_lc_rs` `CryptoProvider` as the

@@ -14,7 +14,9 @@ mod common;
 
 use std::time::Duration;
 
-use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator};
+use affinidi_messaging_test_mediator::{
+    AccessListModeType, MediatorACLSet, TestEnvironment, TestEnvironmentError, TestMediator, acl,
+};
 use common::{init_tracing, skip_if_no_redis};
 
 /// Smoke test: spawning and shutting down a mediator runs to
@@ -413,4 +415,303 @@ async fn enable_external_forwarding_disabled_spawns_successfully() {
 
     mediator.shutdown();
     let _ = mediator.join().await;
+}
+
+// ─── New 0.2.2 surface ───────────────────────────────────────────────
+
+/// `did_hash()` on TestUser and TestMediatorUser returns the SHA-256
+/// hash of the DID — the canonical key shape used by the mediator's
+/// account / ACL / queue stores. Catches accidental drift if either
+/// helper changes its hashing algorithm.
+#[tokio::test]
+async fn did_hash_returns_sha256_of_did() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let env = TestEnvironment::spawn().await.expect("env spawn");
+    let alice = env.add_user("alice").await.expect("add alice");
+
+    let expected = sha256::digest(&alice.did);
+    assert_eq!(alice.did_hash(), expected);
+
+    // Same contract on the lower-level TestMediatorUser handle.
+    let user = env
+        .mediator
+        .add_user("bob")
+        .await
+        .expect("add bob via handle");
+    let expected = sha256::digest(&user.did);
+    assert_eq!(user.did_hash(), expected);
+
+    env.shutdown().await.unwrap();
+}
+
+/// `random_admin_identity()` mints a `did:peer:2.*` admin with two
+/// secrets (Ed25519 verification + X25519 key agreement). Sanity-checks
+/// the helper before any test relies on it.
+#[test]
+fn random_admin_identity_minted_with_secrets() {
+    let id = TestMediator::random_admin_identity().expect("admin identity");
+    assert!(id.did.starts_with("did:peer:2."), "admin DID: {}", id.did);
+    assert_eq!(id.secrets.len(), 2, "Ed25519 + X25519 = 2 secrets");
+    // Cloning must preserve the same DID and secrets.
+    let clone = id.clone();
+    assert_eq!(clone.did, id.did);
+    assert_eq!(clone.secrets.len(), id.secrets.len());
+}
+
+/// `add_user_with_acl(alias, deny_all)` registers the user with
+/// exactly the bitmask `acl::deny_all()` produces, observable via
+/// the fixture-bypass `get_acl` read path.
+#[tokio::test]
+async fn add_user_with_acl_custom_round_trips_through_get_acl() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::spawn().await.expect("spawn");
+    let alice = mediator
+        .add_user_with_acl("alice", acl::deny_all())
+        .await
+        .expect("add alice with deny_all");
+
+    let observed = mediator
+        .get_acl(&alice.did)
+        .await
+        .expect("get_acl")
+        .expect("alice has an ACL record");
+    assert_eq!(observed.to_u64(), acl::deny_all().to_u64());
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `set_acl(did, …)` replaces a previously-registered DID's ACL.
+/// Mint with `ALLOW_ALL`, swap to `DENY_ALL`, read back via `get_acl`.
+#[tokio::test]
+async fn set_acl_replaces_existing_acl() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::spawn().await.expect("spawn");
+    let alice = mediator.add_user("alice").await.expect("add alice");
+
+    // Sanity: starts as ALLOW_ALL.
+    let before = mediator
+        .get_acl(&alice.did)
+        .await
+        .expect("get_acl before")
+        .expect("alice has ACL after add_user");
+    assert_eq!(before.to_u64(), acl::allow_all().to_u64());
+
+    mediator
+        .set_acl(&alice.did, acl::deny_all())
+        .await
+        .expect("set_acl");
+
+    let after = mediator
+        .get_acl(&alice.did)
+        .await
+        .expect("get_acl after")
+        .expect("alice still has an ACL record");
+    assert_eq!(after.to_u64(), acl::deny_all().to_u64());
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `admin_identity(...)` plumbs the supplied DID through to the
+/// mediator's `admin_did` config. Without an override, the mediator
+/// uses the historical opaque `did:key:z6Mk{uuid}` shape — this test
+/// pins the override semantics.
+#[tokio::test]
+async fn admin_identity_overrides_default_admin_did() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let admin = TestMediator::random_admin_identity().expect("admin identity");
+    let expected_did = admin.did.clone();
+
+    let mediator = TestMediator::builder()
+        .admin_identity(admin)
+        .spawn()
+        .await
+        .expect("spawn with admin_identity");
+
+    assert_eq!(mediator.admin_did(), expected_did);
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `add_admin` rejects an `AdminIdentity` whose DID does not match the
+/// mediator's configured `admin_did` — the misuse surfaces at fixture
+/// setup, not at protocol time.
+#[tokio::test]
+async fn add_admin_rejects_mismatched_identity() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    // Spawn without `admin_identity` — mediator picks the historical
+    // random `did:key:z6Mk{uuid}` shape, which won't match the peer
+    // DID we mint below.
+    let env = TestEnvironment::spawn().await.expect("env spawn");
+    let stranger = TestMediator::random_admin_identity().expect("stranger identity");
+
+    let err = env
+        .add_admin(stranger)
+        .await
+        .expect_err("must error on mismatch");
+    match err {
+        TestEnvironmentError::AdminMismatch {
+            configured,
+            supplied,
+        } => {
+            assert_eq!(configured, env.mediator.admin_did());
+            assert!(supplied.starts_with("did:peer:2."));
+        }
+        other => panic!("expected AdminMismatch, got {other:?}"),
+    }
+
+    env.shutdown().await.unwrap();
+}
+
+/// `local_endpoints(...)` is plumbed through to `MediatorBuilder`.
+/// Smoke-tests that the fixture spawns cleanly with extra endpoints
+/// declared and that the resulting handle answers `healthchecker`.
+/// The actual self-loopback matching is covered by the mediator's
+/// own routing tests; here we only assert the wiring doesn't panic.
+#[tokio::test]
+async fn local_endpoints_passed_through_to_mediator_builder() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::builder()
+        .local_endpoints([
+            "https://mediator.example.com".to_string(),
+            "https://mediator.example.com:7037".to_string(),
+        ])
+        .spawn()
+        .await
+        .expect("spawn with local_endpoints");
+
+    let url = format!("{}healthchecker", mediator.endpoint());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client");
+    let resp = client.get(&url).send().await.expect("healthchecker");
+    assert!(resp.status().is_success());
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `acl_mode(ExplicitAllow)` and `global_acl_default(...)` are plumbed
+/// through to `SecurityConfig`. Smoke-tests the spawn path with a
+/// non-default ACL config — the actual enforcement (e.g. allowlist
+/// rejecting unregistered DIDs) is exercised by the mediator's own
+/// authentication tests.
+#[tokio::test]
+async fn acl_mode_and_global_acl_default_plumbing() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::builder()
+        .acl_mode(AccessListModeType::ExplicitAllow)
+        .global_acl_default(acl::deny_all())
+        .spawn()
+        .await
+        .expect("spawn with non-default ACL config");
+
+    // Spawn-success + healthchecker is the smoke test. Anything more
+    // requires reading SecurityConfig back out — not exposed today.
+    let url = format!("{}healthchecker", mediator.endpoint());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client");
+    let resp = client.get(&url).send().await.expect("healthchecker");
+    assert!(resp.status().is_success());
+
+    // A user we add explicitly should still get the ACL we ask for —
+    // confirms that the global default (DENY_ALL) doesn't override the
+    // per-user ACL passed to add_user_with_acl.
+    let alice = mediator
+        .add_user_with_acl("alice", acl::allow_all())
+        .await
+        .expect("add alice");
+    let observed = mediator
+        .get_acl(&alice.did)
+        .await
+        .expect("get_acl")
+        .expect("alice has ACL");
+    assert_eq!(observed.to_u64(), acl::allow_all().to_u64());
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `add_admin` happy path — spawn with a fresh admin identity, wrap
+/// in `TestEnvironment`, and wire an SDK profile authenticated as
+/// admin. Asserts the resulting `TestUser` reports the configured
+/// admin DID and carries the admin's secrets.
+#[tokio::test]
+async fn add_admin_wires_sdk_profile_for_configured_admin() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let admin_identity = TestMediator::random_admin_identity().expect("admin identity");
+    let configured_did = admin_identity.did.clone();
+    let secret_count = admin_identity.secrets.len();
+
+    let mediator = TestMediator::builder()
+        .admin_identity(admin_identity.clone())
+        .spawn()
+        .await
+        .expect("spawn with admin_identity");
+    let env = TestEnvironment::new(mediator).await.expect("env new");
+
+    let admin = env
+        .add_admin(admin_identity)
+        .await
+        .expect("add_admin happy path");
+
+    assert_eq!(admin.did, configured_did);
+    assert_eq!(admin.secrets.len(), secret_count);
+    // The profile should round-trip the configured admin DID via
+    // `dids()`, the same path the SDK uses to learn its own identity.
+    let (profile_did, mediator_did) = admin
+        .profile
+        .dids()
+        .expect("admin profile has DIDs configured");
+    assert_eq!(profile_did, configured_did);
+    assert_eq!(mediator_did, env.mediator.did());
+
+    env.shutdown().await.unwrap();
+}
+
+/// `acl::deny_all()` produces the same all-zeros bitmask as
+/// `MediatorACLSet::default()` — both encode "ExplicitAllow mode, no
+/// LOCAL bit, every permission denied, no self-management". Docs this
+/// invariant so a future reader doesn't add a setter to `deny_all()`
+/// thinking it must differ from default.
+#[test]
+fn deny_all_equals_default_bitmask() {
+    assert_eq!(MediatorACLSet::default().to_u64(), acl::deny_all().to_u64());
 }

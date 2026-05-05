@@ -35,7 +35,7 @@ use affinidi_tdk::common::TDKSharedState;
 use affinidi_tdk::common::config::TDKConfig;
 use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
 
-use crate::{TestMediator, TestMediatorHandle};
+use crate::{AdminIdentity, TestMediator, TestMediatorHandle};
 
 /// Errors specific to the e2e test environment, as opposed to the
 /// mediator-only fixture in [`crate::TestMediatorError`].
@@ -55,6 +55,20 @@ pub enum TestEnvironmentError {
         /// Underlying TDK / crypto error from `DID::generate_did_peer`.
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    /// `add_admin` was called with an `AdminIdentity` whose DID does
+    /// not match the mediator's configured admin DID. Authenticating
+    /// against this mismatched identity would succeed but the session
+    /// would never receive the admin role — surfacing the misuse here
+    /// catches the bug at fixture setup, not at protocol time.
+    #[error(
+        "admin identity DID ({supplied}) does not match mediator's configured admin_did ({configured})"
+    )]
+    AdminMismatch {
+        /// Admin DID the mediator was started with.
+        configured: String,
+        /// Admin DID supplied to `add_admin`.
+        supplied: String,
     },
 }
 
@@ -88,6 +102,16 @@ pub struct TestUser {
     /// the shared resolver — kept here for tests that want to inspect
     /// or copy them.
     pub secrets: Vec<Secret>,
+}
+
+impl TestUser {
+    /// SHA-256 hash of the DID string — the canonical key shape used
+    /// by the mediator's account / ACL / queue stores. Pass this to
+    /// admin-protocol calls (e.g. `acls_set`, `access_list_add`,
+    /// `account_remove`) that operate on hashed DIDs.
+    pub fn did_hash(&self) -> String {
+        sha256::digest(&self.did)
+    }
 }
 
 impl TestEnvironment {
@@ -191,6 +215,75 @@ impl TestEnvironment {
             alias: alias.to_string(),
             profile,
             secrets,
+        })
+    }
+
+    /// Wire an SDK profile authenticated as the mediator's admin DID.
+    ///
+    /// `identity.did` MUST equal `self.mediator.admin_did()` —
+    /// otherwise the resulting profile would authenticate fine but the
+    /// session would never receive the admin role, and admin-protocol
+    /// calls would silently fall through to `Standard`-tier
+    /// permissions. This method returns
+    /// [`TestEnvironmentError::AdminMismatch`] in that case to surface
+    /// the misuse early.
+    ///
+    /// Differences from [`add_user`](Self::add_user):
+    /// - **Does not register the admin DID as a LOCAL account** on the
+    ///   mediator — the admin is recognized by the `admin_did` config
+    ///   match performed at session-establishment, not by ACL.
+    /// - **Does insert** `identity.secrets` into the shared SDK
+    ///   resolver, so the SDK can sign HTTP-auth challenges and
+    ///   DIDComm envelopes on the admin's behalf. The mediator's own
+    ///   server-side secrets resolver is **not** touched (that
+    ///   resolver holds the mediator's operating keys, not its
+    ///   admin's).
+    /// - Returns a [`TestUser`]-shaped value (same struct — admin-ness
+    ///   is a property of the DID-to-config match, not the type).
+    ///
+    /// Pair with [`TestMediator::random_admin_identity`] +
+    /// [`crate::TestMediatorBuilder::admin_identity`] for the full
+    /// "stand up a mediator with a usable admin" flow.
+    pub async fn add_admin(
+        &self,
+        identity: AdminIdentity,
+    ) -> Result<TestUser, TestEnvironmentError> {
+        if identity.did != self.mediator.admin_did() {
+            return Err(TestEnvironmentError::AdminMismatch {
+                configured: self.mediator.admin_did().to_string(),
+                supplied: identity.did,
+            });
+        }
+
+        // Make the admin's secrets available to the SDK so it can
+        // sign auth challenges and pack outbound admin-protocol
+        // messages. NOT inserted into the mediator's own resolver —
+        // see the doc comment above.
+        self.tdk
+            .secrets_resolver()
+            .insert_vec(&identity.secrets)
+            .await;
+
+        let mediator_did = self.mediator.did().to_string();
+        let profile = ATMProfile::new(
+            &self.atm,
+            Some("admin".to_string()),
+            identity.did.clone(),
+            Some(mediator_did),
+        )
+        .await
+        .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+        let profile = self
+            .atm
+            .profile_add(&profile, false)
+            .await
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+
+        Ok(TestUser {
+            did: identity.did,
+            alias: "admin".to_string(),
+            profile,
+            secrets: identity.secrets,
         })
     }
 
