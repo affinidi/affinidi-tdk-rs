@@ -4,6 +4,36 @@
 
 ## 5th May 2026
 
+### 0.15.1 — IPv6 host normalization + wildcard-bind warning
+
+Patch follow-up to 0.15.0 fixing two real-world holes in the
+self-loopback routing fix.
+
+- **FIX:** IPv6 host normalization. `Url::host_str()` returns IPv6
+  literals wrapped in brackets (`"[::1]"`) while
+  `SocketAddr::ip().to_string()` returns them bare (`"::1"`). The
+  routing handler's lookup and the startup-time authority cache now
+  funnel both forms through a shared `normalize_host` helper, so a
+  `http://[::1]:7037/` DID-Doc URI matches a `[::1]:7037` bind
+  address. Without this, IPv6-bound mediators silently never matched
+  themselves and devolved to remote forwarding.
+- **FEAT:** Startup warning when `listen_address` is bound to a
+  wildcard (`0.0.0.0` / `::`) and `local_endpoints` is empty.
+  Service endpoints in DID Docs essentially never use the literal
+  `0.0.0.0`, so the default deployment shape silently rendered the
+  loopback fix a no-op. The warning points operators at the
+  `local_endpoints` config field.
+- **DOC:** `local_endpoints` is now documented in the sample
+  `conf/mediator.toml` with a commented example.
+- **TEST:** Routing test coverage extended — IPv6 (both bracketed
+  and bare host forms), `wss://`, query/path/fragment URIs, and a
+  `compute_self_authorities` integration test that round-trips an
+  IPv6 listen address through the lookup path.
+- **REFACTOR:** `compute_self_authorities` and `default_port_for`
+  hoisted to `pub(crate)` so the routing tests can drive them
+  directly. New `compute_self_authorities_from(listen, endpoints)`
+  takes the two relevant fields rather than a full `Config`.
+
 ### 0.15.0 — Self-loopback routing fix + `local_endpoints` config
 
 Fixes a subtle routing-2.0 bug where a `forward` envelope whose

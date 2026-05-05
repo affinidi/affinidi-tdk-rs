@@ -268,3 +268,149 @@ async fn environment_wires_sdk_profile_to_mediator() {
 
     env.shutdown().await.expect("env shutdown");
 }
+
+/// Resolve `did` and return the URI of its first DIDCommMessaging service.
+/// The `did:peer:2` representation produced by the test-mediator stores the
+/// URI inside `service_endpoint` as a JSON map with a `uri` key (the long
+/// form of the peer-DID service block).
+///
+/// Inspects the resolved Document via JSON serialization rather than
+/// importing `affinidi_did_common::service::Endpoint`, so the test crate
+/// doesn't need a fresh dev-dependency just to peek at one field.
+async fn resolve_didcomm_service_uri(did: &str) -> Option<String> {
+    use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+
+    let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+        .await
+        .expect("DID resolver");
+    let resolved = resolver.resolve(did).await.expect("resolve user DID");
+
+    let doc = serde_json::to_value(&resolved.doc).expect("serialize Document");
+    let services = doc.get("service")?.as_array()?;
+    for service in services {
+        // Filter on type — DID-Doc service types can be a string or an array
+        let type_field = service.get("type")?;
+        let is_didcomm = match type_field {
+            serde_json::Value::String(s) => s == "DIDCommMessaging",
+            serde_json::Value::Array(arr) => {
+                arr.iter().any(|v| v.as_str() == Some("DIDCommMessaging"))
+            }
+            _ => false,
+        };
+        if !is_didcomm {
+            continue;
+        }
+        let endpoint = service.get("serviceEndpoint")?;
+        // Endpoint may be a plain URL string, an object with `uri`, or
+        // an array of either. Peel the first URI we find.
+        let candidates: Vec<&serde_json::Value> = match endpoint {
+            serde_json::Value::Array(arr) => arr.iter().collect(),
+            other => vec![other],
+        };
+        for c in candidates {
+            if let Some(s) = c.as_str() {
+                return Some(s.to_string());
+            }
+            if let Some(uri) = c.get("uri").and_then(|v| v.as_str()) {
+                return Some(uri.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// `add_user` mints a `did:peer:2` whose DIDCommMessaging service URI is
+/// the mediator's DID. This is the architectural contract the routing-2.0
+/// self-loopback path relies on — without it, the routing handler would
+/// classify the user's next-hop as remote and push the forward onto the
+/// remote-delivery queue.
+#[tokio::test]
+async fn add_user_dids_have_mediator_did_as_service_uri() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::spawn().await.expect("spawn");
+    let alice = mediator.add_user("alice").await.expect("add alice");
+
+    let uri = resolve_didcomm_service_uri(&alice.did)
+        .await
+        .expect("alice's DID has a DIDCommMessaging service URI");
+    assert_eq!(
+        uri,
+        mediator.did(),
+        "minted user DID must point at the mediator's DID, not its HTTP URL"
+    );
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// Same contract for `with_users`. The two paths share an
+/// implementation today but the assertion guards against drift.
+#[tokio::test]
+async fn with_users_dids_have_mediator_did_as_service_uri() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let (mediator, users) = TestMediator::with_users(["alice", "bob"])
+        .await
+        .expect("with_users");
+
+    for user in &users {
+        let uri = resolve_didcomm_service_uri(&user.did)
+            .await
+            .unwrap_or_else(|| panic!("{} has no DIDCommMessaging service URI", user.alias));
+        assert_eq!(
+            uri,
+            mediator.did(),
+            "{}'s DID must point at the mediator's DID",
+            user.alias
+        );
+    }
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}
+
+/// `enable_external_forwarding(false)` is honored by the builder and
+/// produces a working mediator. With external forwarding off, the
+/// routing handler delivers every forward locally regardless of the
+/// next-hop's DID Document — which is what tests want when their user
+/// DIDs were minted with the mediator's HTTP URL (rather than its DID)
+/// as the service endpoint.
+///
+/// This test only verifies the builder/spawn surface; the actual
+/// "routes locally" behavior is covered by routing.rs unit tests and
+/// the SDK's e2e suite. Adding a true round-trip assertion (alice
+/// forwards to bob, bob receives) is tracked as followup.
+#[tokio::test]
+async fn enable_external_forwarding_disabled_spawns_successfully() {
+    init_tracing();
+    if skip_if_no_redis() {
+        return;
+    }
+
+    let mediator = TestMediator::builder()
+        .enable_forwarding(true)
+        .enable_external_forwarding(false)
+        .spawn()
+        .await
+        .expect("spawn with external forwarding disabled");
+
+    // Sanity: handle is fully populated and the mediator answers HTTP.
+    assert!(mediator.bound_addr().port() > 0);
+    let url = format!("{}healthchecker", mediator.endpoint());
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client");
+    let resp = client.get(&url).send().await.expect("healthchecker");
+    assert!(resp.status().is_success());
+
+    mediator.shutdown();
+    let _ = mediator.join().await;
+}

@@ -482,6 +482,25 @@ pub async fn serve_internal(
         );
     }
 
+    // Wildcard binds (`0.0.0.0` / `::`) almost never appear as a literal
+    // host in a peer's DID Doc service endpoint. When the bind is wildcard
+    // and the operator hasn't declared any `local_endpoints` aliases, the
+    // self-authority set will never match an inbound forward → loopback
+    // delivery silently devolves to "remote" forwarding. Surface this so
+    // the operator notices before they ship.
+    if let Ok(addr) = config.listen_address.parse::<SocketAddr>()
+        && addr.ip().is_unspecified()
+        && config.local_endpoints.is_empty()
+    {
+        warn!(
+            "listen_address is bound to wildcard {} and no `local_endpoints` are configured — \
+             Routing 2.0 self-loopback delivery will not match any DID-Doc URI. \
+             Add the mediator's public service URL(s) to `local_endpoints` (e.g. \
+             `local_endpoints = [\"https://mediator.example.com\"]`) to enable local routing.",
+            addr.ip()
+        );
+    }
+
     let shared_state = SharedData {
         config: config.clone(),
         service_start_timestamp: chrono::Utc::now(),
@@ -791,21 +810,30 @@ async fn shutdown_signal() {
 /// causing startup to fail — a typo'd alias should not block the
 /// mediator from booting.
 pub(crate) fn compute_self_authorities(config: &Config) -> HashSet<(String, u16)> {
+    compute_self_authorities_from(&config.listen_address, &config.local_endpoints)
+}
+
+/// Field-level core of [`compute_self_authorities`] — kept separate so
+/// unit tests can exercise it without standing up a full [`Config`].
+pub(crate) fn compute_self_authorities_from(
+    listen_address: &str,
+    local_endpoints: &[String],
+) -> HashSet<(String, u16)> {
     let mut out = HashSet::new();
 
     // Bind address: parse as a SocketAddr and record (ip, port). When
     // the bind is `0.0.0.0` or `::` we still record the literal —
     // operators relying on `INADDR_ANY` should declare their public
     // hostname(s) via `local_endpoints` for the comparison to match.
-    if let Ok(addr) = config.listen_address.parse::<SocketAddr>() {
-        out.insert((addr.ip().to_string().to_ascii_lowercase(), addr.port()));
+    if let Ok(addr) = listen_address.parse::<SocketAddr>() {
+        out.insert((normalize_host(&addr.ip().to_string()), addr.port()));
     }
 
-    for raw in &config.local_endpoints {
+    for raw in local_endpoints {
         match Url::parse(raw) {
             Ok(url) => match (url.host_str(), default_port_for(&url)) {
                 (Some(host), Some(port)) => {
-                    out.insert((host.to_ascii_lowercase(), port));
+                    out.insert((normalize_host(host), port));
                 }
                 _ => warn!(
                     "Skipping local_endpoints entry {:?}: missing host or port",
@@ -822,9 +850,23 @@ pub(crate) fn compute_self_authorities(config: &Config) -> HashSet<(String, u16)
     out
 }
 
+/// Normalize a host string for self-authority comparison.
+///
+/// `Url::host_str()` returns IPv6 literals wrapped in `[ ]` (e.g. `"[::1]"`)
+/// while `std::net::SocketAddr::ip().to_string()` returns them bare
+/// (`"::1"`). Strip the outer brackets so the two paths produce the same
+/// key, and lowercase for case-insensitive matching.
+pub(crate) fn normalize_host(host: &str) -> String {
+    let stripped = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    stripped.to_ascii_lowercase()
+}
+
 /// Resolve the effective port for a URL, falling back to the
 /// scheme-specific default when the URL omits an explicit port.
-fn default_port_for(url: &Url) -> Option<u16> {
+pub(crate) fn default_port_for(url: &Url) -> Option<u16> {
     if let Some(port) = url.port() {
         return Some(port);
     }

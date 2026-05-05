@@ -16,7 +16,12 @@ use thiserror::Error;
 /// `MediatorError`. Defining the error here keeps `MediatorACLSet`
 /// owned by mediator-common and avoids an SDK dependency from the
 /// storage trait crate.
+///
+/// Marked `#[non_exhaustive]` so adding new ACL failure modes in
+/// future releases is a non-breaking change. Downstream code should
+/// always include a wildcard arm when matching.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ACLError {
     /// Malformed input (string ruleset, hex string, etc.).
     #[error("ACL configuration error: {0}")]

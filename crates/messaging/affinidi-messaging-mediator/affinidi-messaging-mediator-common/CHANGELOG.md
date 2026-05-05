@@ -4,6 +4,40 @@
 
 ## 5th May 2026
 
+### 0.15.0 — Feature-gated server stack + `ACLError` non-exhaustive
+
+Reorganizes this crate's dependency graph so the SDK and other
+client-side consumers don't pay for the server's compile-time deps.
+Existing server-side consumers (mediator binary, mediator-setup,
+mediator-processors, test-mediator) are unaffected because the
+new `server` feature is on by default.
+
+- **BREAKING (recompile-only for non-default consumers):** Heavy
+  server-side deps — `axum`, `redis`, `reqwest`, `tokio-tungstenite`,
+  `aes-gcm`, `argon2`, `metrics`, etc. — are now optional and gated
+  behind `server` (default-on) or `redis-backend` (Redis client).
+  Default builds compile exactly as before. SDK-style consumers
+  (`default-features = false`) get just the lean `types` module
+  with `serde`/`serde_json`/`thiserror`/`regex` and nothing else
+  — axum/redis/reqwest no longer flow into their build graph
+  via this crate.
+- **BREAKING:** `ACLError` is now `#[non_exhaustive]`. New variants
+  added in future minor releases will be a non-breaking change.
+  Downstream code matching on `ACLError` must include a wildcard
+  arm. The SDK's `From<ACLError> for ATMError` was updated; outside
+  the workspace, callers that exhaustively-matched `Config | Denied`
+  must add `_ => …` (or migrate to the SDK's wrapper).
+- **NOTE:** `impl GenericDataStruct for String` (introduced in 0.14)
+  is a foreign-crate blanket on `String`. If you have your own
+  `GenericDataStruct` impl on `String` in a downstream crate, drop
+  it — the orphan-rule fence won't bite, but the impl is now
+  redundant.
+- **FEAT:** `mediator-setup` consumers should depend on this crate
+  with `default-features = false, features = ["server"]` (or just
+  let `default = ["server"]` apply) to get the secrets module.
+  Cloud-secret backends (`secrets-{aws,gcp,azure,vault,keyring}`)
+  now imply `server` automatically.
+
 ### 0.14.0 — Protocol-vocabulary types relocated here
 
 The mediator's `MediatorStore` trait used to import its protocol

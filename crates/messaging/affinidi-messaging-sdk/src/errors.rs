@@ -96,6 +96,11 @@ impl From<ACLError> for ATMError {
         match err {
             ACLError::Config(msg) => ATMError::ACLConfigError(msg),
             ACLError::Denied(msg) => ATMError::ACLDenied(msg),
+            // ACLError is `#[non_exhaustive]` from mediator-common 0.15;
+            // surface any future variant as a generic ACL error so the
+            // SDK keeps compiling against unmodified consumers when
+            // mediator-common lands new ACL failure modes.
+            other => ATMError::ACLConfigError(other.to_string()),
         }
     }
 }

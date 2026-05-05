@@ -1,23 +1,40 @@
+// `DatabaseConfig` (the serde struct in `config.rs`) is always available
+// under the `server` feature — the mediator binary parses it regardless
+// of which storage backend the deployment selects. `DatabaseHandler`
+// and the redis-using helpers below are gated on `redis-backend`.
+pub mod config;
+
+#[cfg(feature = "redis-backend")]
+pub mod delete;
+
+#[cfg(feature = "redis-backend")]
 use crate::errors::MediatorError;
+#[cfg(feature = "redis-backend")]
 use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
+#[cfg(feature = "redis-backend")]
 use axum::http::StatusCode;
+#[cfg(feature = "redis-backend")]
 use config::DatabaseConfig;
+#[cfg(feature = "redis-backend")]
 use redis::AsyncConnectionConfig;
+#[cfg(feature = "redis-backend")]
 use redis::aio::{ConnectionManager, ConnectionManagerConfig, MultiplexedConnection, PubSub};
 
+#[cfg(feature = "redis-backend")]
 use semver::{Version, VersionReq};
+#[cfg(feature = "redis-backend")]
 use std::time::Duration;
+#[cfg(feature = "redis-backend")]
 use tokio::time::sleep;
+#[cfg(feature = "redis-backend")]
 use tracing::{Level, event, info, warn};
-
-pub mod config;
-pub mod delete;
 
 /// Low-level Redis connection handler used by the mediator.
 ///
 /// Uses a single multiplexed connection (via `ConnectionManager` for auto-reconnect)
 /// instead of a connection pool. `MultiplexedConnection` handles concurrent commands
 /// over one TCP connection, making a pool unnecessary.
+#[cfg(feature = "redis-backend")]
 #[derive(Clone)]
 pub struct DatabaseHandler {
     /// Auto-reconnecting multiplexed connection for normal Redis operations.
@@ -26,8 +43,10 @@ pub struct DatabaseHandler {
     redis_url: String,
 }
 
+#[cfg(feature = "redis-backend")]
 const REDIS_VERSION_REQ: &str = ">=7.1, <9.0";
 
+#[cfg(feature = "redis-backend")]
 impl DatabaseHandler {
     /// Creates a new `DatabaseHandler`, establishing a multiplexed connection and verifying
     /// that the Redis server version is compatible. Retries on connection failure.

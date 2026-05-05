@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.0"
+version = "0.2.1"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -28,7 +28,7 @@ fjall-backend = ["affinidi-messaging-mediator/fjall-backend", "dep:tempfile"]
 ## workspace dev-builds. Pins follow the workspace's caret-pin policy
 ## (major.minor only) so transitive patch fixes resolve automatically.
 affinidi-messaging-mediator = { version = "0.15", path = "../affinidi-messaging-mediator", default-features = false, features = ["didcomm", "memory-backend"] }
-affinidi-messaging-mediator-common = { version = "0.14", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
+affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common" }
 
 # ── Optional: Fjall on-disk backend support (gated on `fjall-backend`) ──
 ## Wraps each FjallStore in a temp directory that's cleaned up when the
