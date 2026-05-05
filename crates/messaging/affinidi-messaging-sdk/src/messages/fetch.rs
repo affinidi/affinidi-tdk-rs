@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use tracing::{Instrument, Level, debug, span};
 
 use crate::{
@@ -12,26 +11,10 @@ use crate::{
 
 use super::{FetchDeletePolicy, GetMessagesResponse};
 
-/// fetch_messages() options
-#[derive(Serialize, Deserialize, Debug)]
-pub struct FetchOptions {
-    /// The maximum number of messages to fetch. Default: 10
-    pub limit: usize,
-    /// The receive_id to start fetching from. Default: None. Starts with oldest message
-    pub start_id: Option<String>,
-    /// Delete policy for messages after fetching. Default: DoNotDelete
-    pub delete_policy: FetchDeletePolicy,
-}
-
-impl Default for FetchOptions {
-    fn default() -> Self {
-        FetchOptions {
-            limit: 10,
-            start_id: None,
-            delete_policy: FetchDeletePolicy::DoNotDelete,
-        }
-    }
-}
+// `FetchOptions` lives in `affinidi-messaging-mediator-common` so the
+// storage trait can describe its fetch API without depending on the
+// SDK. Re-exported here for backwards compatibility.
+pub use affinidi_messaging_mediator_common::types::messages::FetchOptions;
 
 impl ATM {
     /// Fetches any available messages from your ATM inbox

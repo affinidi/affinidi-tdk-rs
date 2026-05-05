@@ -4,7 +4,7 @@
  */
 use super::DatabaseHandler;
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
+use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
 use axum::http::StatusCode;
 use tracing::{Instrument, Level, debug, info, span, warn};
 

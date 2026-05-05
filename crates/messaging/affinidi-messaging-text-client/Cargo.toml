@@ -15,7 +15,7 @@ repository.workspace = true
 [dependencies]
 # Affinidi Crates
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.7" }
-affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.17" }
+affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13" }
 affinidi-did-resolver-cache-sdk = "0.8"
 

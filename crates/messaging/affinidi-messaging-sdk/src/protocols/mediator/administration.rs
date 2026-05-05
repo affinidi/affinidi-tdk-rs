@@ -5,47 +5,22 @@
 use crate::{ATM, errors::ATMError, profiles::ATMProfile, transports::SendMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha256::digest;
 use std::{sync::Arc, time::SystemTime};
 use tracing::{Instrument, Level, debug, span};
 use uuid::Uuid;
 
-use super::accounts::AccountType;
+// Admin-management vocabulary lives in
+// `affinidi-messaging-mediator-common::types::administration`. The
+// `Mediator` / `MediatorOps` client-side handler types remain in this
+// SDK module.
+pub use affinidi_messaging_mediator_common::types::administration::{
+    AdminAccount, MediatorAdminList, MediatorAdminRequest,
+};
 
 #[derive(Default)]
 pub struct Mediator {}
-
-#[derive(Serialize, Deserialize)]
-pub enum MediatorAdminRequest {
-    #[serde(rename = "admin_add")]
-    AdminAdd(Vec<String>),
-    #[serde(rename = "admin_strip")]
-    AdminStrip(Vec<String>),
-    #[serde(rename = "admin_list")]
-    AdminList {
-        cursor: u32,
-        limit: u32,
-    },
-    Configuration(Value),
-}
-
-/// A list of admins in the mediator
-/// - `accounts` - The list of admins (SHA256 Hashed DIDs)
-/// - `cursor` - The offset to use for the next request
-#[derive(Serialize, Deserialize)]
-pub struct MediatorAdminList {
-    pub accounts: Vec<AdminAccount>,
-    pub cursor: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct AdminAccount {
-    pub did_hash: String,
-    #[serde(rename = "type")]
-    pub _type: AccountType,
-}
 
 impl Mediator {
     pub async fn get_config(

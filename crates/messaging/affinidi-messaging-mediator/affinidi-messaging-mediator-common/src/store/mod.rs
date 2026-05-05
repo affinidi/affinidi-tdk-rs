@@ -42,17 +42,15 @@
 //! request handlers to map them to HTTP/DIDComm problem reports.
 
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::{
-    messages::{Folder, GetMessagesResponse, MessageList, MessageListElement, fetch::FetchOptions},
-    protocols::mediator::{
-        accounts::{Account, AccountType, MediatorAccountList},
-        acls::{AccessListModeType, MediatorACLSet},
-        acls_handler::{
-            MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
-            MediatorAccessListListResponse,
-        },
-        administration::MediatorAdminList,
+use crate::types::{
+    accounts::{Account, AccountType, MediatorAccountList},
+    acls::{AccessListModeType, MediatorACLSet},
+    acls_handler::{
+        MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
+        MediatorAccessListListResponse,
     },
+    administration::MediatorAdminList,
+    messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
 };
 use async_trait::async_trait;
 use std::time::Duration;

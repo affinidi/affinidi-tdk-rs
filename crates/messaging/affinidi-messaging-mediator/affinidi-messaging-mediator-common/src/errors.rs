@@ -1,5 +1,5 @@
-use affinidi_messaging_sdk::messages::{
-    GenericDataStruct,
+use crate::types::{
+    messages::GenericDataStruct,
     problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
 };
 use axum::{
@@ -667,9 +667,7 @@ pub fn create_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use affinidi_messaging_sdk::messages::problem_report::{
-        ProblemReportScope, ProblemReportSorter,
-    };
+    use crate::types::problem_report::{ProblemReportScope, ProblemReportSorter};
     use axum::http::StatusCode;
 
     #[test]

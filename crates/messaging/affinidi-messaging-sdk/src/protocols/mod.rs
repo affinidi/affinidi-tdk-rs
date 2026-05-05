@@ -10,7 +10,6 @@
 //! atm.mediator().get_config(&profile).await?;
 //! ```
 
-use crate::messages::GenericDataStruct;
 use mediator::administration::Mediator;
 
 /// **Deprecated**: Use `atm.trust_ping()`, `atm.message_pickup()`, etc. instead.
@@ -33,8 +32,11 @@ pub mod oob_discovery;
 pub mod routing;
 pub mod trust_ping;
 
-type MessageString = String;
-impl GenericDataStruct for MessageString {}
+// `String` implements `GenericDataStruct` via an impl in
+// `affinidi-messaging-mediator-common::types::messages` — the orphan
+// rule prevents us from impl'ing it here now that both the trait and
+// `String` are foreign. Call sites that referenced the `MessageString`
+// alias use `String` directly.
 
 #[allow(deprecated)]
 impl Protocols {

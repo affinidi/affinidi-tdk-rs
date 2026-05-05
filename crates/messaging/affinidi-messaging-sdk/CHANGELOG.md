@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.18.0] - 2026-05-05
+
+### Breaking
+
+- `MediatorACLSet::*` fallible methods now return `Result<_, ACLError>`
+  instead of `Result<_, ATMError>`. `ACLError` is a lightweight enum
+  (`Config(String)` / `Denied(String)`) that lives in
+  `affinidi-messaging-mediator-common::types::acls` so the mediator's
+  storage trait can describe its API without depending on this crate.
+  Callers using `?` against `ATMError` are unaffected — a
+  `From<ACLError> for ATMError` is provided. Callers that
+  match-arm on `ATMError::ACLDenied(_)` / `ATMError::ACLConfigError(_)`
+  need to convert via `.map_err(ATMError::from)` (or update to match on
+  `ACLError` directly).
+
+### Changed
+
+- The mediator protocol vocabulary moved out of this crate and into
+  `affinidi-messaging-mediator-common::types::*`. Affected types:
+  `MediatorACLSet`, `AccessListModeType`, `Account`, `AccountType`,
+  `MediatorAccountList`, `AdminAccount`, `MediatorAdminList`,
+  `Folder`, `MessageList`, `MessageListElement`, `GetMessagesResponse`,
+  `FetchDeletePolicy`, `FetchOptions`, `ProblemReport`, plus the
+  ACL-handler / admin request and response shapes. Each type is
+  re-exported from its original `affinidi_messaging_sdk::*` path so
+  existing imports keep working unchanged.
+- This crate now depends on `affinidi-messaging-mediator-common`
+  (was the other way around). Removes a circular-feeling layering
+  where the storage trait imported from the client SDK.
+
 ## [0.17.0] - 2026-05-02
 
 ### Breaking

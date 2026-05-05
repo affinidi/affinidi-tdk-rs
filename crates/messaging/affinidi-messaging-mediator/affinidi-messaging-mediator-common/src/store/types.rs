@@ -11,7 +11,7 @@
 //! both during the transition keeps each commit small and reviewable.
 
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::protocols::mediator::{accounts::AccountType, acls::MediatorACLSet};
+use crate::types::{accounts::AccountType, acls::MediatorACLSet};
 use ahash::AHashMap as HashMap;
 use num_format::{Locale, ToFormattedString};
 use serde::{Deserialize, Serialize};

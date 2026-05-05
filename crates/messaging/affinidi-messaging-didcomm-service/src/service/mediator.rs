@@ -33,7 +33,7 @@ impl Listener {
         info!(acl_mode = ?acl_mode, "ACL mode configured");
 
         acls.set_access_list_mode(acl_mode.clone(), true, false)
-            .map_err(StartupError::AclMode)?;
+            .map_err(|e| StartupError::AclMode(e.into()))?;
 
         atm.mediator()
             .acls_set(profile, &digest(&profile.inner.did), &acls)

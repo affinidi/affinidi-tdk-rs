@@ -133,14 +133,27 @@ impl TestEnvironment {
     /// register it as an SDK profile pointing at this environment's
     /// mediator. Idempotent on the alias — adding two users with the
     /// same alias replaces the first.
+    ///
+    /// The user DID's DIDComm service endpoint is the **mediator's
+    /// DID**, not the mediator's HTTP URL. This matches the routing
+    /// 2.0 shape (recipients delegate to a mediator DID; the mediator
+    /// DID Document has the HTTP/WS endpoints). Using the HTTP URL
+    /// directly causes the routing handler to classify the user as a
+    /// remote next-hop and push every forwarded message into
+    /// FORWARD_Q.
+    ///
+    /// The user is also pre-registered on the mediator as a LOCAL,
+    /// ALLOW_ALL account so it can complete the WebSocket upgrade
+    /// without needing a separate `local_did` declaration at builder
+    /// time.
     pub async fn add_user(&self, alias: &str) -> Result<TestUser, TestEnvironmentError> {
-        let endpoint = self.mediator.endpoint().to_string();
+        let mediator_did = self.mediator.did().to_string();
         let (did, secrets) = DID::generate_did_peer(
             vec![
                 (PeerKeyRole::Verification, KeyType::Ed25519),
                 (PeerKeyRole::Encryption, KeyType::X25519),
             ],
-            Some(endpoint),
+            Some(mediator_did.clone()),
         )
         .map_err(|e| TestEnvironmentError::UserDid {
             alias: alias.to_string(),
@@ -151,11 +164,19 @@ impl TestEnvironment {
         // outbound messages and unpack inbound ones.
         self.tdk.secrets_resolver().insert_vec(&secrets).await;
 
+        // Register the user as a LOCAL, ALLOW_ALL account on the
+        // mediator. Without this the WebSocket handler refuses
+        // upgrades for non-admin DIDs.
+        self.mediator
+            .register_local_did(&did)
+            .await
+            .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;
+
         let profile = ATMProfile::new(
             &self.atm,
             Some(alias.to_string()),
             did.clone(),
-            Some(self.mediator.did().to_string()),
+            Some(mediator_did),
         )
         .await
         .map_err(|e| TestEnvironmentError::Sdk(e.to_string()))?;

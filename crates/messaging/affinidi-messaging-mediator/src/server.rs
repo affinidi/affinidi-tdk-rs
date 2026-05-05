@@ -21,7 +21,10 @@ use affinidi_messaging_mediator_common::tasks::forwarding::ForwardingProcessor;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::{Router, routing::get};
-use std::{env, net::SocketAddr, sync::Arc, sync::atomic::AtomicUsize, time::Duration};
+use std::{
+    collections::HashSet, env, net::SocketAddr, sync::Arc, sync::atomic::AtomicUsize,
+    time::Duration,
+};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -470,6 +473,15 @@ pub async fn serve_internal(
     let admin_did = config.admin_did.clone();
     let api_prefix = config.api_prefix.clone();
 
+    let self_authorities = compute_self_authorities(&config);
+    if !self_authorities.is_empty() {
+        info!(
+            "Routing 2.0 forward handler will treat {} authority/authorities as local: {:?}",
+            self_authorities.len(),
+            self_authorities
+        );
+    }
+
     let shared_state = SharedData {
         config: config.clone(),
         service_start_timestamp: chrono::Utc::now(),
@@ -481,6 +493,7 @@ pub async fn serve_internal(
         active_websocket_count: Arc::new(AtomicUsize::new(0)),
         did_rate_limiter,
         shutdown_token: shutdown_token.clone(),
+        self_authorities: Arc::new(self_authorities),
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);
@@ -762,5 +775,62 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+/// Compute the `(host, port)` authorities the routing 2.0 forward
+/// handler should treat as local for this mediator instance. Combines
+/// `config.listen_address` (always included) with any operator-declared
+/// aliases in `config.local_endpoints`.
+///
+/// Hostnames are lower-cased for case-insensitive comparison; ports
+/// fall back to the URL-scheme defaults (80/443/80/443 for
+/// http/https/ws/wss) when the URL omits an explicit port.
+///
+/// Malformed entries are skipped with a `warn!` log rather than
+/// causing startup to fail — a typo'd alias should not block the
+/// mediator from booting.
+pub(crate) fn compute_self_authorities(config: &Config) -> HashSet<(String, u16)> {
+    let mut out = HashSet::new();
+
+    // Bind address: parse as a SocketAddr and record (ip, port). When
+    // the bind is `0.0.0.0` or `::` we still record the literal —
+    // operators relying on `INADDR_ANY` should declare their public
+    // hostname(s) via `local_endpoints` for the comparison to match.
+    if let Ok(addr) = config.listen_address.parse::<SocketAddr>() {
+        out.insert((addr.ip().to_string().to_ascii_lowercase(), addr.port()));
+    }
+
+    for raw in &config.local_endpoints {
+        match Url::parse(raw) {
+            Ok(url) => match (url.host_str(), default_port_for(&url)) {
+                (Some(host), Some(port)) => {
+                    out.insert((host.to_ascii_lowercase(), port));
+                }
+                _ => warn!(
+                    "Skipping local_endpoints entry {:?}: missing host or port",
+                    raw
+                ),
+            },
+            Err(e) => warn!(
+                "Skipping local_endpoints entry {:?}: not a valid URL ({})",
+                raw, e
+            ),
+        }
+    }
+
+    out
+}
+
+/// Resolve the effective port for a URL, falling back to the
+/// scheme-specific default when the URL omits an explicit port.
+fn default_port_for(url: &Url) -> Option<u16> {
+    if let Some(port) = url.port() {
+        return Some(port);
+    }
+    match url.scheme() {
+        "http" | "ws" => Some(80),
+        "https" | "wss" => Some(443),
+        _ => None,
     }
 }

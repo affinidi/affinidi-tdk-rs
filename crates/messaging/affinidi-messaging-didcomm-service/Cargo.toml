@@ -14,7 +14,7 @@ rust-version.workspace = true
 
 [dependencies]
 affinidi-tdk-common = "0.6"
-affinidi-messaging-sdk = "0.17"
+affinidi-messaging-sdk = "0.18"
 affinidi-messaging-didcomm = "0.13"
 affinidi-secrets-resolver = "0.5"
 

@@ -1,7 +1,7 @@
 use super::Database;
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::messages::{
-    FetchDeletePolicy, GetMessagesResponse, MessageListElement, fetch::FetchOptions,
+use crate::types::messages::{
+    FetchDeletePolicy, FetchOptions, GetMessagesResponse, MessageListElement,
 };
 use itertools::Itertools;
 use redis::{Value, from_redis_value};

@@ -1,6 +1,6 @@
 use super::Database;
 use crate::errors::MediatorError;
-use affinidi_messaging_sdk::protocols::mediator::{
+use crate::types::{
     acls::{AccessListModeType, MediatorACLSet},
     acls_handler::{
         MediatorACLExpanded, MediatorACLGetResponse, MediatorAccessListAddResponse,

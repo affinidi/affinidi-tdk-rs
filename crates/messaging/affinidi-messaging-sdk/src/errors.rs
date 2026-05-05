@@ -1,5 +1,6 @@
 use affinidi_did_authentication::errors::DIDAuthError;
 use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_mediator_common::types::acls::ACLError;
 use affinidi_tdk_common::errors::TDKError;
 use thiserror::Error;
 
@@ -87,6 +88,15 @@ impl From<TDKError> for ATMError {
 impl From<DIDAuthError> for ATMError {
     fn from(err: DIDAuthError) -> Self {
         ATMError::AuthenticationError(err.to_string())
+    }
+}
+
+impl From<ACLError> for ATMError {
+    fn from(err: ACLError) -> Self {
+        match err {
+            ACLError::Config(msg) => ATMError::ACLConfigError(msg),
+            ACLError::Denied(msg) => ATMError::ACLDenied(msg),
+        }
     }
 }
 

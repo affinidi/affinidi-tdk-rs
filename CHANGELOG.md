@@ -9,6 +9,48 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+## 2026-05-05 — Test-mediator ergonomics, routing self-loopback fix, types relocation
+
+### Breaking
+
+- **`affinidi-messaging-sdk` 0.17.0 → 0.18.0** — `MediatorACLSet::*`
+  fallible methods now return `Result<_, ACLError>` instead of
+  `Result<_, ATMError>`. `ACLError` is a lightweight enum living in
+  `affinidi-messaging-mediator-common::types::acls`. Callers using `?`
+  against `ATMError` are unaffected (a `From<ACLError> for ATMError`
+  is provided); match-on-variant callers need
+  `.map_err(ATMError::from)` or to match `ACLError` directly.
+
+### Changed
+
+- **`affinidi-messaging-mediator-common` 0.13.0 → 0.14.0** — Now owns
+  the storage-trait–facing protocol vocabulary (ACLs, accounts, ACL
+  handler responses, admin types, message-pickup types, problem
+  reports). Storage backends compile against this crate alone — no
+  SDK dependency. The SDK re-exports each type at its original public
+  path so existing imports keep working.
+- **`affinidi-messaging-sdk` 0.17.0 → 0.18.0** — Now depends on
+  `affinidi-messaging-mediator-common` (was the other way around).
+
+### Added
+
+- **`affinidi-messaging-mediator` 0.14.1 → 0.15.0** — Routing-2.0
+  forward handler now classifies a service URI as local when its
+  `(host, port)` matches the mediator's bind address or any
+  operator-declared alias. New `[server.local_endpoints]` TOML
+  config + matching `MediatorBuilder::local_endpoints` setter for
+  declaring URL aliases (load balancer / reverse-proxy deployments).
+  Hostname comparison is case-insensitive; ports default to scheme
+  defaults for http/https/ws/wss.
+- **`affinidi-messaging-test-mediator` 0.1.0 → 0.2.0** —
+  `enable_external_forwarding(bool)` builder setter,
+  `TestMediatorHandle::{register_local_did, add_user}` runtime
+  counterparts to `local_did`, `TestMediator::with_users(["alice",
+  "bob"])` convenience for non-ATM consumers, and a "Local vs. remote
+  routing" README section. `TestEnvironment::add_user` now mints
+  user DIDs whose service URI is the mediator's DID (the routing-2.0
+  shape) rather than the mediator's HTTP URL.
+
 ## Per-crate changelogs
 
 Some crates maintain their own changelogs alongside their source. Entries below

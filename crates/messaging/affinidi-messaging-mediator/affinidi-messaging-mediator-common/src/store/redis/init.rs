@@ -6,7 +6,7 @@
 //! `mediator-common` without depending on the mediator binary's HTTP
 //! / TLS / VTA configuration.
 
-use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+use crate::types::acls::MediatorACLSet;
 
 /// Inputs the Redis backend needs to seed the mediator + root-admin
 /// accounts and run schema migrations.

@@ -17,6 +17,16 @@ use crate::store::redis::database::{
     forwarding::ForwardQueueEntry as InnerForwardEntry, stats::MetadataStats as InnerMetadataStats,
     store::MessageMetaData as InnerMessageMetaData,
 };
+use crate::types::{
+    accounts::{Account, AccountType, MediatorAccountList},
+    acls::{AccessListModeType, MediatorACLSet},
+    acls_handler::{
+        MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
+        MediatorAccessListListResponse,
+    },
+    administration::MediatorAdminList,
+    messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
+};
 use crate::{
     database::DatabaseHandler,
     errors::MediatorError,
@@ -24,18 +34,6 @@ use crate::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
         MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState, StatCounter,
         StoreHealth, StreamingClientState,
-    },
-};
-use affinidi_messaging_sdk::{
-    messages::{Folder, GetMessagesResponse, MessageList, MessageListElement, fetch::FetchOptions},
-    protocols::mediator::{
-        accounts::{Account, AccountType, MediatorAccountList},
-        acls::{AccessListModeType, MediatorACLSet},
-        acls_handler::{
-            MediatorACLGetResponse, MediatorAccessListAddResponse, MediatorAccessListGetResponse,
-            MediatorAccessListListResponse,
-        },
-        administration::MediatorAdminList,
     },
 };
 use async_trait::async_trait;
