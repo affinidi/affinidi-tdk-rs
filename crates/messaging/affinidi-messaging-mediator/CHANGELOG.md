@@ -2,6 +2,55 @@
 
 ## Changelog history
 
+## 6th May 2026
+
+### 0.15.2 — `api_prefix` normalisation + startup-panic fix
+
+Foolproof handling of `api_prefix`. Previously, certain configurations
+caused a deterministic startup panic before the listener bound (which
+manifested as a permanent 502 from any reverse proxy fronting the
+mediator) or silently produced wrong route paths.
+
+- **FIX:** Setting `api_prefix = ""` no longer panics at startup.
+  The health/readiness/admin/metrics route registration in `server.rs`
+  was string-concatenating the prefix into the path, producing
+  `"healthchecker"` (no leading `/`) which axum rejects. With the
+  empty prefix now normalised to `""` and a `join_api_path` helper
+  used to build full paths, the resulting route is always
+  `/healthchecker` (or `/foo/healthchecker` when prefixed).
+- **FIX:** `api_prefix = "/foo"` (no trailing slash) no longer
+  silently produces glued-together routes like `/fooreadyz`. All
+  routes go through `join_api_path` which inserts the separator
+  correctly.
+- **FIX:** WebSocket endpoint URL builder no longer emits
+  `ws://host:portws` when the prefix is empty — uses `join_api_path`
+  for the WS suffix, producing `ws://host:port/ws`.
+- **FEAT:** New helpers `normalize_api_prefix` and `join_api_path` in
+  `common::config::helpers`. The canonical form is `""` (mount at
+  root) or `"/<segment>"` with no trailing slash — the form axum's
+  `Router::nest` requires. All of `"/foo/"`, `"/foo"`, `"foo/"`,
+  `"foo"`, `"  /foo/  "` normalise to the same canonical value.
+- **FEAT:** Config-load emits an `INFO` log line when normalisation
+  changes the configured value, so operators can spot config drift.
+- **CHG:** `MediatorBuilder::api_prefix(...)` now accepts any of the
+  above forms and normalises internally. The previous validation
+  (`api_prefix must end with '/'`) is removed since normalisation
+  makes it unnecessary.
+- **CHG:** Default `Config::api_prefix` is now `"/mediator/v1"`
+  (canonical) rather than `"/mediator/v1/"`. The published
+  `http_endpoint` URL still ends with `/` (preserved contract for
+  callers that concatenate suffixes).
+- **TEST:** 7 new unit tests covering normalisation edge cases —
+  empty/whitespace/`/`/multi-slash collapse, leading/trailing slash
+  stripping, idempotence, and `join_api_path` always returning a
+  valid axum path.
+- **DOC:** `conf/mediator.toml` documents the accepted forms inline.
+
+Existing configs using `api_prefix = "/mediator/v1/"` are
+byte-for-byte compatible — same routes, same URLs, same DID-Doc
+service endpoints. The change is purely additive: it accepts more
+inputs without changing any working ones.
+
 ## 5th May 2026
 
 ### 0.15.1 — IPv6 host normalization + wildcard-bind warning

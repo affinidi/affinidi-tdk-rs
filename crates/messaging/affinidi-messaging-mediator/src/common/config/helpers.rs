@@ -502,6 +502,51 @@ pub(crate) async fn read_document(
     Ok(content)
 }
 
+/// Normalise an operator-supplied `api_prefix` to a canonical form.
+///
+/// Returns either the empty string (mount at root) or `"/<segment>"` with
+/// exactly one leading `/` and no trailing `/`. This is the form axum's
+/// [`Router::nest`](axum::Router::nest) accepts and the form the path-join
+/// helper in this module assumes.
+///
+/// All of the following normalise to `""`:
+/// `""`, `"/"`, `"//"`, whitespace-only.
+///
+/// All of the following normalise to `"/mediator/v1"`:
+/// `"/mediator/v1"`, `"/mediator/v1/"`, `"mediator/v1"`, `"mediator/v1/"`,
+/// `"//mediator/v1//"`.
+pub fn normalize_api_prefix(input: &str) -> String {
+    let bare = input.trim().trim_matches('/');
+    if bare.is_empty() {
+        String::new()
+    } else {
+        format!("/{bare}")
+    }
+}
+
+/// Join a normalised `api_prefix` and a route suffix into a single
+/// well-formed axum path. The prefix is expected to already be in the
+/// form returned by [`normalize_api_prefix`] (`""` or `"/foo"`). The
+/// suffix may or may not have a leading `/`.
+///
+/// The result always starts with exactly one `/`:
+///
+/// ```ignore
+/// assert_eq!(join_api_path("",         "readyz"),  "/readyz");
+/// assert_eq!(join_api_path("",         "/readyz"), "/readyz");
+/// assert_eq!(join_api_path("/foo",     "readyz"),  "/foo/readyz");
+/// assert_eq!(join_api_path("/foo",     "/readyz"), "/foo/readyz");
+/// assert_eq!(join_api_path("/mediator/v1", "admin/status"), "/mediator/v1/admin/status");
+/// ```
+pub fn join_api_path(prefix: &str, suffix: &str) -> String {
+    let suffix = suffix.trim_start_matches('/');
+    if prefix.is_empty() {
+        format!("/{suffix}")
+    } else {
+        format!("{prefix}/{suffix}")
+    }
+}
+
 /// Creates a set of URI's that can be used to detect if forwarding loopbacks to the mediator could occur
 pub(crate) async fn load_forwarding_protection_blocks(
     did_resolver: &DIDCacheClient,
@@ -572,4 +617,75 @@ pub(crate) async fn load_forwarding_protection_blocks(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{join_api_path, normalize_api_prefix};
+
+    #[test]
+    fn normalize_empty_forms_collapse_to_root() {
+        assert_eq!(normalize_api_prefix(""), "");
+        assert_eq!(normalize_api_prefix("/"), "");
+        assert_eq!(normalize_api_prefix("//"), "");
+        assert_eq!(normalize_api_prefix("///"), "");
+        assert_eq!(normalize_api_prefix("   "), "");
+        assert_eq!(normalize_api_prefix(" / "), "");
+    }
+
+    #[test]
+    fn normalize_strips_wrapping_slashes_and_whitespace() {
+        assert_eq!(normalize_api_prefix("foo"), "/foo");
+        assert_eq!(normalize_api_prefix("/foo"), "/foo");
+        assert_eq!(normalize_api_prefix("foo/"), "/foo");
+        assert_eq!(normalize_api_prefix("/foo/"), "/foo");
+        assert_eq!(normalize_api_prefix("//foo//"), "/foo");
+        assert_eq!(normalize_api_prefix("  /foo/  "), "/foo");
+    }
+
+    #[test]
+    fn normalize_preserves_internal_segments() {
+        assert_eq!(normalize_api_prefix("/mediator/v1/"), "/mediator/v1");
+        assert_eq!(normalize_api_prefix("mediator/v1"), "/mediator/v1");
+        assert_eq!(normalize_api_prefix("/a/b/c"), "/a/b/c");
+    }
+
+    #[test]
+    fn normalize_is_idempotent() {
+        for input in ["", "/", "/foo", "/foo/bar", "foo/", "  /foo/bar/  "] {
+            let once = normalize_api_prefix(input);
+            let twice = normalize_api_prefix(&once);
+            assert_eq!(once, twice, "not idempotent for {input:?}");
+        }
+    }
+
+    #[test]
+    fn join_api_path_handles_empty_prefix() {
+        assert_eq!(join_api_path("", "readyz"), "/readyz");
+        assert_eq!(join_api_path("", "/readyz"), "/readyz");
+        assert_eq!(join_api_path("", "admin/status"), "/admin/status");
+    }
+
+    #[test]
+    fn join_api_path_handles_non_empty_prefix() {
+        assert_eq!(join_api_path("/foo", "readyz"), "/foo/readyz");
+        assert_eq!(join_api_path("/foo", "/readyz"), "/foo/readyz");
+        assert_eq!(
+            join_api_path("/mediator/v1", "admin/status"),
+            "/mediator/v1/admin/status"
+        );
+    }
+
+    #[test]
+    fn join_api_path_always_returns_leading_slash() {
+        for prefix in ["", "/foo", "/mediator/v1"] {
+            for suffix in ["readyz", "/readyz", "admin/status"] {
+                let joined = join_api_path(prefix, suffix);
+                assert!(
+                    joined.starts_with('/'),
+                    "join_api_path({prefix:?}, {suffix:?}) = {joined:?} did not start with /"
+                );
+            }
+        }
+    }
 }

@@ -70,13 +70,11 @@ pub fn application_routes(api_prefix: &str, shared_data: &SharedData) -> Router 
             .route("/oob", delete(oob_discovery::delete_oobid_handler));
     }
 
-    // The variable name reads inverted but the body is correct: `has_prefix == true` means
-    // there is no prefix to nest under (operator left it blank or set it to `/`), so the
-    // app routes are mounted at the router root. Otherwise the inner routes nest under
-    // the operator's `api_prefix` (e.g. `/mediator/v1`).
-    let has_prefix = api_prefix.is_empty() || api_prefix == "/";
-
-    let api_router = if has_prefix {
+    // `api_prefix` arrives in the canonical form produced by
+    // `config::helpers::normalize_api_prefix`: either `""` (mount at
+    // root) or `"/<segment>"` with no trailing slash (the form axum's
+    // `Router::nest` requires).
+    let api_router = if api_prefix.is_empty() {
         Router::new().merge(app)
     } else {
         Router::new().nest(api_prefix, app)

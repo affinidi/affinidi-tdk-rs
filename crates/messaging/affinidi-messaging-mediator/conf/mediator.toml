@@ -59,7 +59,10 @@ backend = "keyring://affinidi-mediator"
 listen_address = "0.0.0.0:7037"
 
 ### Env: API_PREFIX
-### API prefix
+### API prefix the mediator's HTTP routes mount under. Leading/trailing slashes
+### are normalised, so all of the following are accepted and equivalent:
+###   "/mediator/v1/"  "/mediator/v1"  "mediator/v1"
+### Use ""  or "/"  to mount routes at the host root (no prefix).
 api_prefix = "/mediator/v1/"
 
 ### Env: ADMIN_DID

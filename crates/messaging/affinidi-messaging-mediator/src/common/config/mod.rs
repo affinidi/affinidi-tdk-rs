@@ -282,7 +282,7 @@ impl Config {
             streaming_enabled: true,
             streaming_uuid: "".into(),
             did_resolver_config,
-            api_prefix: "/mediator/v1/".into(),
+            api_prefix: "/mediator/v1".into(),
             // The default config is only used inside the early-startup
             // path before we've parsed `[secrets].backend`. Stub with
             // an empty URL + an in-memory store so the field is always
@@ -713,7 +713,17 @@ impl TryFrom<ConfigRaw> for Config {
                 true
             }),
             did_resolver_config: raw.did_resolver.convert(),
-            api_prefix: raw.server.api_prefix,
+            api_prefix: {
+                let normalized = helpers::normalize_api_prefix(&raw.server.api_prefix);
+                if normalized != raw.server.api_prefix {
+                    info!(
+                        original = %raw.server.api_prefix,
+                        normalized = %normalized,
+                        "api_prefix normalized — empty/`/` means mount at root, otherwise canonical form is `/<segment>` with no trailing slash"
+                    );
+                }
+                normalized
+            },
             security: raw
                 .security
                 .convert(
