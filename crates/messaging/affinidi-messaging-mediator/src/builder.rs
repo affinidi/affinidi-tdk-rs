@@ -12,7 +12,7 @@
 //! The mediator binary's `start(config_path)` continues to work and
 //! routes through this same code path internally.
 
-use crate::common::config::{Config, LimitsConfig, ProcessorsConfig, SecurityConfig};
+use crate::common::config::{Config, LimitsConfig, ProcessorsConfig, SecurityConfig, helpers};
 use affinidi_did_resolver_cache_sdk::config::{DIDCacheConfig, DIDCacheConfigBuilder};
 use affinidi_messaging_mediator_common::{
     MediatorSecrets, database::config::DatabaseConfig, errors::MediatorError, store::MediatorStore,
@@ -341,9 +341,13 @@ impl MediatorBuilder {
     }
 
     /// Set the URL prefix for mediator routes. Defaults to
-    /// `/mediator/v1/`. Must end with `/`.
+    /// `/mediator/v1`. The supplied value is normalised to canonical
+    /// form (`""` for root, otherwise `"/<segment>"` with no trailing
+    /// slash) — leading/trailing slashes and surrounding whitespace are
+    /// stripped, so `"/foo/"`, `"foo"`, and `"/foo"` all behave the
+    /// same.
     pub fn api_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.config.api_prefix = prefix.into();
+        self.config.api_prefix = helpers::normalize_api_prefix(&prefix.into());
         self
     }
 
@@ -562,13 +566,6 @@ fn validate(config: &Config, has_store: bool) -> Result<(), MediatorError> {
             "database is required (call MediatorBuilder::database with a DatabaseConfig, \
              or supply a pre-built store via MediatorBuilder::store)"
                 .into(),
-        ));
-    }
-    if !config.api_prefix.ends_with('/') {
-        return Err(MediatorError::ConfigError(
-            12,
-            "builder".into(),
-            format!("api_prefix must end with '/' (got {:?})", config.api_prefix),
         ));
     }
     Ok(())

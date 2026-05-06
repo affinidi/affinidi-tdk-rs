@@ -2,7 +2,7 @@ use crate::{
     SharedData,
     builder::{MediatorHandle, StartOpts, TlsMode, TracingMode},
     common::{
-        config::{Config, init},
+        config::{Config, helpers::join_api_path, init},
         did_rate_limiter::DidRateLimiter,
         error_codes,
         metrics::{self, metrics_handler},
@@ -540,21 +540,21 @@ pub async fn serve_internal(
         .layer(RateLimitLayer::new(rate_limiter))
         .layer(RequestIdLayer::new())
         .route(
-            format!("{}healthchecker", &api_prefix).as_str(),
+            join_api_path(&api_prefix, "healthchecker").as_str(),
             get(health_checker_handler).with_state(shared_state.clone()),
         )
         .route(
-            format!("{}readyz", &api_prefix).as_str(),
+            join_api_path(&api_prefix, "readyz").as_str(),
             get(readiness_handler).with_state(shared_state.clone()),
         )
         .route(
-            format!("{}admin/status", &api_prefix).as_str(),
+            join_api_path(&api_prefix, "admin/status").as_str(),
             get(admin_status::admin_status_handler).with_state(shared_state),
         );
 
     let app = if let Some(handle) = metrics_handle {
         app.route(
-            format!("{}metrics", &api_prefix).as_str(),
+            join_api_path(&api_prefix, "metrics").as_str(),
             get(metrics_handler).with_state(handle),
         )
     } else {
@@ -670,22 +670,28 @@ pub async fn serve_internal(
         }
     };
 
+    // `api_prefix` is canonical (`""` or `"/foo"` with no trailing
+    // slash). The published `http_endpoint` is documented as a base URL
+    // that callers can concatenate suffixes onto (and that `Url::join`
+    // can resolve relative paths against), so it always ends with `/`.
+    // The WS endpoint is built via `join_api_path` for the same
+    // slash-safety guarantee.
     let http_endpoint =
-        Url::parse(&format!("{scheme}://{bound_addr}{api_prefix}")).map_err(|e| {
+        Url::parse(&format!("{scheme}://{bound_addr}{api_prefix}/")).map_err(|e| {
             MediatorError::InternalError(
                 error_codes::INTERNAL_ERROR,
                 "NA".into(),
                 format!("Failed to build http endpoint URL: {e}"),
             )
         })?;
-    let ws_endpoint =
-        Url::parse(&format!("{ws_scheme}://{bound_addr}{api_prefix}ws")).map_err(|e| {
-            MediatorError::InternalError(
-                error_codes::INTERNAL_ERROR,
-                "NA".into(),
-                format!("Failed to build ws endpoint URL: {e}"),
-            )
-        })?;
+    let ws_path = join_api_path(&api_prefix, "ws");
+    let ws_endpoint = Url::parse(&format!("{ws_scheme}://{bound_addr}{ws_path}")).map_err(|e| {
+        MediatorError::InternalError(
+            error_codes::INTERNAL_ERROR,
+            "NA".into(),
+            format!("Failed to build ws endpoint URL: {e}"),
+        )
+    })?;
 
     Ok(MediatorHandle::__from_internals(
         http_endpoint,
