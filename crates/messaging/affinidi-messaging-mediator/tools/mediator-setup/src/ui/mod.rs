@@ -815,8 +815,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          ./data/mediator              relative to the mediator CWD (dev)\n  \
                          /var/lib/affinidi-mediator   system-managed persistent volume\n  \
                          /opt/mediator/data           container bind-mount target\n\n\
-                         The parent directory must already exist; the wizard creates the \
-                         leaf directory on confirm if it's missing.",
+                         Missing directories are created on first run — the mediator \
+                         calls `std::fs::create_dir_all` on this path, so any depth of \
+                         missing parents is fine.",
                     );
                 } else {
                     prompt::render_prompt(

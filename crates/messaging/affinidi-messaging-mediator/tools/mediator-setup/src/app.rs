@@ -57,7 +57,7 @@ impl WizardStep {
             Self::Protocol => "Protocol",
             Self::Did => "DID Configuration",
             Self::KeyStorage => "Key Storage",
-            Self::Security => "SSL/TLS & JWT",
+            Self::Security => "Security",
             Self::Database => "Database",
             Self::Admin => "Admin Account",
             Self::Output => "Output Location",
@@ -128,8 +128,10 @@ impl WizardStep {
                 description: "Where should cryptographic keys be stored?".into(),
             },
             Self::Security => StepData {
-                title: format!("Step {num}/{total}: SSL/TLS & JWT"),
-                description: "Configure transport security and authentication tokens.".into(),
+                title: format!("Step {num}/{total}: Security"),
+                description: "TLS termination, JWT signing, and the mediator's \
+                              network access posture (Open vs Closed)."
+                    .into(),
             },
             Self::Database => StepData {
                 title: format!("Step {num}/{total}: Storage Backend"),
@@ -511,42 +513,31 @@ impl Default for WizardConfig {
     }
 }
 
-/// Safety-check for the Fjall data-directory text input. Accepts:
-///   * A path that already exists and is a directory.
-///   * A path whose parent exists (mediator creates the leaf on
-///     first run — same contract as fjall's own `Keyspace::open`).
-///   * A bare relative leaf (`mediator-data`) — parent is the
-///     mediator's CWD, which we can't introspect from here, so we
-///     defer that check to runtime.
+/// Safety-check for the Fjall data-directory text input. Rejects only
+/// the cases that would unambiguously fail at startup:
 ///
-/// Rejects empty input, paths that exist but aren't directories,
-/// and paths whose parent directory is missing.
+///   * Empty input — there's no path to open.
+///   * A path that already exists but is a regular file, symlink to a
+///     non-directory, or other non-directory entry — fjall would error
+///     opening it.
+///
+/// Anything else passes. Fjall calls `std::fs::create_dir_all` on the
+/// configured path (`fjall-3.1.4/keyspace/mod.rs:335`), so missing
+/// parent directories are created automatically; pre-flighting them
+/// here used to reject the wizard's own default (`./data/mediator`)
+/// when the parent `./data` was absent on a fresh install.
 pub(crate) fn validate_fjall_data_dir(path: &str) -> Result<(), String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("Fjall data directory path cannot be empty.".into());
     }
     let p = std::path::Path::new(trimmed);
-    if p.exists() {
-        if !p.is_dir() {
-            return Err(format!(
-                "'{trimmed}' exists but is not a directory — pick another path.",
-            ));
-        }
-        return Ok(());
+    if p.exists() && !p.is_dir() {
+        return Err(format!(
+            "'{trimmed}' exists but is not a directory — pick another path.",
+        ));
     }
-    match p.parent() {
-        // No parent component (bare relative leaf like `mediator-data`)
-        // resolves under the mediator's CWD at runtime; nothing to
-        // check now. Same for the filesystem root itself.
-        Some(parent) if parent.as_os_str().is_empty() => Ok(()),
-        Some(parent) if parent.exists() => Ok(()),
-        Some(parent) => Err(format!(
-            "Parent directory '{}' does not exist — create it before continuing or pick a different path.",
-            parent.display(),
-        )),
-        None => Ok(()),
-    }
+    Ok(())
 }
 
 /// The main wizard application state.
@@ -3918,13 +3909,13 @@ mod tests {
     }
 
     #[test]
-    fn validate_fjall_rejects_missing_parent() {
-        // /a-directory-that-does-not-exist-on-this-host is implausible
-        // enough on macOS / Linux CI runners that this check is robust.
-        let err =
-            validate_fjall_data_dir("/a-directory-that-does-not-exist-on-this-host-42/mediator")
-                .expect_err("validation must reject a missing parent");
-        assert!(err.contains("does not exist"));
+    fn validate_fjall_accepts_missing_parent() {
+        // Regression: previously rejected `./data/mediator` (the wizard's
+        // default) when `./data` didn't yet exist. Fjall calls
+        // `std::fs::create_dir_all` on the configured path, so a missing
+        // parent is fine — the wizard must not block the default.
+        validate_fjall_data_dir("/a-directory-that-does-not-exist-on-this-host-42/mediator")
+            .expect("missing parent must be allowed — fjall create_dir_all handles it");
     }
 
     #[test]
@@ -3932,6 +3923,15 @@ mod tests {
         // A bare relative leaf resolves under the mediator's CWD at
         // runtime; the wizard can't introspect that, so it defers.
         validate_fjall_data_dir("mediator-data-leaf-only").expect("bare leaf must validate");
+    }
+
+    #[test]
+    fn validate_fjall_accepts_default_path() {
+        // The wizard pre-fills `./data/mediator`. Fresh installs likely
+        // don't have `./data` either; the validator must not reject the
+        // default and trap the operator on the screen.
+        validate_fjall_data_dir(crate::consts::DEFAULT_FJALL_DATA_DIR)
+            .expect("wizard default must always validate");
     }
 
     // ── WizardStep navigation ──────────────────────────────────────────
