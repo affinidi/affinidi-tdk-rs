@@ -328,11 +328,24 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 return;
             }
             SealedPhase::CollectWebvhServer => {
+                // Hint paragraphs separated by blank lines so the
+                // prompt widget renders them as distinct chunks
+                // instead of one wrapped wall: what the field is,
+                // how to discover ids, what blank does, and the
+                // registration precondition.
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Optional — id of a webvh hosting server already registered \
-                     on the VTA (matches the `id` returned by the VTA's \
-                     `list_webvh_servers` RPC). Leave blank to self-host at \
-                     the URL above."
+                    "Optional — id of an existing webvh hosting server registered \
+                     on the VTA. Matches the `id` field returned by the VTA's \
+                     `list_webvh_servers` RPC.\n\n\
+                     To discover ids, run on a host with an authenticated pnm \
+                     session against this VTA:\n\
+                       pnm webvh list-servers\n\n\
+                     Leave blank to self-host: the VTA renders a serverless webvh \
+                     DID whose log lives at the mediator URL above.\n\n\
+                     Precondition (if registering): the server must exist before \
+                     this step. Register it via `pnm webvh add-server --id <id> \
+                     --did <webvh-did>` (online) or `vta webvh add-server` on the \
+                     VTA host (offline)."
                         .into()
                 });
                 prompt::render_prompt(
@@ -340,11 +353,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     chunks[0],
                     "Sealed handoff — webvh server (optional)",
                     "Pin a webvh hosting server for this DID's log (optional).",
-                    Some(
-                        "Precondition: the id must already exist on the VTA — \
-                         register it first with `vta webvh add-server --id <id> \
-                         --did <webvh-did>` on the VTA host.",
-                    ),
+                    Some("Discover ids: `pnm webvh list-servers` (authenticated pnm session)."),
                     &app.text_input,
                     "webvh-prod-1",
                     &hint,
@@ -355,9 +364,8 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     "Info",
                     "Sent to the VTA as the `WEBVH_SERVER` template var. The VTA \
                      validates the id against its server catalogue before minting \
-                     — an unknown id fails with a clear error. Blank → VTA uses \
-                     the serverless path (self-host at `URL`). The bootstrap \
-                     request is generated on Enter.",
+                     — an unknown id fails with a clear error. Blank uses the \
+                     serverless path. The bootstrap request is generated on Enter.",
                 );
                 return;
             }
