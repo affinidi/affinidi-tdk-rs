@@ -24,6 +24,21 @@ pub const SSL_NONE: &str = "No SSL (TLS proxy)";
 pub const SSL_EXISTING: &str = "Existing certificates";
 pub const SSL_SELF_SIGNED: &str = "Self-signed";
 
+/// Network mode display strings. Drives the trio of `[security]`
+/// keys the wizard writes (`mediator_acl_mode`, `global_acl_default`,
+/// `local_direct_delivery_allowed`).
+///
+/// `Open` is the wizard's default going forward — any DID can message
+/// any other DID by default; per-DID overrides flip individual flags.
+/// `Closed` keeps the historical posture: every cross-DID exchange
+/// requires an explicit ACL grant.
+pub const NETWORK_MODE_OPEN: &str = "open";
+pub const NETWORK_MODE_CLOSED: &str = "closed";
+/// Default network mode for fresh wizard runs and recipes that omit
+/// `[security].network_mode`. Open by request — see the network-mode
+/// switch in the Security step.
+pub const DEFAULT_NETWORK_MODE: &str = NETWORK_MODE_OPEN;
+
 /// JWT secret provisioning mode. `generate` (default) tells the wizard to
 /// mint a fresh Ed25519 PKCS8 key and push it into the unified secret
 /// backend at `mediator/jwt/secret`. `provide` records the operator's

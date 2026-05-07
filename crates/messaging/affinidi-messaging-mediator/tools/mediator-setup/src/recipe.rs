@@ -172,6 +172,12 @@ pub struct SecuritySection {
     /// `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at startup.
     #[serde(default = "default_jwt_mode")]
     pub jwt_mode: String,
+    /// Network posture: `open` (default) or `closed`. See
+    /// [`crate::consts::NETWORK_MODE_OPEN`] / `_CLOSED` for the
+    /// per-mode `[security]` flag trio that gets emitted into
+    /// `mediator.toml`.
+    #[serde(default = "default_network_mode")]
+    pub network_mode: String,
 }
 
 fn default_ssl() -> String {
@@ -186,6 +192,10 @@ fn default_jwt_mode() -> String {
     "generate".into()
 }
 
+fn default_network_mode() -> String {
+    crate::consts::DEFAULT_NETWORK_MODE.into()
+}
+
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
@@ -195,6 +205,7 @@ impl Default for SecuritySection {
             admin: default_admin(),
             admin_did: None,
             jwt_mode: default_jwt_mode(),
+            network_mode: default_network_mode(),
         }
     }
 }
@@ -485,6 +496,14 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         }
     };
 
+    config.network_mode = match recipe.security.network_mode.as_str() {
+        crate::consts::NETWORK_MODE_OPEN | "" => crate::consts::NETWORK_MODE_OPEN.into(),
+        crate::consts::NETWORK_MODE_CLOSED => crate::consts::NETWORK_MODE_CLOSED.into(),
+        other => {
+            anyhow::bail!("Invalid security.network_mode '{other}': expected 'open' or 'closed'")
+        }
+    };
+
     // Database
     config.database_url = recipe.database.url.clone();
 
@@ -651,7 +670,14 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
         JWT_MODE_PROVIDE => "provide",
         _ => "generate",
     };
-    out.push_str(&format!("jwt_mode = \"{jwt_mode}\"\n\n"));
+    out.push_str(&format!("jwt_mode = \"{jwt_mode}\"\n"));
+    let network_mode = match config.network_mode.as_str() {
+        crate::consts::NETWORK_MODE_CLOSED => crate::consts::NETWORK_MODE_CLOSED,
+        // Anything else (including unset / typo) round-trips as the
+        // wizard's default `open` posture.
+        _ => crate::consts::NETWORK_MODE_OPEN,
+    };
+    out.push_str(&format!("network_mode = \"{network_mode}\"\n\n"));
 
     // Database — strip any embedded credentials
     out.push_str("[database]\n");
@@ -872,6 +898,49 @@ mod tests {
         let mut recipe = minimal_recipe();
         recipe.deployment.deployment_type = "cloud".into();
         assert!(to_wizard_config(&recipe).is_err());
+    }
+
+    #[test]
+    fn network_mode_defaults_to_open_when_unspecified() {
+        // Recipes that pre-date the network_mode field must land on
+        // the new wizard default rather than the historical posture.
+        let recipe_toml = r#"
+[deployment]
+type = "server"
+protocols = ["didcomm"]
+use_vta = false
+
+[identity]
+did_method = "did:peer"
+"#;
+        let parsed: BuildRecipe = toml::from_str(recipe_toml).unwrap();
+        assert_eq!(
+            parsed.security.network_mode,
+            crate::consts::NETWORK_MODE_OPEN
+        );
+        let config = to_wizard_config(&parsed).unwrap();
+        assert_eq!(config.network_mode, crate::consts::NETWORK_MODE_OPEN);
+    }
+
+    #[test]
+    fn network_mode_closed_round_trips() {
+        let mut recipe = minimal_recipe();
+        recipe.security.network_mode = crate::consts::NETWORK_MODE_CLOSED.into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.network_mode, crate::consts::NETWORK_MODE_CLOSED);
+
+        // Auto-recipe writer must emit it back so a re-run preserves
+        // the operator's chosen posture.
+        let toml = from_wizard_config(&config);
+        assert!(toml.contains("network_mode = \"closed\""));
+    }
+
+    #[test]
+    fn network_mode_invalid_value_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.security.network_mode = "invitation-only".into();
+        let err = to_wizard_config(&recipe).unwrap_err();
+        assert!(err.to_string().contains("network_mode"));
     }
 
     #[test]

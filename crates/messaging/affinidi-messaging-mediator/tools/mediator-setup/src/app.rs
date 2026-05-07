@@ -259,6 +259,11 @@ pub enum SecurityPhase {
     /// Choose between generating a fresh JWT signing key or providing
     /// one out-of-band via env var / `--jwt-secret-file` at boot.
     JwtMode,
+    /// Pick the mediator's network posture — Open (any DID can message
+    /// any other; per-DID overrides flip individual flags) vs Closed
+    /// (every cross-DID exchange needs an explicit ACL grant). Renders
+    /// after `JwtMode` and before the step advances to `Database`.
+    NetworkMode,
 }
 
 /// Sub-phases of the `Database` step. The wizard now asks two
@@ -374,6 +379,13 @@ pub struct WizardConfig {
     pub vta_webvh_self_host_url: String,
     /// `generate` (default) or `provide`. See [`crate::consts::JWT_MODE_GENERATE`].
     pub jwt_mode: String,
+    /// Network posture written to `[security]`: `"open"` (default —
+    /// any DID can message any other; per-DID overrides flip
+    /// individual flags) or `"closed"` (every cross-DID exchange needs
+    /// an explicit ACL grant). Drives the trio of `mediator_acl_mode`,
+    /// `global_acl_default`, and `local_direct_delivery_allowed` that
+    /// `config_writer::write_config` emits.
+    pub network_mode: String,
     pub database_url: String,
     /// Storage backend the generated `mediator.toml` selects:
     /// `"redis"` (default) or `"fjall"`. Mirrors `[storage].backend`
@@ -488,6 +500,7 @@ impl Default for WizardConfig {
             vta_webvh_mnemonic: None,
             vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
+            network_mode: crate::consts::DEFAULT_NETWORK_MODE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
             storage_backend: "redis".into(),
             fjall_data_dir: crate::consts::DEFAULT_FJALL_DATA_DIR.into(),
@@ -2135,7 +2148,21 @@ impl WizardApp {
                 ]
             }
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    // Order matches the wizard default — Open is index 0
+                    // so the operator's first Enter confirms the recommended
+                    // posture without re-selecting.
+                    vec![
+                        SelectionOption::new(
+                            "Open network (default)",
+                            "Any DID can message any other DID by default. Override on a per-DID basis via the ACL.",
+                        ),
+                        SelectionOption::new(
+                            "Closed network",
+                            "Restricted: explicit ACL grant required before two DIDs can exchange messages.",
+                        ),
+                    ]
+                } else if self.security_phase == Some(SecurityPhase::JwtMode) {
                     vec![
                         SelectionOption::new(
                             "Generate a fresh JWT signing key (recommended)",
@@ -2325,7 +2352,13 @@ impl WizardApp {
                 _ => String::new(),
             },
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    match self.selection_index {
+                        0 => "Open mode emits `mediator_acl_mode = \"explicit_deny\"`, `global_acl_default = \"ALLOW_ALL\"`, and `local_direct_delivery_allowed = \"true\"`. Any DID may reach any other by default; use the ACL to deny on a per-DID basis.".into(),
+                        1 => "Closed mode keeps the historical posture: `mediator_acl_mode = \"explicit_allow\"` with a denying default ACL. Every cross-DID exchange requires an explicit ACL grant. Pick this for restricted or invitation-only deployments.".into(),
+                        _ => String::new(),
+                    }
+                } else if self.security_phase == Some(SecurityPhase::JwtMode) {
                     match self.selection_index {
                         0 => "The wizard generates a 32-byte Ed25519 PKCS8 keypair and writes it into the unified secret backend at the well-known key `mediator/jwt/secret`. The mediator picks it up at startup with no further config.".into(),
                         1 => "The wizard records your choice but does NOT generate or prompt for a key. Before starting the mediator, set MEDIATOR_JWT_SECRET (raw PKCS8 bytes, base64-encoded) or pass --jwt-secret-file <path>. Choose this when CI/CD already issues JWT keys or when an HSM holds them.".into(),
@@ -2614,17 +2647,27 @@ impl WizardApp {
                 }
             }
             WizardStep::Security => {
-                // Two-phase step: SSL first, then JWT mode. The JWT
-                // sub-phase reuses `selection_index` for its own
-                // 2-option pick.
+                // Three-phase step: SSL → JWT mode → Network mode. Each
+                // sub-phase reuses `selection_index` for its own pick;
+                // the last one (NetworkMode) is what finally advances
+                // to `Database`.
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    self.config.network_mode = match self.selection_index {
+                        0 => crate::consts::NETWORK_MODE_OPEN.into(),
+                        1 => crate::consts::NETWORK_MODE_CLOSED.into(),
+                        _ => return,
+                    };
+                    self.security_phase = None;
+                    self.advance();
+                    return;
+                }
                 if self.security_phase == Some(SecurityPhase::JwtMode) {
                     self.config.jwt_mode = match self.selection_index {
                         0 => JWT_MODE_GENERATE.into(),
                         1 => JWT_MODE_PROVIDE.into(),
                         _ => return,
                     };
-                    self.security_phase = None;
-                    self.advance();
+                    self.enter_network_mode_phase();
                     return;
                 }
                 self.config.ssl_mode = match self.selection_index {
@@ -3110,6 +3153,20 @@ impl WizardApp {
         self.security_phase = Some(SecurityPhase::JwtMode);
         self.mode = InputMode::Selecting;
         self.selection_index = if self.config.jwt_mode == JWT_MODE_PROVIDE {
+            1
+        } else {
+            0
+        };
+    }
+
+    /// Enter the network-mode sub-phase. Runs after JWT mode has been
+    /// settled. Pre-selects the operator's last choice so re-entry is
+    /// idempotent; defaults to Open (index 0) on a fresh run because
+    /// that's the wizard's default network posture.
+    fn enter_network_mode_phase(&mut self) {
+        self.security_phase = Some(SecurityPhase::NetworkMode);
+        self.mode = InputMode::Selecting;
+        self.selection_index = if self.config.network_mode == crate::consts::NETWORK_MODE_CLOSED {
             1
         } else {
             0
@@ -4826,8 +4883,9 @@ mod tests {
 
     #[test]
     fn security_ssl_none_then_jwt_generate_advances() {
-        // SSL "None" + JWT "generate" — the common dev path. Should
-        // walk through both phases and land on Database.
+        // SSL "None" + JWT "generate" + NetworkMode "open" — the common
+        // dev path. Walks through all three sub-phases and lands on
+        // Database.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::Security;
         app.selection_index = 0; // No SSL
@@ -4836,9 +4894,17 @@ mod tests {
         assert_eq!(app.security_phase, Some(SecurityPhase::JwtMode));
         assert_eq!(app.current_step, WizardStep::Security);
 
-        // Default selection is "generate" (index 0).
+        // Default selection is "generate" (index 0). Confirming the JWT
+        // pick now transitions to NetworkMode rather than advancing the
+        // top-level step — Database is reached one confirm later.
         app.select_current();
         assert_eq!(app.config.jwt_mode, JWT_MODE_GENERATE);
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Default network-mode selection is "open" (index 0).
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
         assert!(app.security_phase.is_none());
         assert_eq!(app.current_step, WizardStep::Database);
     }
@@ -4854,6 +4920,31 @@ mod tests {
         app.selection_index = 1; // Provide
         app.select_current();
         assert_eq!(app.config.jwt_mode, JWT_MODE_PROVIDE);
+        // Network-mode sub-phase now interposes between JWT and Database.
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Confirm the default open posture to land on Database.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn security_network_mode_closed_records_choice() {
+        // Walk through the full Security flow and pick Closed at the
+        // last sub-phase to confirm the choice persists.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 0; // No SSL
+        app.select_current();
+        app.select_current(); // JWT default = generate
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+
+        app.selection_index = 1; // Closed
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_CLOSED);
         assert_eq!(app.current_step, WizardStep::Database);
     }
 

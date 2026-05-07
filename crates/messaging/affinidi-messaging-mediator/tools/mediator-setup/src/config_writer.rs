@@ -201,6 +201,29 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
 
         // JWT signing secret is no longer a config field — it lives in the
         // unified `[secrets]` backend under `mediator/jwt/secret`.
+
+        // Network posture — Open by default. Always overwrite the
+        // template's hard-coded trio so the wizard's choice (or the
+        // recipe's `[security].network_mode`) is what lands in the
+        // generated config; otherwise the template's historical
+        // closed-mode defaults would silently shadow Open.
+        match config.network_mode.as_str() {
+            crate::consts::NETWORK_MODE_CLOSED => {
+                sec["mediator_acl_mode"] = toml_edit::value("explicit_allow");
+                sec["global_acl_default"] =
+                    toml_edit::value("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES");
+                sec["local_direct_delivery_allowed"] = toml_edit::value("true");
+            }
+            // Open is the default — applied for `NETWORK_MODE_OPEN`
+            // and any unrecognised value (defensive: a typo'd recipe
+            // value falls back to the new default rather than the
+            // historical posture).
+            _ => {
+                sec["mediator_acl_mode"] = toml_edit::value("explicit_deny");
+                sec["global_acl_default"] = toml_edit::value("ALLOW_ALL");
+                sec["local_direct_delivery_allowed"] = toml_edit::value("true");
+            }
+        }
     }
 
     Ok(doc.to_string())
@@ -266,6 +289,57 @@ mod tests {
             ssl_key_path: None,
             did_log_jsonl_written: false,
         }
+    }
+
+    #[test]
+    fn open_network_mode_emits_explicit_deny_trio() {
+        // Open is the wizard default — the trio is `explicit_deny` /
+        // `ALLOW_ALL` / `local_direct_delivery_allowed = "true"`. Asserts
+        // that the writer overwrites the template's hard-coded closed
+        // trio, not just appends.
+        let config = WizardConfig {
+            network_mode: crate::consts::NETWORK_MODE_OPEN.into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("mediator_acl_mode = \"explicit_deny\""));
+        assert!(toml.contains("global_acl_default = \"ALLOW_ALL\""));
+        assert!(toml.contains("local_direct_delivery_allowed = \"true\""));
+        // Closed trio must NOT survive — match the assignment value,
+        // not the bare token (which appears in the template's `### ACL
+        // logic mode: explicit_deny | explicit_allow` doc comment).
+        assert!(!toml.contains("mediator_acl_mode = \"explicit_allow\""));
+        assert!(!toml.contains("\"DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES\""));
+    }
+
+    #[test]
+    fn closed_network_mode_emits_explicit_allow_trio() {
+        let config = WizardConfig {
+            network_mode: crate::consts::NETWORK_MODE_CLOSED.into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("mediator_acl_mode = \"explicit_allow\""));
+        assert!(
+            toml.contains("global_acl_default = \"DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES\"")
+        );
+        assert!(toml.contains("local_direct_delivery_allowed = \"true\""));
+        // Open trio must NOT survive.
+        assert!(!toml.contains("global_acl_default = \"ALLOW_ALL\""));
+        assert!(!toml.contains("mediator_acl_mode = \"explicit_deny\""));
+    }
+
+    #[test]
+    fn unknown_network_mode_falls_back_to_open() {
+        // Defensive: a typo'd recipe value must land on the new default
+        // rather than silently keeping the historical posture.
+        let config = WizardConfig {
+            network_mode: "totally-not-a-real-mode".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("mediator_acl_mode = \"explicit_deny\""));
+        assert!(toml.contains("global_acl_default = \"ALLOW_ALL\""));
     }
 
     #[test]
