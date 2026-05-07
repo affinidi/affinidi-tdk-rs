@@ -283,6 +283,139 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
 mod tests {
     use super::*;
 
+    // ── build_backend_url parametric coverage ─────────────────────────
+    //
+    // Six backend variants × two `?encrypt=1` modes for file://. Three
+    // downstream call sites trust this output verbatim
+    // (`generate_and_write`, `phase1_emit_request`, `phase2_apply`),
+    // so a typo in any branch silently misroutes secret storage.
+
+    #[test]
+    fn build_backend_url_file_plain() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_FILE.into(),
+            secret_file_path: "conf/secrets.json".into(),
+            secret_file_encrypted: false,
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "file://conf/secrets.json");
+    }
+
+    #[test]
+    fn build_backend_url_file_encrypted_appends_query() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_FILE.into(),
+            secret_file_path: "conf/secrets.json".into(),
+            secret_file_encrypted: true,
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "file://conf/secrets.json?encrypt=1"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_keyring() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_KEYRING.into(),
+            secret_keyring_service: "affinidi-mediator-prod".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "keyring://affinidi-mediator-prod");
+    }
+
+    #[test]
+    fn build_backend_url_aws_concatenates_region_and_namespace() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_AWS.into(),
+            secret_aws_region: "us-east-1".into(),
+            secret_aws_namespace: "mediator/prod".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "aws_secrets://us-east-1/mediator/prod"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_gcp_concatenates_project_and_namespace() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_GCP.into(),
+            secret_gcp_project: "affinidi-prod".into(),
+            secret_gcp_namespace: "mediator-keys".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "gcp_secrets://affinidi-prod/mediator-keys"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_azure_uses_vault_field() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_AZURE.into(),
+            secret_azure_vault: "mediator.vault.azure.net".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "azure_keyvault://mediator.vault.azure.net"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_vault_concatenates_endpoint_and_mount() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VAULT.into(),
+            secret_vault_endpoint: "vault.example.com:8200".into(),
+            secret_vault_mount: "secret/mediator".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "vault://vault.example.com:8200/secret/mediator"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_rejects_unsafe_string_scheme_with_keyring_fallback() {
+        // `string://` was the legacy "inline plaintext" backend —
+        // dropped because the mediator runtime no longer accepts it.
+        // The wizard could in theory still see a stale recipe with
+        // it, so the writer falls back to a sane keyring URL rather
+        // than emitting the unsafe one.
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_STRING.into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "keyring://affinidi-mediator");
+    }
+
+    #[test]
+    fn build_backend_url_rejects_vta_scheme_with_keyring_fallback() {
+        // `vta://` was never a backend (the VTA is a key *source*,
+        // not a store). Same fallback as `string://`.
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_VTA.into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "keyring://affinidi-mediator");
+    }
+
+    #[test]
+    fn build_backend_url_unknown_scheme_falls_back_to_keyring() {
+        // Defensive: a typo'd scheme (e.g. `key-ring:`) lands on
+        // the same safe default rather than emitting a malformed URL.
+        let cfg = WizardConfig {
+            secret_storage: "totally-not-a-real-scheme://".into(),
+            ..WizardConfig::default()
+        };
+        assert_eq!(build_backend_url(&cfg), "keyring://affinidi-mediator");
+    }
+
     fn test_generated() -> GeneratedValues {
         GeneratedValues {
             mediator_did: "did:peer:2.Vtest.Etest".into(),

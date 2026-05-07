@@ -768,6 +768,123 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial_test::serial]
+    async fn phase2_happy_path_unseals_and_deletes_seed() {
+        // End-to-end round-trip — exercises the seam every error-path
+        // test stops short of: phase 2 reads a real seed from the
+        // backend, derives `recipient_secret`, opens a bundle the
+        // producer sealed to the matching recipient pubkey, projects
+        // onto a `VtaSession`, and deletes the seed on success.
+        //
+        // Before this test, all phase-2 coverage stopped at error
+        // surfaces (no seed / aged seed / "no bundle" / etc.). A
+        // happy-path regression in seed-load → recipient_secret
+        // derivation → open_with_digest would slip through. This is
+        // the missing-test gap the review called out.
+        use affinidi_messaging_mediator_common::MediatorSecrets;
+        use vta_sdk::context_provision::ContextProvisionBundle;
+        use vta_sdk::credentials::CredentialBundle;
+        use vta_sdk::sealed_transfer::{
+            AssertionProof, InMemoryNonceStore, ProducerAssertion, SealedPayloadV1, armor,
+            bundle_digest, generate_ed25519_keypair, seal_payload,
+        };
+
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+
+        // Producer + consumer keypairs. The consumer's *seed* is what
+        // gets persisted to the backend — phase 2 derives the X25519
+        // recipient secret from it via `ed25519_seed_to_x25519_secret`,
+        // and the producer must seal to the matching recipient pubkey.
+        let (_prod_seed, prod_ed_pub) = generate_ed25519_keypair();
+        let (consumer_seed, consumer_ed_pub) = generate_ed25519_keypair();
+        let consumer_seed_bytes: [u8; 32] = *consumer_seed;
+        let recipient_pk = affinidi_crypto::did_key::ed25519_pub_to_x25519_bytes(&consumer_ed_pub)
+            .expect("derive recipient X25519 pubkey from consumer ed25519 pub");
+
+        // Fixed nonce → deterministic bundle id, so the backend lookup
+        // key and the bundle's embedded id agree.
+        let nonce = [0xCDu8; 16];
+        let assertion = ProducerAssertion {
+            producer_did: affinidi_crypto::did_key::ed25519_pub_to_did_key(&prod_ed_pub),
+            proof: AssertionProof::PinnedOnly,
+        };
+        // sealed_export_config sets vta_mode = sealed-export, which
+        // maps to OfflineExport intent in `intent_for_mode` — that
+        // intent expects a `ContextProvision` payload variant, NOT
+        // `AdminCredential`. Mismatched payload triggers
+        // "bundle did not contain a mediator admin credential".
+        let payload = SealedPayloadV1::ContextProvision(Box::new(ContextProvisionBundle {
+            context_id: "prod-mediator".into(),
+            context_name: "Mediator (prod-mediator)".into(),
+            vta_url: Some("https://vta.example.com".into()),
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            credential: CredentialBundle::new(
+                "did:key:z6MkAdminHappy",
+                "zAdminPrivateHappy",
+                "did:webvh:vta.example.com",
+            ),
+            admin_did: "did:key:z6MkAdminHappy".into(),
+            did: None,
+        }));
+        let store_for_seal = InMemoryNonceStore::new();
+        let bundle = seal_payload(&recipient_pk, nonce, assertion, &payload, &store_for_seal)
+            .await
+            .expect("producer-side seal");
+        // PinnedOnly producer must be unsealed against the OOB digest
+        // — compute it before armoring so the test can pass it through
+        // to phase 2.
+        let digest = bundle_digest(&bundle);
+        let armored = armor::encode(&bundle);
+        let bundle_path = dir.join("bundle.armor");
+        std::fs::write(&bundle_path, armored).unwrap();
+
+        // Persist the consumer seed in the backend at the bundle-id
+        // key, mimicking what phase 1 would have left behind.
+        let bundle_id_hex = hex_lower(&nonce);
+        let config = sealed_export_config("prod-mediator", &dir);
+        let backend_url = crate::config_writer::build_backend_url(&config);
+        let backend_store = MediatorSecrets::from_url(&backend_url).expect("open backend");
+        backend_store
+            .store_bootstrap_seed(&bundle_id_hex, &consumer_seed_bytes)
+            .await
+            .expect("store seed");
+
+        // Phase 2 — passes the OOB digest so the PinnedOnly bundle
+        // unseals cleanly.
+        let outcome = dispatch(&config, Some(&bundle_path), Some(&digest))
+            .await
+            .expect("phase 2 must succeed when seed + bundle align");
+
+        match outcome {
+            HeadlessOutcome::Applied { session, .. } => {
+                assert_eq!(session.admin_did(), "did:key:z6MkAdminHappy");
+                assert_eq!(session.vta_did, "did:webvh:vta.example.com");
+            }
+            HeadlessOutcome::RequestEmitted { .. } => {
+                panic!("dispatch took the phase-1 branch despite --bundle being set");
+            }
+        }
+
+        // Seed must have been removed from the backend on successful
+        // apply — re-running phase 2 would otherwise rehydrate the
+        // same secret and waste backend storage forever. Re-open the
+        // backend handle so any in-process index cache from before
+        // dispatch is invalidated; the file-backed store persists
+        // through both handles.
+        let backend_store_after =
+            MediatorSecrets::from_url(&backend_url).expect("re-open backend post-dispatch");
+        let after = backend_store_after
+            .load_bootstrap_seed(&bundle_id_hex)
+            .await
+            .expect("load_bootstrap_seed");
+        assert!(
+            after.is_none(),
+            "seed must be deleted from backend on phase-2 success"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
     async fn phase2_errors_when_no_matching_seed_in_backend() {
         // Write a syntactically-valid armored bundle (single chunk,
         // produced by the sealed-transfer producer side of vta-sdk)
