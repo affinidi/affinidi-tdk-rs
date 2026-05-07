@@ -1997,3 +1997,265 @@ mod cache_bundle_tests {
         assert_eq!(bundle.secrets[1].private_key_multibase, "zKa");
     }
 }
+
+/// Integration tests against `generate_and_write` end-to-end.
+///
+/// Locks down the recipe → wizard config → on-disk artefact contract
+/// before refactoring the function into smaller phases. The test
+/// shouldn't change behaviour pre- and post-refactor; if the same
+/// inputs produce a different `mediator.toml` / `secrets.json` /
+/// recipe, the refactor regressed something.
+///
+/// All tests use a tempdir and `#[serial_test::serial]` because
+/// `generate_and_write` writes some artefacts (SSL keys, Dockerfile)
+/// to paths relative to CWD via the `conf/` prefix; CWD-mutating
+/// tests must not race with each other.
+#[cfg(test)]
+mod generate_and_write_tests {
+    use super::*;
+
+    /// Tempdir + CWD swap, restored on drop. Mirrors the
+    /// `bootstrap_headless::tests::CwdGuard` pattern (kept private to
+    /// that module). Two-line duplication is cheaper than restructuring
+    /// for re-use across binary-private mod tests.
+    struct CwdGuard {
+        _tmp: tempfile::TempDir,
+        path: std::path::PathBuf,
+        prev: std::path::PathBuf,
+    }
+
+    impl CwdGuard {
+        fn new() -> Self {
+            let tmp = tempfile::tempdir().unwrap();
+            let prev = std::env::current_dir().unwrap();
+            let path = tmp.path().to_path_buf();
+            std::env::set_current_dir(&path).unwrap();
+            Self {
+                _tmp: tmp,
+                path,
+                prev,
+            }
+        }
+        fn dir(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.prev);
+        }
+    }
+
+    /// Build a minimal `did:peer` config that exercises every
+    /// non-VTA generate_and_write phase: DID generation, JWT mint,
+    /// admin did:key generation, file:// backend probe + writes,
+    /// mediator.toml write, atm-functions.lua write, recipe write.
+    /// Skips SSL (writes to relative `conf/keys/` and is exercised
+    /// elsewhere) and Docker (deployment_type-gated).
+    fn did_peer_config(dir: &std::path::Path) -> app::WizardConfig {
+        let conf_dir = dir.join("conf");
+        let secrets_path = dir.join("unified-secrets.json");
+        app::WizardConfig {
+            config_path: conf_dir
+                .join("mediator.toml")
+                .to_string_lossy()
+                .into_owned(),
+            deployment_type: DEPLOYMENT_LOCAL.into(),
+            didcomm_enabled: true,
+            tsp_enabled: false,
+            did_method: DID_PEER.into(),
+            secret_storage: crate::consts::STORAGE_FILE.into(),
+            secret_file_path: secrets_path.to_string_lossy().into_owned(),
+            secret_file_encrypted: false,
+            ssl_mode: SSL_NONE.into(),
+            jwt_mode: JWT_MODE_GENERATE.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            ..app::WizardConfig::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn generate_and_write_did_peer_emits_full_artefact_set() {
+        // End-to-end: did:peer + file:// + JWT generate + admin
+        // generate. Every phase except SSL and Docker runs. The
+        // assertions cover what the upcoming refactor must preserve:
+        // every file lands in the right place with the right shape.
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let config = did_peer_config(&dir);
+
+        generate_and_write(&config, None, /*save_recipe=*/ true)
+            .await
+            .expect("generate_and_write must succeed for did:peer");
+
+        // Phase: write_config — mediator.toml + atm-functions.lua.
+        let toml_path = dir.join("conf").join("mediator.toml");
+        let lua_path = dir.join("conf").join("atm-functions.lua");
+        assert!(toml_path.exists(), "mediator.toml must be written");
+        assert!(lua_path.exists(), "atm-functions.lua must be written");
+
+        // mediator.toml must parse and carry every field the wizard
+        // sets: mediator DID (did:peer:…), admin DID (did:key:…),
+        // backend URL (file://…), api_prefix, listen_address.
+        let toml_text = std::fs::read_to_string(&toml_path).unwrap();
+        let parsed: toml::Value =
+            toml::from_str(&toml_text).expect("mediator.toml must be valid TOML");
+        let mediator_did = parsed
+            .get("mediator_did")
+            .and_then(|v| v.as_str())
+            .expect("mediator_did must be present");
+        assert!(
+            mediator_did.starts_with("did://did:peer:"),
+            "mediator_did must be a did:peer (got: {mediator_did})"
+        );
+        let server = parsed.get("server").expect("[server] section");
+        let admin_did = server
+            .get("admin_did")
+            .and_then(|v| v.as_str())
+            .expect("admin_did must be present");
+        assert!(
+            admin_did.starts_with("did://did:key:"),
+            "admin_did must be a did:key (got: {admin_did})"
+        );
+        let secrets = parsed.get("secrets").expect("[secrets] section");
+        let backend = secrets
+            .get("backend")
+            .and_then(|v| v.as_str())
+            .expect("[secrets].backend");
+        assert!(
+            backend.starts_with("file://"),
+            "backend must be the file:// URL (got: {backend})"
+        );
+
+        // Phase: provision_secret_backend — unified store contains
+        // the JWT secret + operating secrets + admin credential.
+        // Verify the file backend was populated rather than asserting
+        // exact bytes (the JWT key is randomly generated).
+        let unified_path = dir.join("unified-secrets.json");
+        assert!(
+            unified_path.exists(),
+            "unified secret backend file must exist after probe + writes"
+        );
+        let unified_text = std::fs::read_to_string(&unified_path).unwrap();
+        // Parse to verify well-formed JSON; assert on the well-known
+        // keys mediator-common defines.
+        let unified_json: serde_json::Value =
+            serde_json::from_str(&unified_text).expect("unified secrets file must be valid JSON");
+        let _ = unified_json; // structural-validity check only
+        for well_known in [
+            affinidi_messaging_mediator_common::JWT_SECRET,
+            affinidi_messaging_mediator_common::OPERATING_SECRETS,
+            affinidi_messaging_mediator_common::ADMIN_CREDENTIAL,
+        ] {
+            assert!(
+                unified_text.contains(well_known),
+                "unified secret backend missing well-known key '{well_known}': {unified_text}"
+            );
+        }
+
+        // Phase: legacy `<config_dir>/secrets.json` (file-backend
+        // operating-keys export) — separate from the unified store.
+        let legacy_secrets = dir.join("conf").join("secrets.json");
+        assert!(
+            legacy_secrets.exists(),
+            "legacy secrets.json must be written for file:// backend"
+        );
+
+        // Phase: recipe write (save_recipe=true).
+        let recipe_path = dir.join("conf").join("mediator-build.toml");
+        assert!(
+            recipe_path.exists(),
+            "build recipe must be saved when save_recipe=true"
+        );
+        let recipe_text = std::fs::read_to_string(&recipe_path).unwrap();
+        let recipe_parsed: toml::Value =
+            toml::from_str(&recipe_text).expect("recipe must be valid TOML");
+        // Round-trip check: parsing back as a BuildRecipe must
+        // succeed, otherwise the auto-write produced something the
+        // recipe loader can't consume.
+        let _: recipe::BuildRecipe = toml::from_str(&recipe_text)
+            .expect("auto-written recipe must round-trip through BuildRecipe deserialize");
+        assert_eq!(recipe_parsed["deployment"]["type"].as_str(), Some("local"));
+        assert_eq!(
+            recipe_parsed["identity"]["did_method"].as_str(),
+            Some("did:peer")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn generate_and_write_skips_recipe_when_save_recipe_false() {
+        // Recipe write is gated by save_recipe — passing `false`
+        // (the recipe-driven `--from <recipe>` re-run path) must not
+        // overwrite the input recipe with a re-rendered copy.
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let config = did_peer_config(&dir);
+
+        generate_and_write(&config, None, /*save_recipe=*/ false)
+            .await
+            .expect("generate_and_write must succeed");
+
+        let recipe_path = dir.join("conf").join("mediator-build.toml");
+        assert!(
+            !recipe_path.exists(),
+            "recipe must NOT be written when save_recipe=false"
+        );
+        // Mediator.toml still lands — the recipe-skip is independent
+        // of the main config write.
+        assert!(dir.join("conf").join("mediator.toml").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn generate_and_write_admin_skip_omits_admin_did_field() {
+        // ADMIN_SKIP path: no admin DID generated, no admin
+        // credential in the unified backend, and `[server].admin_did`
+        // is absent from mediator.toml. Lock down so a refactor
+        // doesn't accidentally always-mint an admin DID.
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let mut config = did_peer_config(&dir);
+        config.admin_did_mode = ADMIN_SKIP.into();
+
+        generate_and_write(&config, None, false)
+            .await
+            .expect("generate_and_write with ADMIN_SKIP");
+
+        let toml_text = std::fs::read_to_string(dir.join("conf").join("mediator.toml")).unwrap();
+        let parsed: toml::Value = toml::from_str(&toml_text).unwrap();
+        let server = parsed.get("server").expect("[server] section");
+        assert!(
+            server.get("admin_did").is_none(),
+            "admin_did must be absent under ADMIN_SKIP — got: {server:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn generate_and_write_jwt_provide_skips_jwt_secret_in_backend() {
+        // jwt_mode = provide: the wizard records the choice and DOES
+        // NOT mint or store a JWT secret. The mediator's runtime
+        // boot picks it up from MEDIATOR_JWT_SECRET / --jwt-secret-file.
+        // Refactor must preserve this — silently always-minting would
+        // be a security regression.
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let mut config = did_peer_config(&dir);
+        config.jwt_mode = JWT_MODE_PROVIDE.into();
+
+        generate_and_write(&config, None, false).await.unwrap();
+
+        let unified_text = std::fs::read_to_string(dir.join("unified-secrets.json")).unwrap();
+        assert!(
+            !unified_text.contains(affinidi_messaging_mediator_common::JWT_SECRET),
+            "JWT_SECRET key must be absent under jwt_mode = provide"
+        );
+        // Operating secrets + admin credential still land — they're
+        // independent of jwt_mode.
+        assert!(unified_text.contains(affinidi_messaging_mediator_common::OPERATING_SECRETS));
+        assert!(unified_text.contains(affinidi_messaging_mediator_common::ADMIN_CREDENTIAL));
+    }
+}
