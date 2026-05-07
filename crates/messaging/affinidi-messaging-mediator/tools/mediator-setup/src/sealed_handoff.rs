@@ -60,6 +60,14 @@ const DEFAULT_VALIDITY_OFFLINE: Duration = Duration::days(7);
 /// `vta-service/src/operations/provision_integration.rs::resolve_webvh_server`.
 const WEBVH_SERVER_TEMPLATE_VAR: &str = "WEBVH_SERVER";
 
+/// Template variable the VTA forwards to the chosen webvh server's
+/// `request_uri` call as the desired DID path / mnemonic — the
+/// memorable trailing component of `did:webvh:server.example.com:<path>`.
+/// Only meaningful when `WEBVH_SERVER` is also set (self-host paths
+/// are derived from `URL`). See `vta-service::operations::
+/// provision_integration::webvh::take_webvh_path`.
+const WEBVH_PATH_TEMPLATE_VAR: &str = "WEBVH_PATH";
+
 /// Linear progress through the air-gapped flow. The wizard advances
 /// strictly in order — each phase has a single well-defined exit.
 ///
@@ -84,6 +92,13 @@ pub enum SealedPhase {
     /// VTA should host the minted DID's did.jsonl log on. Empty means
     /// "self-host at the URL" (the VTA's serverless path).
     CollectWebvhServer,
+    /// FullSetup-only: optional text input for the DID path / mnemonic
+    /// the chosen webvh server should publish the minted DID under
+    /// (forwarded to the VTA as `WEBVH_PATH`). Only entered when the
+    /// operator picked a webvh server on `CollectWebvhServer`; empty
+    /// means "let the server auto-assign". Skipped entirely when
+    /// `webvh_server` is empty (self-host derives the path from URL).
+    CollectWebvhPath,
     /// AdminOnly-only: text input for the admin ACL label. Optional —
     /// empty advances with the `--admin-label` flag omitted.
     CollectAdminLabel,
@@ -133,6 +148,13 @@ pub struct SealedHandoffState {
     /// Empty means "self-host at the URL". See
     /// [`WEBVH_SERVER_TEMPLATE_VAR`].
     pub webvh_server: String,
+    /// FullSetup-only: optional DID path / mnemonic the chosen webvh
+    /// server should publish the minted DID under. Forwarded to the
+    /// VTA as [`WEBVH_PATH_TEMPLATE_VAR`]; the VTA in turn passes it
+    /// to the server's `request_uri` call. Empty means "let the
+    /// server auto-assign"; ignored entirely when `webvh_server` is
+    /// empty (self-host derives the path from `URL`).
+    pub webvh_path: String,
     /// Consumer's X25519 secret. Required to open the returned bundle;
     /// dropped when the sub-flow exits. Zeroed until the inputs phases
     /// complete and `finalize_request` runs.
@@ -233,6 +255,7 @@ impl SealedHandoffState {
             admin_label: String::new(),
             mediator_url: String::new(),
             webvh_server: String::new(),
+            webvh_path: String::new(),
             recipient_secret: [0u8; 32],
             seed_bytes: [0u8; 32],
             nonce: [0u8; 16],
@@ -325,6 +348,14 @@ impl SealedHandoffState {
                         WEBVH_SERVER_TEMPLATE_VAR.to_string(),
                         Value::String(self.webvh_server.clone()),
                     );
+                    // `WEBVH_PATH` is only meaningful alongside a chosen
+                    // server — self-host derives the path from `URL`.
+                    if !self.webvh_path.is_empty() {
+                        vars.insert(
+                            WEBVH_PATH_TEMPLATE_VAR.to_string(),
+                            Value::String(self.webvh_path.clone()),
+                        );
+                    }
                 }
                 let mut builder = ProvisionRequestBuilder::new(DEFAULT_MEDIATOR_TEMPLATE)
                     .vars(vars)
@@ -1258,6 +1289,64 @@ mod tests {
         assert!(
             !state.request_json.contains("WEBVH_SERVER"),
             "blank webvh_server should omit the template var entirely"
+        );
+        // No server → no path either.
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "blank webvh_server should also omit WEBVH_PATH"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_webvh_path_appears_in_vp_when_server_set() {
+        // When both webvh_server and webvh_path are set, the VP must
+        // carry `WEBVH_PATH` so the VTA forwards it to the chosen
+        // server's `request_uri`.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = "prod-1".into();
+        state.webvh_path = "acme-mediator".into();
+        state.finalize_request().unwrap();
+        assert!(
+            state.request_json.contains("\"WEBVH_PATH\""),
+            "WEBVH_PATH template var missing from VP: {}",
+            state.request_json
+        );
+        assert!(
+            state.request_json.contains("\"acme-mediator\""),
+            "resolved webvh path missing from VP: {}",
+            state.request_json
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_webvh_path_dropped_when_server_blank() {
+        // Path without a server is meaningless (self-host derives the
+        // path from URL). The VP must omit `WEBVH_PATH` entirely.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = String::new();
+        state.webvh_path = "stray-mnemonic".into();
+        state.finalize_request().unwrap();
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "WEBVH_PATH must be dropped when no server is set: {}",
+            state.request_json
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_omits_webvh_path_when_blank() {
+        // Server set but path empty → server auto-assigns. VP must
+        // not carry `WEBVH_PATH` so the VTA defers to the server.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = "prod-1".into();
+        state.finalize_request().unwrap();
+        assert!(state.request_json.contains("\"WEBVH_SERVER\""));
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "blank webvh_path should omit the template var entirely"
         );
     }
 

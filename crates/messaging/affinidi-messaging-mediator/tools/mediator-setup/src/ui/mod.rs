@@ -369,6 +369,45 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 );
                 return;
             }
+            SealedPhase::CollectWebvhPath => {
+                // Reached only when the operator picked a webvh server
+                // on the prior phase. Optional — blank lets the server
+                // auto-assign. Forwarded to the VTA as `WEBVH_PATH`.
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    format!(
+                        "Optional — DID path / mnemonic the chosen webvh server \
+                         ('{}') should publish the minted DID under.\n\n\
+                         The minted DID will look like:\n  \
+                         did:webvh:<server-host>:<your-path>\n\n\
+                         Use a memorable slug (e.g. `prod-mediator`, `acme-mediator`) \
+                         so the DID is easy to recognise in audit logs and ACL \
+                         entries.\n\n\
+                         Leave blank to let the server auto-assign a random mnemonic.",
+                        state.webvh_server,
+                    )
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — webvh path / mnemonic (optional)",
+                    "DID path the webvh server should publish the minted DID under \
+                     (optional).",
+                    None,
+                    &app.text_input,
+                    "prod-mediator",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "Sent to the VTA as the `WEBVH_PATH` template var; the VTA \
+                     forwards it to the chosen webvh server's `request_uri` call. \
+                     Empty → server auto-assigns. The bootstrap request is \
+                     generated on Enter.",
+                );
+                return;
+            }
             SealedPhase::RequestGenerated => {
                 // Handled above before the two-panel split so the
                 // JSON + producer commands get the full content

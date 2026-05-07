@@ -784,7 +784,8 @@ impl WizardApp {
             SealedPhase::CollectContext
             | SealedPhase::CollectAdminLabel
             | SealedPhase::CollectMediatorUrl
-            | SealedPhase::CollectWebvhServer => {
+            | SealedPhase::CollectWebvhServer
+            | SealedPhase::CollectWebvhPath => {
                 // These phases drive text-input; Enter goes through
                 // `sealed_handoff_confirm_text`, not here. The renderer
                 // only lands in `sealed_handoff_select` for these
@@ -899,6 +900,30 @@ impl WizardApp {
                 // against its server catalogue (unknown id → NotFound
                 // before any minting runs).
                 state.webvh_server = value.trim().to_string();
+                state.last_error = None;
+                if state.webvh_server.is_empty() {
+                    // Self-host — no server, no path. Finalise.
+                    if let Err(e) = state.finalize_request() {
+                        state.last_error = Some(e.to_string());
+                    } else {
+                        self.text_input = Input::default();
+                        self.mode = InputMode::Selecting;
+                    }
+                } else {
+                    // Server picked → ask for the optional DID path /
+                    // mnemonic before finalising.
+                    state.phase = SealedPhase::CollectWebvhPath;
+                    self.text_input = Input::new(state.webvh_path.clone());
+                }
+                true
+            }
+            SealedPhase::CollectWebvhPath => {
+                // Optional. Empty trims to "let the server auto-assign
+                // a mnemonic"; non-empty is forwarded to the VTA as
+                // `WEBVH_PATH` and on to the chosen webvh server's
+                // `request_uri` call.
+                state.webvh_path = value.trim().to_string();
+                state.last_error = None;
                 if let Err(e) = state.finalize_request() {
                     state.last_error = Some(e.to_string());
                 } else {
@@ -1810,6 +1835,28 @@ impl WizardApp {
             return StepData {
                 title: format!("Step {num}/{total}: VTA Integration — {suffix}"),
                 description: desc.into(),
+            };
+        }
+        // Database step: override the generic backend-picker title
+        // when the wizard is in the create-directory confirmation
+        // sub-phase, so the operator doesn't see "Choose between
+        // Redis and Fjall" while the screen is asking a different
+        // question entirely. Leading `\u{26A0}` (⚠) signals the
+        // warning posture without restyling the whole renderer.
+        if self.current_step == WizardStep::Database
+            && self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir)
+        {
+            let num = self.current_step.step_number();
+            let total = WizardStep::total();
+            return StepData {
+                title: format!(
+                    "Step {num}/{total}: Storage Backend — \u{26A0} Fjall directory missing"
+                ),
+                description: format!(
+                    "\u{26A0} The Fjall data directory '{}' does not exist yet. \
+                     Create it now or go back and edit the path.",
+                    self.config.fjall_data_dir,
+                ),
             };
         }
         default
