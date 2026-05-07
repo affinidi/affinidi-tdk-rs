@@ -615,6 +615,28 @@ impl SealedHandoffState {
         }
     }
 
+    /// Optional `pnm` precondition command — the one-shot a FullSetup
+    /// operator must run before `pnm bootstrap provision-integration`
+    /// when the target context doesn't yet exist on the VTA. The
+    /// `vta-service` request handler returns a 404 with a "create it
+    /// first" hint on the missing-context path; pnm-cli does not yet
+    /// expose `--create-context` (only the offline `vta` CLI does), so
+    /// surfacing the explicit pre-step here closes the gap.
+    ///
+    /// `None` for AdminOnly (its primary already creates the context
+    /// implicitly via `pnm contexts bootstrap`) and OfflineExport (the
+    /// context exists by definition — it's an *export*).
+    pub fn pnm_precondition_command(&self) -> Option<String> {
+        match self.intent {
+            VtaIntent::FullSetup => Some(format!(
+                "pnm contexts create --id {} --name \"{}\"",
+                self.context_id,
+                self.context_display_name(),
+            )),
+            VtaIntent::AdminOnly | VtaIntent::OfflineExport => None,
+        }
+    }
+
     /// Optional fallback command. AdminOnly returns a low-level `vta
     /// bootstrap seal …` invocation that requires the operator to
     /// hand-author a `SealedPayloadV1::AdminCredential` JSON file.
@@ -1165,6 +1187,36 @@ mod tests {
         assert!(!cmd.contains("--create-context"));
         // Sanity: must not be the `vta` flavour.
         assert!(!cmd.contains("vta bootstrap"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_pnm_precondition_emits_pnm_contexts_create() {
+        // pnm-cli has no `--create-context` flag, so the wizard must
+        // surface the explicit pre-step. Asserts the command shape and
+        // that the chosen context_id flows through verbatim.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.context_id = "prod-mediator".into();
+        state.finalize_request().unwrap();
+        let pre = state
+            .pnm_precondition_command()
+            .expect("FullSetup exposes a precondition");
+        assert!(pre.starts_with("pnm contexts create"));
+        assert!(pre.contains("--id prod-mediator"));
+        assert!(pre.contains("--name \"Mediator (prod-mediator)\""));
+    }
+
+    #[test]
+    fn admin_only_and_offline_export_have_no_pnm_precondition() {
+        // AdminOnly's primary already creates the context implicitly;
+        // OfflineExport's context exists by definition. No pre-step.
+        let mut admin = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        admin.finalize_request().unwrap();
+        assert!(admin.pnm_precondition_command().is_none());
+
+        let mut export = SealedHandoffState::new(VtaIntent::OfflineExport, None);
+        export.finalize_request().unwrap();
+        assert!(export.pnm_precondition_command().is_none());
     }
 
     #[test]
