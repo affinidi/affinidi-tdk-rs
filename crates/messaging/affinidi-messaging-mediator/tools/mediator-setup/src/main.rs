@@ -970,17 +970,164 @@ fn combine_url_prefix(base: &str, prefix: &str) -> String {
     }
 }
 
+/// Bag of artefacts the mint phase produces and the later phases
+/// consume. Keeps the four `generate_and_write` phases coupled by an
+/// explicit value type rather than the prior soup of mutable locals.
+///
+/// Pure-ish: every field is a value, not a handle to a backend or
+/// open file. Side effects (file writes, network calls, stdout) live
+/// in `provision_secret_backend`, `write_config_artefacts`, and
+/// `print_completion_summary` which take a borrowed `&MintedArtefacts`.
+struct MintedArtefacts {
+    /// The mediator's DID — `did:peer:…`, `did:webvh:…`, or a
+    /// VTA-managed DID forwarded from the Vta sub-flow.
+    mediator_did: String,
+    /// Operating-key secrets the mediator's runtime loader expects
+    /// at `mediator/operating/secrets`. Empty when the VTA hosts
+    /// the keys (the runtime fetches them at startup).
+    mediator_secrets: Vec<affinidi_secrets_resolver::secrets::Secret>,
+    /// Serialised did:webvh log entry (or VTA-returned log) that
+    /// `write_config_artefacts` writes to `did.jsonl`. `None` when
+    /// the deployment uses no self-hosted DID log.
+    did_doc: Option<String>,
+    /// Authorization credential JSON the VTA returned with the
+    /// minted DID. Archived alongside the config in
+    /// `write_config_artefacts`. `None` for non-VTA / OfflineExport
+    /// deployments.
+    authorization_vc: Option<String>,
+    /// Raw PKCS8 bytes of the JWT signing key. `None` under
+    /// `jwt_mode = provide` — the runtime expects
+    /// `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at boot.
+    jwt_secret: Option<Vec<u8>>,
+    /// Operator's admin DID. `None` under `ADMIN_SKIP`.
+    admin_did: Option<String>,
+    /// Admin DID's secret material. `None` when the admin DID came
+    /// from a VTA session (the rotated credential is in the session
+    /// already) or under `ADMIN_SKIP`.
+    admin_secret: Option<affinidi_secrets_resolver::secrets::Secret>,
+}
+
 /// Run all generators and write configuration files.
 /// When `save_recipe` is true, a `mediator-build.toml` recipe is saved alongside
 /// the config for reproducibility. Set to false when running from `--from` to
 /// avoid overwriting the input recipe.
+///
+/// Orchestrator — delegates to four phase functions in order. Each
+/// phase has a distinct concern:
+///
+/// 1. [`mint_artefacts`] — pure-ish value computation (DID + JWT +
+///    admin DID). No file IO; no network; the only side effect is
+///    progress `println!` calls that report which branch ran.
+/// 2. [`provision_secret_backend`] — opens the unified
+///    `MediatorSecrets` store, probes it (catches typos / missing
+///    AWS creds / dead Vault tokens here, not at first mediator
+///    boot), and pushes every well-known entry the runtime expects.
+/// 3. [`write_config_artefacts`] — file IO: SSL gen, `mediator.toml`
+///    + Lua, `did.jsonl`, authorization VC archive, recipe,
+///    Dockerfile.
+/// 4. [`print_completion_summary`] — operator-facing terminal output:
+///    paths written + admin-key echo with the UNSAFE banner.
+///
+/// The split exists so `mint_artefacts` is unit-testable (no IO),
+/// the IO phases can be tested with a tempdir + file:// backend, and
+/// each branch of the (`did_method` × `vta_session` ×
+/// `admin_did_mode`) matrix lives in its own arm of one phase rather
+/// than being interleaved with side effects. Integration coverage in
+/// `generate_and_write_tests` locks the end-to-end behaviour against
+/// regressions across the split.
 async fn generate_and_write(
     config: &app::WizardConfig,
     vta_session: Option<&vta::VtaSession>,
     save_recipe: bool,
 ) -> anyhow::Result<()> {
-    // Generate mediator DID + secrets
-    let (mediator_did, mediator_secrets, did_doc) = match config.did_method.as_str() {
+    let artefacts = mint_artefacts(config, vta_session).await?;
+    provision_secret_backend(config, &artefacts, vta_session).await?;
+    write_config_artefacts(config, &artefacts, save_recipe)?;
+    print_completion_summary(config, &artefacts, vta_session);
+    Ok(())
+}
+
+/// Phase 1 — pure-ish value computation. Branches on `did_method`,
+/// `jwt_mode`, and `admin_did_mode` to determine what the wizard will
+/// stamp into the config; produces no file or network side effects.
+/// `println!` progress messages stay inline so the operator sees the
+/// streaming UX they're used to (which-branch-ran), but no writes
+/// happen here.
+///
+/// The `authorization_vc` field used to be written mid-mint inside
+/// the `DID_VTA` branch — that file write is now deferred to
+/// [`write_config_artefacts`] so this phase is genuinely pure for
+/// IO purposes.
+async fn mint_artefacts(
+    config: &app::WizardConfig,
+    vta_session: Option<&vta::VtaSession>,
+) -> anyhow::Result<MintedArtefacts> {
+    // ── DID + operating secrets + (optional) DID log + (optional) VC ──
+    let (mediator_did, mediator_secrets, did_doc, authorization_vc) =
+        mint_did_material(config, vta_session).await?;
+
+    // ── JWT secret ────────────────────────────────────────────────────
+    let jwt_secret: Option<Vec<u8>> = if config.jwt_mode == JWT_MODE_PROVIDE {
+        println!(
+            "  JWT secret: provide mode — wizard will NOT generate or store a key. \
+             Set MEDIATOR_JWT_SECRET or pass --jwt-secret-file <path> when starting \
+             the mediator."
+        );
+        None
+    } else {
+        Some(generators::jwt::generate_jwt_secret()?)
+    };
+
+    // ── Admin DID ─────────────────────────────────────────────────────
+    // If the operator went through the online-VTA sub-flow, the setup
+    // did:key they pasted into the ACL has already been rotated to a
+    // fresh admin identity by the SDK — prefer that over a freshly-minted
+    // local did:key so the mediator has a single canonical admin DID
+    // that also exists in the VTA's ACL.
+    let (admin_did, admin_secret) = match (vta_session, config.admin_did_mode.as_str()) {
+        (Some(session), _) => {
+            println!(
+                "  Using rotated admin DID from VTA session: {}",
+                session.admin_did()
+            );
+            (Some(session.admin_did().to_string()), None)
+        }
+        (None, ADMIN_GENERATE) => {
+            let (did, secret) = generators::did_key::generate_admin_did_key()?;
+            (Some(did), Some(secret))
+        }
+        (None, ADMIN_SKIP) => (None, None),
+        (None, _) => (None, None),
+    };
+
+    Ok(MintedArtefacts {
+        mediator_did,
+        mediator_secrets,
+        did_doc,
+        authorization_vc,
+        jwt_secret,
+        admin_did,
+        admin_secret,
+    })
+}
+
+/// Mint the mediator's DID + operating secrets per `did_method`.
+/// Returns `(did, secrets, did_log, authorization_vc)` — the last two
+/// are `None` for non-webvh / non-VTA deployments.
+///
+/// Used to live as a `match` block inside `mint_artefacts`; extracted
+/// because the four-tuple was getting dense and the VTA arm in
+/// particular was 50 lines that benefit from sitting alone.
+async fn mint_did_material(
+    config: &app::WizardConfig,
+    vta_session: Option<&vta::VtaSession>,
+) -> anyhow::Result<(
+    String,
+    Vec<affinidi_secrets_resolver::secrets::Secret>,
+    Option<String>,
+    Option<String>,
+)> {
+    Ok(match config.did_method.as_str() {
         DID_PEER => {
             let service_uri = if config.public_url.is_empty() {
                 None
@@ -988,7 +1135,7 @@ async fn generate_and_write(
                 Some(config.public_url.clone())
             };
             let (did, secrets) = generators::did_peer::generate_did_peer(service_uri)?;
-            (did, secrets, None)
+            (did, secrets, None, None)
         }
         DID_WEBVH => {
             // The DID identifier should encode the host only (`example.com`)
@@ -1005,21 +1152,15 @@ async fn generate_and_write(
             let address = strip_url_path_owned(&raw_url);
             let service_url = combine_url_prefix(&address, &config.api_prefix);
             let result = generators::did_webvh::generate_did_webvh(&address, &service_url).await?;
-            (result.did, result.secrets, Some(result.did_doc))
+            (result.did, result.secrets, Some(result.did_doc), None)
         }
         DID_VTA => {
-            // VTA-managed DID: the mediator DID + keys came from the
-            // VTA at Vta-step provisioning. Two reply shapes carry it:
-            //
+            // VTA-managed DID: two reply shapes carry it.
             // - `Full(ProvisionResult)` — fresh template render
             //   (online / offline-mint paths, FullSetup intent).
-            // - `ContextExport(ContextProvisionBundle)` — re-export of
-            //   already-provisioned material (offline-export path,
+            // - `ContextExport(ContextProvisionBundle)` — re-export
+            //   of already-provisioned material (offline-export path,
             //   OfflineExport intent).
-            //
-            // Both land here. We dispatch on whichever accessor
-            // returns `Some`; one of them always will when
-            // `did_method == DID_VTA` and the Vta sub-flow completed.
             let from_full = vta_session.and_then(|s| s.as_full_provision());
             let from_export = vta_session.and_then(|s| s.as_context_export());
             if let Some(provision) = from_full {
@@ -1035,47 +1176,28 @@ async fn generate_and_write(
                     .to_string();
                 println!("  VTA-minted mediator DID: {integration_did}");
 
-                // Persist the integration DID's private keys as
-                // `Secret` values — the mediator's runtime secrets
-                // loader reads these at startup.
+                // Persist the integration DID's private keys as `Secret`
+                // values — the mediator's runtime secrets loader reads
+                // these at startup.
                 let secrets = provision
                     .integration_key()
                     .map(did_key_material_to_secrets)
                     .transpose()?
                     .unwrap_or_default();
 
-                // Archive the VTA-issued authorization VC next to
-                // the config. Short-lived (~1h validity) but useful
-                // for operator audit trails.
-                let vc_path = std::path::Path::new(&config.config_path)
-                    .parent()
-                    .unwrap_or(std::path::Path::new("."))
-                    .join("authorization.jsonld");
-                if let Ok(serialized) = serde_json::to_string_pretty(provision.authorization_vc()) {
-                    // VC is signed by the VTA; not secret per se, but
-                    // it's an authorization credential and a co-tenant
-                    // shouldn't be able to read the operator's audit
-                    // trail. Owner-only on Unix.
-                    match crate::secure_fs::write_sensitive(&vc_path, serialized) {
-                        Ok(()) => println!(
-                            "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
-                            vc_path.display()
-                        ),
-                        Err(e) => eprintln!(
-                            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
-                            vc_path.display()
-                        ),
-                    }
-                }
+                // Authorization VC content — actual file write happens
+                // in `write_config_artefacts`. Pre-serialise here so the
+                // mint phase produces a value-only `Option<String>` and
+                // the IO phase has nothing to compute.
+                let vc = serde_json::to_string_pretty(provision.authorization_vc()).ok();
 
-                // Return the webvh log entry for the unified post-match
-                // write. The VTA also exposes the inner DID document
-                // separately on `provision.payload.config.did_document`,
-                // but the wizard only needs the log entry — the
-                // mediator's loader extracts the DID document from the
-                // log envelope for `/.well-known/did.json`.
+                // The VTA also exposes the inner DID document separately
+                // on `provision.payload.config.did_document`, but the
+                // wizard only needs the log entry — the mediator's
+                // loader extracts the DID document from the log envelope
+                // for `/.well-known/did.json`.
                 let log_entry = provision.webvh_log().map(str::to_string);
-                (integration_did, secrets, log_entry)
+                (integration_did, secrets, log_entry, vc)
             } else if let Some(bundle) = from_export {
                 // OfflineExport path. Bundle carries the existing
                 // mediator DID + operational keys (Vec<SecretEntry>)
@@ -1093,20 +1215,15 @@ async fn generate_and_write(
                 println!("  VTA-exported mediator DID: {integration_did}");
 
                 let secrets = secret_entries_to_secrets(&did_view.secrets)?;
-
-                // Return the exported log entry for the unified post-match
-                // write. ContextProvision carries a single
-                // `Option<String>`, not a list of outputs — simpler than
-                // the TemplateBootstrap shape.
                 let log_entry = did_view.log_entry.clone();
-                (integration_did, secrets, log_entry)
+                (integration_did, secrets, log_entry, None)
             } else {
                 eprintln!(
                     "  Note: VTA-managed DID selected but no provisioned session \
                      was captured. Falling back to placeholder — edit mediator.toml \
                      manually before starting the mediator."
                 );
-                ("vta://mediator".into(), vec![], None)
+                ("vta://mediator".into(), vec![], None, None)
             }
         }
         _ => {
@@ -1115,64 +1232,24 @@ async fn generate_and_write(
                 "  Note: {} requires manual DID configuration.",
                 config.did_method
             );
-            ("PLACEHOLDER_DID".into(), vec![], None)
+            ("PLACEHOLDER_DID".into(), vec![], None, None)
         }
-    };
+    })
+}
 
-    // Generate JWT secret only if the operator chose `generate`. With
-    // `provide` we leave the well-known key absent — the mediator's
-    // boot-time loader picks it up from MEDIATOR_JWT_SECRET or the
-    // `--jwt-secret-file` flag and surfaces a clear error if neither is
-    // set, so the operator can't accidentally start without one.
-    let jwt_secret: Option<Vec<u8>> = if config.jwt_mode == JWT_MODE_PROVIDE {
-        println!(
-            "  JWT secret: provide mode — wizard will NOT generate or store a key. \
-             Set MEDIATOR_JWT_SECRET or pass --jwt-secret-file <path> when starting \
-             the mediator."
-        );
-        None
-    } else {
-        Some(generators::jwt::generate_jwt_secret()?)
-    };
-
-    // Generate admin DID. If the operator went through the online-VTA
-    // sub-flow, the setup did:key they pasted into the ACL has already
-    // been rotated to a fresh admin identity by the SDK — prefer that
-    // over a freshly-minted local did:key so the mediator has a single
-    // canonical admin DID that also exists in the VTA's ACL.
-    let (admin_did, admin_secret) = match (vta_session, config.admin_did_mode.as_str()) {
-        (Some(session), _) => {
-            println!(
-                "  Using rotated admin DID from VTA session: {}",
-                session.admin_did()
-            );
-            (Some(session.admin_did().to_string()), None)
-        }
-        (None, ADMIN_GENERATE) => {
-            let (did, secret) = generators::did_key::generate_admin_did_key()?;
-            (Some(did), Some(secret))
-        }
-        (None, ADMIN_SKIP) => (None, None),
-        (None, _) => (None, None),
-    };
-
-    // Generate self-signed SSL if requested
-    let (ssl_cert_path, ssl_key_path) = if config.ssl_mode == SSL_SELF_SIGNED {
-        let (cert, key) = generators::ssl::generate_self_signed_cert("conf/keys")?;
-        (Some(cert), Some(key))
-    } else {
-        (None, None)
-    };
-
-    // ── Provision the unified secret backend ────────────────────────────
-    //
-    // Open the same backend the mediator will read at startup, probe it
-    // (catches typos / missing AWS creds / dead Vault tokens *now*, not
-    // at boot), and push every well-known entry the mediator expects.
-    //
-    // Self-hosted (did:peer / did:webvh): operating keys + JWT.
-    // VTA-managed: admin credential (so the mediator can authenticate
-    //   to the VTA at boot) + JWT. Operating keys come from the VTA.
+/// Phase 2 — open the unified secret backend, probe it, push every
+/// well-known entry the mediator runtime expects at startup. Async
+/// because every backend (keyring, AWS, GCP, Azure, Vault, file) is
+/// async at the trait level.
+///
+/// Self-hosted (did:peer / did:webvh): operating keys + JWT.
+/// VTA-managed: admin credential (so the mediator can authenticate to
+/// the VTA at boot) + JWT. Operating keys come from the VTA.
+async fn provision_secret_backend(
+    config: &app::WizardConfig,
+    artefacts: &MintedArtefacts,
+    vta_session: Option<&vta::VtaSession>,
+) -> anyhow::Result<()> {
     let backend_url = config_writer::build_backend_url(config);
     println!("  Provisioning unified secret backend: {backend_url}");
     // macOS Keychain prompts once per keychain item the first time a
@@ -1199,7 +1276,7 @@ async fn generate_and_write(
 
     // JWT signing key — only when generated. Provide-mode skips this
     // and relies on the boot-time env-var/flag path.
-    if let Some(ref bytes) = jwt_secret {
+    if let Some(ref bytes) = artefacts.jwt_secret {
         mediator_secrets_store
             .store_jwt_secret(bytes)
             .await
@@ -1217,20 +1294,21 @@ async fn generate_and_write(
 
     // Operating keys — only when the wizard generated them locally
     // (peer/webvh). VTA-managed deployments fetch them at startup.
-    if !mediator_secrets.is_empty() {
+    if !artefacts.mediator_secrets.is_empty() {
         mediator_secrets_store
             .store_entry(
                 affinidi_messaging_mediator_common::OPERATING_SECRETS,
                 "operating-secrets",
-                &mediator_secrets,
+                &artefacts.mediator_secrets,
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to store operating secrets: {e}"))?;
+        let count = artefacts.mediator_secrets.len();
         println!(
             "    \x1b[32m\u{2714}\x1b[0m {} ({} key{})",
             affinidi_messaging_mediator_common::OPERATING_SECRETS,
-            mediator_secrets.len(),
-            if mediator_secrets.len() == 1 { "" } else { "s" }
+            count,
+            if count == 1 { "" } else { "s" }
         );
     }
 
@@ -1280,7 +1358,10 @@ async fn generate_and_write(
                 if bundle.secrets.len() == 1 { "" } else { "s" }
             );
         }
-    } else if let (Some(did), Some(secret)) = (admin_did.as_ref(), admin_secret.as_ref()) {
+    } else if let (Some(did), Some(secret)) = (
+        artefacts.admin_did.as_ref(),
+        artefacts.admin_secret.as_ref(),
+    ) {
         // Self-hosted ADMIN_GENERATE: the wizard minted the admin DID
         // locally (no VTA session), so the only place the private key
         // exists outside this process is the operator's terminal
@@ -1307,19 +1388,47 @@ async fn generate_and_write(
         }
     }
 
+    Ok(())
+}
+
+/// Phase 3 — file IO. Generates self-signed SSL (when requested),
+/// writes `mediator.toml` + `atm-functions.lua` (via
+/// `config_writer::write_config`), the did.jsonl log envelope, the
+/// authorization VC archive, the build recipe (when requested), and
+/// the Docker artefacts (when requested).
+///
+/// SSL generation lives here rather than in `mint_artefacts` because
+/// it's a side effect — `generators::ssl::generate_self_signed_cert`
+/// writes the `.cert` / `.key` pair to disk before returning the
+/// paths. Keeping the call here matches the "no IO in mint" rule.
+fn write_config_artefacts(
+    config: &app::WizardConfig,
+    artefacts: &MintedArtefacts,
+    save_recipe: bool,
+) -> anyhow::Result<()> {
+    // Self-signed SSL (when requested). Writes `conf/keys/end.cert`
+    // and `conf/keys/end.key` (the latter at 0o600 via
+    // `secure_fs`); paths feed into `mediator.toml`.
+    let (ssl_cert_path, ssl_key_path) = if config.ssl_mode == SSL_SELF_SIGNED {
+        let (cert, key) = generators::ssl::generate_self_signed_cert("conf/keys")?;
+        (Some(cert), Some(key))
+    } else {
+        (None, None)
+    };
+
     let generated = config_writer::GeneratedValues {
-        mediator_did,
-        mediator_secrets,
-        jwt_secret,
-        admin_did: admin_did.clone(),
-        admin_secret: admin_secret.clone(),
+        mediator_did: artefacts.mediator_did.clone(),
+        mediator_secrets: artefacts.mediator_secrets.clone(),
+        jwt_secret: artefacts.jwt_secret.clone(),
+        admin_did: artefacts.admin_did.clone(),
+        admin_secret: artefacts.admin_secret.clone(),
         ssl_cert_path,
         ssl_key_path,
         // The post-match write below mirrors this flag — they're set
         // off the same `did_doc` Option so `did_web_self_hosted` is
         // wired into `mediator.toml` exactly when there's a `did.jsonl`
         // on disk for the loader to read.
-        did_log_jsonl_written: did_doc.is_some(),
+        did_log_jsonl_written: artefacts.did_doc.is_some(),
     };
 
     config_writer::write_config(config, &generated)?;
@@ -1330,50 +1439,33 @@ async fn generate_and_write(
     // `provision.webvh_log()` / `did_view.log_entry` (DID_VTA branches);
     // both return the canonical log-entry JSON envelope.
     // `write_did_jsonl` adds the trailing newline strict JSONL requires.
-    if let Some(ref doc) = did_doc {
+    if let Some(ref doc) = artefacts.did_doc {
         write_did_jsonl(&config.config_path, doc);
     }
 
-    let conf_dir = std::path::Path::new(&config.config_path)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
-    println!(
-        "  \x1b[32m\u{2714}\x1b[0m Configuration: \x1b[1m{}\x1b[0m",
-        config.config_path
-    );
-    println!(
-        "  \x1b[32m\u{2714}\x1b[0m Lua functions: \x1b[1m{}\x1b[0m",
-        conf_dir.join("atm-functions.lua").display()
-    );
-
-    // Display admin DID info to user
-    if let Some(ref did) = admin_did {
-        println!("  \x1b[32m\u{2714}\x1b[0m Admin DID: \x1b[36m{did}\x1b[0m");
-        if let Some(ref secret) = admin_secret {
-            if let Ok(privkey) = secret.get_private_keymultibase() {
-                print_admin_key_echo(&privkey, None);
-            }
-        } else if let Some(session) = vta_session {
-            // VTA-session rotation case: the credential is already in
-            // the backend (stored above). The stdout echo is a
-            // convenience so operators can copy the key for offline
-            // storage — same UNSAFE warning applies.
-            print_admin_key_echo(
-                session.admin_private_key_mb(),
-                Some((session.vta_did.as_str(), session.context_id.as_str())),
-            );
+    // Authorization VC archive (DID_VTA Full path only). Pre-serialised
+    // in `mint_did_material` so this phase is pure file IO. Short-lived
+    // (~1h validity) but useful for operator audit trails. Owner-only
+    // on Unix — VC is a signed authorization credential and a co-tenant
+    // shouldn't be able to read the operator's audit trail.
+    if let Some(ref vc_text) = artefacts.authorization_vc {
+        let vc_path = std::path::Path::new(&config.config_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("authorization.jsonld");
+        match crate::secure_fs::write_sensitive(&vc_path, vc_text) {
+            Ok(()) => println!(
+                "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
+                vc_path.display()
+            ),
+            Err(e) => eprintln!(
+                "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+                vc_path.display()
+            ),
         }
     }
 
-    if config.secret_storage == STORAGE_FILE {
-        println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
-    }
-
-    if config.ssl_mode == SSL_SELF_SIGNED {
-        println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
-    }
-
-    // Save build recipe for reproducibility (skip when running from --from)
+    // Save build recipe for reproducibility (skip when running from --from).
     if save_recipe {
         let recipe_path = std::path::Path::new(&config.config_path)
             .parent()
@@ -1392,12 +1484,61 @@ async fn generate_and_write(
         );
     }
 
-    // Generate Docker files for container deployments
+    // Generate Docker files for container deployments.
     if config.deployment_type == DEPLOYMENT_CONTAINER {
         docker::generate_dockerfile(config, ".")?;
     }
 
     Ok(())
+}
+
+/// Phase 4 — operator-facing terminal output. No file or network IO;
+/// just the streaming progress messages + admin-key echo with the
+/// UNSAFE banner. Kept separate from `write_config_artefacts` so the
+/// IO phase doesn't have to share its termination point with the
+/// final summary banner — easier to keep both readable.
+fn print_completion_summary(
+    config: &app::WizardConfig,
+    artefacts: &MintedArtefacts,
+    vta_session: Option<&vta::VtaSession>,
+) {
+    let conf_dir = std::path::Path::new(&config.config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Configuration: \x1b[1m{}\x1b[0m",
+        config.config_path
+    );
+    println!(
+        "  \x1b[32m\u{2714}\x1b[0m Lua functions: \x1b[1m{}\x1b[0m",
+        conf_dir.join("atm-functions.lua").display()
+    );
+
+    if let Some(ref did) = artefacts.admin_did {
+        println!("  \x1b[32m\u{2714}\x1b[0m Admin DID: \x1b[36m{did}\x1b[0m");
+        if let Some(ref secret) = artefacts.admin_secret {
+            if let Ok(privkey) = secret.get_private_keymultibase() {
+                print_admin_key_echo(&privkey, None);
+            }
+        } else if let Some(session) = vta_session {
+            // VTA-session rotation case: the credential is already in
+            // the backend (stored by `provision_secret_backend`). The
+            // stdout echo is a convenience so operators can copy the
+            // key for offline storage — same UNSAFE warning applies.
+            print_admin_key_echo(
+                session.admin_private_key_mb(),
+                Some((session.vta_did.as_str(), session.context_id.as_str())),
+            );
+        }
+    }
+
+    if config.secret_storage == STORAGE_FILE {
+        println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
+    }
+
+    if config.ssl_mode == SSL_SELF_SIGNED {
+        println!("  \x1b[32m\u{2714}\x1b[0m SSL certificates: conf/keys/");
+    }
 }
 
 /// Print the admin private key to stdout alongside an UNSAFE banner.
@@ -2230,6 +2371,100 @@ mod generate_and_write_tests {
         assert!(
             server.get("admin_did").is_none(),
             "admin_did must be absent under ADMIN_SKIP — got: {server:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn mint_artefacts_did_peer_returns_value_only_bag_no_io() {
+        // The `mint_artefacts` phase is the value-only / IO-free
+        // counterpart to `provision_secret_backend` /
+        // `write_config_artefacts`. This test runs it inside a
+        // CWD-isolated tempdir so a regression that sneaks a file
+        // write back in (the prior structure had one in the DID_VTA
+        // arm — now deferred to write_config_artefacts) shows up as
+        // a stray artefact in the tempdir.
+        let cwd = CwdGuard::new();
+        let cwd_before: std::collections::BTreeSet<_> = std::fs::read_dir(cwd.dir())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .collect();
+
+        let config = app::WizardConfig {
+            did_method: DID_PEER.into(),
+            jwt_mode: JWT_MODE_GENERATE.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            ..app::WizardConfig::default()
+        };
+        let artefacts = mint_artefacts(&config, None)
+            .await
+            .expect("did:peer mint must succeed");
+
+        // Value contract: did:peer DID, two operating secrets, JWT
+        // present, admin DID present, no VC, no DID log.
+        assert!(
+            artefacts.mediator_did.starts_with("did:peer:"),
+            "got: {}",
+            artefacts.mediator_did
+        );
+        assert_eq!(
+            artefacts.mediator_secrets.len(),
+            2,
+            "did:peer mints signing + KA"
+        );
+        assert!(artefacts.jwt_secret.is_some());
+        assert!(
+            artefacts
+                .admin_did
+                .as_deref()
+                .map(|d| d.starts_with("did:key:"))
+                .unwrap_or(false)
+        );
+        assert!(artefacts.admin_secret.is_some());
+        assert!(artefacts.did_doc.is_none());
+        assert!(artefacts.authorization_vc.is_none());
+
+        // IO contract: nothing new in CWD. If a future regression
+        // re-introduces a file write inside mint, this catches it.
+        let cwd_after: std::collections::BTreeSet<_> = std::fs::read_dir(cwd.dir())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .collect();
+        assert_eq!(
+            cwd_before, cwd_after,
+            "mint_artefacts must not write any files — phase 1 is value-only"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn mint_artefacts_admin_skip_returns_no_admin_did() {
+        // Lock down the ADMIN_SKIP branch at the unit level — the
+        // integration test covers the same path end-to-end, but
+        // this one runs in microseconds and surfaces the precise
+        // value contract.
+        let config = app::WizardConfig {
+            did_method: DID_PEER.into(),
+            jwt_mode: JWT_MODE_GENERATE.into(),
+            admin_did_mode: ADMIN_SKIP.into(),
+            ..app::WizardConfig::default()
+        };
+        let artefacts = mint_artefacts(&config, None).await.unwrap();
+        assert!(artefacts.admin_did.is_none());
+        assert!(artefacts.admin_secret.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn mint_artefacts_jwt_provide_returns_none_jwt_secret() {
+        let config = app::WizardConfig {
+            did_method: DID_PEER.into(),
+            jwt_mode: JWT_MODE_PROVIDE.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            ..app::WizardConfig::default()
+        };
+        let artefacts = mint_artefacts(&config, None).await.unwrap();
+        assert!(
+            artefacts.jwt_secret.is_none(),
+            "jwt_mode = provide must not mint a key"
         );
     }
 
