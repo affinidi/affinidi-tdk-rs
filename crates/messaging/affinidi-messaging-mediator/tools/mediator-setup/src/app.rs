@@ -268,16 +268,22 @@ pub enum SecurityPhase {
     NetworkMode,
 }
 
-/// Sub-phases of the `Database` step. The wizard now asks two
+/// Sub-phases of the `Database` step. The wizard now asks up to three
 /// questions: first which storage backend (Redis vs Fjall), then a
-/// backend-specific URL/path. `None` means we're past the selection
-/// and the text-input widget is active.
+/// backend-specific URL/path, and (Fjall only) — when the path doesn't
+/// yet exist on disk — whether to create it now. `None` means the
+/// text-input widget is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabasePhase {
     /// Choose between `redis` and `fjall`. After confirm the wizard
     /// transitions to a backend-specific text-input phase
     /// (represented by `database_phase = None` + `InputMode::TextInput`).
     SelectBackend,
+    /// Fjall-only: text input was confirmed against a path that doesn't
+    /// exist yet. Selection list of "Yes — create now" / "No — edit
+    /// path". Yes runs `fs::create_dir_all` and advances; No goes back
+    /// to the text-input phase.
+    ConfirmCreateFjallDir,
 }
 
 /// Sub-phases of the top-level `Vta` step picker (before any of the
@@ -2185,7 +2191,9 @@ impl WizardApp {
                 // The backend-picker phase shows two options; once
                 // the operator confirms, the step transitions to a
                 // text-input phase (URL or path) and `selection_options`
-                // is no longer consulted.
+                // is no longer consulted. ConfirmCreateFjallDir runs
+                // a Yes/No selection list when the operator confirmed
+                // a Fjall path that doesn't exist on disk yet.
                 if self.database_phase == Some(DatabasePhase::SelectBackend) {
                     vec![
                         SelectionOption::new(
@@ -2195,6 +2203,18 @@ impl WizardApp {
                         SelectionOption::new(
                             "Fjall",
                             "Embedded LSM store — single-node, no Redis sidecar",
+                        ),
+                    ]
+                } else if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    vec![
+                        SelectionOption::new(
+                            "Yes — create the directory now",
+                            "Wizard runs `fs::create_dir_all` so any permission / \
+                             filesystem errors surface here, not on first mediator boot.",
+                        ),
+                        SelectionOption::new(
+                            "No — go back and edit the path",
+                            "Returns to the path-input screen so you can retype.",
                         ),
                     ]
                 } else {
@@ -2371,13 +2391,27 @@ impl WizardApp {
                         1 => "Fjall: single-node embedded LSM. No Redis sidecar — data lives on disk under data_dir. Recommended for self-hosted deployments and operators who want fewer moving parts.".into(),
                         _ => String::new(),
                     }
+                } else if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    // Validation errors take priority — they're how
+                    // we surface a `create_dir_all` failure (permission
+                    // denied, etc.) after the operator picked Yes.
+                    if let Some(ref err) = self.database_validation_error {
+                        return err.clone();
+                    }
+                    format!(
+                        "The path '{}' does not exist yet. \
+                         Yes runs `std::fs::create_dir_all` immediately so any \
+                         permission / filesystem errors surface here rather than \
+                         on first mediator boot. No goes back so you can retype.",
+                        self.config.fjall_data_dir,
+                    )
                 } else if self.config.storage_backend == "fjall" {
                     // Validation errors override the default hint so
                     // the operator sees why Enter didn't advance.
                     if let Some(ref err) = self.database_validation_error {
                         return err.clone();
                     }
-                    "Path on disk where Fjall will keep its data directory. Created if absent. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
+                    "Path on disk where Fjall will keep its data directory. Wizard asks before creating if missing. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
                 } else {
                     "Redis connection URL. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
                 }
@@ -2677,6 +2711,39 @@ impl WizardApp {
                 self.enter_jwt_mode_phase();
             }
             WizardStep::Database => {
+                // ConfirmCreateFjallDir: Yes (0) runs `create_dir_all`
+                // and advances; No (1) sends the operator back to the
+                // path-input screen so they can retype. A failure
+                // running `create_dir_all` surfaces as
+                // `database_validation_error` and re-routes back to
+                // text input so the operator sees the OS error.
+                if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    match self.selection_index {
+                        0 => match std::fs::create_dir_all(&self.config.fjall_data_dir) {
+                            Ok(()) => {
+                                self.database_phase = None;
+                                self.database_validation_error = None;
+                                self.advance();
+                            }
+                            Err(e) => {
+                                self.database_phase = None;
+                                self.database_validation_error = Some(format!(
+                                    "Couldn't create '{}': {e}",
+                                    self.config.fjall_data_dir,
+                                ));
+                                self.mode = InputMode::TextInput;
+                                self.text_input = Input::new(self.config.fjall_data_dir.clone());
+                            }
+                        },
+                        1 => {
+                            self.database_phase = None;
+                            self.mode = InputMode::TextInput;
+                            self.text_input = Input::new(self.config.fjall_data_dir.clone());
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 // First phase: backend picker. Confirming this branch
                 // sets `storage_backend` and transitions to the
                 // backend-specific text-input phase. The text-input
@@ -3304,12 +3371,15 @@ impl WizardApp {
                 }
             }
             WizardStep::Database => {
-                // Text-input confirm: save the URL or path against
-                // the right field based on the backend the operator
-                // picked in the prior phase, then advance. Fjall paths
-                // get a parent-exists safety check so an obvious typo
-                // (e.g. `/varr/lib/mediator`) doesn't propagate into
-                // the generated `mediator.toml`.
+                // Text-input confirm: save the URL or path against the
+                // right field based on the backend the operator picked
+                // in the prior phase, then advance. For Fjall, if the
+                // path doesn't exist yet we route into a Yes/No
+                // confirmation phase asking whether to create it now,
+                // rather than silently deferring to the mediator's
+                // first-run `create_dir_all`. This surfaces filesystem
+                // / permission errors at wizard time and gives the
+                // operator a chance to back out and retype.
                 let value = self.text_input.value().to_string();
                 if self.config.storage_backend == "fjall" {
                     let trimmed = value.trim().to_string();
@@ -3318,7 +3388,15 @@ impl WizardApp {
                         return;
                     }
                     self.database_validation_error = None;
-                    self.config.fjall_data_dir = trimmed;
+                    self.config.fjall_data_dir = trimmed.clone();
+                    if !std::path::Path::new(&trimmed).exists() {
+                        self.database_phase = Some(DatabasePhase::ConfirmCreateFjallDir);
+                        self.mode = InputMode::Selecting;
+                        // Default Yes — pressing Enter accepts the
+                        // create-directory prompt without re-navigating.
+                        self.selection_index = 0;
+                        return;
+                    }
                 } else {
                     self.config.database_url = value;
                 }
@@ -3604,6 +3682,17 @@ impl WizardApp {
                 0
             };
             self.database_validation_error = None;
+            return;
+        }
+        // ConfirmCreateFjallDir: Esc cancels the create-now prompt and
+        // sends the operator back to text input so they can retype the
+        // path. Same effect as picking "No" from the selection list.
+        if self.current_step == WizardStep::Database
+            && self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir)
+        {
+            self.database_phase = None;
+            self.mode = InputMode::TextInput;
+            self.text_input = Input::new(self.config.fjall_data_dir.clone());
             return;
         }
         if self.in_did_subflow() {
@@ -4228,19 +4317,124 @@ mod tests {
             "Fjall path must remain at default when Redis was picked"
         );
 
-        // Fjall path — operator types a directory path.
+        // Fjall path — operator types an EXISTING directory so the
+        // wizard skips the create-dir confirm and advances straight
+        // through. The CWD always exists on every CI runner.
         let mut app = WizardApp::new("test.toml".into());
         advance_to_database_step(&mut app);
         app.selection_index = 1;
         app.select_current();
-        app.text_input = tui_input::Input::new("/var/lib/affinidi-mediator".into());
+        let cwd = std::env::current_dir().unwrap();
+        let cwd_str = cwd.to_str().unwrap().to_string();
+        app.text_input = tui_input::Input::new(cwd_str.clone());
         app.confirm_text_input();
         assert_eq!(app.config.storage_backend, "fjall");
-        assert_eq!(app.config.fjall_data_dir, "/var/lib/affinidi-mediator");
+        assert_eq!(app.config.fjall_data_dir, cwd_str);
+        // Existing path → no create-dir confirm phase.
+        assert_eq!(app.database_phase, None);
         assert_eq!(
             app.config.database_url, DEFAULT_REDIS_URL,
             "Redis URL must remain at default when Fjall was picked"
         );
+    }
+
+    #[test]
+    fn database_fjall_missing_path_routes_to_create_confirm() {
+        // Confirming the text input on a path that doesn't exist must
+        // NOT silently advance — it routes into ConfirmCreateFjallDir
+        // so the operator gets to choose whether to create now.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1; // Fjall
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-1");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(app.current_step, WizardStep::Database);
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(app.selection_index, 0, "Yes is the default option");
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_yes_creates_and_advances() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-2");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+
+        // Confirm Yes — wizard runs `create_dir_all` and advances.
+        app.selection_index = 0;
+        app.select_current();
+        assert!(path.exists(), "directory must be created on confirm");
+        assert!(path.is_dir());
+        assert_eq!(app.database_phase, None);
+        assert!(app.current_step != WizardStep::Database);
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_no_returns_to_text_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-3");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+
+        // Confirm No — wizard does NOT create the directory and routes
+        // back to the text-input phase so the operator can retype.
+        app.selection_index = 1;
+        app.select_current();
+        assert!(
+            !path.exists(),
+            "directory must NOT be created when No is picked"
+        );
+        assert_eq!(app.database_phase, None);
+        assert_eq!(app.mode, InputMode::TextInput);
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_esc_returns_to_text_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-4");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+
+        // Esc cancels the prompt — same effect as picking No.
+        app.go_back();
+        assert!(!path.exists());
+        assert_eq!(app.database_phase, None);
+        assert_eq!(app.mode, InputMode::TextInput);
+        assert_eq!(app.current_step, WizardStep::Database);
     }
 
     #[test]
