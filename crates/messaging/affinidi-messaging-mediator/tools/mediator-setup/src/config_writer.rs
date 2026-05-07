@@ -158,7 +158,7 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
         }
         let storage = doc.get_mut("storage").expect("just inserted");
         storage["backend"] = toml_edit::value(&config.storage_backend);
-        if config.storage_backend == "fjall" {
+        if config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
             storage["data_dir"] = toml_edit::value(&config.fjall_data_dir);
         } else {
             // Strip a stale data_dir if the operator switched back to

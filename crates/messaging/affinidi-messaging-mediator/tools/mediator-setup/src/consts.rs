@@ -19,6 +19,16 @@ pub const STORAGE_AZURE: &str = "azure_keyvault://";
 pub const STORAGE_VAULT: &str = "vault://";
 pub const STORAGE_VTA: &str = "vta://";
 
+/// Mediator persistence backend selectors written to `[storage].backend`
+/// in `mediator.toml`. Distinct from the `STORAGE_*` *secret* schemes
+/// above — those name the secret store; these name the *mediator's*
+/// runtime persistence layer (sessions, message queues, etc.).
+pub const STORAGE_BACKEND_REDIS: &str = "redis";
+pub const STORAGE_BACKEND_FJALL: &str = "fjall";
+/// Default backend when neither the wizard nor the recipe specify one.
+/// Matches the historical out-of-the-box experience (Redis sidecar).
+pub const DEFAULT_STORAGE_BACKEND: &str = STORAGE_BACKEND_REDIS;
+
 /// SSL mode display strings
 pub const SSL_NONE: &str = "No SSL (TLS proxy)";
 pub const SSL_EXISTING: &str = "Existing certificates";

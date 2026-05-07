@@ -14,6 +14,7 @@ use crate::consts::*;
 
 /// Top-level build recipe.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuildRecipe {
     pub deployment: DeploymentSection,
     #[serde(default)]
@@ -49,6 +50,7 @@ pub struct BuildRecipe {
 /// fields reads more naturally as its own table than a widening
 /// `[deployment]`.
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VtaSection {
     /// VTA context ID this mediator lives in. Defaults to `"mediator"`
     /// via `apply_vta_defaults` when absent; operators with multiple
@@ -69,6 +71,7 @@ pub struct VtaSection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeploymentSection {
     /// `local`, `server`, or `container`
     #[serde(rename = "type")]
@@ -107,6 +110,7 @@ fn default_protocols() -> Vec<String> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IdentitySection {
     /// `vta`, `did:peer`, `did:webvh`, or `import`
     #[serde(default = "default_did_method")]
@@ -129,6 +133,7 @@ impl Default for IdentitySection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecretsSection {
     /// One of: `file://`, `keyring://`, `aws_secrets://`,
     /// `gcp_secrets://`, `azure_keyvault://`, `vault://`. Note:
@@ -152,6 +157,7 @@ impl Default for SecretsSection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecuritySection {
     /// `none`, `self-signed`, or `existing`
     #[serde(default = "default_ssl")]
@@ -211,6 +217,7 @@ impl Default for SecuritySection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DatabaseSection {
     #[serde(default = "default_database_url")]
     pub url: String,
@@ -237,6 +244,7 @@ impl Default for DatabaseSection {
 /// Memory backend is intentionally absent — it's a tests-only backend
 /// and shouldn't appear in operator-facing config.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageSection {
     /// `"redis"` or `"fjall"`. Defaults to `"redis"` so existing
     /// recipes without a `[storage]` section continue to work.
@@ -250,7 +258,7 @@ pub struct StorageSection {
 }
 
 fn default_storage_backend() -> String {
-    "redis".into()
+    crate::consts::DEFAULT_STORAGE_BACKEND.into()
 }
 
 fn default_fjall_data_dir() -> String {
@@ -267,6 +275,7 @@ impl Default for StorageSection {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutputSection {
     /// Path for the generated mediator.toml
     #[serde(default = "default_config_path")]
@@ -306,6 +315,7 @@ impl Default for OutputSection {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct InstallSection {
     /// Whether to run `cargo install` after generating config
     #[serde(default)]
@@ -388,13 +398,13 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         .context
         .clone()
         .unwrap_or_else(|| DEFAULT_VTA_CONTEXT.into());
-    // Reuse the existing `vta_webvh_server_id` / `vta_webvh_mnemonic`
+    // Reuse the existing `vta_webvh_server_id` / `vta_webvh_path`
     // fields on `WizardConfig` — they were originally populated by
     // the TUI's online-VTA webvh picker and have the right shape for
     // the recipe-driven sealed-mint flow too. `WEBVH_PATH` on the
-    // VTA template maps to `vta_webvh_mnemonic`.
+    // VTA template maps to `vta_webvh_path`.
     config.vta_webvh_server_id = recipe.vta.webvh_server.clone();
-    config.vta_webvh_mnemonic = recipe.vta.webvh_path.clone();
+    config.vta_webvh_path = recipe.vta.webvh_path.clone();
 
     // Mode-specific validation: `sealed-mint` mints a new DID on the
     // VTA whose template requires a `URL` — identity.public_url must
@@ -512,9 +522,9 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     // startup. `memory` is intentionally rejected — it's a tests-
     // only backend.
     match recipe.storage.backend.as_str() {
-        "redis" => config.storage_backend = "redis".into(),
-        "fjall" => {
-            config.storage_backend = "fjall".into();
+        STORAGE_BACKEND_REDIS => config.storage_backend = STORAGE_BACKEND_REDIS.into(),
+        STORAGE_BACKEND_FJALL => {
+            config.storage_backend = STORAGE_BACKEND_FJALL.into();
             config.fjall_data_dir = recipe.storage.data_dir.clone();
         }
         other => {
@@ -606,7 +616,7 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
         let has_nondefault_context =
             !config.vta_context.is_empty() && config.vta_context != DEFAULT_VTA_CONTEXT;
         let has_webvh_server = config.vta_webvh_server_id.is_some();
-        let has_webvh_path = config.vta_webvh_mnemonic.is_some();
+        let has_webvh_path = config.vta_webvh_path.is_some();
         if has_nondefault_context || has_webvh_server || has_webvh_path {
             out.push_str("[vta]\n");
             if has_nondefault_context {
@@ -615,7 +625,7 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
             if let Some(ref s) = config.vta_webvh_server_id {
                 out.push_str(&format!("webvh_server = \"{s}\"\n"));
             }
-            if let Some(ref p) = config.vta_webvh_mnemonic {
+            if let Some(ref p) = config.vta_webvh_path {
                 out.push_str(&format!("webvh_path = \"{p}\"\n"));
             }
             out.push('\n');
@@ -936,6 +946,53 @@ did_method = "did:peer"
     }
 
     #[test]
+    fn deny_unknown_fields_rejects_typo_in_security_section() {
+        // Regression: a typo in a security-relevant key would silently
+        // default to the new wizard default (`network_mode = "open"`,
+        // `jwt_mode = "generate"`, `ssl = "none"`). With
+        // `deny_unknown_fields`, the typo errors at parse time so the
+        // operator sees the misconfiguration immediately.
+        let recipe_toml = r#"
+[deployment]
+type = "server"
+protocols = ["didcomm"]
+use_vta = false
+
+[identity]
+did_method = "did:peer"
+
+[security]
+# Deliberate typo — kebab-case version of the legal field name.
+network-mode = "closed"
+"#;
+        let err = toml::from_str::<BuildRecipe>(recipe_toml).unwrap_err();
+        assert!(
+            err.to_string().contains("network-mode"),
+            "deny_unknown_fields should name the offending field: {err}"
+        );
+    }
+
+    #[test]
+    fn deny_unknown_fields_rejects_top_level_typo() {
+        // Same guard at the top-level — section names also have to be
+        // recognised, not silently dropped.
+        let recipe_toml = r#"
+[deployment]
+type = "server"
+protocols = ["didcomm"]
+use_vta = false
+
+[secuirty]
+ssl = "none"
+"#;
+        let err = toml::from_str::<BuildRecipe>(recipe_toml).unwrap_err();
+        assert!(
+            err.to_string().contains("secuirty"),
+            "deny_unknown_fields should name the offending section: {err}"
+        );
+    }
+
+    #[test]
     fn network_mode_invalid_value_errors() {
         let mut recipe = minimal_recipe();
         recipe.security.network_mode = "invitation-only".into();
@@ -1206,7 +1263,7 @@ did_method = "did:peer"
             secret_storage: STORAGE_KEYRING.into(),
             admin_did_mode: ADMIN_VTA.into(),
             vta_webvh_server_id: Some("prod-1".into()),
-            vta_webvh_mnemonic: Some("mediator/v1".into()),
+            vta_webvh_path: Some("mediator/v1".into()),
             ..WizardConfig::default()
         };
 
@@ -1220,7 +1277,7 @@ did_method = "did:peer"
         let restored = to_wizard_config(&parsed).unwrap();
         assert_eq!(restored.vta_context, "prod-mediator");
         assert_eq!(restored.vta_webvh_server_id.as_deref(), Some("prod-1"));
-        assert_eq!(restored.vta_webvh_mnemonic.as_deref(), Some("mediator/v1"));
+        assert_eq!(restored.vta_webvh_path.as_deref(), Some("mediator/v1"));
     }
 
     #[test]

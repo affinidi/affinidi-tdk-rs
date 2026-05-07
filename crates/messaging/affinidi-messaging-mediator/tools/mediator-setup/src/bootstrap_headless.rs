@@ -237,7 +237,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
         if let Some(ref server) = config.vta_webvh_server_id {
             state.webvh_server = server.clone();
         }
-        if let Some(ref path) = config.vta_webvh_mnemonic {
+        if let Some(ref path) = config.vta_webvh_path {
             state.webvh_path = path.clone();
         }
     }

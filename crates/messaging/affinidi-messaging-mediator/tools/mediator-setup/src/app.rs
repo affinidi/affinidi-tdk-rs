@@ -379,9 +379,12 @@ pub struct WizardConfig {
     /// phase; read by `generate_and_write` when it calls the VTA's
     /// `create_did_webvh`.
     pub vta_webvh_server_id: Option<String>,
-    /// Optional mnemonic (URL path segment) when using a hosted
-    /// server. `None` = VTA auto-assigns.
-    pub vta_webvh_mnemonic: Option<String>,
+    /// Optional DID path / mnemonic (URL path segment) when using a
+    /// hosted server. `None` = VTA auto-assigns. Mirrors the recipe's
+    /// `[vta].webvh_path` and `SealedHandoffState::webvh_path`; was
+    /// previously named `vta_webvh_path` (one of three names for
+    /// the same concept) — the consistent name is `path`.
+    pub vta_webvh_path: Option<String>,
     /// Self-host base URL — defaults to the stripped mediator URL.
     /// Only meaningful when `vta_webvh_server_id` is `None`.
     pub vta_webvh_self_host_url: String,
@@ -400,7 +403,7 @@ pub struct WizardConfig {
     /// in the recipe shape and the rendered config.
     pub storage_backend: String,
     /// On-disk path for the Fjall data directory. Only meaningful
-    /// when `storage_backend == "fjall"`.
+    /// when `storage_backend == crate::consts::STORAGE_BACKEND_FJALL`.
     pub fjall_data_dir: String,
     pub admin_did_mode: String,
     pub listen_address: String,
@@ -447,20 +450,23 @@ impl WizardConfig {
         }
 
         features.push(match self.storage_backend.as_str() {
-            "fjall" => "fjall-backend",
+            crate::consts::STORAGE_BACKEND_FJALL => "fjall-backend",
             // Anything else (incl. blank legacy recipes) → redis. The
-            // recipe parser also defaults to "redis", so this branch
+            // recipe parser also defaults to redis, so this branch
             // primarily covers WizardConfig::default() before the
             // Database step has run.
             _ => "redis-backend",
         });
 
+        // Route through the canonical `STORAGE_*` constants rather
+        // than re-typing the URL prefixes — keeps this in lockstep
+        // with `consts.rs` if a scheme prefix ever changes.
         match self.secret_storage.as_str() {
-            "keyring://" => features.push("secrets-keyring"),
-            "aws_secrets://" => features.push("secrets-aws"),
-            "gcp_secrets://" => features.push("secrets-gcp"),
-            "azure_keyvault://" => features.push("secrets-azure"),
-            "vault://" => features.push("secrets-vault"),
+            STORAGE_KEYRING => features.push("secrets-keyring"),
+            STORAGE_AWS => features.push("secrets-aws"),
+            STORAGE_GCP => features.push("secrets-gcp"),
+            STORAGE_AZURE => features.push("secrets-azure"),
+            STORAGE_VAULT => features.push("secrets-vault"),
             _ => {}
         }
 
@@ -505,12 +511,12 @@ impl Default for WizardConfig {
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
             vta_webvh_server_id: None,
-            vta_webvh_mnemonic: None,
+            vta_webvh_path: None,
             vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
             network_mode: crate::consts::DEFAULT_NETWORK_MODE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
-            storage_backend: "redis".into(),
+            storage_backend: crate::consts::DEFAULT_STORAGE_BACKEND.into(),
             fjall_data_dir: crate::consts::DEFAULT_FJALL_DATA_DIR.into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
@@ -2452,7 +2458,7 @@ impl WizardApp {
                          on first mediator boot. No goes back so you can retype.",
                         self.config.fjall_data_dir,
                     )
-                } else if self.config.storage_backend == "fjall" {
+                } else if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
                     // Validation errors override the default hint so
                     // the operator sees why Enter didn't advance.
                     if let Some(ref err) = self.database_validation_error {
@@ -2797,17 +2803,18 @@ impl WizardApp {
                 // confirm path then writes either `database_url` (Redis)
                 // or `fjall_data_dir` (Fjall).
                 self.config.storage_backend = match self.selection_index {
-                    0 => "redis".into(),
-                    1 => "fjall".into(),
+                    0 => crate::consts::STORAGE_BACKEND_REDIS.into(),
+                    1 => crate::consts::STORAGE_BACKEND_FJALL.into(),
                     _ => return,
                 };
                 self.database_phase = None;
                 self.mode = InputMode::TextInput;
-                self.text_input = if self.config.storage_backend == "fjall" {
-                    Input::new(self.config.fjall_data_dir.clone())
-                } else {
-                    Input::new(self.config.database_url.clone())
-                };
+                self.text_input =
+                    if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                        Input::new(self.config.fjall_data_dir.clone())
+                    } else {
+                        Input::new(self.config.database_url.clone())
+                    };
             }
             WizardStep::Admin => {
                 // Options list is [generate, paste, (vta,) skip] with
@@ -3321,7 +3328,7 @@ impl WizardApp {
         match self.selection_index {
             0 => {
                 self.config.vta_webvh_server_id = None;
-                self.config.vta_webvh_mnemonic = None;
+                self.config.vta_webvh_path = None;
                 self.did_phase = None;
                 self.advance();
             }
@@ -3376,7 +3383,7 @@ impl WizardApp {
                             self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
                         }
                         self.config.vta_webvh_server_id = None;
-                        self.config.vta_webvh_mnemonic = None;
+                        self.config.vta_webvh_path = None;
                         self.did_phase = None;
                         self.mode = InputMode::Selecting;
                         self.advance();
@@ -3428,7 +3435,7 @@ impl WizardApp {
                 // / permission errors at wizard time and gives the
                 // operator a chance to back out and retype.
                 let value = self.text_input.value().to_string();
-                if self.config.storage_backend == "fjall" {
+                if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
                     let trimmed = value.trim().to_string();
                     if let Err(err) = validate_fjall_data_dir(&trimmed) {
                         self.database_validation_error = Some(err);
@@ -3630,11 +3637,12 @@ impl WizardApp {
                 self.mode = InputMode::Selecting;
                 // Pre-select the operator's last-chosen backend so
                 // re-entry is idempotent.
-                self.selection_index = if self.config.storage_backend == "fjall" {
-                    1
-                } else {
-                    0
-                };
+                self.selection_index =
+                    if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                        1
+                    } else {
+                        0
+                    };
             } else if self.current_step == WizardStep::Output {
                 self.mode = InputMode::TextInput;
                 self.text_input = Input::new(self.config.config_path.clone());
@@ -3723,11 +3731,12 @@ impl WizardApp {
         {
             self.database_phase = Some(DatabasePhase::SelectBackend);
             self.mode = InputMode::Selecting;
-            self.selection_index = if self.config.storage_backend == "fjall" {
-                1
-            } else {
-                0
-            };
+            self.selection_index =
+                if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                    1
+                } else {
+                    0
+                };
             self.database_validation_error = None;
             return;
         }
