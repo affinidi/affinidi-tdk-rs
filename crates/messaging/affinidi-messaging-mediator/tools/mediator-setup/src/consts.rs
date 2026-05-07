@@ -87,6 +87,10 @@ pub const VTA_MODE_EXPORT: &str = VTA_MODE_SEALED_EXPORT;
 /// Default values
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
 pub const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";
+/// Default on-disk path for the Fjall data directory written to
+/// `[storage].data_dir`. Mirrors `WizardConfig::default()`'s value so
+/// the constant and the in-memory default never drift.
+pub const DEFAULT_FJALL_DATA_DIR: &str = "./data/mediator";
 pub const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:7037";
 
 /// Default `[server] api_prefix` written to `mediator.toml`. The

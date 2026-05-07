@@ -243,7 +243,7 @@ fn default_storage_backend() -> String {
 }
 
 fn default_fjall_data_dir() -> String {
-    "./data/mediator".into()
+    crate::consts::DEFAULT_FJALL_DATA_DIR.into()
 }
 
 impl Default for StorageSection {

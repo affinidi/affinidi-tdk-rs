@@ -490,11 +490,49 @@ impl Default for WizardConfig {
             jwt_mode: JWT_MODE_GENERATE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
             storage_backend: "redis".into(),
-            fjall_data_dir: "./data/mediator".into(),
+            fjall_data_dir: crate::consts::DEFAULT_FJALL_DATA_DIR.into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
             api_prefix: DEFAULT_API_PREFIX.into(),
         }
+    }
+}
+
+/// Safety-check for the Fjall data-directory text input. Accepts:
+///   * A path that already exists and is a directory.
+///   * A path whose parent exists (mediator creates the leaf on
+///     first run — same contract as fjall's own `Keyspace::open`).
+///   * A bare relative leaf (`mediator-data`) — parent is the
+///     mediator's CWD, which we can't introspect from here, so we
+///     defer that check to runtime.
+///
+/// Rejects empty input, paths that exist but aren't directories,
+/// and paths whose parent directory is missing.
+pub(crate) fn validate_fjall_data_dir(path: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Fjall data directory path cannot be empty.".into());
+    }
+    let p = std::path::Path::new(trimmed);
+    if p.exists() {
+        if !p.is_dir() {
+            return Err(format!(
+                "'{trimmed}' exists but is not a directory — pick another path.",
+            ));
+        }
+        return Ok(());
+    }
+    match p.parent() {
+        // No parent component (bare relative leaf like `mediator-data`)
+        // resolves under the mediator's CWD at runtime; nothing to
+        // check now. Same for the filesystem root itself.
+        Some(parent) if parent.as_os_str().is_empty() => Ok(()),
+        Some(parent) if parent.exists() => Ok(()),
+        Some(parent) => Err(format!(
+            "Parent directory '{}' does not exist — create it before continuing or pick a different path.",
+            parent.display(),
+        )),
+        None => Ok(()),
     }
 }
 
@@ -584,6 +622,12 @@ pub struct WizardApp {
     /// (vta_connect / sealed_handoff) carry their own equivalent
     /// fields. Reset on phase transitions away from Summary.
     pub clipboard_status: Option<String>,
+    /// Inline validation error surfaced in the Database step's info
+    /// box when the operator confirms a Fjall data-directory path
+    /// whose parent is missing or whose target is not a directory.
+    /// Cleared on a successful confirm or when the operator backs
+    /// out of the step.
+    pub database_validation_error: Option<String>,
 }
 
 impl WizardApp {
@@ -617,6 +661,7 @@ impl WizardApp {
             discovery: None,
             discovery_rx: None,
             clipboard_status: None,
+            database_validation_error: None,
         }
     }
 
@@ -2303,6 +2348,11 @@ impl WizardApp {
                         _ => String::new(),
                     }
                 } else if self.config.storage_backend == "fjall" {
+                    // Validation errors override the default hint so
+                    // the operator sees why Enter didn't advance.
+                    if let Some(ref err) = self.database_validation_error {
+                        return err.clone();
+                    }
                     "Path on disk where Fjall will keep its data directory. Created if absent. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
                 } else {
                     "Redis connection URL. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
@@ -3208,10 +3258,19 @@ impl WizardApp {
             WizardStep::Database => {
                 // Text-input confirm: save the URL or path against
                 // the right field based on the backend the operator
-                // picked in the prior phase, then advance.
+                // picked in the prior phase, then advance. Fjall paths
+                // get a parent-exists safety check so an obvious typo
+                // (e.g. `/varr/lib/mediator`) doesn't propagate into
+                // the generated `mediator.toml`.
                 let value = self.text_input.value().to_string();
                 if self.config.storage_backend == "fjall" {
-                    self.config.fjall_data_dir = value;
+                    let trimmed = value.trim().to_string();
+                    if let Err(err) = validate_fjall_data_dir(&trimmed) {
+                        self.database_validation_error = Some(err);
+                        return;
+                    }
+                    self.database_validation_error = None;
+                    self.config.fjall_data_dir = trimmed;
                 } else {
                     self.config.database_url = value;
                 }
@@ -3368,6 +3427,7 @@ impl WizardApp {
             // and the caller can then move forward into the URL/path
             // text-input phase.
             self.database_phase = Some(DatabasePhase::SelectBackend);
+            self.database_validation_error = None;
         }
     }
 
@@ -3495,6 +3555,7 @@ impl WizardApp {
             } else {
                 0
             };
+            self.database_validation_error = None;
             return;
         }
         if self.in_did_subflow() {
@@ -3765,6 +3826,56 @@ impl WizardApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Fjall data-directory validation ────────────────────────────────
+
+    #[test]
+    fn validate_fjall_rejects_empty() {
+        assert!(validate_fjall_data_dir("").is_err());
+        assert!(validate_fjall_data_dir("   ").is_err());
+    }
+
+    #[test]
+    fn validate_fjall_accepts_existing_directory() {
+        // The repo root is guaranteed to exist on every CI runner.
+        let cwd = std::env::current_dir().unwrap();
+        validate_fjall_data_dir(cwd.to_str().unwrap()).expect("CWD is a directory");
+    }
+
+    #[test]
+    fn validate_fjall_rejects_existing_non_directory() {
+        // Cargo.toml is always a regular file relative to the package root.
+        let err = validate_fjall_data_dir("Cargo.toml")
+            .expect_err("validation must reject paths that exist but aren't directories");
+        assert!(err.contains("not a directory"));
+    }
+
+    #[test]
+    fn validate_fjall_accepts_missing_leaf_with_existing_parent() {
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-fjall-validate-test-leaf-42");
+        // Best-effort cleanup so reruns work; ignore failure.
+        let _ = std::fs::remove_dir_all(&path);
+        validate_fjall_data_dir(path.to_str().unwrap())
+            .expect("missing leaf under an existing temp dir is acceptable");
+    }
+
+    #[test]
+    fn validate_fjall_rejects_missing_parent() {
+        // /a-directory-that-does-not-exist-on-this-host is implausible
+        // enough on macOS / Linux CI runners that this check is robust.
+        let err =
+            validate_fjall_data_dir("/a-directory-that-does-not-exist-on-this-host-42/mediator")
+                .expect_err("validation must reject a missing parent");
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn validate_fjall_accepts_bare_relative_leaf() {
+        // A bare relative leaf resolves under the mediator's CWD at
+        // runtime; the wizard can't introspect that, so it defers.
+        validate_fjall_data_dir("mediator-data-leaf-only").expect("bare leaf must validate");
+    }
 
     // ── WizardStep navigation ──────────────────────────────────────────
 

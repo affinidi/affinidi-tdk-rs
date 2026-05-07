@@ -599,11 +599,13 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
         && let Some(state) = app.sealed_handoff.as_mut()
         && state.phase == crate::sealed_handoff::SealedPhase::RequestGenerated
     {
-        // Primary command hotkey: `p` for AdminOnly
-        // (pnm contexts bootstrap), `v` for FullSetup
-        // (vta bootstrap provision-integration). `f` copies
-        // the fallback command when one exists (AdminOnly's
-        // raw `vta bootstrap seal` invocation).
+        // Command-copy hotkeys: `v` always copies the `vta …`
+        // flavour (the offline producer the wizard recommends for
+        // FullSetup / OfflineExport), `p` always copies the
+        // `pnm …` flavour (what an operator with an authenticated
+        // pnm session against a live VTA runs). For AdminOnly the
+        // two collapse — primary is already `pnm contexts bootstrap`.
+        // `f` copies the fallback command when one exists.
         //
         // Scroll keys: one line (arrows) or 10 lines (Page).
         // 10 is a compromise between "obvious jump" and "don't
@@ -614,8 +616,11 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 state.copy_request_to_clipboard();
             }
-            KeyCode::Char('p') | KeyCode::Char('P') | KeyCode::Char('v') | KeyCode::Char('V') => {
+            KeyCode::Char('v') | KeyCode::Char('V') => {
                 state.copy_primary_command_to_clipboard();
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                state.copy_pnm_command_to_clipboard();
             }
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 state.copy_fallback_command_to_clipboard();
@@ -625,6 +630,39 @@ fn handle_key_event(app: &mut WizardApp, code: KeyCode, modifiers: KeyModifiers)
             KeyCode::PageUp => state.scroll_request_up(PAGE),
             KeyCode::PageDown => state.scroll_request_down(PAGE),
             KeyCode::Home => state.scroll_request_home(),
+            _ => unreachable!("outer matches! guards the code space"),
+        }
+        return;
+    }
+
+    // Bare `m` / `a` / `v` on the sealed-handoff Complete screen copy
+    // the mediator / admin / VTA DIDs to the clipboard. Phase-scoped
+    // to Complete so the same letters don't conflict with `[v]` /
+    // `[p]` on the RequestGenerated screen above.
+    if !modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(
+            code,
+            KeyCode::Char('m')
+                | KeyCode::Char('M')
+                | KeyCode::Char('a')
+                | KeyCode::Char('A')
+                | KeyCode::Char('v')
+                | KeyCode::Char('V')
+        )
+        && app.in_sealed_handoff_subflow()
+        && let Some(state) = app.sealed_handoff.as_mut()
+        && state.phase == crate::sealed_handoff::SealedPhase::Complete
+    {
+        match code {
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                state.copy_mediator_did_to_clipboard();
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                state.copy_admin_did_to_clipboard();
+            }
+            KeyCode::Char('v') | KeyCode::Char('V') => {
+                state.copy_vta_did_to_clipboard();
+            }
             _ => unreachable!("outer matches! guards the code space"),
         }
         return;

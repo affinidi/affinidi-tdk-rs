@@ -444,6 +444,57 @@ impl SealedHandoffState {
         }
     }
 
+    /// Copy the `pnm` flavour of the producer command — what an
+    /// operator with an authenticated `pnm` session against the live
+    /// VTA would run. Counterpart to `copy_primary_command_to_clipboard`,
+    /// which always emits the offline `vta …` invocation for FullSetup
+    /// / OfflineExport. AdminOnly's primary is already a `pnm` command,
+    /// so the two collapse there.
+    pub fn copy_pnm_command_to_clipboard(&mut self) {
+        let label = match self.intent {
+            VtaIntent::AdminOnly => "pnm contexts bootstrap command",
+            VtaIntent::FullSetup => "pnm bootstrap provision-integration command",
+            VtaIntent::OfflineExport => "pnm contexts reprovision command",
+        };
+        self.set_clipboard(self.pnm_command(), label);
+    }
+
+    /// Copy the mediator's integration DID to the clipboard. Only
+    /// meaningful on the `Complete` phase for FullSetup / OfflineExport
+    /// reply variants — AdminOnly's reply carries no integration DID.
+    /// Hotkey `[m]` on the Complete panel.
+    pub fn copy_mediator_did_to_clipboard(&mut self) {
+        match self.session.as_ref().and_then(|s| s.integration_did()) {
+            Some(did) => self.set_clipboard(did.to_string(), "mediator DID"),
+            None => {
+                self.clipboard_status =
+                    Some("No mediator DID in this bundle (AdminOnly handoff)".into());
+            }
+        }
+    }
+
+    /// Copy the admin DID to the clipboard. Hotkey `[a]` on the
+    /// Complete panel — present in every reply variant.
+    pub fn copy_admin_did_to_clipboard(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            self.clipboard_status = Some("No session yet — open the bundle first".into());
+            return;
+        };
+        let did = session.admin_did().to_string();
+        self.set_clipboard(did, "admin DID");
+    }
+
+    /// Copy the VTA DID to the clipboard. Hotkey `[v]` on the
+    /// Complete panel — every reply variant carries this.
+    pub fn copy_vta_did_to_clipboard(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            self.clipboard_status = Some("No session yet — open the bundle first".into());
+            return;
+        };
+        let did = session.vta_did.clone();
+        self.set_clipboard(did, "VTA DID");
+    }
+
     /// Copy the wizard-computed bundle digest to the clipboard.
     /// Hotkey `[F2]` on the `DigestVerify` panel — `F2` instead of
     /// a letter key because the panel has an active text input
@@ -517,6 +568,48 @@ impl SealedHandoffState {
                  --id {} \
                  --recipient {} \
                  --out bundle.armor",
+                self.context_id, file,
+            ),
+        }
+    }
+
+    /// `pnm`-flavour producer command for the current intent — what an
+    /// operator with an authenticated `pnm` session against the live
+    /// VTA runs. Verified against pnm-cli's `BootstrapCommands` /
+    /// `ContextCommands` enums (no `--out` on `pnm contexts
+    /// {bootstrap,reprovision}` — the bundle is emitted on stdout, so
+    /// the operator redirects with `> bundle.armor`).
+    ///
+    /// **AdminOnly** — same shape as `primary_command()`: `pnm contexts
+    /// bootstrap --id <ctx> --name "<name>" [--admin-label "<label>"]
+    /// --recipient <path>`.
+    ///
+    /// **FullSetup** — `pnm bootstrap provision-integration --request
+    /// <path> --context <ctx> --assertion pinned-only --out
+    /// bundle.armor`. No `--create-context` (pnm-cli doesn't accept it
+    /// — the context is expected to exist on the VTA already, or the
+    /// request's `contextHint` is used).
+    ///
+    /// **OfflineExport** — `pnm contexts reprovision --id <ctx>
+    /// --recipient <path> > bundle.armor`. Stdout redirect because the
+    /// pnm subcommand has no `--out` flag.
+    pub fn pnm_command(&self) -> String {
+        let file = self.request_file_display();
+        match self.intent {
+            VtaIntent::AdminOnly => self.primary_command(),
+            VtaIntent::FullSetup => format!(
+                "pnm bootstrap provision-integration \
+                 --request {} \
+                 --context {} \
+                 --assertion pinned-only \
+                 --out bundle.armor",
+                file, self.context_id,
+            ),
+            VtaIntent::OfflineExport => format!(
+                "pnm contexts reprovision \
+                 --id {} \
+                 --recipient {} \
+                 > bundle.armor",
                 self.context_id, file,
             ),
         }
@@ -1039,6 +1132,56 @@ mod tests {
         assert!(cmd.contains("--out bundle.armor"));
         // Sanity: FullSetup has no fallback.
         assert!(state.fallback_command().is_none());
+    }
+
+    #[test]
+    fn admin_only_pnm_command_matches_primary() {
+        // AdminOnly's primary is already a `pnm` command — `[p]` and
+        // `[v]` should produce the same text so the operator never
+        // gets a confusing surprise.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.context_id = "prod-mediator".into();
+        state.admin_label = "staff".into();
+        state.finalize_request().unwrap();
+        assert_eq!(state.pnm_command(), state.primary_command());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_pnm_command_uses_pnm_bootstrap_subcommand() {
+        // Regression: `[p]` used to alias `[v]` and emit the `vta …`
+        // command. The pnm-cli equivalent is `pnm bootstrap
+        // provision-integration` (verified against pnm-cli's
+        // `BootstrapCommands::ProvisionIntegration` arg list).
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.context_id = "prod-mediator".into();
+        state.finalize_request().unwrap();
+        let cmd = state.pnm_command();
+        assert!(cmd.starts_with("pnm bootstrap provision-integration"));
+        assert!(cmd.contains("--request bootstrap-request-vp.json"));
+        assert!(cmd.contains("--context prod-mediator"));
+        assert!(cmd.contains("--out bundle.armor"));
+        // pnm-cli's ProvisionIntegration has no `--create-context`.
+        assert!(!cmd.contains("--create-context"));
+        // Sanity: must not be the `vta` flavour.
+        assert!(!cmd.contains("vta bootstrap"));
+    }
+
+    #[test]
+    fn offline_export_pnm_command_uses_pnm_contexts_reprovision() {
+        // pnm-cli's `ContextCommands::Reprovision` has no `--out`
+        // flag — the bundle is emitted on stdout, so the rendered
+        // command redirects with `>`.
+        let mut state = SealedHandoffState::new(VtaIntent::OfflineExport, None);
+        state.context_id = "prod-mediator".into();
+        state.finalize_request().unwrap();
+        let cmd = state.pnm_command();
+        assert!(cmd.starts_with("pnm contexts reprovision"));
+        assert!(cmd.contains("--id prod-mediator"));
+        assert!(cmd.contains("--recipient bootstrap-request.json"));
+        assert!(cmd.contains("> bundle.armor"));
+        assert!(!cmd.contains("--out"));
+        assert!(!cmd.contains("vta contexts"));
     }
 
     #[test]
