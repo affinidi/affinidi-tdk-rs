@@ -569,17 +569,23 @@ impl SealedHandoffState {
     /// which is what the wizard wants for self-sufficient mediator
     /// startup.
     pub fn primary_command(&self) -> String {
-        let file = self.request_file_display();
+        // Every operator-controlled field goes through `sh_quote` so
+        // a hostile context_id / admin_label / path can't break out
+        // of the rendered shell command when the operator pastes it
+        // on the VTA host. Plain alphanumeric values pass through
+        // unchanged — no spurious quotes around `prod-mediator` or
+        // `bootstrap-request.json`.
+        let file = sh_quote(&self.request_file_display());
+        let context = sh_quote(&self.context_id);
         match self.intent {
             VtaIntent::AdminOnly => {
+                let name = sh_quote(&self.context_display_name());
                 let mut cmd = format!(
-                    "pnm contexts bootstrap --id {} --name \"{}\" --recipient {}",
-                    self.context_id,
-                    self.context_display_name(),
-                    file,
+                    "pnm contexts bootstrap --id {context} --name {name} --recipient {file}",
                 );
                 if !self.admin_label.is_empty() {
-                    cmd.push_str(&format!(" --admin-label \"{}\"", self.admin_label));
+                    let label = sh_quote(&self.admin_label);
+                    cmd.push_str(&format!(" --admin-label {label}"));
                 }
                 cmd
             }
@@ -592,19 +598,17 @@ impl SealedHandoffState {
                 // the context on the VTA host) without penalising
                 // re-runs.
                 "vta bootstrap provision-integration \
-                 --request {} \
-                 --context {} \
+                 --request {file} \
+                 --context {context} \
                  --create-context \
                  --assertion pinned-only \
                  --out bundle.armor",
-                file, self.context_id,
             ),
             VtaIntent::OfflineExport => format!(
                 "vta contexts reprovision \
-                 --id {} \
-                 --recipient {} \
+                 --id {context} \
+                 --recipient {file} \
                  --out bundle.armor",
-                self.context_id, file,
             ),
         }
     }
@@ -630,7 +634,8 @@ impl SealedHandoffState {
     /// --recipient <path> > bundle.armor`. Stdout redirect because the
     /// pnm subcommand has no `--out` flag.
     pub fn pnm_command(&self) -> String {
-        let file = self.request_file_display();
+        let file = sh_quote(&self.request_file_display());
+        let context = sh_quote(&self.context_id);
         match self.intent {
             VtaIntent::AdminOnly => self.primary_command(),
             VtaIntent::FullSetup => format!(
@@ -643,19 +648,17 @@ impl SealedHandoffState {
                 // re-runs. Mirrors the offline `vta bootstrap
                 // provision-integration --create-context` shape.
                 "pnm bootstrap provision-integration \
-                 --request {} \
-                 --context {} \
+                 --request {file} \
+                 --context {context} \
                  --create-context \
                  --assertion pinned-only \
                  --out bundle.armor",
-                file, self.context_id,
             ),
             VtaIntent::OfflineExport => format!(
                 "pnm contexts reprovision \
-                 --id {} \
-                 --recipient {} \
+                 --id {context} \
+                 --recipient {file} \
                  > bundle.armor",
-                self.context_id, file,
             ),
         }
     }
@@ -672,17 +675,18 @@ impl SealedHandoffState {
     /// being managed out-of-band (key escrow, separate admin
     /// workstation, principle-of-least-privilege deployments).
     pub fn fallback_command(&self) -> Option<String> {
+        let file = sh_quote(&self.request_file_display());
         match self.intent {
             VtaIntent::AdminOnly => Some(format!(
-                "vta bootstrap seal --request {} --payload <ADMIN_CREDENTIAL_JSON> --out bundle.armor",
-                self.request_file_display(),
+                "vta bootstrap seal --request {file} --payload <ADMIN_CREDENTIAL_JSON> --out bundle.armor",
             )),
             VtaIntent::FullSetup => None,
-            VtaIntent::OfflineExport => Some(format!(
-                "vta keys bundle --context {} --recipient {} --out bundle.armor",
-                self.context_id,
-                self.request_file_display(),
-            )),
+            VtaIntent::OfflineExport => {
+                let context = sh_quote(&self.context_id);
+                Some(format!(
+                    "vta keys bundle --context {context} --recipient {file} --out bundle.armor",
+                ))
+            }
         }
     }
 
@@ -992,6 +996,53 @@ pub fn open_with_digest(
     Ok(())
 }
 
+/// POSIX shell single-quote escaping for operator-supplied fields
+/// interpolated into the rendered producer commands.
+///
+/// The wizard tells the operator to *paste these strings into a
+/// shell* on the VTA host. A `context_id` of `mediator"; rm -rf /;
+/// echo "` would, without escaping, result in a command that runs
+/// arbitrary code as the VTA admin. Single-quote wrapping is the
+/// right primitive: inside `'…'` POSIX disables every special
+/// character except `'` itself, which we replace with `'\''`
+/// (close-quote, escaped single-quote, re-open-quote).
+///
+/// Strings that contain no shell metacharacters and aren't empty
+/// pass through unchanged so test assertions and operator-readable
+/// output don't sprout spurious quotes around `bootstrap-request.json`
+/// / `prod-mediator` / similar plain values.
+fn sh_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    // Conservative allowlist — every byte outside of these needs
+    // single-quote wrapping. Matches the set commonly considered
+    // "shell-safe" (alphanumerics + a small set of punctuation that
+    // never has special meaning in any POSIX shell context).
+    let safe = |b: u8| -> bool {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-' | b'_'
+            )
+    };
+    if s.bytes().all(safe) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            // Close-quote, escape a literal single-quote, re-open-quote.
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Decode a base64url-no-pad VP nonce string back to the 16-byte
 /// sealed-bundle id. Mirrors the SDK's `pub(crate)` helper
 /// (`vta_sdk::provision_client::result::decode_nonce_b64url`) — kept
@@ -1122,6 +1173,78 @@ mod tests {
     }
 
     #[test]
+    fn sh_quote_passes_alphanumeric_through_unchanged() {
+        // Plain values pass through so test assertions and operator-
+        // facing output don't sprout spurious quotes around safe
+        // strings.
+        for s in [
+            "prod-mediator",
+            "bootstrap-request.json",
+            "mediator/v1",
+            "abc123",
+            "host:port",
+            "label_with_underscore",
+            "tag=value",
+        ] {
+            assert_eq!(sh_quote(s), s, "safe value should not be quoted: {s}");
+        }
+    }
+
+    #[test]
+    fn sh_quote_wraps_special_chars_in_single_quotes() {
+        // Strings containing whitespace, glob metas, or shell control
+        // characters must be wrapped.
+        assert_eq!(sh_quote("a b"), "'a b'");
+        assert_eq!(sh_quote("Mediator (prod)"), "'Mediator (prod)'");
+        assert_eq!(sh_quote("tag*"), "'tag*'");
+        assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn sh_quote_neutralises_command_substitution() {
+        // The wizard renders these strings into commands the operator
+        // pastes into a shell on the VTA host. Without escaping, a
+        // hostile context_id like `mediator"; rm -rf ~; echo "` would
+        // execute arbitrary code as the VTA admin. Single-quote
+        // wrapping with `'\''` escape for embedded single quotes is
+        // the POSIX-safe primitive — `$()`, backticks, `;`, `&`,
+        // `>`, `|`, and double quotes all become literal.
+        let hostile = r#"mediator"; rm -rf ~; echo ""#;
+        let q = sh_quote(hostile);
+        assert!(q.starts_with('\''));
+        assert!(q.ends_with('\''));
+        // Crucially, the `;` and `"` no longer terminate the surrounding
+        // shell context — they're inside a single-quoted block.
+        assert!(q.contains(r#"mediator"; rm -rf ~; echo ""#));
+        // Embedded single-quote test: `'$()'` must round-trip via the
+        // POSIX `'\''` close-and-reopen idiom, not get truncated.
+        let with_squote = "it's a test '$(rm -rf /)'";
+        let q = sh_quote(with_squote);
+        // Each `'` in the input becomes `'\''` (close, escaped quote,
+        // reopen) — three occurrences in input → three escapes in output.
+        assert_eq!(q.matches(r"'\''").count(), 3);
+    }
+
+    #[test]
+    fn primary_command_quotes_hostile_context_id() {
+        // Regression: a hostile recipe-supplied / TUI-typed context id
+        // must not break out of the rendered command. The wrapped
+        // output keeps the malicious shell metacharacters inert when
+        // the operator pastes it.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.context_id = r#"x"; rm -rf ~; echo ""#.into();
+        state.finalize_request().unwrap();
+        let cmd = state.primary_command();
+        // The full hostile string lives inside a single-quoted block;
+        // the surrounding `'…'` stops `;` and `"` from being shell-
+        // interpreted.
+        assert!(cmd.contains(r#"--id 'x"; rm -rf ~; echo "'"#));
+        // Sanity: command structure is preserved.
+        assert!(cmd.starts_with("pnm contexts bootstrap"));
+        assert!(cmd.contains("--recipient bootstrap-request.json"));
+    }
+
+    #[test]
     fn admin_only_primary_command_uses_collected_context_and_label() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.context_id = "prod-mediator".into();
@@ -1129,10 +1252,15 @@ mod tests {
         state.finalize_request().unwrap();
         let cmd = state.primary_command();
         assert!(cmd.starts_with("pnm contexts bootstrap"));
+        // Plain alphanumeric values pass through `sh_quote` unchanged.
         assert!(cmd.contains("--id prod-mediator"));
-        assert!(cmd.contains("--name \"Mediator (prod-mediator)\""));
-        assert!(cmd.contains("--admin-label \"staff\""));
+        assert!(cmd.contains("--admin-label staff"));
         assert!(cmd.contains("--recipient bootstrap-request.json"));
+        // The display name has spaces + parens, so `sh_quote` wraps
+        // it in single quotes (the POSIX-safe escape) rather than
+        // the prior double-quote rendering. Both work in bash; only
+        // single-quotes are robust to embedded `$(...)` / backticks.
+        assert!(cmd.contains("--name 'Mediator (prod-mediator)'"));
         // No fabricated payload kind — regression check against the
         // broken pre-Slice-2 command.
         assert!(!cmd.contains("mediator-admin-credential"));
