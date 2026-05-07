@@ -62,9 +62,14 @@ pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyho
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(path, &toml_content)?;
+    // mediator.toml carries the `[secrets].backend` URL — vault
+    // endpoint, AWS region/namespace, etc. Not key material, but
+    // enough to mount a targeted attack on the secret backend, so
+    // restrict to owner-only on Unix.
+    crate::secure_fs::write_sensitive(path, &toml_content)?;
 
-    // Write the Redis Lua functions file alongside the config
+    // Redis Lua functions are public Redis script content — leave
+    // at default (world-readable) permissions.
     let lua_path = config_dir(config).join("atm-functions.lua");
     fs::write(&lua_path, ATM_FUNCTIONS_LUA)?;
 

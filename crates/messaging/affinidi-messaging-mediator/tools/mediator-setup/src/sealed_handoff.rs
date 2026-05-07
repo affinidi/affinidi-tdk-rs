@@ -392,7 +392,12 @@ impl SealedHandoffState {
         // cleanly. Distinct filenames per intent prevent a mid-run
         // mode switch from aliasing a stale file on disk.
         let request_path = std::path::PathBuf::from(filename);
-        let persisted = match std::fs::write(&request_path, &request_json) {
+        // The request is public material (operator's ephemeral X25519
+        // pubkey + nonce + optional VP framing) — no secret to leak —
+        // but tightening to owner-only on Unix removes it from a
+        // co-tenant's view and matches the rest of the wizard's
+        // "default to 0o600 on artefacts we generate" posture.
+        let persisted = match crate::secure_fs::write_sensitive(&request_path, &request_json) {
             Ok(()) => Some(request_path),
             Err(_) => None,
         };

@@ -11,6 +11,7 @@ mod generators;
 mod recipe;
 mod reprovision;
 mod sealed_handoff;
+mod secure_fs;
 mod ui;
 mod vta;
 
@@ -920,7 +921,12 @@ fn write_did_jsonl(config_path: &str, log_content: &str) {
     // a trailing newline already, others don't — normalise to exactly one so
     // `cat`-ing the file or appending future log entries always works.
     let normalised = format!("{}\n", log_content.trim_end_matches('\n'));
-    match std::fs::write(&did_jsonl_path, normalised) {
+    // did.jsonl is the DID's log of public state, but it also pins
+    // the mediator's identity. Owner-only on Unix is defence in
+    // depth — a public-readable log isn't a confidentiality break,
+    // but a co-tenant who can't read the file can't subtly mutate
+    // it either if they ever get write access.
+    match crate::secure_fs::write_sensitive(&did_jsonl_path, normalised) {
         Ok(()) => println!(
             "  \x1b[32m\u{2714}\x1b[0m Saved DID log: \x1b[36m{}\x1b[0m",
             did_jsonl_path.display()
@@ -1046,7 +1052,11 @@ async fn generate_and_write(
                     .unwrap_or(std::path::Path::new("."))
                     .join("authorization.jsonld");
                 if let Ok(serialized) = serde_json::to_string_pretty(provision.authorization_vc()) {
-                    match std::fs::write(&vc_path, serialized) {
+                    // VC is signed by the VTA; not secret per se, but
+                    // it's an authorization credential and a co-tenant
+                    // shouldn't be able to read the operator's audit
+                    // trail. Owner-only on Unix.
+                    match crate::secure_fs::write_sensitive(&vc_path, serialized) {
                         Ok(()) => println!(
                             "  \x1b[32m\u{2714}\x1b[0m Archived authorization VC: \x1b[36m{}\x1b[0m",
                             vc_path.display()
@@ -1370,7 +1380,12 @@ async fn generate_and_write(
             .unwrap_or(std::path::Path::new("."))
             .join("mediator-build.toml");
         let recipe_content = recipe::from_wizard_config(config);
-        std::fs::write(&recipe_path, &recipe_content)?;
+        // Recipe is "designed to not contain secrets" (URLs are
+        // redacted by `redact_url`), but it does carry the resolved
+        // secret-backend URL — vault endpoint, AWS region/namespace,
+        // azure vault id, etc. — which is enough to mount a targeted
+        // attack on the mediator's secret store. Owner-only on Unix.
+        crate::secure_fs::write_sensitive(&recipe_path, &recipe_content)?;
         println!(
             "  \x1b[32m\u{2714}\x1b[0m Build recipe:  \x1b[1m{}\x1b[0m",
             recipe_path.display()

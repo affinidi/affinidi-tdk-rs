@@ -21,8 +21,11 @@ pub fn generate_self_signed_cert(output_dir: &str) -> anyhow::Result<(String, St
     let cert_path = Path::new(output_dir).join("end.cert");
     let key_path = Path::new(output_dir).join("end.key");
 
+    // Cert is public — the regular world-readable write is fine.
     fs::write(&cert_path, cert.pem())?;
-    fs::write(&key_path, key_pair.serialize_pem())?;
+    // Private key MUST land at 0o600 on Unix; co-tenant readability
+    // would be a full TLS-key compromise.
+    crate::secure_fs::write_sensitive(&key_path, key_pair.serialize_pem())?;
 
     Ok((
         cert_path.to_string_lossy().into_owned(),
