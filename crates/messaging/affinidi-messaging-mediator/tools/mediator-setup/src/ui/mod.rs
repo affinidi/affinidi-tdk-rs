@@ -974,9 +974,9 @@ fn render_sealed_request(
              keyspace — no `pnm acl create` required):",
             "  [v] ",
             Some(
-                "Or, with an authenticated `pnm` session against a live VTA — the \
-                 context must already exist (or be carried by the request's \
-                 `contextHint`):",
+                "Or, with an authenticated `pnm` session against a live VTA. \
+                 `--create-context` is idempotent: it provisions the context \
+                 inline if missing and is a no-op if it already exists.",
             ),
             None,
         ),
@@ -1009,20 +1009,6 @@ fn render_sealed_request(
             Span::styled("  [p] ", cmd),
             Span::styled(state.pnm_command(), cmd),
         ]));
-        // Pre-step: if the operator hasn't already created this VTA
-        // context, `pnm bootstrap provision-integration` will fail
-        // with a 404 (pnm-cli has no `--create-context` flag — only
-        // the offline `vta` CLI does). Show the explicit one-shot
-        // they need to run first. Re-runs against an existing context
-        // hit a 409 conflict, so emitting it as a separate visible
-        // line (not a chain) keeps the failure mode obvious.
-        if let Some(pre) = state.pnm_precondition_command() {
-            lines.push(Line::from(Span::styled(
-                "      Precondition (skip if context already exists):",
-                hint,
-            )));
-            lines.push(Line::from(vec![Span::styled(format!("      {pre}"), cmd)]));
-        }
     }
     if let (Some(header), Some(fb)) = (fallback_header, state.fallback_command()) {
         lines.push(Line::from(""));
