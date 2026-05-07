@@ -292,12 +292,18 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
             }
             SealedPhase::CollectMediatorUrl => {
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Include the FULL path (typically https://example.com/mediator/v1) — \
-                     this URL is fed verbatim to the VTA's `didcomm-mediator` template \
-                     as the `URL` variable, and the rendered mediator DID's service \
-                     endpoints (#didcomm, #auth, #whois) are appended to it. A bare \
-                     host with no path will publish endpoints under the host root, \
-                     which won't match the mediator's `api_prefix`."
+                    // Embed `\n\n` so the prompt widget renders three
+                    // distinct paragraphs (typical shape, why it
+                    // matters, what goes wrong with a bare host)
+                    // instead of one wall of wrapped text.
+                    "Include the FULL path — typically \
+                     `https://example.com/mediator/v1`.\n\n\
+                     This URL is fed verbatim to the VTA's `didcomm-mediator` \
+                     template as the `URL` variable. The rendered mediator DID's \
+                     service endpoints (#didcomm, #auth, #whois) are appended \
+                     to it.\n\n\
+                     A bare host with no path will publish endpoints under the \
+                     host root, which won't match the mediator's `api_prefix`."
                         .into()
                 });
                 prompt::render_prompt(
@@ -484,11 +490,15 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     None,
                     &app.text_input,
                     "https://mediator.example.com/mediator/v1",
-                    "Include the FULL path (typically \
-                     `https://example.com/mediator/v1`). Passed verbatim to the \
-                     VTA's didcomm-mediator template as the `URL` variable; the \
-                     wizard reuses this value for the mediator's own config so \
-                     you won't be asked again later.",
+                    // `\n\n` between paragraphs — the prompt widget
+                    // splits on newlines so each chunk renders on its
+                    // own line, separated by a blank.
+                    "Include the FULL path — typically \
+                     `https://example.com/mediator/v1`.\n\n\
+                     Passed verbatim to the VTA's `didcomm-mediator` template \
+                     as the `URL` variable.\n\n\
+                     The wizard reuses this value for the mediator's own config, \
+                     so you won't be asked again later.",
                 );
                 return;
             }
