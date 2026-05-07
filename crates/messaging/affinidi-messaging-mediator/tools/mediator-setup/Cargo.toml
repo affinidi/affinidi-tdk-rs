@@ -117,6 +117,12 @@ ring = { version = "0.17", features = ["std"] }
 ## rcgen: self-signed SSL certificate generation (local dev only)
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 sha256 = "1"
+## `Zeroizing<T>` wrapper used by SealedHandoffState so the ephemeral
+## HPKE seed / recipient secret / 16-byte nonce don't linger in heap
+## memory after the sub-flow completes. Already a transitive dep
+## via vta-sdk; calling it out as a direct dep makes the security
+## intent explicit and pins the API we rely on.
+zeroize = "1"
 
 # ── Error Handling ───────────────────────────────────────────────────────
 anyhow = "1"

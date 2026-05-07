@@ -32,6 +32,8 @@ use rand::TryRng;
 use serde_json::Value;
 use tracing::{info, warn};
 use vta_sdk::credentials::CredentialBundle;
+use zeroize::Zeroize;
+
 use vta_sdk::provision_integration::{
     ProvisionRequestBuilder, http::ProvisionSummary, payload::TemplateBootstrapPayload,
 };
@@ -155,20 +157,23 @@ pub struct SealedHandoffState {
     /// server auto-assign"; ignored entirely when `webvh_server` is
     /// empty (self-host derives the path from `URL`).
     pub webvh_path: String,
-    /// Consumer's X25519 secret. Required to open the returned bundle;
-    /// dropped when the sub-flow exits. Zeroed until the inputs phases
-    /// complete and `finalize_request` runs.
+    /// Consumer's X25519 secret. Required to open the returned bundle.
+    /// Zeroed by `Drop` when the sub-flow exits (success, error, or
+    /// back-out — see `impl Drop` below). Holds zero bytes until the
+    /// input phases complete and `finalize_request` populates it.
     pub recipient_secret: [u8; 32],
     /// Raw 32-byte Ed25519 seed the X25519 secret is derived from. The
     /// non-interactive driver persists this into the configured secret
     /// backend so phase 2 (a separate process invocation) can recover
     /// `recipient_secret` without the operator fishing it out by hand.
-    /// Zeroed until `finalize_request` runs; unused by the TUI, which
-    /// stays single-process and relies on the in-memory
-    /// `recipient_secret` directly.
+    /// Zeroed by `Drop`; unused by the TUI, which stays single-process
+    /// and relies on the in-memory `recipient_secret` directly.
     pub seed_bytes: [u8; 32],
     /// Raw 16-byte nonce that anchors the bundle (must round-trip
-    /// through the VTA admin's reply). Zeroed until `finalize_request`.
+    /// through the VTA admin's reply). Not strictly secret but treated
+    /// as such — zeroed by `Drop` alongside the seed and recipient
+    /// secret so the sealed-bundle id doesn't linger after the
+    /// sub-flow exits.
     pub nonce: [u8; 16],
     /// JSON-serialised [`BootstrapRequest`] the operator hands to the
     /// VTA admin. Empty string until `finalize_request` populates it.
@@ -725,6 +730,40 @@ impl SealedHandoffState {
     /// across re-renders since the nonce is constant for the run.
     pub fn nonce_display(&self) -> String {
         B64URL.encode(self.nonce)
+    }
+
+    /// Zero every secret-bearing field. Called from `Drop` (so every
+    /// exit path runs it) and exposed as `pub` so tests can verify
+    /// the zeroizer touches each field — calling `Drop::drop`
+    /// manually isn't allowed, and reading post-drop memory is
+    /// unsound, so this is the only way to assert the contract
+    /// without UB.
+    pub fn zeroize_secrets(&mut self) {
+        self.recipient_secret.zeroize();
+        self.seed_bytes.zeroize();
+        self.nonce.zeroize();
+    }
+}
+
+/// Zero the ephemeral HPKE seed, X25519 recipient secret, and bundle
+/// nonce when the sub-flow exits — success, error, or
+/// `sealed_handoff_back` cleanup all funnel through here.
+///
+/// `recipient_secret` was previously zeroed only on the back path
+/// (`app::WizardApp::sealed_handoff_back`); the success path moved the
+/// session out and dropped the rest, leaving the secret bytes in heap
+/// memory until the allocator overwrote them. `seed_bytes` was never
+/// zeroed at all. A core-dump or swap-leak after a successful run
+/// could recover both, and combined with a captured bundle ciphertext
+/// would unseal the admin credential. Zeroing in `Drop` closes that
+/// window for every exit path uniformly.
+///
+/// `Zeroize::zeroize` writes a fence-protected pattern that the
+/// compiler can't optimise away, then commits with a memory barrier —
+/// stronger than `[0u8; N]` assignment.
+impl Drop for SealedHandoffState {
+    fn drop(&mut self) {
+        self.zeroize_secrets();
     }
 }
 
@@ -1306,6 +1345,28 @@ mod tests {
         assert!(cmd.contains("--out bundle.armor"));
         // Sanity: FullSetup has no fallback.
         assert!(state.fallback_command().is_none());
+    }
+
+    #[test]
+    fn zeroize_secrets_clears_recipient_seed_and_nonce() {
+        // Regression: every secret-bearing field on SealedHandoffState
+        // must be zeroed by `zeroize_secrets`, which `Drop::drop`
+        // delegates to. Calling Drop directly isn't allowed and reading
+        // post-drop memory is unsound, so we test the helper. As long
+        // as Drop calls this method, the contract holds end-to-end.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.recipient_secret = [0x42u8; 32];
+        state.seed_bytes = [0x69u8; 32];
+        state.nonce = [0xABu8; 16];
+
+        state.zeroize_secrets();
+
+        assert_eq!(
+            state.recipient_secret, [0u8; 32],
+            "recipient_secret must be all zeroes",
+        );
+        assert_eq!(state.seed_bytes, [0u8; 32], "seed_bytes must be all zeroes");
+        assert_eq!(state.nonce, [0u8; 16], "nonce must be all zeroes");
     }
 
     #[test]

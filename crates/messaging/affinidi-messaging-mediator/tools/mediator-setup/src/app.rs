@@ -1023,13 +1023,17 @@ impl WizardApp {
     }
 
     /// Esc/back from inside the sealed sub-flow. Drops the ephemeral
-    /// keypair (zeroed on Drop by `Zeroizing` upstream — but we copied
-    /// the secret out, so explicit `take()` clears the visible copy)
-    /// and returns to the Vta scheme list.
+    /// keypair — `SealedHandoffState`'s `Drop` impl zeroes
+    /// `recipient_secret`, `seed_bytes`, and `nonce` automatically, so
+    /// the explicit `take()` is enough; no manual `.fill(0)` needed.
     fn sealed_handoff_back(&mut self) {
-        if let Some(mut state) = self.sealed_handoff.take() {
-            state.recipient_secret.fill(0);
-        }
+        // Take the state out; the moved-out value drops at end of
+        // scope and runs `SealedHandoffState::drop` which zeroes all
+        // three secret-bearing fields. Behaviour is now uniform with
+        // the success path (which also drops the state) — previously
+        // only the back path zeroed `recipient_secret`, and
+        // `seed_bytes` was never zeroed at all.
+        let _state = self.sealed_handoff.take();
         self.config.use_vta = false;
         self.config.vta_mode = String::new();
         self.mode = InputMode::Selecting;
