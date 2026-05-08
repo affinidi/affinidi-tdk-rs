@@ -106,7 +106,7 @@ did-scid = { path = "crates/identity/did-methods/did-scid" }
 # (notably `pnm bootstrap provision-integration --create-context`). Revert
 # to the published vta-sdk crate before merging once the next VTA release
 # ships.
-vta-sdk = { path = "/Users/glenngore/devel/fpp/verifiable-trust-infrastructure/vta-sdk" }
+vta-sdk = { path = "../../fpp/verifiable-trust-infrastructure/vta-sdk" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
