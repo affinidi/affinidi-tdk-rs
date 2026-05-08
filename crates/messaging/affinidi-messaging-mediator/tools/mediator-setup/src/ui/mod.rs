@@ -676,16 +676,26 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     ),
                     KeyStoragePhase::FilePassphrase => (
                         "File-backend passphrase",
-                        "Used to derive an AES-256-GCM key (Argon2id, mem=64MiB, t=3, p=4). \
-                         Type carefully — there is no recovery if you lose it. The mediator \
-                         will need the same passphrase at boot via MEDIATOR_FILE_BACKEND_PASSPHRASE \
-                         or MEDIATOR_FILE_BACKEND_PASSPHRASE_FILE.",
+                        "Derives an AES-256-GCM key via Argon2id (mem=64MiB, t=3, p=4).",
                         "(passphrase — input is hidden)",
-                        "Empty input is rejected. Pick something long and high-entropy: a \
-                         passphrase manager entry or a 6+ word diceware string. The wizard \
-                         exports this passphrase to its own process env so it can write \
-                         the initial entries; you must arrange for the mediator to see the \
-                         same value at boot.",
+                        "Type carefully — there is no recovery if you lose it.\n\n\
+                         The mediator needs the same passphrase at boot via\n  \
+                         MEDIATOR_FILE_BACKEND_PASSPHRASE\n  \
+                         MEDIATOR_FILE_BACKEND_PASSPHRASE_FILE\n\n\
+                         Empty input is rejected. Pick something long and high-entropy: \
+                         a passphrase-manager entry or a 6+ word diceware string.\n\n\
+                         The wizard exports this passphrase to its own process env so \
+                         it can write the initial entries; you must arrange for the \
+                         mediator to see the same value at boot.",
+                    ),
+                    KeyStoragePhase::FilePassphraseConfirm => (
+                        "Confirm file-backend passphrase",
+                        "Re-type the passphrase exactly to guard against typos.",
+                        "(passphrase — input is hidden)",
+                        "If the two entries don't match, the wizard returns to the \
+                         previous screen and you start over. The first entry is held \
+                         in memory only between these two screens and zeroed on \
+                         success or mismatch.",
                     ),
                     KeyStoragePhase::KeyringService => (
                         "Keyring service name",
@@ -763,7 +773,19 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          can see the live layout.",
                     ),
                 };
-                prompt::render_prompt(
+                // Passphrase entry + confirm get the masked variant so
+                // characters render as bullets. All other key-storage
+                // sub-phases collect non-secret config (paths, region,
+                // namespace, …) and stay on the standard prompt.
+                let render = if matches!(
+                    phase,
+                    KeyStoragePhase::FilePassphrase | KeyStoragePhase::FilePassphraseConfirm,
+                ) {
+                    prompt::render_secret_prompt
+                } else {
+                    prompt::render_prompt
+                };
+                render(
                     frame,
                     chunks[0],
                     title,

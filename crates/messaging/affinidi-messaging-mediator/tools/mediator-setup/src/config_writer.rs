@@ -123,15 +123,22 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
             server.as_table_like_mut().map(|t| t.remove("admin_did"));
         }
 
-        // Self-hosted DID log. Triggered whenever the wizard wrote a
-        // `did.jsonl` alongside the config — covers both `did_method =
-        // "did:webvh"` (self-host generator) and the VTA-managed
-        // serverless path where the VTA returned a webvh log entry the
-        // mediator now serves itself. The mediator's loader detects the
-        // log envelope and serves both `/.well-known/did.json`
-        // (extracted DID Document) and `/.well-known/did.jsonl` (raw
-        // log) from this single file.
-        if generated.did_log_jsonl_written {
+        // Self-hosted DID log. Two conditions must both hold before the
+        // wizard activates the line:
+        //   1. A `did.jsonl` was written next to the config (either the
+        //      did:webvh self-host generator or the VTA-managed
+        //      serverless path).
+        //   2. The DID's host matches the public URL host — i.e. this
+        //      mediator can plausibly serve `/.well-known/did.json`
+        //      for that DID. When the VTA delegates webvh hosting to a
+        //      different domain, the mediator must not advertise itself
+        //      as the authority.
+        // Otherwise the line stays commented (template default), which
+        // is also the safe outcome when public_url isn't set or the DID
+        // shape doesn't expose a host.
+        let should_self_host = generated.did_log_jsonl_written
+            && self_host_domain_match(&generated.mediator_did, &config.public_url);
+        if should_self_host {
             server["did_web_self_hosted"] = toml_edit::value("file://./conf/did.jsonl");
         } else {
             server
@@ -232,6 +239,63 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
     }
 
     Ok(doc.to_string())
+}
+
+/// True when the mediator's DID and the public URL resolve to the same
+/// host. Drives whether the wizard activates `did_web_self_hosted` —
+/// when both sides agree on the host, this mediator can serve
+/// `/.well-known/did.json[l]` for that DID; otherwise some other server
+/// is the authority and the field stays commented.
+///
+/// Comparison is case-insensitive (DNS hosts are case-insensitive) and
+/// strips ports, so `https://mediator.example.com:7037` matches
+/// `did:webvh:SCID:mediator.example.com`. Returns `false` whenever
+/// either input fails to parse or yields no host.
+fn self_host_domain_match(mediator_did: &str, public_url: &str) -> bool {
+    match (webvh_did_host(mediator_did), url_host(public_url.trim())) {
+        (Some(d), Some(u)) => d.eq_ignore_ascii_case(&u),
+        _ => false,
+    }
+}
+
+/// Extract the host segment from a `did:webvh:SCID:host[:port][:path…]`
+/// DID. The webvh spec puts the SCID at position 2 and the host at
+/// position 3; everything after that is path. Returns `None` for
+/// non-webvh DIDs or malformed inputs.
+fn webvh_did_host(did: &str) -> Option<String> {
+    let stripped = did.strip_prefix("did:webvh:")?;
+    let mut parts = stripped.splitn(3, ':');
+    let _scid = parts.next()?;
+    let host_with_port = parts.next()?;
+    // `host[%3Aport]` — webvh percent-encodes the port separator. Only
+    // the host portion is meaningful for the domain match.
+    let host = host_with_port
+        .split_once("%3A")
+        .or_else(|| host_with_port.split_once("%3a"))
+        .map(|(h, _)| h)
+        .unwrap_or(host_with_port);
+    if host.is_empty() {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
+/// Parse the host out of a public URL. Accepts bare hosts (`example.com`)
+/// and full URLs (`https://example.com:7037/path`). Returns `None` when
+/// the input is empty or has no parseable host.
+fn url_host(url: &str) -> Option<String> {
+    if url.is_empty() {
+        return None;
+    }
+    // Try as-is first; if there's no scheme, retry with `https://`
+    // so callers don't need to normalise. `url::Url::parse` requires a
+    // scheme; without one a bare host like `mediator.example.com` would
+    // be rejected, even though it's the form a recipe author may write.
+    let parsed = url::Url::parse(url)
+        .or_else(|_| url::Url::parse(&format!("https://{url}")))
+        .ok()?;
+    parsed.host_str().map(|h| h.to_string())
 }
 
 /// Construct the `[secrets].backend` URL from the wizard's per-backend
@@ -624,22 +688,119 @@ mod tests {
         assert!(!toml.contains("admin_did = \"did://"));
     }
 
+    /// True when the rendered TOML contains an *active* (uncommented)
+    /// `did_web_self_hosted = ...` line. The template's commented
+    /// fallback (`# did_web_self_hosted = ...`) is intentionally
+    /// ignored — assertions about wizard behaviour care about the
+    /// active key, not the documentation comment.
+    fn has_active_did_web_self_hosted(toml: &str) -> bool {
+        toml.lines()
+            .any(|line| line.trim_start().starts_with("did_web_self_hosted"))
+    }
+
     #[test]
-    fn test_webvh_includes_self_hosted() {
+    fn test_webvh_self_host_with_matching_domain_activates_line() {
+        // did:webvh self-host generator always produces a DID whose
+        // host segment is the public URL host (the SCID is computed
+        // from the very same domain). The wizard must activate
+        // `did_web_self_hosted` so the mediator serves
+        // `/.well-known/did.jsonl` for its own DID.
         let config = WizardConfig {
             did_method: DID_WEBVH.into(),
             secret_storage: STORAGE_STRING.into(),
+            public_url: "https://mediator.example.com".into(),
             ..WizardConfig::default()
         };
-        // The DID_WEBVH branch in `main.rs` always produces a log entry,
-        // so `did_log_jsonl_written` is true alongside the mediator
-        // config write. Mirror that here.
         let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:mediator.example.com".into(),
             did_log_jsonl_written: true,
             ..test_generated()
         };
         let toml = generate_toml(&config, &generated).unwrap();
+        assert!(has_active_did_web_self_hosted(&toml));
         assert!(toml.contains("did_web_self_hosted = \"file://./conf/did.jsonl\""));
+    }
+
+    #[test]
+    fn test_webvh_with_mismatched_domain_leaves_commented() {
+        // VTA-managed path: VTA mints a DID hosted on a different
+        // webvh server. Even though a `did.jsonl` lands next to the
+        // config, the mediator must NOT advertise itself as the
+        // authority — leaving the line commented protects against
+        // serving stale content for someone else's DID.
+        let config = WizardConfig {
+            did_method: DID_VTA.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: "https://mediator.example.com".into(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:webvh.vta-host.com".into(),
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(!has_active_did_web_self_hosted(&toml));
+        // Comment line from the template should still be present so the
+        // operator can flip it later if they take over hosting.
+        assert!(toml.contains("# did_web_self_hosted"));
+    }
+
+    #[test]
+    fn test_webvh_with_matching_domain_but_no_jsonl_stays_commented() {
+        // Defensive: domain-match alone isn't enough — there has to
+        // be a did.jsonl on disk for the line to point at.
+        let config = WizardConfig {
+            did_method: DID_VTA.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: "https://mediator.example.com".into(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:mediator.example.com".into(),
+            did_log_jsonl_written: false,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(!has_active_did_web_self_hosted(&toml));
+    }
+
+    #[test]
+    fn test_webvh_with_empty_public_url_stays_commented() {
+        // `public_url` may be unset (e.g. minimal recipe). Without
+        // both sides we fail closed and leave the line commented.
+        let config = WizardConfig {
+            did_method: DID_WEBVH.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: String::new(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:mediator.example.com".into(),
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(!has_active_did_web_self_hosted(&toml));
+    }
+
+    #[test]
+    fn test_webvh_domain_match_is_case_insensitive_and_strips_port() {
+        // DNS hosts are case-insensitive; bind ports on the public URL
+        // shouldn't break the equality check.
+        let config = WizardConfig {
+            did_method: DID_WEBVH.into(),
+            secret_storage: STORAGE_STRING.into(),
+            public_url: "https://Mediator.Example.com:7037".into(),
+            ..WizardConfig::default()
+        };
+        let generated = GeneratedValues {
+            mediator_did: "did:webvh:QmScid:mediator.example.com".into(),
+            did_log_jsonl_written: true,
+            ..test_generated()
+        };
+        let toml = generate_toml(&config, &generated).unwrap();
+        assert!(has_active_did_web_self_hosted(&toml));
     }
 
     #[test]
@@ -650,8 +811,107 @@ mod tests {
             ..WizardConfig::default()
         };
         let toml = generate_toml(&config, &test_generated()).unwrap();
-        // should not have did_web_self_hosted as a key=value
-        assert!(!toml.contains("did_web_self_hosted = \"file://"));
+        // should not appear as an active key=value (commented form may
+        // still survive from the template)
+        assert!(!has_active_did_web_self_hosted(&toml));
+    }
+
+    // ── self_host_domain_match unit tests ─────────────────────────────
+
+    #[test]
+    fn self_host_domain_match_basic_match() {
+        assert!(self_host_domain_match(
+            "did:webvh:QmScid:mediator.example.com",
+            "https://mediator.example.com",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_bare_host_in_url() {
+        // Recipe authors may write a bare host without scheme.
+        assert!(self_host_domain_match(
+            "did:webvh:QmScid:mediator.example.com",
+            "mediator.example.com",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_strips_port_and_path() {
+        assert!(self_host_domain_match(
+            "did:webvh:QmScid:mediator.example.com",
+            "https://mediator.example.com:7037/mediator/v1/",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_case_insensitive() {
+        assert!(self_host_domain_match(
+            "did:webvh:QmScid:Mediator.Example.com",
+            "https://mediator.example.COM",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_rejects_different_hosts() {
+        assert!(!self_host_domain_match(
+            "did:webvh:QmScid:webvh.vta-host.com",
+            "https://mediator.example.com",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_rejects_non_webvh_did() {
+        // did:peer / did:key DIDs have no host — fail closed.
+        assert!(!self_host_domain_match(
+            "did:peer:2.Vtest.Etest",
+            "https://mediator.example.com",
+        ));
+        assert!(!self_host_domain_match(
+            "did:key:z6MkTest",
+            "https://mediator.example.com",
+        ));
+    }
+
+    #[test]
+    fn self_host_domain_match_rejects_empty_inputs() {
+        assert!(!self_host_domain_match("", "https://mediator.example.com"));
+        assert!(!self_host_domain_match(
+            "did:webvh:QmScid:mediator.example.com",
+            "",
+        ));
+        assert!(!self_host_domain_match("", ""));
+    }
+
+    #[test]
+    fn webvh_did_host_handles_percent_encoded_port() {
+        // Per webvh spec the port separator is percent-encoded as
+        // `%3A`. The host-only comparison should drop the port.
+        assert_eq!(
+            webvh_did_host("did:webvh:QmScid:localhost%3A8000"),
+            Some("localhost".to_string())
+        );
+        assert_eq!(
+            webvh_did_host("did:webvh:QmScid:localhost%3a8000"),
+            Some("localhost".to_string())
+        );
+    }
+
+    #[test]
+    fn webvh_did_host_handles_path_segments() {
+        // webvh DIDs may carry path segments after the host — e.g.
+        // `did:webvh:SCID:host:tenant:subpath`. The first segment
+        // after the SCID is the host (port may be percent-encoded).
+        assert_eq!(
+            webvh_did_host("did:webvh:QmScid:mediator.example.com:tenant:abc"),
+            Some("mediator.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn webvh_did_host_returns_none_for_malformed() {
+        assert_eq!(webvh_did_host("did:peer:2.Vtest"), None);
+        assert_eq!(webvh_did_host("did:webvh:onlyone"), None);
+        assert_eq!(webvh_did_host(""), None);
     }
 
     #[test]

@@ -208,6 +208,11 @@ pub enum KeyStoragePhase {
     /// can derive its key when `MediatorSecrets::from_url` is called
     /// in `generate_and_write`.
     FilePassphrase,
+    /// `file://` — re-enter the passphrase to guard against typos. The
+    /// first input is stashed on `WizardApp::pending_passphrase`; this
+    /// phase compares against it and either advances (match) or bounces
+    /// back to [`Self::FilePassphrase`] with an inline error (mismatch).
+    FilePassphraseConfirm,
     /// `keyring://` — prompt for the OS-keyring service name.
     KeyringService,
     /// `aws_secrets://` — first prompt: AWS region.
@@ -644,6 +649,18 @@ pub struct WizardApp {
     /// Cleared on a successful confirm or when the operator backs
     /// out of the step.
     pub database_validation_error: Option<String>,
+    /// First passphrase typed on the [`KeyStoragePhase::FilePassphrase`]
+    /// screen. Held just long enough for the operator to retype it on
+    /// the [`KeyStoragePhase::FilePassphraseConfirm`] screen — cleared
+    /// on a successful match (after the env var is written) or on
+    /// mismatch (so the next attempt starts fresh). `Zeroizing<String>`
+    /// scrubs the heap allocation when the option is dropped.
+    pub pending_passphrase: Option<zeroize::Zeroizing<String>>,
+    /// Inline validation error surfaced under the file-backend
+    /// passphrase prompt when the confirm-typed value didn't match the
+    /// first entry. Cleared on the next successful match or when the
+    /// operator backs out of the sub-flow.
+    pub passphrase_validation_error: Option<String>,
 }
 
 impl WizardApp {
@@ -678,6 +695,8 @@ impl WizardApp {
             discovery_rx: None,
             clipboard_status: None,
             database_validation_error: None,
+            pending_passphrase: None,
+            passphrase_validation_error: None,
         }
     }
 
@@ -2410,15 +2429,29 @@ impl WizardApp {
                     }
                 }
             }
-            WizardStep::KeyStorage => match self.selection_index {
-                0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
-                1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                2 => "Store secrets in Google Cloud Secret Manager. Auth via Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / `gcloud auth application-default login` / GKE workload identity).".into(),
-                3 => "Store secrets in Azure Key Vault. Auth via Azure CLI / azd developer credentials (`az login`). Sovereign clouds supported via full DNS in the vault field.".into(),
-                4 => "Store secrets in HashiCorp Vault (KV v2). Token auth via VAULT_TOKEN env var. The mount point must already exist on the server.".into(),
-                5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
-                _ => String::new(),
-            },
+            WizardStep::KeyStorage => {
+                // Validation errors take priority — the operator just
+                // had a passphrase mismatch and needs to see why their
+                // Enter sent them back a screen.
+                if matches!(
+                    self.key_storage_phase,
+                    Some(KeyStoragePhase::FilePassphrase)
+                        | Some(KeyStoragePhase::FilePassphraseConfirm)
+                ) {
+                    if let Some(ref err) = self.passphrase_validation_error {
+                        return err.clone();
+                    }
+                }
+                match self.selection_index {
+                    0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
+                    1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                    2 => "Store secrets in Google Cloud Secret Manager. Auth via Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / `gcloud auth application-default login` / GKE workload identity).".into(),
+                    3 => "Store secrets in Azure Key Vault. Auth via Azure CLI / azd developer credentials (`az login`). Sovereign clouds supported via full DNS in the vault field.".into(),
+                    4 => "Store secrets in HashiCorp Vault (KV v2). Token auth via VAULT_TOKEN env var. The mount point must already exist on the server.".into(),
+                    5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
+                    _ => String::new(),
+                }
+            }
             WizardStep::Security => {
                 if self.security_phase == Some(SecurityPhase::NetworkMode) {
                     match self.selection_index {
@@ -2864,6 +2897,7 @@ impl WizardApp {
             // list rather than text input.
             KeyStoragePhase::FileGate => String::new(),
             KeyStoragePhase::FilePassphrase => String::new(),
+            KeyStoragePhase::FilePassphraseConfirm => String::new(),
             KeyStoragePhase::FilePath => self.config.secret_file_path.clone(),
             KeyStoragePhase::KeyringService => self.config.secret_keyring_service.clone(),
             KeyStoragePhase::AwsRegion => self.config.secret_aws_region.clone(),
@@ -2934,6 +2968,39 @@ impl WizardApp {
                     // is trivially brute-forceable.
                     return;
                 }
+                // Stash the first entry and ask the operator to retype
+                // it on the confirm screen. The actual env-var export
+                // (and step advance) happens after the confirm matches —
+                // catching typos here is the whole point of having a
+                // confirm step at all.
+                self.pending_passphrase = Some(zeroize::Zeroizing::new(value));
+                // Don't carry a stale "passphrases didn't match" error
+                // forward into the confirm screen.
+                self.passphrase_validation_error = None;
+                self.enter_key_storage_phase(KeyStoragePhase::FilePassphraseConfirm);
+            }
+            KeyStoragePhase::FilePassphraseConfirm => {
+                if value.is_empty() {
+                    // Same reasoning as the first prompt — empty input
+                    // shouldn't silently match an empty pending entry
+                    // (the FilePassphrase arm rejects empties).
+                    return;
+                }
+                let matched = self
+                    .pending_passphrase
+                    .as_ref()
+                    .map(|p| p.as_str() == value.as_str())
+                    .unwrap_or(false);
+                if !matched {
+                    // Drop the stash so a future attempt starts clean —
+                    // can't leak the first entry into the next try if
+                    // the operator backs out and re-enters.
+                    self.pending_passphrase = None;
+                    self.passphrase_validation_error =
+                        Some("Passphrases didn't match — please type the same value twice.".into());
+                    self.enter_key_storage_phase(KeyStoragePhase::FilePassphrase);
+                    return;
+                }
                 // Export to the env var the encrypted backend reads.
                 // The wizard process is short-lived; the env var dies
                 // with it. Operators who want persistence beyond the
@@ -2942,6 +3009,8 @@ impl WizardApp {
                 unsafe {
                     std::env::set_var(affinidi_messaging_mediator_common::PASSPHRASE_ENV, &value);
                 }
+                self.pending_passphrase = None;
+                self.passphrase_validation_error = None;
                 self.config.secret_file_encrypted = true;
                 self.exit_key_storage_subflow();
                 self.advance();
@@ -3044,6 +3113,11 @@ impl WizardApp {
         self.key_storage_phase = None;
         self.mode = InputMode::Selecting;
         self.text_input = Input::default();
+        // Drop any partially-collected passphrase + clear stale errors
+        // so the operator's next entry into the sub-flow starts clean.
+        // `Zeroizing` zeroes the heap allocation when dropped.
+        self.pending_passphrase = None;
+        self.passphrase_validation_error = None;
     }
 
     /// `true` while the discovery overlay (loading spinner, results
@@ -4777,6 +4851,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(passphrase_env)]
     fn keystorage_file_backend_encrypt_yes_collects_passphrase() {
         // Picking "encrypt" advances to the passphrase prompt, which
         // rejects empty input and exports the value via env on confirm.
@@ -4808,21 +4883,103 @@ mod tests {
             "empty passphrase must be rejected (Argon2id with no input is trivial)"
         );
 
-        // Real passphrase exits the sub-flow + flips secret_file_encrypted.
+        // First passphrase entry advances to the confirm prompt — sub-flow
+        // is still in progress, env var must NOT be set yet.
+        app.text_input = Input::new("correct horse battery staple".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm),
+            "first entry must route to the confirm screen, not advance"
+        );
+        assert!(app.in_key_storage_subflow());
+        assert!(
+            !app.config.secret_file_encrypted,
+            "secret_file_encrypted must not flip until the confirm matches"
+        );
+        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
+        assert!(
+            std::env::var(key).is_err(),
+            "env var must not be exported until the confirm matches"
+        );
+
+        // Matching confirm finishes the sub-flow, sets the env var, and
+        // flips secret_file_encrypted.
         app.text_input = Input::new("correct horse battery staple".into());
         app.confirm_text_input();
         assert!(!app.in_key_storage_subflow());
         assert!(app.config.secret_file_encrypted);
         assert_eq!(app.current_step, WizardStep::Vta);
-
-        // The wizard exports the env var so generate_and_write can open
-        // the encrypted backend on first put. Read it back to confirm,
-        // then clean up so we don't pollute neighbour tests.
-        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
         assert_eq!(
             std::env::var(key).ok().as_deref(),
             Some("correct horse battery staple"),
         );
+        // Pending stash must be cleared so a second entry into the
+        // sub-flow doesn't see the previous passphrase.
+        assert!(app.pending_passphrase.is_none());
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(passphrase_env)]
+    fn keystorage_file_backend_passphrase_mismatch_returns_to_first_screen() {
+        // The whole point of the confirm step is to catch typos.
+        // Mismatch must:
+        //   1. Bounce the operator back to FilePassphrase
+        //   2. Clear the stashed first entry (no leak across attempts)
+        //   3. Surface an inline error
+        //   4. Leave secret_file_encrypted unchanged
+        //   5. Leave the env var unset
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // file://
+        app.select_current();
+        app.text_input = Input::new(FILE_GATE_PHRASE.into());
+        app.confirm_text_input();
+        app.confirm_text_input(); // accept default path
+        app.selection_index = 0; // encrypt = yes
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FilePassphrase));
+
+        // First entry → confirm screen.
+        app.text_input = Input::new("first try".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm)
+        );
+
+        // Confirm types something different → bounce back with error.
+        app.text_input = Input::new("second try".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphrase),
+            "mismatch must return to the first screen so the operator starts over"
+        );
+        assert!(app.pending_passphrase.is_none(), "stash must be dropped");
+        assert!(
+            app.passphrase_validation_error.is_some(),
+            "operator must see why Enter sent them back"
+        );
+        assert!(!app.config.secret_file_encrypted);
+        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
+        assert!(std::env::var(key).is_err());
+
+        // Re-typing both correctly clears the error and finishes.
+        app.text_input = Input::new("third time lucky".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm)
+        );
+        app.text_input = Input::new("third time lucky".into());
+        app.confirm_text_input();
+        assert!(!app.in_key_storage_subflow());
+        assert!(app.config.secret_file_encrypted);
+        assert!(app.passphrase_validation_error.is_none());
         unsafe {
             std::env::remove_var(key);
         }

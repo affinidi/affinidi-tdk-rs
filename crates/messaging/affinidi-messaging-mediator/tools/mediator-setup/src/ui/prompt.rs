@@ -39,6 +39,60 @@ pub fn render_prompt(
     placeholder: &str,
     hint: &str,
 ) {
+    render_prompt_inner(
+        frame,
+        area,
+        title,
+        description,
+        tip,
+        input,
+        placeholder,
+        hint,
+        false,
+    );
+}
+
+/// Render a passphrase-style prompt: characters masked as `•`, but the
+/// underlying `Input` still tracks the real value so callers can read
+/// it on Enter. Use when the field's contents must not be visible to
+/// over-the-shoulder observers (e.g. file-backend passphrase).
+///
+/// All other behaviour matches [`render_prompt`].
+pub fn render_secret_prompt(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    description: &str,
+    tip: Option<&str>,
+    input: &Input,
+    placeholder: &str,
+    hint: &str,
+) {
+    render_prompt_inner(
+        frame,
+        area,
+        title,
+        description,
+        tip,
+        input,
+        placeholder,
+        hint,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_prompt_inner(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    description: &str,
+    tip: Option<&str>,
+    input: &Input,
+    placeholder: &str,
+    hint: &str,
+    masked: bool,
+) {
     // Vertical layout: title, description, optional tip, blank, prompt,
     // blank, hint (grows for multi-line hints), then flex. The global
     // bottom help bar already shows `Enter Confirm / Esc Cancel`, so we
@@ -90,6 +144,18 @@ pub fn render_prompt(
     let value = input.value();
     let after_glyph_x = chunks[4].x + indent.len() as u16 + glyph.chars().count() as u16 + 1;
 
+    // For masked prompts the rendered value is one bullet per character
+    // of the underlying input — same column count, so the cursor stays
+    // aligned with what the operator sees. The placeholder is *not*
+    // masked: showing the placeholder text only kicks in when the
+    // input is empty (no secret to hide), and bulleting the placeholder
+    // would just hide the help string.
+    let display: String = if masked {
+        "\u{2022}".repeat(value.chars().count())
+    } else {
+        value.to_string()
+    };
+
     let prompt_line: Line = if value.is_empty() {
         Line::from(vec![
             Span::raw(indent),
@@ -102,12 +168,15 @@ pub fn render_prompt(
             Span::raw(indent),
             Span::styled(glyph, theme::selected_style()),
             Span::raw(" "),
-            Span::styled(value.to_string(), theme::normal_style()),
+            Span::styled(display, theme::normal_style()),
         ])
     };
     frame.render_widget(Paragraph::new(prompt_line), chunks[4]);
 
     // Place the terminal cursor right where new characters would appear.
+    // `Input::visual_cursor` counts characters of the real value — for
+    // masked rendering each character maps 1:1 onto a single-column
+    // bullet, so the offset is correct in both modes.
     let cursor_x = after_glyph_x + input.visual_cursor() as u16;
     frame.set_cursor_position(Position::new(cursor_x, chunks[4].y));
 
