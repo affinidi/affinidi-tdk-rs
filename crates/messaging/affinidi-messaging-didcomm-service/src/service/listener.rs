@@ -93,6 +93,12 @@ impl Listener {
         // Clean up any existing connection before reconnecting to prevent
         // orphaned websocket tasks that independently retry and cause
         // duplicate-channel floods when the mediator comes back online.
+        // The post-success-then-disconnect case is handled by stop_websocket
+        // on `self.profile`. The partial-init case (profile_add failed before
+        // returning a handle) is handled below by stop_websocket on the
+        // locally-built `atm_profile`, since `from_tdk_profile` returns an
+        // Arc and `profile_add(&atm_profile, true)` shares the same Mediator
+        // (and therefore the same `ws_channel_tx` slot).
         if let Some(ref profile) = self.profile {
             let _ = profile.stop_websocket().await;
         }
@@ -128,9 +134,19 @@ impl Listener {
         )
         .await
         {
-            Ok(result) => result?,
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
+                // Belt-and-braces against older SDK versions / future
+                // regressions: ensure a half-started websocket transport is
+                // torn down. With the SDK fix in profile_enable_websocket
+                // this is a no-op, but it prevents the duplicate-channel
+                // storm described in the bug report if that fix is missing.
+                let _ = atm_profile.stop_websocket().await;
+                return Err(e.into());
+            }
             Err(e) => {
                 warn!(profile = %self.config.profile.alias, error = %e, "Timeout adding profile");
+                let _ = atm_profile.stop_websocket().await;
                 return Err(DIDCommServiceError::Timeout(e));
             }
         };

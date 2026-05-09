@@ -307,6 +307,23 @@ impl Mediator {
     pub(crate) fn get_tx_uuid(&self) -> u32 {
         self.tx_uuid.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Tear down a half-started websocket transport for this Mediator.
+    ///
+    /// Called from the error paths of `profile_enable_websocket` and
+    /// `profile_start_live_streaming`, which spawn a `WebSocketTransport`
+    /// task and store its command sender in `ws_channel_tx`. Without this
+    /// cleanup, the spawned task stays alive forever via an Arc cycle:
+    /// the task holds `Arc<ATMProfile>` → `Mediator` → `ws_channel_tx` →
+    /// `Sender`, so the channel never reaches zero senders and the run
+    /// loop never returns. Take the sender out of the slot and send
+    /// `Stop` so the task exits cleanly and drops its arcs on the way out.
+    pub(crate) async fn cleanup_failed_websocket(&self) {
+        let sender = self.ws_channel_tx.write().await.take();
+        if let Some(sender) = sender {
+            let _ = sender.send(WebSocketCommands::Stop).await;
+        }
+    }
 }
 
 /// Key is the alias of the profile
@@ -367,9 +384,13 @@ impl ATM {
         let _profile = self.inner.profiles.write().await.insert(profile.clone());
         debug!("Profile({}): Added to profiles", _profile.inner.alias);
 
-        if live_stream {
-            // Grab a copy of the wrapped Profile
-            self.profile_enable_websocket(&_profile).await?;
+        if live_stream && let Err(err) = self.profile_enable_websocket(&_profile).await {
+            // Roll back the insertion so a retry doesn't see a stale entry
+            // and so the map doesn't grow unbounded across reconnect attempts.
+            let alias = _profile.inner.alias.clone();
+            self.inner.profiles.write().await.0.remove(&alias);
+            debug!("Profile({alias}): removed from profiles after websocket startup failure");
+            return Err(err);
         }
         Ok(_profile)
     }
@@ -398,24 +419,19 @@ impl ATM {
         &self,
         profile: &Arc<ATMProfile>,
     ) -> Result<(), ATMError> {
-        let mediator = {
-            let Some(mediator) = &*profile.inner.mediator else {
-                return Err(ATMError::ConfigError(
-                    "No Mediator is configured for this Profile".to_string(),
-                ));
-            };
-            mediator
+        let Some(mediator) = &*profile.inner.mediator else {
+            return Err(ATMError::ConfigError(
+                "No Mediator is configured for this Profile".to_string(),
+            ));
         };
 
-        {
-            if mediator.ws_channel_tx.read().await.is_some() {
-                // Already connected
-                debug!(
-                    "Profile ({}): is already connected to the WebSocket",
-                    profile.inner.alias
-                );
-                return Ok(());
-            }
+        if mediator.ws_channel_tx.read().await.is_some() {
+            // Already connected
+            debug!(
+                "Profile ({}): is already connected to the WebSocket",
+                profile.inner.alias
+            );
+            return Ok(());
         }
 
         debug!("Profile({}): enabling...", profile.inner.alias);
@@ -426,60 +442,18 @@ impl ATM {
             self.inner.config.inbound_message_channel.clone(),
         )
         .await;
-        {
-            mediator.ws_channel_tx.write().await.replace(ws_channel);
-        }
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
 
-        let (tx, rx) = oneshot::channel();
-
-        {
-            if let Some(channel_tx) = &*mediator.ws_channel_tx.read().await {
-                channel_tx
-                    .send(WebSocketCommands::NotifyConnection(tx))
-                    .await
-                    .map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send websocket NotifyConnection? command: {err:?}"
-                        ))
-                    })?;
-            } else {
-                return Err(ATMError::TransportError(
-                    "No WebSocket channel is configured for this Profile".to_string(),
-                ));
+        // Every error path past WebSocketTransport::start MUST clear the
+        // sender slot and tell the spawned task to stop. Otherwise the task
+        // stays alive forever via an Arc cycle (see Mediator::cleanup_failed_websocket).
+        match Self::wait_for_websocket_ready(mediator, &profile.inner.alias).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                mediator.cleanup_failed_websocket().await;
+                Err(err)
             }
         }
-
-        let sleep = tokio::time::sleep(Duration::from_secs(10));
-        tokio::pin!(sleep);
-
-        select! {
-            _ = sleep => {
-                return Err(ATMError::TransportError(
-                    "WebSocket isActive? command timed out".to_string(),
-                ));
-            }
-            val = rx => {
-                match val {
-                    Ok(is_active) => {
-                        if is_active {
-                            debug!("Profile({}): WebSocket is active", profile.inner.alias);
-                        } else {
-                            debug!("Profile({}): WebSocket is not active", profile.inner.alias);
-                            return Err(ATMError::TransportError(
-                                "WebSocket is not active".to_string(),
-                            ));
-                        }
-                    }
-                    Err(err) => {
-                        return Err(ATMError::TransportError(format!(
-                            "Could not receive websocket NotifyConnection? response: {err:?}"
-                        )));
-                    }
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Will create a websocket connection for the profile if one doesn't already exist
@@ -493,24 +467,19 @@ impl ATM {
         skip_toggle_live_delivery: bool,
         skip_unpack_messages: bool,
     ) -> Result<(), ATMError> {
-        let mediator = {
-            let Some(mediator) = &*profile.inner.mediator else {
-                return Err(ATMError::ConfigError(
-                    "No Mediator is configured for this Profile".to_string(),
-                ));
-            };
-            mediator
+        let Some(mediator) = &*profile.inner.mediator else {
+            return Err(ATMError::ConfigError(
+                "No Mediator is configured for this Profile".to_string(),
+            ));
         };
 
-        {
-            if mediator.ws_channel_tx.read().await.is_some() {
-                // Already connected
-                debug!(
-                    "Profile ({}): is already connected to the WebSocket",
-                    profile.inner.alias
-                );
-                return Ok(());
-            }
+        if mediator.ws_channel_tx.read().await.is_some() {
+            // Already connected
+            debug!(
+                "Profile ({}): is already connected to the WebSocket",
+                profile.inner.alias
+            );
+            return Ok(());
         }
 
         debug!("Profile({}): enabling...", profile.inner.alias);
@@ -523,60 +492,67 @@ impl ATM {
             skip_unpack_messages,
         )
         .await;
-        {
-            mediator.ws_channel_tx.write().await.replace(ws_channel);
-        }
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
 
+        // Every error path past WebSocketTransport::start_with_options MUST
+        // clear the sender slot and tell the spawned task to stop. Otherwise
+        // the task stays alive forever via an Arc cycle (see
+        // Mediator::cleanup_failed_websocket).
+        match Self::wait_for_websocket_ready(mediator, &profile.inner.alias).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                mediator.cleanup_failed_websocket().await;
+                Err(err)
+            }
+        }
+    }
+
+    /// Send `NotifyConnection` to the spawned websocket task and wait up to
+    /// 10s for the response. Caller is responsible for tearing down the
+    /// transport via `Mediator::cleanup_failed_websocket` if this returns Err.
+    async fn wait_for_websocket_ready(mediator: &Mediator, alias: &str) -> Result<(), ATMError> {
         let (tx, rx) = oneshot::channel();
 
         {
-            if let Some(channel_tx) = &*mediator.ws_channel_tx.read().await {
-                channel_tx
-                    .send(WebSocketCommands::NotifyConnection(tx))
-                    .await
-                    .map_err(|err| {
-                        ATMError::TransportError(format!(
-                            "Could not send websocket NotifyConnection? command: {err:?}"
-                        ))
-                    })?;
-            } else {
+            let guard = mediator.ws_channel_tx.read().await;
+            let Some(channel_tx) = &*guard else {
                 return Err(ATMError::TransportError(
                     "No WebSocket channel is configured for this Profile".to_string(),
                 ));
-            }
+            };
+            channel_tx
+                .send(WebSocketCommands::NotifyConnection(tx))
+                .await
+                .map_err(|err| {
+                    ATMError::TransportError(format!(
+                        "Could not send websocket NotifyConnection? command: {err:?}"
+                    ))
+                })?;
         }
 
         let sleep = tokio::time::sleep(Duration::from_secs(10));
         tokio::pin!(sleep);
 
         select! {
-            _ = sleep => {
-                return Err(ATMError::TransportError(
-                    "WebSocket isActive? command timed out".to_string(),
-                ));
-            }
-            val = rx => {
-                match val {
-                    Ok(is_active) => {
-                        if is_active {
-                            debug!("Profile({}): WebSocket is active", profile.inner.alias);
-                        } else {
-                            debug!("Profile({}): WebSocket is not active", profile.inner.alias);
-                            return Err(ATMError::TransportError(
-                                "WebSocket is not active".to_string(),
-                            ));
-                        }
-                    }
-                    Err(err) => {
-                        return Err(ATMError::TransportError(format!(
-                            "Could not receive websocket NotifyConnection? response: {err:?}"
-                        )));
-                    }
+            _ = sleep => Err(ATMError::TransportError(
+                "WebSocket isActive? command timed out".to_string(),
+            )),
+            val = rx => match val {
+                Ok(true) => {
+                    debug!("Profile({}): WebSocket is active", alias);
+                    Ok(())
                 }
+                Ok(false) => {
+                    debug!("Profile({}): WebSocket is not active", alias);
+                    Err(ATMError::TransportError(
+                        "WebSocket is not active".to_string(),
+                    ))
+                }
+                Err(err) => Err(ATMError::TransportError(format!(
+                    "Could not receive websocket NotifyConnection? response: {err:?}"
+                ))),
             }
         }
-
-        Ok(())
     }
 
     /// Returns all active profiles within ATM
@@ -587,5 +563,117 @@ impl ATM {
     /// Returns a specific profile for a given DID
     pub async fn find_profile(&self, did: &str) -> Option<Arc<ATMProfile>> {
         self.inner.profiles.read().await.find_by_did(did)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ATM;
+    use crate::config::ATMConfig;
+    use affinidi_tdk_common::TDKSharedState;
+    use affinidi_tdk_common::config::TDKConfig;
+    use tokio::time::timeout;
+
+    /// Build an `ATMProfile` with a manually-constructed `Mediator` whose
+    /// endpoints point at a closed port. Bypasses `Mediator::new` (which
+    /// would resolve the DID) so we can test transport-level behaviour
+    /// without a real mediator.
+    fn fake_profile() -> Arc<ATMProfile> {
+        let mediator = Mediator {
+            did: "did:peer:fake-mediator".to_string(),
+            rest_endpoint: Some("http://127.0.0.1:1/".to_string()),
+            websocket_endpoint: Some("ws://127.0.0.1:1/".to_string()),
+            ws_channel_tx: RwLock::new(None),
+            tx_uuid: AtomicU32::new(0),
+        };
+        Arc::new(ATMProfile {
+            inner: Arc::new(ATMProfileInner {
+                did: "did:peer:fake-profile".to_string(),
+                alias: "test-orphan".to_string(),
+                mediator: Arc::new(Some(mediator)),
+            }),
+        })
+    }
+
+    fn mediator_of(profile: &Arc<ATMProfile>) -> &Mediator {
+        profile
+            .inner
+            .mediator
+            .as_ref()
+            .as_ref()
+            .expect("test profile has a mediator")
+    }
+
+    /// Regression test for the websocket orphan/Arc-cycle bug.
+    ///
+    /// Before the fix, when `profile_enable_websocket` failed after spawning
+    /// `WebSocketTransport`, the spawned task stayed alive forever: it held
+    /// `Arc<ATMProfile>` → `Mediator` → `ws_channel_tx` → `Sender`, so the
+    /// channel never reached zero senders and the run loop never returned.
+    ///
+    /// `Mediator::cleanup_failed_websocket` breaks the cycle by taking the
+    /// sender out of the slot and sending `Stop`, which causes the task's
+    /// run loop to break and drop its `Arc<ATMProfile>` clone.
+    #[tokio::test]
+    async fn cleanup_failed_websocket_terminates_orphan_task() {
+        let tdk_cfg = TDKConfig::headless().expect("headless tdk config");
+        let tdk = Arc::new(
+            TDKSharedState::new(tdk_cfg)
+                .await
+                .expect("tdk shared state"),
+        );
+        let atm_cfg = ATMConfig::builder().build().expect("atm config");
+        let atm = ATM::new(atm_cfg, tdk).await.expect("atm");
+
+        let profile = fake_profile();
+        let mediator = mediator_of(&profile);
+
+        // Start the transport directly — same call sequence
+        // `profile_enable_websocket` performs internally.
+        let (handle, ws_channel) =
+            crate::transports::websockets::websocket::WebSocketTransport::start(
+                profile.clone(),
+                atm.inner.clone(),
+                None,
+            )
+            .await;
+        mediator.ws_channel_tx.write().await.replace(ws_channel);
+
+        assert!(!handle.is_finished(), "task should be alive after start");
+        assert!(
+            mediator.ws_channel_tx.read().await.is_some(),
+            "sender slot should be populated after start",
+        );
+
+        // Trigger the cleanup that the fix invokes on every error path.
+        mediator.cleanup_failed_websocket().await;
+
+        assert!(
+            mediator.ws_channel_tx.read().await.is_none(),
+            "sender slot must be cleared after cleanup",
+        );
+
+        // The task must terminate. Without the fix it lives forever via the
+        // Arc cycle. Bound generously to allow for an in-flight authenticate
+        // (default timeout 10s) before the run loop processes Stop.
+        timeout(Duration::from_secs(15), handle)
+            .await
+            .expect("websocket task did not terminate within 15s")
+            .expect("websocket task panicked");
+
+        atm.graceful_shutdown().await;
+    }
+
+    /// `cleanup_failed_websocket` is a no-op when there is no transport
+    /// running (slot already empty). Guards against double-cleanup paths.
+    #[tokio::test]
+    async fn cleanup_failed_websocket_is_idempotent_when_slot_empty() {
+        let profile = fake_profile();
+        let mediator = mediator_of(&profile);
+
+        assert!(mediator.ws_channel_tx.read().await.is_none());
+        mediator.cleanup_failed_websocket().await;
+        assert!(mediator.ws_channel_tx.read().await.is_none());
     }
 }
