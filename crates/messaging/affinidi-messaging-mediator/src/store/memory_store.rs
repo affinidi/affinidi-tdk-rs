@@ -864,8 +864,10 @@ impl MediatorStore for MemoryStore {
         if !state.known_dids.iter().any(|d| d == did_hash) {
             state.known_dids.push(did_hash.to_string());
         }
-        let mut record = AccountRecord::default();
-        record.acls = acls.clone();
+        let mut record = AccountRecord {
+            acls: acls.clone(),
+            ..AccountRecord::default()
+        };
         if let Some(limit) = queue_limit {
             record.queue_send_limit = Some(limit as i32);
             record.queue_receive_limit = Some(limit as i32);
