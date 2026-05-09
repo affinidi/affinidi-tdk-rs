@@ -13,6 +13,7 @@ docs
 **/conf/keys/
 **/bootstrap-request.json
 **/bootstrap-request-vp.json
+**/*.armor
 
 # Superego
 .superego/
