@@ -193,9 +193,11 @@ pub struct Config {
     pub limits: LimitsConfig,
     pub tags: HashMap<String, String>,
     /// URL of the unified secret backend (`[secrets].backend` from
-    /// the config file). Surfaced in `/readyz` so operators can
-    /// confirm the mediator is talking to the backend they expect
-    /// without having to read the on-disk TOML.
+    /// the config file). Used by the secret-backend probe and surfaced
+    /// in startup logs and the authenticated `/admin/status` endpoint
+    /// so operators can confirm the mediator is talking to the backend
+    /// they expect. Intentionally NOT echoed in `/readyz`, which is
+    /// unauthenticated and must not leak backend identity.
     #[serde(skip_serializing)]
     pub secrets_backend_url: String,
     /// Open handle to the unified secret backend. Cloned cheaply (it
