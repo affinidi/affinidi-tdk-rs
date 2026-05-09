@@ -864,8 +864,10 @@ impl MediatorStore for MemoryStore {
         if !state.known_dids.iter().any(|d| d == did_hash) {
             state.known_dids.push(did_hash.to_string());
         }
-        let mut record = AccountRecord::default();
-        record.acls = acls.clone();
+        let mut record = AccountRecord {
+            acls: acls.clone(),
+            ..AccountRecord::default()
+        };
         if let Some(limit) = queue_limit {
             record.queue_send_limit = Some(limit as i32);
             record.queue_receive_limit = Some(limit as i32);
@@ -1094,7 +1096,7 @@ impl MediatorStore for MemoryStore {
         &self,
         access_list_limit: usize,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListAddResponse, MediatorError> {
         let mut state = self.state.lock().await;
         let list = state.access_lists.entry(did_hash.to_string()).or_default();
@@ -1105,7 +1107,7 @@ impl MediatorStore for MemoryStore {
             let allowed = access_list_limit.saturating_sub(current);
             hashes.iter().take(allowed).cloned().collect()
         } else {
-            hashes.clone()
+            hashes.to_vec()
         };
         for h in &to_add {
             if !list.iter().any(|d| d == h) {
@@ -1121,7 +1123,7 @@ impl MediatorStore for MemoryStore {
     async fn access_list_remove(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<usize, MediatorError> {
         let mut state = self.state.lock().await;
         let Some(list) = state.access_lists.get_mut(did_hash) else {
@@ -1140,7 +1142,7 @@ impl MediatorStore for MemoryStore {
     async fn access_list_get(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListGetResponse, MediatorError> {
         let state = self.state.lock().await;
         let list = state.access_lists.get(did_hash);
@@ -1907,7 +1909,7 @@ mod tests {
             .expect("add");
 
         let resp = store
-            .access_list_add(100, "alice", &vec!["bob".into(), "charlie".into()])
+            .access_list_add(100, "alice", &["bob".into(), "charlie".into()])
             .await
             .expect("add");
         assert_eq!(resp.did_hashes.len(), 2);
@@ -1915,13 +1917,13 @@ mod tests {
         assert_eq!(store.access_list_count("alice").await.unwrap(), 2);
 
         let got = store
-            .access_list_get("alice", &vec!["bob".into(), "eve".into()])
+            .access_list_get("alice", &["bob".into(), "eve".into()])
             .await
             .expect("get");
         assert_eq!(got.did_hashes, vec!["bob"]);
 
         let removed = store
-            .access_list_remove("alice", &vec!["bob".into()])
+            .access_list_remove("alice", &["bob".into()])
             .await
             .expect("remove");
         assert_eq!(removed, 1);

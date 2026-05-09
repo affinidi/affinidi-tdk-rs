@@ -2,6 +2,33 @@
 
 ## Changelog history
 
+## 9th May 2026
+
+### 0.15.1 — `MediatorStore` access-list signatures take `&[String]`
+
+Trivia release: cleans up four pre-existing clippy lints that get
+promoted to errors under `RUSTFLAGS=-D warnings` (which the workspace
+CI uses). Surfaced incidentally during PR #311's
+`/admin/status` hardening work — the lints had been accumulating on
+recent merges because clippy was failing-but-merged on every PR.
+
+- **BREAKING (recompile-only for out-of-tree impls):**
+  `MediatorStore::access_list_{add,remove,get}` now take
+  `hashes: &[String]` instead of `&Vec<String>`. Callers that pass
+  `&vec![...]` keep working (deref-coercion); only out-of-tree
+  implementations of the trait need to update their method signatures
+  to match. In-tree impls (`RedisStore`, `MemoryStore`, `FjallStore`)
+  updated synchronously.
+- **FIX:** `clippy::collapsible_match` in `AzureRetryPolicy::classify`
+  suppressed inline with a justification comment — the nested
+  `match err.kind() { HttpResponse { status } => match *status { ... }`
+  form is more readable than the collapsed alternative which splits
+  transport-level arms (`Connection`/`Io`) away from HTTP-status
+  arms.
+- **FIX:** `clippy::uninlined_format_args` in
+  `types/problem_report.rs` test code — `panic!("...{}", err)`
+  → `panic!("...{err}")`.
+
 ## 5th May 2026
 
 ### 0.15.0 — Feature-gated server stack + `ACLError` non-exhaustive

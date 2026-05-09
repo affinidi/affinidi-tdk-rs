@@ -1,8 +1,10 @@
 //! Polls the mediator's /admin/status endpoint and maintains history for rate calculations.
 
+use crate::auth::AdminAuth;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Mirrors the JSON structure from the mediator's /admin/status endpoint.
@@ -60,6 +62,10 @@ struct Snapshot {
 pub struct StatusPoller {
     client: Client,
     status_url: String,
+    /// Admin auth handle. Required — `/admin/status` is auth-gated.
+    /// Held as `Arc` so the poller is cheap to clone if we ever need to
+    /// hand it across tasks; today it lives on the main task.
+    auth: Arc<AdminAuth>,
     pub current: AdminStatus,
     pub error: Option<String>,
     pub connected: bool,
@@ -71,13 +77,14 @@ pub struct StatusPoller {
 }
 
 impl StatusPoller {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, auth: Arc<AdminAuth>) -> Self {
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap_or_default(),
             status_url: format!("{base_url}/admin/status"),
+            auth,
             current: AdminStatus::default(),
             error: None,
             connected: false,
@@ -88,44 +95,88 @@ impl StatusPoller {
     }
 
     pub async fn poll(&mut self) {
-        match self.client.get(&self.status_url).send().await {
-            Ok(response) => match response.json::<AdminStatus>().await {
-                Ok(status) => {
-                    let now = Instant::now();
+        let token = match self.auth.bearer_token().await {
+            Ok(t) => t,
+            Err(e) => {
+                // Auth failure is distinct from a transport / parse error —
+                // surface it as such so the operator knows the credential
+                // path is wrong, not the URL.
+                self.error = Some(format!("Auth error: {e}"));
+                self.connected = false;
+                return;
+            }
+        };
 
-                    // Calculate rates from oldest snapshot in window
-                    if let Some(oldest) = self.history.front() {
-                        let elapsed = now.duration_since(oldest.taken_at).as_secs_f64();
-                        if elapsed > 0.5 {
-                            let msg_delta = (status.messages.received_count
-                                - oldest.status.messages.received_count)
-                                as f64;
-                            let bytes_delta = (status.messages.received_bytes
-                                - oldest.status.messages.received_bytes)
-                                as f64;
-                            self.msg_per_sec = msg_delta / elapsed;
-                            self.bytes_per_sec = bytes_delta / elapsed;
-                        }
-                    }
+        let request = self
+            .client
+            .get(&self.status_url)
+            .header("Authorization", format!("Bearer {token}"));
 
-                    // Keep last 30 snapshots (~60 seconds at 2s interval)
-                    if self.history.len() >= 30 {
-                        self.history.pop_front();
-                    }
-                    self.history.push_back(Snapshot {
-                        status: status.clone(),
-                        taken_at: now,
-                    });
-
-                    self.current = status;
-                    self.connected = true;
-                    self.error = None;
-                }
-                Err(e) => {
-                    self.error = Some(format!("Parse error: {e}"));
+        match request.send().await {
+            Ok(response) => {
+                let status_code = response.status();
+                if status_code == reqwest::StatusCode::UNAUTHORIZED {
+                    self.error = Some(
+                        "Unauthorized (401) — admin JWT was rejected by the mediator. Check that \
+                         the admin profile's `did` and `mediator` match the mediator's config and \
+                         that the secrets are current."
+                            .into(),
+                    );
                     self.connected = false;
+                    return;
                 }
-            },
+                if status_code == reqwest::StatusCode::FORBIDDEN {
+                    self.error = Some(
+                        "Forbidden (403) — DID authenticated but is not admin-tier. \
+                         /admin/status requires Admin, RootAdmin, or Mediator account_type."
+                            .into(),
+                    );
+                    self.connected = false;
+                    return;
+                }
+                if !status_code.is_success() {
+                    self.error = Some(format!("Mediator returned {status_code}"));
+                    self.connected = false;
+                    return;
+                }
+                match response.json::<AdminStatus>().await {
+                    Ok(status) => {
+                        let now = Instant::now();
+
+                        // Calculate rates from oldest snapshot in window
+                        if let Some(oldest) = self.history.front() {
+                            let elapsed = now.duration_since(oldest.taken_at).as_secs_f64();
+                            if elapsed > 0.5 {
+                                let msg_delta = (status.messages.received_count
+                                    - oldest.status.messages.received_count)
+                                    as f64;
+                                let bytes_delta = (status.messages.received_bytes
+                                    - oldest.status.messages.received_bytes)
+                                    as f64;
+                                self.msg_per_sec = msg_delta / elapsed;
+                                self.bytes_per_sec = bytes_delta / elapsed;
+                            }
+                        }
+
+                        // Keep last 30 snapshots (~60 seconds at 2s interval)
+                        if self.history.len() >= 30 {
+                            self.history.pop_front();
+                        }
+                        self.history.push_back(Snapshot {
+                            status: status.clone(),
+                            taken_at: now,
+                        });
+
+                        self.current = status;
+                        self.connected = true;
+                        self.error = None;
+                    }
+                    Err(e) => {
+                        self.error = Some(format!("Parse error: {e}"));
+                        self.connected = false;
+                    }
+                }
+            }
             Err(e) => {
                 self.error = Some(format!("Connection error: {e}"));
                 self.connected = false;

@@ -4,12 +4,22 @@
 //! connections, throughput, queue depths, circuit breaker state, uptime, etc.
 //!
 //! Designed to be polled by the mediator-monitor TUI or any monitoring tool.
+//!
+//! ## Authorisation
+//!
+//! Requires a valid mediator JWT for an account whose `account_type`
+//! is admin-tier (`Admin`, `RootAdmin`, or `Mediator`). Unauthenticated
+//! requests are rejected by the `Session` extractor with 401; authenticated
+//! non-admin sessions are rejected with 403. Operational metrics (uptime,
+//! message counts, queue depth, masked Redis URL) leak fingerprintable
+//! infra detail and historically were public — that's been corrected here.
 
-use crate::SharedData;
+use crate::{SharedData, common::session::Session};
 use axum::{Json, extract::State};
 use chrono::Utc;
 use http::StatusCode;
 use serde::Serialize;
+use tracing::warn;
 
 #[derive(Serialize)]
 pub struct AdminStatus {
@@ -86,7 +96,18 @@ fn mask_redis_url(url: &str) -> String {
 
 pub async fn admin_status_handler(
     State(state): State<SharedData>,
+    session: Session,
 ) -> Result<(StatusCode, Json<AdminStatus>), StatusCode> {
+    if !session.account_type.is_admin() {
+        warn!(
+            session_id = %session.session_id,
+            did_hash = %session.did_hash,
+            account_type = %session.account_type,
+            "Non-admin session attempted to access /admin/status",
+        );
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let now = Utc::now();
     let uptime = now
         .signed_duration_since(state.service_start_timestamp)

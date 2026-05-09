@@ -1,8 +1,11 @@
+mod auth;
 mod status;
 mod ui;
 
 use std::{
     io::{self, Stdout},
+    path::PathBuf,
+    sync::Arc,
     time::Duration,
 };
 
@@ -19,6 +22,7 @@ use ratatui::{
 };
 use tokio_stream::StreamExt;
 
+use auth::AdminAuth;
 use status::StatusPoller;
 
 #[derive(Parser)]
@@ -38,6 +42,18 @@ struct Args {
     /// Poll interval in seconds
     #[arg(long, short = 'i', default_value_t = 2)]
     interval: u64,
+
+    /// Path to a JSON file describing the admin profile to authenticate as.
+    ///
+    /// File shape mirrors `affinidi_tdk_common::profiles::TDKProfile`:
+    /// `{ "alias": "...", "did": "...", "mediator": "...", "secrets": [...] }`.
+    /// The `mediator` field must be the mediator's DID (the JWT audience),
+    /// not its URL — the URL comes from `--url`.
+    ///
+    /// Required because the mediator's `/admin/status` endpoint is gated on
+    /// an admin-tier JWT.
+    #[arg(long, short = 'a', value_name = "PATH")]
+    admin_profile: PathBuf,
 }
 
 #[tokio::main]
@@ -47,13 +63,27 @@ async fn main() -> anyhow::Result<()> {
     let url = args.url.trim_end_matches('/').to_string();
     let poll_interval = Duration::from_secs(args.interval);
 
-    let mut poller = StatusPoller::new(&url);
+    // Build the auth session before opening the TUI: a bad admin profile
+    // path or unparseable JSON should fail fast on the terminal the user
+    // launched from, not buried inside the alternate screen.
+    let auth = Arc::new(
+        AdminAuth::from_profile_path(&args.admin_profile)
+            .await
+            .context("loading admin profile")?,
+    );
+
+    let mut poller = StatusPoller::new(&url, auth.clone());
 
     let mut terminal = setup_terminal()?;
 
     let result = run_event_loop(&mut terminal, &mut poller, poll_interval).await;
 
     restore_terminal(&mut terminal)?;
+
+    // Best-effort SDK shutdown — tears down deletion handler and any
+    // websocket tasks (we use none, but the deletion handler runs
+    // unconditionally on `ATM::new`).
+    auth.shutdown().await;
 
     result
 }

@@ -312,8 +312,10 @@ impl MediatorBuilder {
     }
 
     /// Set a human-readable URL for the secrets backend. Surfaced in
-    /// `/readyz` so operators can see which backend the mediator is
-    /// using. Defaults to `"(programmatic)"` when not set.
+    /// startup logs and the authenticated `/admin/status` endpoint so
+    /// operators can see which backend the mediator is using. Not
+    /// echoed in `/readyz` (unauthenticated). Defaults to
+    /// `"(programmatic)"` when not set.
     pub fn secrets_backend_url(mut self, url: impl Into<String>) -> Self {
         self.config.secrets_backend_url = url.into();
         self
@@ -515,7 +517,8 @@ impl MediatorBuilder {
             self.config.listen_address = default.to_string();
         }
 
-        // Default secrets_backend_url so /readyz has something to show.
+        // Default secrets_backend_url so startup logs and /admin/status
+        // have something to show. Not exposed in /readyz.
         if self.config.secrets_backend_url.is_empty() {
             self.config.secrets_backend_url = "(programmatic)".to_string();
         }

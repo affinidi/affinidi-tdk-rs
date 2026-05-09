@@ -8,6 +8,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use http::StatusCode;
+use tracing::warn;
 
 pub mod admin_status;
 #[cfg(feature = "didcomm")]
@@ -209,22 +210,28 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     // likely still reachable here. Re-probing on every /readyz catches
     // mid-flight credential expiries / network blips that the boot-
     // time probe couldn't.
+    //
+    // /readyz is unauthenticated, so the response must not echo the
+    // backend URL or the underlying probe error: those can leak
+    // internal hostnames, ARNs, Vault paths, or credential-shaped
+    // strings to anyone who can reach the load-balancer probe path.
+    // Keep a boolean `secrets_backend_reachable` for monitoring; log
+    // the detailed error at warn level for operators.
     let backend_reachable = match state.config.secrets_backend.probe().await {
         Ok(()) => {
             checks.push(serde_json::json!({
                 "name": "secrets_backend",
                 "status": "pass",
-                "url": state.config.secrets_backend_url,
             }));
             true
         }
         Err(e) => {
             all_ok = false;
+            warn!(error = %e, "Secret backend probe failed");
             checks.push(serde_json::json!({
                 "name": "secrets_backend",
                 "status": "fail",
-                "url": state.config.secrets_backend_url,
-                "message": format!("Secret backend probe failed: {e}"),
+                "message": "Secret backend probe failed",
             }));
             false
         }
@@ -271,8 +278,11 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         "checks": checks,
         // Top-level fields (alongside `checks`) so ops dashboards can
         // pluck them without parsing the variable-length checks list.
+        // The secrets backend URL is intentionally NOT exposed here —
+        // /readyz is unauthenticated and an attacker scraping it should
+        // not learn the backend's identity. Operators can read the URL
+        // from logs or the authenticated /admin/status endpoint.
         "secrets_backend_reachable": backend_reachable,
-        "secrets_backend_url": state.config.secrets_backend_url,
         "vta_cache_age_secs": vta_cache_age_secs,
         "operating_keys_loaded": state.config.operating_keys_loaded,
     });

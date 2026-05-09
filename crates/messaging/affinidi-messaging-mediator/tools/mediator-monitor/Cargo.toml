@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-monitor"
-version = "0.1.0"
+version = "0.1.1"
 description = "Real-time TUI monitoring dashboard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -28,6 +28,13 @@ tokio-stream = "0.1"
 
 # ── HTTP Client (polls mediator /admin/status endpoint) ──────────────────
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# ── DIDComm auth (mediator's /admin/status is gated on admin JWT) ────────
+## Path-pinned to the workspace copy via [patch.crates-io] in the workspace
+## root Cargo.toml; the version specs here are upper-bound contracts only.
+affinidi-messaging-sdk = "0.18"
+affinidi-tdk-common = "0.6"
+affinidi-secrets-resolver = "0.5"
 
 # ── Serialization ────────────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }

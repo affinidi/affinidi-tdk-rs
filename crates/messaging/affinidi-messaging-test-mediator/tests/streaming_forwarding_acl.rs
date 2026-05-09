@@ -63,11 +63,18 @@ async fn websocket_endpoint_rejects_unauthenticated_handshake() {
     let _ = mediator.join().await;
 }
 
-/// `/admin/status` returns operational metrics as JSON. We don't
-/// assert specific field values — only that the endpoint serves
-/// well-formed JSON containing the expected top-level keys.
+/// `/admin/status` is gated behind admin auth. Operational metrics
+/// (uptime, message counts, queue depth, masked Redis URL) are
+/// fingerprintable infra detail and historically were exposed
+/// publicly; this test verifies the auth gate is in place by
+/// asserting an unauthenticated GET returns 401.
+///
+/// A full "200 with admin auth" verification requires running the
+/// SDK auth handshake to mint a JWT, which is exercised by SDK-level
+/// integration tests and by `mediator-monitor` once it's updated to
+/// authenticate. The wire-shape of `AdminStatus` is checked there.
 #[tokio::test]
-async fn admin_status_returns_metrics_json() {
+async fn admin_status_requires_authentication() {
     init_tracing();
     if skip_if_no_redis() {
         return;
@@ -81,20 +88,21 @@ async fn admin_status_returns_metrics_json() {
         .build()
         .expect("client");
     let resp = client.get(&url).send().await.expect("admin status");
-    assert!(
-        resp.status().is_success(),
-        "admin status returned: {}",
+    assert_eq!(
+        resp.status().as_u16(),
+        401,
+        "/admin/status must reject unauthenticated GETs (got {})",
         resp.status()
     );
 
+    // The 401 body comes from the JWT auth extractor's IntoResponse
+    // and is JSON. Confirm it's well-formed so we catch accidental
+    // changes that produce empty / HTML bodies.
     let body: JsonValue = resp.json().await.expect("json body");
-    // The handler builds an `AdminStatus` struct; we just confirm a
-    // few load-bearing keys are present rather than mirroring the
-    // full schema (which evolves).
-    let obj = body.as_object().expect("admin status is a JSON object");
     assert!(
-        obj.contains_key("circuit_breaker") || obj.contains_key("queue_length"),
-        "admin status missing both circuit_breaker and queue_length: {body}"
+        body.as_object()
+            .is_some_and(|obj| obj.contains_key("error_code") || obj.contains_key("message")),
+        "401 body must be a structured ErrorResponse, got: {body}"
     );
 
     mediator.shutdown();

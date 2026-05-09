@@ -151,6 +151,12 @@ pub(crate) struct AzureRetryPolicy;
 
 #[cfg(feature = "secrets-azure")]
 impl RetryPolicy<AzureError> for AzureRetryPolicy {
+    // The nested match keeps the "HttpResponse → status code triage" intent
+    // visible at a glance. The collapsed form (a single match with status
+    // patterns inside HttpResponse destructuring) prevents the natural
+    // "transport-level" arms (Connection / Io) from sitting next to the
+    // status arms in source order, hurting readability for a lint-only win.
+    #[allow(clippy::collapsible_match)]
     fn classify(&self, err: &AzureError) -> Retryable {
         match err.kind() {
             AzureErrorKind::HttpResponse { status, .. } => match *status {

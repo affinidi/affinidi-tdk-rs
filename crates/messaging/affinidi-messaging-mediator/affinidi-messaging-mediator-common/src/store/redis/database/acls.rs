@@ -289,7 +289,7 @@ impl Database {
         &self,
         access_list_limit: usize,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListAddResponse, MediatorError> {
         let _span = span!(
             Level::DEBUG,
@@ -344,7 +344,7 @@ impl Database {
     pub(crate) async fn access_list_remove(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<usize, MediatorError> {
         let _span = span!(
             Level::DEBUG,
@@ -411,7 +411,7 @@ impl Database {
     pub(crate) async fn access_list_get(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListGetResponse, MediatorError> {
         let _span = span!(
             Level::DEBUG,
