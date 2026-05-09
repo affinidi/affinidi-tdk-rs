@@ -2,6 +2,47 @@
 
 ## Changelog history
 
+## 9th May 2026
+
+### 0.15.3 — `/admin/status` auth + `/readyz` redaction
+
+Defensive hardening of the public HTTP surface. **No secret material
+was ever disclosed** by either endpoint — what was exposed was
+infrastructure metadata (uptime/throughput/queue depth/masked Redis
+URL on `/admin/status`; `secrets_backend_url` and probe-error text on
+`/readyz`) that helps an attacker fingerprint a deployment. This
+release closes that reconnaissance channel.
+
+- **BREAKING (HTTP):** `GET /admin/status` is now gated on an
+  admin-tier session. Unauthenticated requests get 401 from the
+  existing JWT extractor; authenticated non-admin sessions get 403.
+  Admin tier = `Admin`, `RootAdmin`, or `Mediator` account_type.
+  External tooling that scrapes `/admin/status` without auth must
+  update — the in-tree `mediator-monitor` ships a matching update in
+  this PR.
+- **FIX:** `GET /readyz` no longer echoes `secrets_backend_url` (was
+  in three places: per-check success entry, per-check failure entry,
+  top-level field). The probe failure message is now generic
+  (`"Secret backend probe failed"`) and the underlying error is
+  surfaced via a `warn!` log instead of the response body so it
+  doesn't leak hostnames / ARNs / Vault paths / project IDs to an
+  unauthenticated probe path. The boolean `secrets_backend_reachable`
+  is still returned so k8s / load-balancer readiness probes work
+  unchanged.
+- **CHORE:** Doc comments on `Config::secrets_backend_url`,
+  `MediatorBuilder::secrets_backend_url`, and the in-builder default
+  comment updated to reflect the new exposure surface (startup logs
+  + authenticated `/admin/status` only — never `/readyz`).
+- **CHORE:** `MemoryStore::account_add` rewritten to use the
+  struct-update form so it stops tripping
+  `clippy::field_reassign_with_default`.
+- **TEST:** Integration test `admin_status_returns_metrics_json`
+  renamed to `admin_status_requires_authentication` and rewritten to
+  assert 401 on an unauthenticated GET (was: assert 2xx + JSON
+  shape, exactly the behaviour this release removes). The existing
+  `mediator_serves_readyz` test continues to pass — it only asserts
+  200/503, not specific JSON fields.
+
 ## 6th May 2026
 
 ### 0.15.2 — `api_prefix` normalisation + startup-panic fix
