@@ -703,7 +703,7 @@ impl MediatorStore for RedisStore {
         &self,
         access_list_limit: usize,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListAddResponse, MediatorError> {
         self.access_list_add(access_list_limit, did_hash, hashes)
             .await
@@ -712,7 +712,7 @@ impl MediatorStore for RedisStore {
     async fn access_list_remove(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<usize, MediatorError> {
         self.access_list_remove(did_hash, hashes).await
     }
@@ -724,7 +724,7 @@ impl MediatorStore for RedisStore {
     async fn access_list_get(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListGetResponse, MediatorError> {
         self.access_list_get(did_hash, hashes).await
     }

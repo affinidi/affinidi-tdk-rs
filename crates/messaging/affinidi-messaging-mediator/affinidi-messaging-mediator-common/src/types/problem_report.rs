@@ -188,12 +188,12 @@ mod tests {
 
         let ser = match serde_json::to_string(&problem_report) {
             Ok(ser) => ser,
-            Err(err) => panic!("Error serializing ProblemReport: {}", err),
+            Err(err) => panic!("Error serializing ProblemReport: {err}"),
         };
 
         let pr: ProblemReport = match serde_json::from_str(&ser) {
             Ok(pr) => pr,
-            Err(err) => panic!("Error deserializing ProblemReport: {}", err),
+            Err(err) => panic!("Error deserializing ProblemReport: {err}"),
         };
 
         assert_eq!(problem_report, pr);

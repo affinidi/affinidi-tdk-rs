@@ -1577,7 +1577,7 @@ impl MediatorStore for FjallStore {
         &self,
         access_list_limit: usize,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListAddResponse, MediatorError> {
         let _guard = self.write_lock.lock().await;
         let current = self.access_list_count_inner(did_hash)?;
@@ -1587,7 +1587,7 @@ impl MediatorStore for FjallStore {
             let allowed = access_list_limit.saturating_sub(current);
             hashes.iter().take(allowed).cloned().collect()
         } else {
-            hashes.clone()
+            hashes.to_vec()
         };
         let mut batch = self.db.batch();
         for h in &to_add {
@@ -1607,7 +1607,7 @@ impl MediatorStore for FjallStore {
     async fn access_list_remove(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<usize, MediatorError> {
         let _guard = self.write_lock.lock().await;
         let mut batch = self.db.batch();
@@ -1649,7 +1649,7 @@ impl MediatorStore for FjallStore {
     async fn access_list_get(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListGetResponse, MediatorError> {
         let mut found = Vec::new();
         for h in hashes {

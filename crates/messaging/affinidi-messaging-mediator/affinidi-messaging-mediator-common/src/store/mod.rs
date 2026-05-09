@@ -345,7 +345,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         &self,
         access_list_limit: usize,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListAddResponse, MediatorError>;
 
     /// Remove `hashes` from a DID's access list. Returns the number of
@@ -353,7 +353,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     async fn access_list_remove(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<usize, MediatorError>;
 
     /// Drop the entire access list for a DID.
@@ -363,7 +363,7 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     async fn access_list_get(
         &self,
         did_hash: &str,
-        hashes: &Vec<String>,
+        hashes: &[String],
     ) -> Result<MediatorAccessListGetResponse, MediatorError>;
 
     // ─── Admin accounts ─────────────────────────────────────────────────────
