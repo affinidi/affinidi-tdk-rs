@@ -361,16 +361,23 @@ pub fn load(path: &str) -> anyhow::Result<BuildRecipe> {
 
 /// Convert a build recipe into a WizardConfig.
 pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
-    let mut config = WizardConfig::default();
-
-    // Deployment type
-    config.deployment_type = match recipe.deployment.deployment_type.as_str() {
+    // Initialise `deployment_type` via struct-update so the function
+    // does not trip `clippy::field_reassign_with_default` on the very
+    // first assignment. Subsequent fields are still mutated below;
+    // the lint only fires on the *first* post-default reassignment,
+    // and refactoring the entire 100+-field mapping into one literal
+    // would just shuffle the same cognitive load around.
+    let deployment_type = match recipe.deployment.deployment_type.as_str() {
         "local" => DEPLOYMENT_LOCAL.into(),
         "server" => DEPLOYMENT_SERVER.into(),
         "container" => DEPLOYMENT_CONTAINER.into(),
         other => anyhow::bail!(
             "Invalid deployment.type '{other}': expected 'local', 'server', or 'container'"
         ),
+    };
+    let mut config = WizardConfig {
+        deployment_type,
+        ..WizardConfig::default()
     };
 
     // VTA integration

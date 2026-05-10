@@ -19,6 +19,10 @@ use crate::ui::selection::SelectionOption;
 use crate::ui::theme;
 use crate::vta::{AttemptResult, AttemptResultKind, VtaConnectState};
 
+// 8 params: same shape as `render_diagnostics` /
+// `render_instructions`. See `ui/diagnostics.rs` for the grouping
+// discussion.
+#[allow(clippy::too_many_arguments)]
 pub fn render_recovery_prompt(
     frame: &mut Frame,
     area: Rect,

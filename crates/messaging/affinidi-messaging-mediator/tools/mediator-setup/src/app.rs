@@ -665,8 +665,10 @@ pub struct WizardApp {
 
 impl WizardApp {
     pub fn new(config_path: String) -> Self {
-        let mut config = WizardConfig::default();
-        config.config_path = config_path;
+        let config = WizardConfig {
+            config_path,
+            ..WizardConfig::default()
+        };
         Self {
             current_step: WizardStep::Deployment,
             config,
@@ -2437,10 +2439,9 @@ impl WizardApp {
                     self.key_storage_phase,
                     Some(KeyStoragePhase::FilePassphrase)
                         | Some(KeyStoragePhase::FilePassphraseConfirm)
-                ) {
-                    if let Some(ref err) = self.passphrase_validation_error {
-                        return err.clone();
-                    }
+                ) && let Some(ref err) = self.passphrase_validation_error
+                {
+                    return err.clone();
                 }
                 match self.selection_index {
                     0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
@@ -3454,22 +3455,20 @@ impl WizardApp {
             WizardStep::Did => {
                 // Handle Did sub-phases (VTA webvh host choice) before
                 // the "just saved the mediator URL" fall-through below.
-                match self.did_phase {
-                    Some(DidPhase::EnterCustomUrl) => {
-                        let v = self.text_input.value().trim().to_string();
-                        if !v.is_empty() {
-                            self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
-                        }
-                        self.config.vta_webvh_server_id = None;
-                        self.config.vta_webvh_path = None;
-                        self.did_phase = None;
-                        self.mode = InputMode::Selecting;
-                        self.advance();
-                        return;
+                // Only the `EnterCustomUrl` phase is text-input here;
+                // `SelectWebvhHost` is Selecting mode and falls through
+                // to the default Did branch below.
+                if let Some(DidPhase::EnterCustomUrl) = self.did_phase {
+                    let v = self.text_input.value().trim().to_string();
+                    if !v.is_empty() {
+                        self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
                     }
-                    // SelectWebvhHost is Selecting mode, not TextInput —
-                    // falls through to the default Did branch below.
-                    _ => {}
+                    self.config.vta_webvh_server_id = None;
+                    self.config.vta_webvh_path = None;
+                    self.did_phase = None;
+                    self.mode = InputMode::Selecting;
+                    self.advance();
+                    return;
                 }
 
                 self.config.public_url = self.text_input.value().to_string();
@@ -4209,9 +4208,14 @@ mod tests {
 
     #[test]
     fn protocol_display_combinations() {
-        let mut cfg = WizardConfig::default();
-        cfg.didcomm_enabled = true;
-        cfg.tsp_enabled = false;
+        // Build the test config via struct-update so the initial
+        // `didcomm_enabled / tsp_enabled` pair is set in one go;
+        // subsequent assertions then mutate just the fields under test.
+        let mut cfg = WizardConfig {
+            didcomm_enabled: true,
+            tsp_enabled: false,
+            ..WizardConfig::default()
+        };
         assert_eq!(cfg.protocol_display(), "DIDComm v2");
 
         cfg.tsp_enabled = true;

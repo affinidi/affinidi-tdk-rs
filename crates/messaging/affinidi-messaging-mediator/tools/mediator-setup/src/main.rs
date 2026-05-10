@@ -1026,10 +1026,10 @@ struct MintedArtefacts {
 ///    AWS creds / dead Vault tokens here, not at first mediator
 ///    boot), and pushes every well-known entry the runtime expects.
 /// 3. [`write_config_artefacts`] — file IO: SSL gen, `mediator.toml`
-///    + Lua, `did.jsonl`, authorization VC archive, recipe,
+///    plus Lua, `did.jsonl`, authorization VC archive, recipe,
 ///    Dockerfile.
 /// 4. [`print_completion_summary`] — operator-facing terminal output:
-///    paths written + admin-key echo with the UNSAFE banner.
+///    paths written plus admin-key echo with the UNSAFE banner.
 ///
 /// The split exists so `mint_artefacts` is unit-testable (no IO),
 /// the IO phases can be tested with a tempdir + file:// backend, and

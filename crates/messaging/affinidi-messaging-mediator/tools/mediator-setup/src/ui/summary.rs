@@ -113,10 +113,10 @@ pub fn render_summary(
     );
     // Webvh path / mnemonic — only meaningful when the operator picked
     // a hosted webvh server and chose a path. Hidden when blank.
-    if let Some(ref path) = config.vta_webvh_path {
-        if !path.is_empty() {
-            add_field(&mut lines, "  Webvh path", path, label_style, value_style);
-        }
+    if let Some(ref path) = config.vta_webvh_path
+        && !path.is_empty()
+    {
+        add_field(&mut lines, "  Webvh path", path, label_style, value_style);
     }
     if !config.public_url.is_empty() {
         add_field(

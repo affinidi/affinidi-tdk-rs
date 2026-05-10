@@ -29,6 +29,14 @@ use crate::ui::theme;
 /// - `placeholder`: ghost text shown in dim grey while the field is empty;
 ///   disappears as soon as the operator types.
 /// - `hint`: small help text rendered below the input line.
+//
+// 8 params is intentional — TUI text-prompt render helper. The
+// param shape is shared between `render_prompt` /
+// `render_secret_prompt` / the inner `render_prompt_inner`; grouping
+// would duplicate the struct definition without changing what each
+// param does at the call site. See `ui/diagnostics.rs` for the
+// grouping discussion.
+#[allow(clippy::too_many_arguments)]
 pub fn render_prompt(
     frame: &mut Frame,
     area: Rect,
@@ -58,6 +66,10 @@ pub fn render_prompt(
 /// over-the-shoulder observers (e.g. file-backend passphrase).
 ///
 /// All other behaviour matches [`render_prompt`].
+//
+// 8 params: same shape as `render_prompt`. See its allow attribute
+// for the grouping discussion.
+#[allow(clippy::too_many_arguments)]
 pub fn render_secret_prompt(
     frame: &mut Frame,
     area: Rect,

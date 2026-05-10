@@ -338,8 +338,11 @@ pub fn build_backend_url(config: &WizardConfig) -> String {
         ),
         // string:// is no longer supported by the mediator's SecretStore
         // URL parser; fall back to a keyring default and warn in stdout
-        // during `generate_and_write`.
-        STORAGE_STRING | STORAGE_VTA | _ => "keyring://affinidi-mediator".to_string(),
+        // during `generate_and_write`. The wildcard catches any future
+        // legacy variant that lands here without a dedicated arm —
+        // STORAGE_STRING / STORAGE_VTA are listed explicitly because
+        // they have callers today.
+        _ => "keyring://affinidi-mediator".to_string(),
     }
 }
 

@@ -17,6 +17,12 @@ use crate::vta::VtaConnectState;
 /// Render the instructions + single-option selection. `area` is the full
 /// right-panel content area (the caller reserves space for the info box
 /// below).
+//
+// 8 params is intentional — same TUI-render shape as
+// `render_diagnostics` / `render_recovery_prompt`, all three live in
+// the same online-VTA sub-flow and are read together. See
+// `render_diagnostics` for the grouping discussion.
+#[allow(clippy::too_many_arguments)]
 pub fn render_instructions(
     frame: &mut Frame,
     area: Rect,
