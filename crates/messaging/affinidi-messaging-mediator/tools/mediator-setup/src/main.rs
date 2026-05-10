@@ -385,12 +385,14 @@ async fn run_from_recipe(
                 request_path,
                 bundle_id_hex,
                 producer_command,
+                pnm_command,
             } => {
                 print_phase1_next_steps(
                     recipe_path,
                     &request_path,
                     &bundle_id_hex,
                     &producer_command,
+                    &pnm_command,
                 );
                 return Ok(());
             }
@@ -1781,6 +1783,7 @@ fn print_phase1_next_steps(
     request_path: &std::path::Path,
     bundle_id_hex: &str,
     producer_command: &str,
+    pnm_command: &str,
 ) {
     println!("  \x1b[32m\u{2714}\x1b[0m Phase 1 complete — bootstrap request written.");
     println!();
@@ -1790,8 +1793,40 @@ fn print_phase1_next_steps(
     );
     println!("  \x1b[1mBundle ID:\x1b[0m     \x1b[36m{bundle_id_hex}\x1b[0m");
     println!();
-    println!("  \x1b[1mNext — on the VTA host, run:\x1b[0m");
-    println!("    \x1b[36m{producer_command}\x1b[0m");
+    // `AdminOnly` intent has the same `pnm contexts bootstrap …` shape
+    // for both the offline and live-API flavours, so an "unseal first"
+    // note doesn't apply — show the single command and move on.
+    //
+    // `FullSetup` and `OfflineExport` *do* gate the offline `vta …`
+    // form on an unsealed VTA. After install or after `vta bootstrap-
+    // admin`, the VTA is sealed by default, and the offline command
+    // errors with "VTA is sealed (… Offline CLI commands are
+    // disabled)" — exactly the coldstart trap a first-time operator
+    // hits. The unseal note is the canonical fix; the pnm alternative
+    // is shown as an escape hatch for operators who already have a
+    // pnm session against an operational VTA.
+    if producer_command == pnm_command {
+        println!("  \x1b[1mNext — on the VTA host, run:\x1b[0m");
+        println!("    \x1b[36m{producer_command}\x1b[0m");
+    } else {
+        println!("  \x1b[1mNext — on the VTA host, run:\x1b[0m");
+        println!("    \x1b[36m{producer_command}\x1b[0m");
+        println!();
+        println!(
+            "  \x1b[2mIf the VTA is sealed (default state after install or after\n  \
+             `vta bootstrap-admin`), the command above errors with\n  \
+             \"VTA is sealed (… Offline CLI commands are disabled)\".\n  \
+             Unseal first (challenge-response with your super-admin key),\n  \
+             then re-run the command above:\x1b[0m"
+        );
+        println!("    \x1b[36mvta unseal\x1b[0m");
+        println!();
+        println!(
+            "  \x1b[2mAlternatively, if you have a `pnm` session authenticated\n  \
+             against this VTA, the live-API form skips the unseal step:\x1b[0m"
+        );
+        println!("    \x1b[36m{pnm_command}\x1b[0m");
+    }
     println!();
     println!("  \x1b[1mThen — back on this host, run:\x1b[0m");
     println!(

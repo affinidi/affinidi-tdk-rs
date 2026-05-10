@@ -45,10 +45,22 @@ use crate::vta::{VtaIntent, VtaSession};
 pub enum HeadlessOutcome {
     /// Phase 1: request file + seed written. The caller should print
     /// the operator instructions and exit with code 0.
+    ///
+    /// Both producer commands are returned so the next-steps printer
+    /// can surface the live-API alternative — operators routinely run
+    /// the offline `vta …` form into a sealed VTA and get back
+    /// `VTA is sealed (…). Offline CLI commands are disabled` with no
+    /// hint that `pnm …` (live session) would have worked.
     RequestEmitted {
         request_path: PathBuf,
         bundle_id_hex: String,
+        /// Offline `vta …` producer command — requires an unsealed VTA.
         producer_command: String,
+        /// `pnm …` equivalent — works against a live API session
+        /// regardless of VTA seal state. Identical to `producer_command`
+        /// for `AdminOnly` (both flavours share the same `pnm contexts
+        /// bootstrap` shape there).
+        pnm_command: String,
     },
     /// Phase 2: sealed bundle opened, session materialised. Caller
     /// passes this to the generate-and-write pipeline, then invokes
@@ -254,6 +266,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     })?;
     let bundle_id_hex = hex_lower(&state.nonce);
     let producer_command = state.primary_command();
+    let pnm_command = state.pnm_command();
 
     // Persist the HPKE recipient seed into the configured backend.
     // Phase 2 reads it back by bundle id to derive `recipient_secret`
@@ -275,6 +288,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
         request_path,
         bundle_id_hex,
         producer_command,
+        pnm_command,
     })
 }
 
@@ -592,6 +606,7 @@ mod tests {
             request_path,
             bundle_id_hex,
             producer_command,
+            pnm_command,
         } = outcome
         else {
             panic!("phase 1 with no --bundle must emit a request, not apply");
@@ -604,6 +619,22 @@ mod tests {
         assert!(
             producer_command.contains("--id prod-mediator"),
             "context id must propagate into the command: {producer_command}"
+        );
+        // Sealed-VTA escape hatch: phase-1 must also surface the
+        // pnm-flavour reprovision command so an operator who hits
+        // "VTA is sealed (… Offline CLI commands are disabled)" has a
+        // live-API alternative right there in the next-steps printout.
+        assert!(
+            pnm_command.contains("pnm contexts reprovision"),
+            "pnm equivalent must be surfaced for the OfflineExport intent: {pnm_command}"
+        );
+        assert!(
+            pnm_command.contains("--id prod-mediator"),
+            "pnm command must carry the same context id: {pnm_command}"
+        );
+        assert_ne!(
+            producer_command, pnm_command,
+            "OfflineExport's offline and live-API commands differ; they must not be aliased"
         );
 
         // Seed must be reachable via the backend, not via any
