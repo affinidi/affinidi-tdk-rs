@@ -1,3 +1,4 @@
+mod admin_monitor_profile;
 mod app;
 mod bootstrap_headless;
 mod cli;
@@ -1467,6 +1468,43 @@ fn write_config_artefacts(
         }
     }
 
+    // Admin monitor profile (`admin-monitor.json`). Emitted only when the
+    // wizard has the admin DID's secret material in memory — i.e., the
+    // `ADMIN_GENERATE` path. This is the file `mediator-monitor
+    // --admin-profile <path>` consumes. For VTA-managed admins the
+    // secret material lives in the configured secret backend; we don't
+    // re-derive a flat-file profile here (often the backend is cloud-
+    // hosted specifically to keep secrets off disk).
+    //
+    // Only `(Some, Some)` triggers the write: `mint_artefacts` sets
+    // `admin_secret = None` for the VTA path (credential is in the
+    // session) and for `ADMIN_SKIP` (no admin at all).
+    if let (Some(admin_did), Some(admin_secret)) = (&artefacts.admin_did, &artefacts.admin_secret) {
+        match admin_monitor_profile::write(
+            &config.config_path,
+            &artefacts.mediator_did,
+            admin_did,
+            admin_secret,
+        ) {
+            Ok(path) => println!(
+                "  \x1b[32m\u{2714}\x1b[0m Admin monitor profile: \x1b[1m{}\x1b[0m\n    \
+                 \x1b[2mUse with: \x1b[36mmediator-monitor --admin-profile {}\x1b[0m",
+                path.display(),
+                path.display(),
+            ),
+            // Non-fatal — the wizard's primary job is the mediator
+            // config; a failed monitor profile shouldn't roll back
+            // an otherwise good setup. Surface it loudly so the
+            // operator knows to construct it manually if they
+            // wanted monitor.
+            Err(e) => eprintln!(
+                "  \x1b[33mWarning:\x1b[0m could not write admin monitor profile: {e}\n    \
+                 mediator-monitor --admin-profile won't have a ready-made file; \
+                 reconstruct manually if needed."
+            ),
+        }
+    }
+
     // Save build recipe for reproducibility (skip when running from --from).
     if save_recipe {
         let recipe_path = std::path::Path::new(&config.config_path)
@@ -2337,6 +2375,55 @@ mod generate_and_write_tests {
         assert!(
             legacy_secrets.exists(),
             "legacy secrets.json must be written for file:// backend"
+        );
+
+        // Phase: admin-monitor.json — TDKProfile-shaped JSON for
+        // `mediator-monitor --admin-profile`. Emitted by
+        // `write_config_artefacts` whenever the wizard has the admin
+        // DID's secret material in memory (i.e., ADMIN_GENERATE).
+        let monitor_profile = dir.join("conf").join("admin-monitor.json");
+        assert!(
+            monitor_profile.exists(),
+            "admin-monitor.json must be written when admin DID is generated locally"
+        );
+        let monitor_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&monitor_profile).unwrap())
+                .expect("admin-monitor.json must be valid JSON");
+        let monitor_obj = monitor_json
+            .as_object()
+            .expect("admin-monitor.json top-level must be an object");
+        // Mediator DID in the monitor profile must match what the
+        // wizard wrote into mediator.toml — same identity used as the
+        // JWT audience.
+        let monitor_mediator = monitor_obj
+            .get("mediator")
+            .and_then(serde_json::Value::as_str)
+            .expect("admin-monitor.json `mediator` field");
+        // mediator.toml stores the DID with a `did://` URI prefix; the
+        // monitor profile is the bare DID since TDKProfile.mediator
+        // expects a DID, not a URI. Compare by stripping that prefix.
+        let toml_did_bare = mediator_did.trim_start_matches("did://");
+        assert_eq!(
+            monitor_mediator, toml_did_bare,
+            "admin-monitor.json mediator DID must match mediator.toml's mediator_did",
+        );
+        let monitor_admin = monitor_obj
+            .get("did")
+            .and_then(serde_json::Value::as_str)
+            .expect("admin-monitor.json `did` field");
+        let toml_admin_bare = admin_did.trim_start_matches("did://");
+        assert_eq!(
+            monitor_admin, toml_admin_bare,
+            "admin-monitor.json admin DID must match mediator.toml's admin_did",
+        );
+        let monitor_secrets = monitor_obj
+            .get("secrets")
+            .and_then(serde_json::Value::as_array)
+            .expect("admin-monitor.json `secrets` array");
+        assert_eq!(
+            monitor_secrets.len(),
+            1,
+            "ADMIN_GENERATE produces exactly one Ed25519 admin secret",
         );
 
         // Phase: recipe write (save_recipe=true).
