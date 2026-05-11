@@ -32,6 +32,8 @@ use rand::TryRng;
 use serde_json::Value;
 use tracing::{info, warn};
 use vta_sdk::credentials::CredentialBundle;
+use zeroize::Zeroize;
+
 use vta_sdk::provision_integration::{
     ProvisionRequestBuilder, http::ProvisionSummary, payload::TemplateBootstrapPayload,
 };
@@ -60,6 +62,14 @@ const DEFAULT_VALIDITY_OFFLINE: Duration = Duration::days(7);
 /// `vta-service/src/operations/provision_integration.rs::resolve_webvh_server`.
 const WEBVH_SERVER_TEMPLATE_VAR: &str = "WEBVH_SERVER";
 
+/// Template variable the VTA forwards to the chosen webvh server's
+/// `request_uri` call as the desired DID path / mnemonic — the
+/// memorable trailing component of `did:webvh:server.example.com:<path>`.
+/// Only meaningful when `WEBVH_SERVER` is also set (self-host paths
+/// are derived from `URL`). See `vta-service::operations::
+/// provision_integration::webvh::take_webvh_path`.
+const WEBVH_PATH_TEMPLATE_VAR: &str = "WEBVH_PATH";
+
 /// Linear progress through the air-gapped flow. The wizard advances
 /// strictly in order — each phase has a single well-defined exit.
 ///
@@ -84,6 +94,13 @@ pub enum SealedPhase {
     /// VTA should host the minted DID's did.jsonl log on. Empty means
     /// "self-host at the URL" (the VTA's serverless path).
     CollectWebvhServer,
+    /// FullSetup-only: optional text input for the DID path / mnemonic
+    /// the chosen webvh server should publish the minted DID under
+    /// (forwarded to the VTA as `WEBVH_PATH`). Only entered when the
+    /// operator picked a webvh server on `CollectWebvhServer`; empty
+    /// means "let the server auto-assign". Skipped entirely when
+    /// `webvh_server` is empty (self-host derives the path from URL).
+    CollectWebvhPath,
     /// AdminOnly-only: text input for the admin ACL label. Optional —
     /// empty advances with the `--admin-label` flag omitted.
     CollectAdminLabel,
@@ -133,20 +150,30 @@ pub struct SealedHandoffState {
     /// Empty means "self-host at the URL". See
     /// [`WEBVH_SERVER_TEMPLATE_VAR`].
     pub webvh_server: String,
-    /// Consumer's X25519 secret. Required to open the returned bundle;
-    /// dropped when the sub-flow exits. Zeroed until the inputs phases
-    /// complete and `finalize_request` runs.
+    /// FullSetup-only: optional DID path / mnemonic the chosen webvh
+    /// server should publish the minted DID under. Forwarded to the
+    /// VTA as [`WEBVH_PATH_TEMPLATE_VAR`]; the VTA in turn passes it
+    /// to the server's `request_uri` call. Empty means "let the
+    /// server auto-assign"; ignored entirely when `webvh_server` is
+    /// empty (self-host derives the path from `URL`).
+    pub webvh_path: String,
+    /// Consumer's X25519 secret. Required to open the returned bundle.
+    /// Zeroed by `Drop` when the sub-flow exits (success, error, or
+    /// back-out — see `impl Drop` below). Holds zero bytes until the
+    /// input phases complete and `finalize_request` populates it.
     pub recipient_secret: [u8; 32],
     /// Raw 32-byte Ed25519 seed the X25519 secret is derived from. The
     /// non-interactive driver persists this into the configured secret
     /// backend so phase 2 (a separate process invocation) can recover
     /// `recipient_secret` without the operator fishing it out by hand.
-    /// Zeroed until `finalize_request` runs; unused by the TUI, which
-    /// stays single-process and relies on the in-memory
-    /// `recipient_secret` directly.
+    /// Zeroed by `Drop`; unused by the TUI, which stays single-process
+    /// and relies on the in-memory `recipient_secret` directly.
     pub seed_bytes: [u8; 32],
     /// Raw 16-byte nonce that anchors the bundle (must round-trip
-    /// through the VTA admin's reply). Zeroed until `finalize_request`.
+    /// through the VTA admin's reply). Not strictly secret but treated
+    /// as such — zeroed by `Drop` alongside the seed and recipient
+    /// secret so the sealed-bundle id doesn't linger after the
+    /// sub-flow exits.
     pub nonce: [u8; 16],
     /// JSON-serialised [`BootstrapRequest`] the operator hands to the
     /// VTA admin. Empty string until `finalize_request` populates it.
@@ -233,6 +260,7 @@ impl SealedHandoffState {
             admin_label: String::new(),
             mediator_url: String::new(),
             webvh_server: String::new(),
+            webvh_path: String::new(),
             recipient_secret: [0u8; 32],
             seed_bytes: [0u8; 32],
             nonce: [0u8; 16],
@@ -325,6 +353,14 @@ impl SealedHandoffState {
                         WEBVH_SERVER_TEMPLATE_VAR.to_string(),
                         Value::String(self.webvh_server.clone()),
                     );
+                    // `WEBVH_PATH` is only meaningful alongside a chosen
+                    // server — self-host derives the path from `URL`.
+                    if !self.webvh_path.is_empty() {
+                        vars.insert(
+                            WEBVH_PATH_TEMPLATE_VAR.to_string(),
+                            Value::String(self.webvh_path.clone()),
+                        );
+                    }
                 }
                 let mut builder = ProvisionRequestBuilder::new(DEFAULT_MEDIATOR_TEMPLATE)
                     .vars(vars)
@@ -361,7 +397,12 @@ impl SealedHandoffState {
         // cleanly. Distinct filenames per intent prevent a mid-run
         // mode switch from aliasing a stale file on disk.
         let request_path = std::path::PathBuf::from(filename);
-        let persisted = match std::fs::write(&request_path, &request_json) {
+        // The request is public material (operator's ephemeral X25519
+        // pubkey + nonce + optional VP framing) — no secret to leak —
+        // but tightening to owner-only on Unix removes it from a
+        // co-tenant's view and matches the rest of the wizard's
+        // "default to 0o600 on artefacts we generate" posture.
+        let persisted = match crate::secure_fs::write_sensitive(&request_path, &request_json) {
             Ok(()) => Some(request_path),
             Err(_) => None,
         };
@@ -444,6 +485,57 @@ impl SealedHandoffState {
         }
     }
 
+    /// Copy the `pnm` flavour of the producer command — what an
+    /// operator with an authenticated `pnm` session against the live
+    /// VTA would run. Counterpart to `copy_primary_command_to_clipboard`,
+    /// which always emits the offline `vta …` invocation for FullSetup
+    /// / OfflineExport. AdminOnly's primary is already a `pnm` command,
+    /// so the two collapse there.
+    pub fn copy_pnm_command_to_clipboard(&mut self) {
+        let label = match self.intent {
+            VtaIntent::AdminOnly => "pnm contexts bootstrap command",
+            VtaIntent::FullSetup => "pnm bootstrap provision-integration command",
+            VtaIntent::OfflineExport => "pnm contexts reprovision command",
+        };
+        self.set_clipboard(self.pnm_command(), label);
+    }
+
+    /// Copy the mediator's integration DID to the clipboard. Only
+    /// meaningful on the `Complete` phase for FullSetup / OfflineExport
+    /// reply variants — AdminOnly's reply carries no integration DID.
+    /// Hotkey `[m]` on the Complete panel.
+    pub fn copy_mediator_did_to_clipboard(&mut self) {
+        match self.session.as_ref().and_then(|s| s.integration_did()) {
+            Some(did) => self.set_clipboard(did.to_string(), "mediator DID"),
+            None => {
+                self.clipboard_status =
+                    Some("No mediator DID in this bundle (AdminOnly handoff)".into());
+            }
+        }
+    }
+
+    /// Copy the admin DID to the clipboard. Hotkey `[a]` on the
+    /// Complete panel — present in every reply variant.
+    pub fn copy_admin_did_to_clipboard(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            self.clipboard_status = Some("No session yet — open the bundle first".into());
+            return;
+        };
+        let did = session.admin_did().to_string();
+        self.set_clipboard(did, "admin DID");
+    }
+
+    /// Copy the VTA DID to the clipboard. Hotkey `[v]` on the
+    /// Complete panel — every reply variant carries this.
+    pub fn copy_vta_did_to_clipboard(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            self.clipboard_status = Some("No session yet — open the bundle first".into());
+            return;
+        };
+        let did = session.vta_did.clone();
+        self.set_clipboard(did, "VTA DID");
+    }
+
     /// Copy the wizard-computed bundle digest to the clipboard.
     /// Hotkey `[F2]` on the `DigestVerify` panel — `F2` instead of
     /// a letter key because the panel has an active text input
@@ -482,17 +574,23 @@ impl SealedHandoffState {
     /// which is what the wizard wants for self-sufficient mediator
     /// startup.
     pub fn primary_command(&self) -> String {
-        let file = self.request_file_display();
+        // Every operator-controlled field goes through `sh_quote` so
+        // a hostile context_id / admin_label / path can't break out
+        // of the rendered shell command when the operator pastes it
+        // on the VTA host. Plain alphanumeric values pass through
+        // unchanged — no spurious quotes around `prod-mediator` or
+        // `bootstrap-request.json`.
+        let file = sh_quote(&self.request_file_display());
+        let context = sh_quote(&self.context_id);
         match self.intent {
             VtaIntent::AdminOnly => {
+                let name = sh_quote(&self.context_display_name());
                 let mut cmd = format!(
-                    "pnm contexts bootstrap --id {} --name \"{}\" --recipient {}",
-                    self.context_id,
-                    self.context_display_name(),
-                    file,
+                    "pnm contexts bootstrap --id {context} --name {name} --recipient {file}",
                 );
                 if !self.admin_label.is_empty() {
-                    cmd.push_str(&format!(" --admin-label \"{}\"", self.admin_label));
+                    let label = sh_quote(&self.admin_label);
+                    cmd.push_str(&format!(" --admin-label {label}"));
                 }
                 cmd
             }
@@ -505,19 +603,67 @@ impl SealedHandoffState {
                 // the context on the VTA host) without penalising
                 // re-runs.
                 "vta bootstrap provision-integration \
-                 --request {} \
-                 --context {} \
+                 --request {file} \
+                 --context {context} \
                  --create-context \
                  --assertion pinned-only \
                  --out bundle.armor",
-                file, self.context_id,
             ),
             VtaIntent::OfflineExport => format!(
                 "vta contexts reprovision \
-                 --id {} \
-                 --recipient {} \
+                 --id {context} \
+                 --recipient {file} \
                  --out bundle.armor",
-                self.context_id, file,
+            ),
+        }
+    }
+
+    /// `pnm`-flavour producer command for the current intent — what an
+    /// operator with an authenticated `pnm` session against the live
+    /// VTA runs. Verified against pnm-cli's `BootstrapCommands` /
+    /// `ContextCommands` enums (no `--out` on `pnm contexts
+    /// {bootstrap,reprovision}` — the bundle is emitted on stdout, so
+    /// the operator redirects with `> bundle.armor`).
+    ///
+    /// **AdminOnly** — same shape as `primary_command()`: `pnm contexts
+    /// bootstrap --id <ctx> --name "<name>" [--admin-label "<label>"]
+    /// --recipient <path>`.
+    ///
+    /// **FullSetup** — `pnm bootstrap provision-integration --request
+    /// <path> --context <ctx> --assertion pinned-only --out
+    /// bundle.armor`. No `--create-context` (pnm-cli doesn't accept it
+    /// — the context is expected to exist on the VTA already, or the
+    /// request's `contextHint` is used).
+    ///
+    /// **OfflineExport** — `pnm contexts reprovision --id <ctx>
+    /// --recipient <path> > bundle.armor`. Stdout redirect because the
+    /// pnm subcommand has no `--out` flag.
+    pub fn pnm_command(&self) -> String {
+        let file = sh_quote(&self.request_file_display());
+        let context = sh_quote(&self.context_id);
+        match self.intent {
+            VtaIntent::AdminOnly => self.primary_command(),
+            VtaIntent::FullSetup => format!(
+                // `--create-context` is idempotent on pnm-cli: the
+                // server treats an existing context as a no-op (and
+                // surfaces `context_created` in the response summary
+                // so the operator sees whether the create fired).
+                // Always emitting it covers the first-run case
+                // (context not yet on the VTA) without penalising
+                // re-runs. Mirrors the offline `vta bootstrap
+                // provision-integration --create-context` shape.
+                "pnm bootstrap provision-integration \
+                 --request {file} \
+                 --context {context} \
+                 --create-context \
+                 --assertion pinned-only \
+                 --out bundle.armor",
+            ),
+            VtaIntent::OfflineExport => format!(
+                "pnm contexts reprovision \
+                 --id {context} \
+                 --recipient {file} \
+                 > bundle.armor",
             ),
         }
     }
@@ -534,17 +680,18 @@ impl SealedHandoffState {
     /// being managed out-of-band (key escrow, separate admin
     /// workstation, principle-of-least-privilege deployments).
     pub fn fallback_command(&self) -> Option<String> {
+        let file = sh_quote(&self.request_file_display());
         match self.intent {
             VtaIntent::AdminOnly => Some(format!(
-                "vta bootstrap seal --request {} --payload <ADMIN_CREDENTIAL_JSON> --out bundle.armor",
-                self.request_file_display(),
+                "vta bootstrap seal --request {file} --payload <ADMIN_CREDENTIAL_JSON> --out bundle.armor",
             )),
             VtaIntent::FullSetup => None,
-            VtaIntent::OfflineExport => Some(format!(
-                "vta keys bundle --context {} --recipient {} --out bundle.armor",
-                self.context_id,
-                self.request_file_display(),
-            )),
+            VtaIntent::OfflineExport => {
+                let context = sh_quote(&self.context_id);
+                Some(format!(
+                    "vta keys bundle --context {context} --recipient {file} --out bundle.armor",
+                ))
+            }
         }
     }
 
@@ -583,6 +730,40 @@ impl SealedHandoffState {
     /// across re-renders since the nonce is constant for the run.
     pub fn nonce_display(&self) -> String {
         B64URL.encode(self.nonce)
+    }
+
+    /// Zero every secret-bearing field. Called from `Drop` (so every
+    /// exit path runs it) and exposed as `pub` so tests can verify
+    /// the zeroizer touches each field — calling `Drop::drop`
+    /// manually isn't allowed, and reading post-drop memory is
+    /// unsound, so this is the only way to assert the contract
+    /// without UB.
+    pub fn zeroize_secrets(&mut self) {
+        self.recipient_secret.zeroize();
+        self.seed_bytes.zeroize();
+        self.nonce.zeroize();
+    }
+}
+
+/// Zero the ephemeral HPKE seed, X25519 recipient secret, and bundle
+/// nonce when the sub-flow exits — success, error, or
+/// `sealed_handoff_back` cleanup all funnel through here.
+///
+/// `recipient_secret` was previously zeroed only on the back path
+/// (`app::WizardApp::sealed_handoff_back`); the success path moved the
+/// session out and dropped the rest, leaving the secret bytes in heap
+/// memory until the allocator overwrote them. `seed_bytes` was never
+/// zeroed at all. A core-dump or swap-leak after a successful run
+/// could recover both, and combined with a captured bundle ciphertext
+/// would unseal the admin credential. Zeroing in `Drop` closes that
+/// window for every exit path uniformly.
+///
+/// `Zeroize::zeroize` writes a fence-protected pattern that the
+/// compiler can't optimise away, then commits with a memory barrier —
+/// stronger than `[0u8; N]` assignment.
+impl Drop for SealedHandoffState {
+    fn drop(&mut self) {
+        self.zeroize_secrets();
     }
 }
 
@@ -854,6 +1035,53 @@ pub fn open_with_digest(
     Ok(())
 }
 
+/// POSIX shell single-quote escaping for operator-supplied fields
+/// interpolated into the rendered producer commands.
+///
+/// The wizard tells the operator to *paste these strings into a
+/// shell* on the VTA host. A `context_id` of `mediator"; rm -rf /;
+/// echo "` would, without escaping, result in a command that runs
+/// arbitrary code as the VTA admin. Single-quote wrapping is the
+/// right primitive: inside `'…'` POSIX disables every special
+/// character except `'` itself, which we replace with `'\''`
+/// (close-quote, escaped single-quote, re-open-quote).
+///
+/// Strings that contain no shell metacharacters and aren't empty
+/// pass through unchanged so test assertions and operator-readable
+/// output don't sprout spurious quotes around `bootstrap-request.json`
+/// / `prod-mediator` / similar plain values.
+fn sh_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    // Conservative allowlist — every byte outside of these needs
+    // single-quote wrapping. Matches the set commonly considered
+    // "shell-safe" (alphanumerics + a small set of punctuation that
+    // never has special meaning in any POSIX shell context).
+    let safe = |b: u8| -> bool {
+        b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-' | b'_'
+            )
+    };
+    if s.bytes().all(safe) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            // Close-quote, escape a literal single-quote, re-open-quote.
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Decode a base64url-no-pad VP nonce string back to the 16-byte
 /// sealed-bundle id. Mirrors the SDK's `pub(crate)` helper
 /// (`vta_sdk::provision_client::result::decode_nonce_b64url`) — kept
@@ -907,6 +1135,7 @@ fn provision_from_template_payload(payload: TemplateBootstrapPayload) -> Provisi
         webvh_server_id: None,
         secret_count: payload.secrets.len(),
         output_count: payload.config.outputs.len(),
+        context_created: false,
     };
     ProvisionResult {
         bundle_id_hex: String::new(),
@@ -983,6 +1212,78 @@ mod tests {
     }
 
     #[test]
+    fn sh_quote_passes_alphanumeric_through_unchanged() {
+        // Plain values pass through so test assertions and operator-
+        // facing output don't sprout spurious quotes around safe
+        // strings.
+        for s in [
+            "prod-mediator",
+            "bootstrap-request.json",
+            "mediator/v1",
+            "abc123",
+            "host:port",
+            "label_with_underscore",
+            "tag=value",
+        ] {
+            assert_eq!(sh_quote(s), s, "safe value should not be quoted: {s}");
+        }
+    }
+
+    #[test]
+    fn sh_quote_wraps_special_chars_in_single_quotes() {
+        // Strings containing whitespace, glob metas, or shell control
+        // characters must be wrapped.
+        assert_eq!(sh_quote("a b"), "'a b'");
+        assert_eq!(sh_quote("Mediator (prod)"), "'Mediator (prod)'");
+        assert_eq!(sh_quote("tag*"), "'tag*'");
+        assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn sh_quote_neutralises_command_substitution() {
+        // The wizard renders these strings into commands the operator
+        // pastes into a shell on the VTA host. Without escaping, a
+        // hostile context_id like `mediator"; rm -rf ~; echo "` would
+        // execute arbitrary code as the VTA admin. Single-quote
+        // wrapping with `'\''` escape for embedded single quotes is
+        // the POSIX-safe primitive — `$()`, backticks, `;`, `&`,
+        // `>`, `|`, and double quotes all become literal.
+        let hostile = r#"mediator"; rm -rf ~; echo ""#;
+        let q = sh_quote(hostile);
+        assert!(q.starts_with('\''));
+        assert!(q.ends_with('\''));
+        // Crucially, the `;` and `"` no longer terminate the surrounding
+        // shell context — they're inside a single-quoted block.
+        assert!(q.contains(r#"mediator"; rm -rf ~; echo ""#));
+        // Embedded single-quote test: `'$()'` must round-trip via the
+        // POSIX `'\''` close-and-reopen idiom, not get truncated.
+        let with_squote = "it's a test '$(rm -rf /)'";
+        let q = sh_quote(with_squote);
+        // Each `'` in the input becomes `'\''` (close, escaped quote,
+        // reopen) — three occurrences in input → three escapes in output.
+        assert_eq!(q.matches(r"'\''").count(), 3);
+    }
+
+    #[test]
+    fn primary_command_quotes_hostile_context_id() {
+        // Regression: a hostile recipe-supplied / TUI-typed context id
+        // must not break out of the rendered command. The wrapped
+        // output keeps the malicious shell metacharacters inert when
+        // the operator pastes it.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.context_id = r#"x"; rm -rf ~; echo ""#.into();
+        state.finalize_request().unwrap();
+        let cmd = state.primary_command();
+        // The full hostile string lives inside a single-quoted block;
+        // the surrounding `'…'` stops `;` and `"` from being shell-
+        // interpreted.
+        assert!(cmd.contains(r#"--id 'x"; rm -rf ~; echo "'"#));
+        // Sanity: command structure is preserved.
+        assert!(cmd.starts_with("pnm contexts bootstrap"));
+        assert!(cmd.contains("--recipient bootstrap-request.json"));
+    }
+
+    #[test]
     fn admin_only_primary_command_uses_collected_context_and_label() {
         let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
         state.context_id = "prod-mediator".into();
@@ -990,10 +1291,15 @@ mod tests {
         state.finalize_request().unwrap();
         let cmd = state.primary_command();
         assert!(cmd.starts_with("pnm contexts bootstrap"));
+        // Plain alphanumeric values pass through `sh_quote` unchanged.
         assert!(cmd.contains("--id prod-mediator"));
-        assert!(cmd.contains("--name \"Mediator (prod-mediator)\""));
-        assert!(cmd.contains("--admin-label \"staff\""));
+        assert!(cmd.contains("--admin-label staff"));
         assert!(cmd.contains("--recipient bootstrap-request.json"));
+        // The display name has spaces + parens, so `sh_quote` wraps
+        // it in single quotes (the POSIX-safe escape) rather than
+        // the prior double-quote rendering. Both work in bash; only
+        // single-quotes are robust to embedded `$(...)` / backticks.
+        assert!(cmd.contains("--name 'Mediator (prod-mediator)'"));
         // No fabricated payload kind — regression check against the
         // broken pre-Slice-2 command.
         assert!(!cmd.contains("mediator-admin-credential"));
@@ -1039,6 +1345,81 @@ mod tests {
         assert!(cmd.contains("--out bundle.armor"));
         // Sanity: FullSetup has no fallback.
         assert!(state.fallback_command().is_none());
+    }
+
+    #[test]
+    fn zeroize_secrets_clears_recipient_seed_and_nonce() {
+        // Regression: every secret-bearing field on SealedHandoffState
+        // must be zeroed by `zeroize_secrets`, which `Drop::drop`
+        // delegates to. Calling Drop directly isn't allowed and reading
+        // post-drop memory is unsound, so we test the helper. As long
+        // as Drop calls this method, the contract holds end-to-end.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.recipient_secret = [0x42u8; 32];
+        state.seed_bytes = [0x69u8; 32];
+        state.nonce = [0xABu8; 16];
+
+        state.zeroize_secrets();
+
+        assert_eq!(
+            state.recipient_secret, [0u8; 32],
+            "recipient_secret must be all zeroes",
+        );
+        assert_eq!(state.seed_bytes, [0u8; 32], "seed_bytes must be all zeroes");
+        assert_eq!(state.nonce, [0u8; 16], "nonce must be all zeroes");
+    }
+
+    #[test]
+    fn admin_only_pnm_command_matches_primary() {
+        // AdminOnly's primary is already a `pnm` command — `[p]` and
+        // `[v]` should produce the same text so the operator never
+        // gets a confusing surprise.
+        let mut state = SealedHandoffState::new(VtaIntent::AdminOnly, None);
+        state.context_id = "prod-mediator".into();
+        state.admin_label = "staff".into();
+        state.finalize_request().unwrap();
+        assert_eq!(state.pnm_command(), state.primary_command());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_pnm_command_uses_pnm_bootstrap_subcommand() {
+        // Regression: `[p]` used to alias `[v]` and emit the `vta …`
+        // command. The pnm-cli equivalent is `pnm bootstrap
+        // provision-integration` (verified against pnm-cli's
+        // `BootstrapCommands::ProvisionIntegration` arg list).
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.context_id = "prod-mediator".into();
+        state.finalize_request().unwrap();
+        let cmd = state.pnm_command();
+        assert!(cmd.starts_with("pnm bootstrap provision-integration"));
+        assert!(cmd.contains("--request bootstrap-request-vp.json"));
+        assert!(cmd.contains("--context prod-mediator"));
+        assert!(cmd.contains("--out bundle.armor"));
+        // pnm-cli now accepts `--create-context` (idempotent server
+        // side); the wizard always emits it so first-run against a
+        // fresh context succeeds without a manual `pnm contexts create`
+        // pre-step.
+        assert!(cmd.contains("--create-context"));
+        // Sanity: must not be the `vta` flavour.
+        assert!(!cmd.contains("vta bootstrap"));
+    }
+
+    #[test]
+    fn offline_export_pnm_command_uses_pnm_contexts_reprovision() {
+        // pnm-cli's `ContextCommands::Reprovision` has no `--out`
+        // flag — the bundle is emitted on stdout, so the rendered
+        // command redirects with `>`.
+        let mut state = SealedHandoffState::new(VtaIntent::OfflineExport, None);
+        state.context_id = "prod-mediator".into();
+        state.finalize_request().unwrap();
+        let cmd = state.pnm_command();
+        assert!(cmd.starts_with("pnm contexts reprovision"));
+        assert!(cmd.contains("--id prod-mediator"));
+        assert!(cmd.contains("--recipient bootstrap-request.json"));
+        assert!(cmd.contains("> bundle.armor"));
+        assert!(!cmd.contains("--out"));
+        assert!(!cmd.contains("vta contexts"));
     }
 
     #[test]
@@ -1102,6 +1483,64 @@ mod tests {
         assert!(
             !state.request_json.contains("WEBVH_SERVER"),
             "blank webvh_server should omit the template var entirely"
+        );
+        // No server → no path either.
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "blank webvh_server should also omit WEBVH_PATH"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_webvh_path_appears_in_vp_when_server_set() {
+        // When both webvh_server and webvh_path are set, the VP must
+        // carry `WEBVH_PATH` so the VTA forwards it to the chosen
+        // server's `request_uri`.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = "prod-1".into();
+        state.webvh_path = "acme-mediator".into();
+        state.finalize_request().unwrap();
+        assert!(
+            state.request_json.contains("\"WEBVH_PATH\""),
+            "WEBVH_PATH template var missing from VP: {}",
+            state.request_json
+        );
+        assert!(
+            state.request_json.contains("\"acme-mediator\""),
+            "resolved webvh path missing from VP: {}",
+            state.request_json
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_webvh_path_dropped_when_server_blank() {
+        // Path without a server is meaningless (self-host derives the
+        // path from URL). The VP must omit `WEBVH_PATH` entirely.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = String::new();
+        state.webvh_path = "stray-mnemonic".into();
+        state.finalize_request().unwrap();
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "WEBVH_PATH must be dropped when no server is set: {}",
+            state.request_json
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn full_setup_omits_webvh_path_when_blank() {
+        // Server set but path empty → server auto-assigns. VP must
+        // not carry `WEBVH_PATH` so the VTA defers to the server.
+        let mut state = SealedHandoffState::new(VtaIntent::FullSetup, None)
+            .with_mediator_url("https://mediator.example.com");
+        state.webvh_server = "prod-1".into();
+        state.finalize_request().unwrap();
+        assert!(state.request_json.contains("\"WEBVH_SERVER\""));
+        assert!(
+            !state.request_json.contains("WEBVH_PATH"),
+            "blank webvh_path should omit the template var entirely"
         );
     }
 

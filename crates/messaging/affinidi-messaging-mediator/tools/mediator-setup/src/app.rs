@@ -57,7 +57,7 @@ impl WizardStep {
             Self::Protocol => "Protocol",
             Self::Did => "DID Configuration",
             Self::KeyStorage => "Key Storage",
-            Self::Security => "SSL/TLS & JWT",
+            Self::Security => "Security",
             Self::Database => "Database",
             Self::Admin => "Admin Account",
             Self::Output => "Output Location",
@@ -128,8 +128,10 @@ impl WizardStep {
                 description: "Where should cryptographic keys be stored?".into(),
             },
             Self::Security => StepData {
-                title: format!("Step {num}/{total}: SSL/TLS & JWT"),
-                description: "Configure transport security and authentication tokens.".into(),
+                title: format!("Step {num}/{total}: Security"),
+                description: "TLS termination, JWT signing, and the mediator's \
+                              network access posture (Open vs Closed)."
+                    .into(),
             },
             Self::Database => StepData {
                 title: format!("Step {num}/{total}: Storage Backend"),
@@ -206,6 +208,11 @@ pub enum KeyStoragePhase {
     /// can derive its key when `MediatorSecrets::from_url` is called
     /// in `generate_and_write`.
     FilePassphrase,
+    /// `file://` — re-enter the passphrase to guard against typos. The
+    /// first input is stashed on `WizardApp::pending_passphrase`; this
+    /// phase compares against it and either advances (match) or bounces
+    /// back to [`Self::FilePassphrase`] with an inline error (mismatch).
+    FilePassphraseConfirm,
     /// `keyring://` — prompt for the OS-keyring service name.
     KeyringService,
     /// `aws_secrets://` — first prompt: AWS region.
@@ -259,18 +266,29 @@ pub enum SecurityPhase {
     /// Choose between generating a fresh JWT signing key or providing
     /// one out-of-band via env var / `--jwt-secret-file` at boot.
     JwtMode,
+    /// Pick the mediator's network posture — Open (any DID can message
+    /// any other; per-DID overrides flip individual flags) vs Closed
+    /// (every cross-DID exchange needs an explicit ACL grant). Renders
+    /// after `JwtMode` and before the step advances to `Database`.
+    NetworkMode,
 }
 
-/// Sub-phases of the `Database` step. The wizard now asks two
+/// Sub-phases of the `Database` step. The wizard now asks up to three
 /// questions: first which storage backend (Redis vs Fjall), then a
-/// backend-specific URL/path. `None` means we're past the selection
-/// and the text-input widget is active.
+/// backend-specific URL/path, and (Fjall only) — when the path doesn't
+/// yet exist on disk — whether to create it now. `None` means the
+/// text-input widget is active.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabasePhase {
     /// Choose between `redis` and `fjall`. After confirm the wizard
     /// transitions to a backend-specific text-input phase
     /// (represented by `database_phase = None` + `InputMode::TextInput`).
     SelectBackend,
+    /// Fjall-only: text input was confirmed against a path that doesn't
+    /// exist yet. Selection list of "Yes — create now" / "No — edit
+    /// path". Yes runs `fs::create_dir_all` and advances; No goes back
+    /// to the text-input phase.
+    ConfirmCreateFjallDir,
 }
 
 /// Sub-phases of the top-level `Vta` step picker (before any of the
@@ -366,21 +384,31 @@ pub struct WizardConfig {
     /// phase; read by `generate_and_write` when it calls the VTA's
     /// `create_did_webvh`.
     pub vta_webvh_server_id: Option<String>,
-    /// Optional mnemonic (URL path segment) when using a hosted
-    /// server. `None` = VTA auto-assigns.
-    pub vta_webvh_mnemonic: Option<String>,
+    /// Optional DID path / mnemonic (URL path segment) when using a
+    /// hosted server. `None` = VTA auto-assigns. Mirrors the recipe's
+    /// `[vta].webvh_path` and `SealedHandoffState::webvh_path`; was
+    /// previously named `vta_webvh_path` (one of three names for
+    /// the same concept) — the consistent name is `path`.
+    pub vta_webvh_path: Option<String>,
     /// Self-host base URL — defaults to the stripped mediator URL.
     /// Only meaningful when `vta_webvh_server_id` is `None`.
     pub vta_webvh_self_host_url: String,
     /// `generate` (default) or `provide`. See [`crate::consts::JWT_MODE_GENERATE`].
     pub jwt_mode: String,
+    /// Network posture written to `[security]`: `"open"` (default —
+    /// any DID can message any other; per-DID overrides flip
+    /// individual flags) or `"closed"` (every cross-DID exchange needs
+    /// an explicit ACL grant). Drives the trio of `mediator_acl_mode`,
+    /// `global_acl_default`, and `local_direct_delivery_allowed` that
+    /// `config_writer::write_config` emits.
+    pub network_mode: String,
     pub database_url: String,
     /// Storage backend the generated `mediator.toml` selects:
     /// `"redis"` (default) or `"fjall"`. Mirrors `[storage].backend`
     /// in the recipe shape and the rendered config.
     pub storage_backend: String,
     /// On-disk path for the Fjall data directory. Only meaningful
-    /// when `storage_backend == "fjall"`.
+    /// when `storage_backend == crate::consts::STORAGE_BACKEND_FJALL`.
     pub fjall_data_dir: String,
     pub admin_did_mode: String,
     pub listen_address: String,
@@ -427,20 +455,23 @@ impl WizardConfig {
         }
 
         features.push(match self.storage_backend.as_str() {
-            "fjall" => "fjall-backend",
+            crate::consts::STORAGE_BACKEND_FJALL => "fjall-backend",
             // Anything else (incl. blank legacy recipes) → redis. The
-            // recipe parser also defaults to "redis", so this branch
+            // recipe parser also defaults to redis, so this branch
             // primarily covers WizardConfig::default() before the
             // Database step has run.
             _ => "redis-backend",
         });
 
+        // Route through the canonical `STORAGE_*` constants rather
+        // than re-typing the URL prefixes — keeps this in lockstep
+        // with `consts.rs` if a scheme prefix ever changes.
         match self.secret_storage.as_str() {
-            "keyring://" => features.push("secrets-keyring"),
-            "aws_secrets://" => features.push("secrets-aws"),
-            "gcp_secrets://" => features.push("secrets-gcp"),
-            "azure_keyvault://" => features.push("secrets-azure"),
-            "vault://" => features.push("secrets-vault"),
+            STORAGE_KEYRING => features.push("secrets-keyring"),
+            STORAGE_AWS => features.push("secrets-aws"),
+            STORAGE_GCP => features.push("secrets-gcp"),
+            STORAGE_AZURE => features.push("secrets-azure"),
+            STORAGE_VAULT => features.push("secrets-vault"),
             _ => {}
         }
 
@@ -485,17 +516,45 @@ impl Default for WizardConfig {
             ssl_cert_path: String::new(),
             ssl_key_path: String::new(),
             vta_webvh_server_id: None,
-            vta_webvh_mnemonic: None,
+            vta_webvh_path: None,
             vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
+            network_mode: crate::consts::DEFAULT_NETWORK_MODE.into(),
             database_url: DEFAULT_REDIS_URL.into(),
-            storage_backend: "redis".into(),
-            fjall_data_dir: "./data/mediator".into(),
+            storage_backend: crate::consts::DEFAULT_STORAGE_BACKEND.into(),
+            fjall_data_dir: crate::consts::DEFAULT_FJALL_DATA_DIR.into(),
             admin_did_mode: String::new(),
             listen_address: DEFAULT_LISTEN_ADDR.into(),
             api_prefix: DEFAULT_API_PREFIX.into(),
         }
     }
+}
+
+/// Safety-check for the Fjall data-directory text input. Rejects only
+/// the cases that would unambiguously fail at startup:
+///
+///   * Empty input — there's no path to open.
+///   * A path that already exists but is a regular file, symlink to a
+///     non-directory, or other non-directory entry — fjall would error
+///     opening it.
+///
+/// Anything else passes. Fjall calls `std::fs::create_dir_all` on the
+/// configured path (`fjall-3.1.4/keyspace/mod.rs:335`), so missing
+/// parent directories are created automatically; pre-flighting them
+/// here used to reject the wizard's own default (`./data/mediator`)
+/// when the parent `./data` was absent on a fresh install.
+pub(crate) fn validate_fjall_data_dir(path: &str) -> Result<(), String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Fjall data directory path cannot be empty.".into());
+    }
+    let p = std::path::Path::new(trimmed);
+    if p.exists() && !p.is_dir() {
+        return Err(format!(
+            "'{trimmed}' exists but is not a directory — pick another path.",
+        ));
+    }
+    Ok(())
 }
 
 /// The main wizard application state.
@@ -584,12 +643,32 @@ pub struct WizardApp {
     /// (vta_connect / sealed_handoff) carry their own equivalent
     /// fields. Reset on phase transitions away from Summary.
     pub clipboard_status: Option<String>,
+    /// Inline validation error surfaced in the Database step's info
+    /// box when the operator confirms a Fjall data-directory path
+    /// whose parent is missing or whose target is not a directory.
+    /// Cleared on a successful confirm or when the operator backs
+    /// out of the step.
+    pub database_validation_error: Option<String>,
+    /// First passphrase typed on the [`KeyStoragePhase::FilePassphrase`]
+    /// screen. Held just long enough for the operator to retype it on
+    /// the [`KeyStoragePhase::FilePassphraseConfirm`] screen — cleared
+    /// on a successful match (after the env var is written) or on
+    /// mismatch (so the next attempt starts fresh). `Zeroizing<String>`
+    /// scrubs the heap allocation when the option is dropped.
+    pub pending_passphrase: Option<zeroize::Zeroizing<String>>,
+    /// Inline validation error surfaced under the file-backend
+    /// passphrase prompt when the confirm-typed value didn't match the
+    /// first entry. Cleared on the next successful match or when the
+    /// operator backs out of the sub-flow.
+    pub passphrase_validation_error: Option<String>,
 }
 
 impl WizardApp {
     pub fn new(config_path: String) -> Self {
-        let mut config = WizardConfig::default();
-        config.config_path = config_path;
+        let config = WizardConfig {
+            config_path,
+            ..WizardConfig::default()
+        };
         Self {
             current_step: WizardStep::Deployment,
             config,
@@ -617,6 +696,9 @@ impl WizardApp {
             discovery: None,
             discovery_rx: None,
             clipboard_status: None,
+            database_validation_error: None,
+            pending_passphrase: None,
+            passphrase_validation_error: None,
         }
     }
 
@@ -729,7 +811,8 @@ impl WizardApp {
             SealedPhase::CollectContext
             | SealedPhase::CollectAdminLabel
             | SealedPhase::CollectMediatorUrl
-            | SealedPhase::CollectWebvhServer => {
+            | SealedPhase::CollectWebvhServer
+            | SealedPhase::CollectWebvhPath => {
                 // These phases drive text-input; Enter goes through
                 // `sealed_handoff_confirm_text`, not here. The renderer
                 // only lands in `sealed_handoff_select` for these
@@ -844,6 +927,30 @@ impl WizardApp {
                 // against its server catalogue (unknown id → NotFound
                 // before any minting runs).
                 state.webvh_server = value.trim().to_string();
+                state.last_error = None;
+                if state.webvh_server.is_empty() {
+                    // Self-host — no server, no path. Finalise.
+                    if let Err(e) = state.finalize_request() {
+                        state.last_error = Some(e.to_string());
+                    } else {
+                        self.text_input = Input::default();
+                        self.mode = InputMode::Selecting;
+                    }
+                } else {
+                    // Server picked → ask for the optional DID path /
+                    // mnemonic before finalising.
+                    state.phase = SealedPhase::CollectWebvhPath;
+                    self.text_input = Input::new(state.webvh_path.clone());
+                }
+                true
+            }
+            SealedPhase::CollectWebvhPath => {
+                // Optional. Empty trims to "let the server auto-assign
+                // a mnemonic"; non-empty is forwarded to the VTA as
+                // `WEBVH_PATH` and on to the chosen webvh server's
+                // `request_uri` call.
+                state.webvh_path = value.trim().to_string();
+                state.last_error = None;
                 if let Err(e) = state.finalize_request() {
                     state.last_error = Some(e.to_string());
                 } else {
@@ -937,13 +1044,17 @@ impl WizardApp {
     }
 
     /// Esc/back from inside the sealed sub-flow. Drops the ephemeral
-    /// keypair (zeroed on Drop by `Zeroizing` upstream — but we copied
-    /// the secret out, so explicit `take()` clears the visible copy)
-    /// and returns to the Vta scheme list.
+    /// keypair — `SealedHandoffState`'s `Drop` impl zeroes
+    /// `recipient_secret`, `seed_bytes`, and `nonce` automatically, so
+    /// the explicit `take()` is enough; no manual `.fill(0)` needed.
     fn sealed_handoff_back(&mut self) {
-        if let Some(mut state) = self.sealed_handoff.take() {
-            state.recipient_secret.fill(0);
-        }
+        // Take the state out; the moved-out value drops at end of
+        // scope and runs `SealedHandoffState::drop` which zeroes all
+        // three secret-bearing fields. Behaviour is now uniform with
+        // the success path (which also drops the state) — previously
+        // only the back path zeroed `recipient_secret`, and
+        // `seed_bytes` was never zeroed at all.
+        let _state = self.sealed_handoff.take();
         self.config.use_vta = false;
         self.config.vta_mode = String::new();
         self.mode = InputMode::Selecting;
@@ -1757,6 +1868,28 @@ impl WizardApp {
                 description: desc.into(),
             };
         }
+        // Database step: override the generic backend-picker title
+        // when the wizard is in the create-directory confirmation
+        // sub-phase, so the operator doesn't see "Choose between
+        // Redis and Fjall" while the screen is asking a different
+        // question entirely. Leading `\u{26A0}` (⚠) signals the
+        // warning posture without restyling the whole renderer.
+        if self.current_step == WizardStep::Database
+            && self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir)
+        {
+            let num = self.current_step.step_number();
+            let total = WizardStep::total();
+            return StepData {
+                title: format!(
+                    "Step {num}/{total}: Storage Backend — \u{26A0} Fjall directory missing"
+                ),
+                description: format!(
+                    "\u{26A0} The Fjall data directory '{}' does not exist yet. \
+                     Create it now or go back and edit the path.",
+                    self.config.fjall_data_dir,
+                ),
+            };
+        }
         default
     }
 
@@ -2090,7 +2223,21 @@ impl WizardApp {
                 ]
             }
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    // Order matches the wizard default — Open is index 0
+                    // so the operator's first Enter confirms the recommended
+                    // posture without re-selecting.
+                    vec![
+                        SelectionOption::new(
+                            "Open network (default)",
+                            "Any DID can message any other DID by default. Override on a per-DID basis via the ACL.",
+                        ),
+                        SelectionOption::new(
+                            "Closed network",
+                            "Restricted: explicit ACL grant required before two DIDs can exchange messages.",
+                        ),
+                    ]
+                } else if self.security_phase == Some(SecurityPhase::JwtMode) {
                     vec![
                         SelectionOption::new(
                             "Generate a fresh JWT signing key (recommended)",
@@ -2122,7 +2269,9 @@ impl WizardApp {
                 // The backend-picker phase shows two options; once
                 // the operator confirms, the step transitions to a
                 // text-input phase (URL or path) and `selection_options`
-                // is no longer consulted.
+                // is no longer consulted. ConfirmCreateFjallDir runs
+                // a Yes/No selection list when the operator confirmed
+                // a Fjall path that doesn't exist on disk yet.
                 if self.database_phase == Some(DatabasePhase::SelectBackend) {
                     vec![
                         SelectionOption::new(
@@ -2132,6 +2281,18 @@ impl WizardApp {
                         SelectionOption::new(
                             "Fjall",
                             "Embedded LSM store — single-node, no Redis sidecar",
+                        ),
+                    ]
+                } else if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    vec![
+                        SelectionOption::new(
+                            "Yes — create the directory now",
+                            "Wizard runs `fs::create_dir_all` so any permission / \
+                             filesystem errors surface here, not on first mediator boot.",
+                        ),
+                        SelectionOption::new(
+                            "No — go back and edit the path",
+                            "Returns to the path-input screen so you can retype.",
                         ),
                     ]
                 } else {
@@ -2270,17 +2431,36 @@ impl WizardApp {
                     }
                 }
             }
-            WizardStep::KeyStorage => match self.selection_index {
-                0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
-                1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
-                2 => "Store secrets in Google Cloud Secret Manager. Auth via Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / `gcloud auth application-default login` / GKE workload identity).".into(),
-                3 => "Store secrets in Azure Key Vault. Auth via Azure CLI / azd developer credentials (`az login`). Sovereign clouds supported via full DNS in the vault field.".into(),
-                4 => "Store secrets in HashiCorp Vault (KV v2). Token auth via VAULT_TOKEN env var. The mount point must already exist on the server.".into(),
-                5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
-                _ => String::new(),
-            },
+            WizardStep::KeyStorage => {
+                // Validation errors take priority — the operator just
+                // had a passphrase mismatch and needs to see why their
+                // Enter sent them back a screen.
+                if matches!(
+                    self.key_storage_phase,
+                    Some(KeyStoragePhase::FilePassphrase)
+                        | Some(KeyStoragePhase::FilePassphraseConfirm)
+                ) && let Some(ref err) = self.passphrase_validation_error
+                {
+                    return err.clone();
+                }
+                match self.selection_index {
+                    0 => "Uses the OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager). Good for desktop development and single-host servers.".into(),
+                    1 => "Store secrets in AWS Secrets Manager. Requires AWS credentials configured. Suitable for AWS production.".into(),
+                    2 => "Store secrets in Google Cloud Secret Manager. Auth via Application Default Credentials (GOOGLE_APPLICATION_CREDENTIALS / `gcloud auth application-default login` / GKE workload identity).".into(),
+                    3 => "Store secrets in Azure Key Vault. Auth via Azure CLI / azd developer credentials (`az login`). Sovereign clouds supported via full DNS in the vault field.".into(),
+                    4 => "Store secrets in HashiCorp Vault (KV v2). Token auth via VAULT_TOKEN env var. The mount point must already exist on the server.".into(),
+                    5 => "Secrets written to conf/secrets.json as plaintext. DEV ONLY — anyone with file access can read the private keys. The wizard will require an explicit confirmation before accepting this choice.".into(),
+                    _ => String::new(),
+                }
+            }
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::JwtMode) {
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    match self.selection_index {
+                        0 => "Open mode emits `mediator_acl_mode = \"explicit_deny\"`, `global_acl_default = \"ALLOW_ALL\"`, and `local_direct_delivery_allowed = \"true\"`. Any DID may reach any other by default; use the ACL to deny on a per-DID basis.".into(),
+                        1 => "Closed mode keeps the historical posture: `mediator_acl_mode = \"explicit_allow\"` with a denying default ACL. Every cross-DID exchange requires an explicit ACL grant. Pick this for restricted or invitation-only deployments.".into(),
+                        _ => String::new(),
+                    }
+                } else if self.security_phase == Some(SecurityPhase::JwtMode) {
                     match self.selection_index {
                         0 => "The wizard generates a 32-byte Ed25519 PKCS8 keypair and writes it into the unified secret backend at the well-known key `mediator/jwt/secret`. The mediator picks it up at startup with no further config.".into(),
                         1 => "The wizard records your choice but does NOT generate or prompt for a key. Before starting the mediator, set MEDIATOR_JWT_SECRET (raw PKCS8 bytes, base64-encoded) or pass --jwt-secret-file <path>. Choose this when CI/CD already issues JWT keys or when an HSM holds them.".into(),
@@ -2302,8 +2482,27 @@ impl WizardApp {
                         1 => "Fjall: single-node embedded LSM. No Redis sidecar — data lives on disk under data_dir. Recommended for self-hosted deployments and operators who want fewer moving parts.".into(),
                         _ => String::new(),
                     }
-                } else if self.config.storage_backend == "fjall" {
-                    "Path on disk where Fjall will keep its data directory. Created if absent. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
+                } else if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    // Validation errors take priority — they're how
+                    // we surface a `create_dir_all` failure (permission
+                    // denied, etc.) after the operator picked Yes.
+                    if let Some(ref err) = self.database_validation_error {
+                        return err.clone();
+                    }
+                    format!(
+                        "The path '{}' does not exist yet. \
+                         Yes runs `std::fs::create_dir_all` immediately so any \
+                         permission / filesystem errors surface here rather than \
+                         on first mediator boot. No goes back so you can retype.",
+                        self.config.fjall_data_dir,
+                    )
+                } else if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                    // Validation errors override the default hint so
+                    // the operator sees why Enter didn't advance.
+                    if let Some(ref err) = self.database_validation_error {
+                        return err.clone();
+                    }
+                    "Path on disk where Fjall will keep its data directory. Wizard asks before creating if missing. Use a persistent volume (or a host bind-mount) when running in Docker.".into()
                 } else {
                     "Redis connection URL. Use database partitions (e.g. redis://127.0.0.1/1) to isolate data when sharing a Redis instance.".into()
                 }
@@ -2564,17 +2763,27 @@ impl WizardApp {
                 }
             }
             WizardStep::Security => {
-                // Two-phase step: SSL first, then JWT mode. The JWT
-                // sub-phase reuses `selection_index` for its own
-                // 2-option pick.
+                // Three-phase step: SSL → JWT mode → Network mode. Each
+                // sub-phase reuses `selection_index` for its own pick;
+                // the last one (NetworkMode) is what finally advances
+                // to `Database`.
+                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                    self.config.network_mode = match self.selection_index {
+                        0 => crate::consts::NETWORK_MODE_OPEN.into(),
+                        1 => crate::consts::NETWORK_MODE_CLOSED.into(),
+                        _ => return,
+                    };
+                    self.security_phase = None;
+                    self.advance();
+                    return;
+                }
                 if self.security_phase == Some(SecurityPhase::JwtMode) {
                     self.config.jwt_mode = match self.selection_index {
                         0 => JWT_MODE_GENERATE.into(),
                         1 => JWT_MODE_PROVIDE.into(),
                         _ => return,
                     };
-                    self.security_phase = None;
-                    self.advance();
+                    self.enter_network_mode_phase();
                     return;
                 }
                 self.config.ssl_mode = match self.selection_index {
@@ -2593,23 +2802,57 @@ impl WizardApp {
                 self.enter_jwt_mode_phase();
             }
             WizardStep::Database => {
+                // ConfirmCreateFjallDir: Yes (0) runs `create_dir_all`
+                // and advances; No (1) sends the operator back to the
+                // path-input screen so they can retype. A failure
+                // running `create_dir_all` surfaces as
+                // `database_validation_error` and re-routes back to
+                // text input so the operator sees the OS error.
+                if self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir) {
+                    match self.selection_index {
+                        0 => match std::fs::create_dir_all(&self.config.fjall_data_dir) {
+                            Ok(()) => {
+                                self.database_phase = None;
+                                self.database_validation_error = None;
+                                self.advance();
+                            }
+                            Err(e) => {
+                                self.database_phase = None;
+                                self.database_validation_error = Some(format!(
+                                    "Couldn't create '{}': {e}",
+                                    self.config.fjall_data_dir,
+                                ));
+                                self.mode = InputMode::TextInput;
+                                self.text_input = Input::new(self.config.fjall_data_dir.clone());
+                            }
+                        },
+                        1 => {
+                            self.database_phase = None;
+                            self.mode = InputMode::TextInput;
+                            self.text_input = Input::new(self.config.fjall_data_dir.clone());
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 // First phase: backend picker. Confirming this branch
                 // sets `storage_backend` and transitions to the
                 // backend-specific text-input phase. The text-input
                 // confirm path then writes either `database_url` (Redis)
                 // or `fjall_data_dir` (Fjall).
                 self.config.storage_backend = match self.selection_index {
-                    0 => "redis".into(),
-                    1 => "fjall".into(),
+                    0 => crate::consts::STORAGE_BACKEND_REDIS.into(),
+                    1 => crate::consts::STORAGE_BACKEND_FJALL.into(),
                     _ => return,
                 };
                 self.database_phase = None;
                 self.mode = InputMode::TextInput;
-                self.text_input = if self.config.storage_backend == "fjall" {
-                    Input::new(self.config.fjall_data_dir.clone())
-                } else {
-                    Input::new(self.config.database_url.clone())
-                };
+                self.text_input =
+                    if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                        Input::new(self.config.fjall_data_dir.clone())
+                    } else {
+                        Input::new(self.config.database_url.clone())
+                    };
             }
             WizardStep::Admin => {
                 // Options list is [generate, paste, (vta,) skip] with
@@ -2655,6 +2898,7 @@ impl WizardApp {
             // list rather than text input.
             KeyStoragePhase::FileGate => String::new(),
             KeyStoragePhase::FilePassphrase => String::new(),
+            KeyStoragePhase::FilePassphraseConfirm => String::new(),
             KeyStoragePhase::FilePath => self.config.secret_file_path.clone(),
             KeyStoragePhase::KeyringService => self.config.secret_keyring_service.clone(),
             KeyStoragePhase::AwsRegion => self.config.secret_aws_region.clone(),
@@ -2725,6 +2969,39 @@ impl WizardApp {
                     // is trivially brute-forceable.
                     return;
                 }
+                // Stash the first entry and ask the operator to retype
+                // it on the confirm screen. The actual env-var export
+                // (and step advance) happens after the confirm matches —
+                // catching typos here is the whole point of having a
+                // confirm step at all.
+                self.pending_passphrase = Some(zeroize::Zeroizing::new(value));
+                // Don't carry a stale "passphrases didn't match" error
+                // forward into the confirm screen.
+                self.passphrase_validation_error = None;
+                self.enter_key_storage_phase(KeyStoragePhase::FilePassphraseConfirm);
+            }
+            KeyStoragePhase::FilePassphraseConfirm => {
+                if value.is_empty() {
+                    // Same reasoning as the first prompt — empty input
+                    // shouldn't silently match an empty pending entry
+                    // (the FilePassphrase arm rejects empties).
+                    return;
+                }
+                let matched = self
+                    .pending_passphrase
+                    .as_ref()
+                    .map(|p| p.as_str() == value.as_str())
+                    .unwrap_or(false);
+                if !matched {
+                    // Drop the stash so a future attempt starts clean —
+                    // can't leak the first entry into the next try if
+                    // the operator backs out and re-enters.
+                    self.pending_passphrase = None;
+                    self.passphrase_validation_error =
+                        Some("Passphrases didn't match — please type the same value twice.".into());
+                    self.enter_key_storage_phase(KeyStoragePhase::FilePassphrase);
+                    return;
+                }
                 // Export to the env var the encrypted backend reads.
                 // The wizard process is short-lived; the env var dies
                 // with it. Operators who want persistence beyond the
@@ -2733,6 +3010,8 @@ impl WizardApp {
                 unsafe {
                     std::env::set_var(affinidi_messaging_mediator_common::PASSPHRASE_ENV, &value);
                 }
+                self.pending_passphrase = None;
+                self.passphrase_validation_error = None;
                 self.config.secret_file_encrypted = true;
                 self.exit_key_storage_subflow();
                 self.advance();
@@ -2835,6 +3114,11 @@ impl WizardApp {
         self.key_storage_phase = None;
         self.mode = InputMode::Selecting;
         self.text_input = Input::default();
+        // Drop any partially-collected passphrase + clear stale errors
+        // so the operator's next entry into the sub-flow starts clean.
+        // `Zeroizing` zeroes the heap allocation when dropped.
+        self.pending_passphrase = None;
+        self.passphrase_validation_error = None;
     }
 
     /// `true` while the discovery overlay (loading spinner, results
@@ -3066,6 +3350,20 @@ impl WizardApp {
         };
     }
 
+    /// Enter the network-mode sub-phase. Runs after JWT mode has been
+    /// settled. Pre-selects the operator's last choice so re-entry is
+    /// idempotent; defaults to Open (index 0) on a fresh run because
+    /// that's the wizard's default network posture.
+    fn enter_network_mode_phase(&mut self) {
+        self.security_phase = Some(SecurityPhase::NetworkMode);
+        self.mode = InputMode::Selecting;
+        self.selection_index = if self.config.network_mode == crate::consts::NETWORK_MODE_CLOSED {
+            1
+        } else {
+            0
+        };
+    }
+
     /// Strip any URL path so the stripped `<scheme>://<host>[:port]`
     /// lands on the VTA's `CreateDidWebvhRequest.url`. webvh resolves
     /// to `<url>/.well-known/did.jsonl`, so a trailing `/mediator/v1`
@@ -3109,7 +3407,7 @@ impl WizardApp {
         match self.selection_index {
             0 => {
                 self.config.vta_webvh_server_id = None;
-                self.config.vta_webvh_mnemonic = None;
+                self.config.vta_webvh_path = None;
                 self.did_phase = None;
                 self.advance();
             }
@@ -3157,22 +3455,20 @@ impl WizardApp {
             WizardStep::Did => {
                 // Handle Did sub-phases (VTA webvh host choice) before
                 // the "just saved the mediator URL" fall-through below.
-                match self.did_phase {
-                    Some(DidPhase::EnterCustomUrl) => {
-                        let v = self.text_input.value().trim().to_string();
-                        if !v.is_empty() {
-                            self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
-                        }
-                        self.config.vta_webvh_server_id = None;
-                        self.config.vta_webvh_mnemonic = None;
-                        self.did_phase = None;
-                        self.mode = InputMode::Selecting;
-                        self.advance();
-                        return;
+                // Only the `EnterCustomUrl` phase is text-input here;
+                // `SelectWebvhHost` is Selecting mode and falls through
+                // to the default Did branch below.
+                if let Some(DidPhase::EnterCustomUrl) = self.did_phase {
+                    let v = self.text_input.value().trim().to_string();
+                    if !v.is_empty() {
+                        self.config.vta_webvh_self_host_url = Self::strip_url_path(&v);
                     }
-                    // SelectWebvhHost is Selecting mode, not TextInput —
-                    // falls through to the default Did branch below.
-                    _ => {}
+                    self.config.vta_webvh_server_id = None;
+                    self.config.vta_webvh_path = None;
+                    self.did_phase = None;
+                    self.mode = InputMode::Selecting;
+                    self.advance();
+                    return;
                 }
 
                 self.config.public_url = self.text_input.value().to_string();
@@ -3206,12 +3502,32 @@ impl WizardApp {
                 }
             }
             WizardStep::Database => {
-                // Text-input confirm: save the URL or path against
-                // the right field based on the backend the operator
-                // picked in the prior phase, then advance.
+                // Text-input confirm: save the URL or path against the
+                // right field based on the backend the operator picked
+                // in the prior phase, then advance. For Fjall, if the
+                // path doesn't exist yet we route into a Yes/No
+                // confirmation phase asking whether to create it now,
+                // rather than silently deferring to the mediator's
+                // first-run `create_dir_all`. This surfaces filesystem
+                // / permission errors at wizard time and gives the
+                // operator a chance to back out and retype.
                 let value = self.text_input.value().to_string();
-                if self.config.storage_backend == "fjall" {
-                    self.config.fjall_data_dir = value;
+                if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                    let trimmed = value.trim().to_string();
+                    if let Err(err) = validate_fjall_data_dir(&trimmed) {
+                        self.database_validation_error = Some(err);
+                        return;
+                    }
+                    self.database_validation_error = None;
+                    self.config.fjall_data_dir = trimmed.clone();
+                    if !std::path::Path::new(&trimmed).exists() {
+                        self.database_phase = Some(DatabasePhase::ConfirmCreateFjallDir);
+                        self.mode = InputMode::Selecting;
+                        // Default Yes — pressing Enter accepts the
+                        // create-directory prompt without re-navigating.
+                        self.selection_index = 0;
+                        return;
+                    }
                 } else {
                     self.config.database_url = value;
                 }
@@ -3368,6 +3684,7 @@ impl WizardApp {
             // and the caller can then move forward into the URL/path
             // text-input phase.
             self.database_phase = Some(DatabasePhase::SelectBackend);
+            self.database_validation_error = None;
         }
     }
 
@@ -3397,11 +3714,12 @@ impl WizardApp {
                 self.mode = InputMode::Selecting;
                 // Pre-select the operator's last-chosen backend so
                 // re-entry is idempotent.
-                self.selection_index = if self.config.storage_backend == "fjall" {
-                    1
-                } else {
-                    0
-                };
+                self.selection_index =
+                    if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                        1
+                    } else {
+                        0
+                    };
             } else if self.current_step == WizardStep::Output {
                 self.mode = InputMode::TextInput;
                 self.text_input = Input::new(self.config.config_path.clone());
@@ -3490,11 +3808,24 @@ impl WizardApp {
         {
             self.database_phase = Some(DatabasePhase::SelectBackend);
             self.mode = InputMode::Selecting;
-            self.selection_index = if self.config.storage_backend == "fjall" {
-                1
-            } else {
-                0
-            };
+            self.selection_index =
+                if self.config.storage_backend == crate::consts::STORAGE_BACKEND_FJALL {
+                    1
+                } else {
+                    0
+                };
+            self.database_validation_error = None;
+            return;
+        }
+        // ConfirmCreateFjallDir: Esc cancels the create-now prompt and
+        // sends the operator back to text input so they can retype the
+        // path. Same effect as picking "No" from the selection list.
+        if self.current_step == WizardStep::Database
+            && self.database_phase == Some(DatabasePhase::ConfirmCreateFjallDir)
+        {
+            self.database_phase = None;
+            self.mode = InputMode::TextInput;
+            self.text_input = Input::new(self.config.fjall_data_dir.clone());
             return;
         }
         if self.in_did_subflow() {
@@ -3766,6 +4097,65 @@ impl WizardApp {
 mod tests {
     use super::*;
 
+    // ── Fjall data-directory validation ────────────────────────────────
+
+    #[test]
+    fn validate_fjall_rejects_empty() {
+        assert!(validate_fjall_data_dir("").is_err());
+        assert!(validate_fjall_data_dir("   ").is_err());
+    }
+
+    #[test]
+    fn validate_fjall_accepts_existing_directory() {
+        // The repo root is guaranteed to exist on every CI runner.
+        let cwd = std::env::current_dir().unwrap();
+        validate_fjall_data_dir(cwd.to_str().unwrap()).expect("CWD is a directory");
+    }
+
+    #[test]
+    fn validate_fjall_rejects_existing_non_directory() {
+        // Cargo.toml is always a regular file relative to the package root.
+        let err = validate_fjall_data_dir("Cargo.toml")
+            .expect_err("validation must reject paths that exist but aren't directories");
+        assert!(err.contains("not a directory"));
+    }
+
+    #[test]
+    fn validate_fjall_accepts_missing_leaf_with_existing_parent() {
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-fjall-validate-test-leaf-42");
+        // Best-effort cleanup so reruns work; ignore failure.
+        let _ = std::fs::remove_dir_all(&path);
+        validate_fjall_data_dir(path.to_str().unwrap())
+            .expect("missing leaf under an existing temp dir is acceptable");
+    }
+
+    #[test]
+    fn validate_fjall_accepts_missing_parent() {
+        // Regression: previously rejected `./data/mediator` (the wizard's
+        // default) when `./data` didn't yet exist. Fjall calls
+        // `std::fs::create_dir_all` on the configured path, so a missing
+        // parent is fine — the wizard must not block the default.
+        validate_fjall_data_dir("/a-directory-that-does-not-exist-on-this-host-42/mediator")
+            .expect("missing parent must be allowed — fjall create_dir_all handles it");
+    }
+
+    #[test]
+    fn validate_fjall_accepts_bare_relative_leaf() {
+        // A bare relative leaf resolves under the mediator's CWD at
+        // runtime; the wizard can't introspect that, so it defers.
+        validate_fjall_data_dir("mediator-data-leaf-only").expect("bare leaf must validate");
+    }
+
+    #[test]
+    fn validate_fjall_accepts_default_path() {
+        // The wizard pre-fills `./data/mediator`. Fresh installs likely
+        // don't have `./data` either; the validator must not reject the
+        // default and trap the operator on the screen.
+        validate_fjall_data_dir(crate::consts::DEFAULT_FJALL_DATA_DIR)
+            .expect("wizard default must always validate");
+    }
+
     // ── WizardStep navigation ──────────────────────────────────────────
 
     #[test]
@@ -3818,9 +4208,14 @@ mod tests {
 
     #[test]
     fn protocol_display_combinations() {
-        let mut cfg = WizardConfig::default();
-        cfg.didcomm_enabled = true;
-        cfg.tsp_enabled = false;
+        // Build the test config via struct-update so the initial
+        // `didcomm_enabled / tsp_enabled` pair is set in one go;
+        // subsequent assertions then mutate just the fields under test.
+        let mut cfg = WizardConfig {
+            didcomm_enabled: true,
+            tsp_enabled: false,
+            ..WizardConfig::default()
+        };
         assert_eq!(cfg.protocol_display(), "DIDComm v2");
 
         cfg.tsp_enabled = true;
@@ -4060,19 +4455,124 @@ mod tests {
             "Fjall path must remain at default when Redis was picked"
         );
 
-        // Fjall path — operator types a directory path.
+        // Fjall path — operator types an EXISTING directory so the
+        // wizard skips the create-dir confirm and advances straight
+        // through. The CWD always exists on every CI runner.
         let mut app = WizardApp::new("test.toml".into());
         advance_to_database_step(&mut app);
         app.selection_index = 1;
         app.select_current();
-        app.text_input = tui_input::Input::new("/var/lib/affinidi-mediator".into());
+        let cwd = std::env::current_dir().unwrap();
+        let cwd_str = cwd.to_str().unwrap().to_string();
+        app.text_input = tui_input::Input::new(cwd_str.clone());
         app.confirm_text_input();
         assert_eq!(app.config.storage_backend, "fjall");
-        assert_eq!(app.config.fjall_data_dir, "/var/lib/affinidi-mediator");
+        assert_eq!(app.config.fjall_data_dir, cwd_str);
+        // Existing path → no create-dir confirm phase.
+        assert_eq!(app.database_phase, None);
         assert_eq!(
             app.config.database_url, DEFAULT_REDIS_URL,
             "Redis URL must remain at default when Fjall was picked"
         );
+    }
+
+    #[test]
+    fn database_fjall_missing_path_routes_to_create_confirm() {
+        // Confirming the text input on a path that doesn't exist must
+        // NOT silently advance — it routes into ConfirmCreateFjallDir
+        // so the operator gets to choose whether to create now.
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1; // Fjall
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-1");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(app.current_step, WizardStep::Database);
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(app.selection_index, 0, "Yes is the default option");
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_yes_creates_and_advances() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-2");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+
+        // Confirm Yes — wizard runs `create_dir_all` and advances.
+        app.selection_index = 0;
+        app.select_current();
+        assert!(path.exists(), "directory must be created on confirm");
+        assert!(path.is_dir());
+        assert_eq!(app.database_phase, None);
+        assert!(app.current_step != WizardStep::Database);
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_no_returns_to_text_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-3");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+
+        // Confirm No — wizard does NOT create the directory and routes
+        // back to the text-input phase so the operator can retype.
+        app.selection_index = 1;
+        app.select_current();
+        assert!(
+            !path.exists(),
+            "directory must NOT be created when No is picked"
+        );
+        assert_eq!(app.database_phase, None);
+        assert_eq!(app.mode, InputMode::TextInput);
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn database_fjall_create_confirm_esc_returns_to_text_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        advance_to_database_step(&mut app);
+        app.selection_index = 1;
+        app.select_current();
+        let mut path = std::env::temp_dir();
+        path.push("affinidi-mediator-create-confirm-test-leaf-4");
+        let _ = std::fs::remove_dir_all(&path);
+        app.text_input = tui_input::Input::new(path.to_str().unwrap().into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.database_phase,
+            Some(DatabasePhase::ConfirmCreateFjallDir)
+        );
+
+        // Esc cancels the prompt — same effect as picking No.
+        app.go_back();
+        assert!(!path.exists());
+        assert_eq!(app.database_phase, None);
+        assert_eq!(app.mode, InputMode::TextInput);
+        assert_eq!(app.current_step, WizardStep::Database);
     }
 
     #[test]
@@ -4355,6 +4855,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(passphrase_env)]
     fn keystorage_file_backend_encrypt_yes_collects_passphrase() {
         // Picking "encrypt" advances to the passphrase prompt, which
         // rejects empty input and exports the value via env on confirm.
@@ -4386,21 +4887,103 @@ mod tests {
             "empty passphrase must be rejected (Argon2id with no input is trivial)"
         );
 
-        // Real passphrase exits the sub-flow + flips secret_file_encrypted.
+        // First passphrase entry advances to the confirm prompt — sub-flow
+        // is still in progress, env var must NOT be set yet.
+        app.text_input = Input::new("correct horse battery staple".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm),
+            "first entry must route to the confirm screen, not advance"
+        );
+        assert!(app.in_key_storage_subflow());
+        assert!(
+            !app.config.secret_file_encrypted,
+            "secret_file_encrypted must not flip until the confirm matches"
+        );
+        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
+        assert!(
+            std::env::var(key).is_err(),
+            "env var must not be exported until the confirm matches"
+        );
+
+        // Matching confirm finishes the sub-flow, sets the env var, and
+        // flips secret_file_encrypted.
         app.text_input = Input::new("correct horse battery staple".into());
         app.confirm_text_input();
         assert!(!app.in_key_storage_subflow());
         assert!(app.config.secret_file_encrypted);
         assert_eq!(app.current_step, WizardStep::Vta);
-
-        // The wizard exports the env var so generate_and_write can open
-        // the encrypted backend on first put. Read it back to confirm,
-        // then clean up so we don't pollute neighbour tests.
-        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
         assert_eq!(
             std::env::var(key).ok().as_deref(),
             Some("correct horse battery staple"),
         );
+        // Pending stash must be cleared so a second entry into the
+        // sub-flow doesn't see the previous passphrase.
+        assert!(app.pending_passphrase.is_none());
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    #[serial_test::serial(passphrase_env)]
+    fn keystorage_file_backend_passphrase_mismatch_returns_to_first_screen() {
+        // The whole point of the confirm step is to catch typos.
+        // Mismatch must:
+        //   1. Bounce the operator back to FilePassphrase
+        //   2. Clear the stashed first entry (no leak across attempts)
+        //   3. Surface an inline error
+        //   4. Leave secret_file_encrypted unchanged
+        //   5. Leave the env var unset
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::KeyStorage;
+        app.selection_index = 5; // file://
+        app.select_current();
+        app.text_input = Input::new(FILE_GATE_PHRASE.into());
+        app.confirm_text_input();
+        app.confirm_text_input(); // accept default path
+        app.selection_index = 0; // encrypt = yes
+        app.select_current();
+        assert_eq!(app.key_storage_phase, Some(KeyStoragePhase::FilePassphrase));
+
+        // First entry → confirm screen.
+        app.text_input = Input::new("first try".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm)
+        );
+
+        // Confirm types something different → bounce back with error.
+        app.text_input = Input::new("second try".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphrase),
+            "mismatch must return to the first screen so the operator starts over"
+        );
+        assert!(app.pending_passphrase.is_none(), "stash must be dropped");
+        assert!(
+            app.passphrase_validation_error.is_some(),
+            "operator must see why Enter sent them back"
+        );
+        assert!(!app.config.secret_file_encrypted);
+        let key = affinidi_messaging_mediator_common::PASSPHRASE_ENV;
+        assert!(std::env::var(key).is_err());
+
+        // Re-typing both correctly clears the error and finishes.
+        app.text_input = Input::new("third time lucky".into());
+        app.confirm_text_input();
+        assert_eq!(
+            app.key_storage_phase,
+            Some(KeyStoragePhase::FilePassphraseConfirm)
+        );
+        app.text_input = Input::new("third time lucky".into());
+        app.confirm_text_input();
+        assert!(!app.in_key_storage_subflow());
+        assert!(app.config.secret_file_encrypted);
+        assert!(app.passphrase_validation_error.is_none());
         unsafe {
             std::env::remove_var(key);
         }
@@ -4715,8 +5298,9 @@ mod tests {
 
     #[test]
     fn security_ssl_none_then_jwt_generate_advances() {
-        // SSL "None" + JWT "generate" — the common dev path. Should
-        // walk through both phases and land on Database.
+        // SSL "None" + JWT "generate" + NetworkMode "open" — the common
+        // dev path. Walks through all three sub-phases and lands on
+        // Database.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::Security;
         app.selection_index = 0; // No SSL
@@ -4725,9 +5309,17 @@ mod tests {
         assert_eq!(app.security_phase, Some(SecurityPhase::JwtMode));
         assert_eq!(app.current_step, WizardStep::Security);
 
-        // Default selection is "generate" (index 0).
+        // Default selection is "generate" (index 0). Confirming the JWT
+        // pick now transitions to NetworkMode rather than advancing the
+        // top-level step — Database is reached one confirm later.
         app.select_current();
         assert_eq!(app.config.jwt_mode, JWT_MODE_GENERATE);
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Default network-mode selection is "open" (index 0).
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
         assert!(app.security_phase.is_none());
         assert_eq!(app.current_step, WizardStep::Database);
     }
@@ -4743,6 +5335,31 @@ mod tests {
         app.selection_index = 1; // Provide
         app.select_current();
         assert_eq!(app.config.jwt_mode, JWT_MODE_PROVIDE);
+        // Network-mode sub-phase now interposes between JWT and Database.
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Confirm the default open posture to land on Database.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn security_network_mode_closed_records_choice() {
+        // Walk through the full Security flow and pick Closed at the
+        // last sub-phase to confirm the choice persists.
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 0; // No SSL
+        app.select_current();
+        app.select_current(); // JWT default = generate
+        assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
+
+        app.selection_index = 1; // Closed
+        app.select_current();
+        assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_CLOSED);
         assert_eq!(app.current_step, WizardStep::Database);
     }
 

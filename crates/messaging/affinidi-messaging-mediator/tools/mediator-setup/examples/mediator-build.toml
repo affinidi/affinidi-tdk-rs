@@ -97,6 +97,19 @@ admin = "generate"
 # Required when admin = "import":
 # admin_did = "did:key:z6Mk..."
 
+# network_mode: "open" (default) | "closed"
+#   open   — any DID can message any other DID by default. Override per-DID
+#            via the ACL. Wizard emits:
+#              mediator_acl_mode = "explicit_deny"
+#              global_acl_default = "ALLOW_ALL"
+#              local_direct_delivery_allowed = "true"
+#   closed — restricted: every cross-DID exchange requires an explicit ACL
+#            grant. Wizard emits:
+#              mediator_acl_mode = "explicit_allow"
+#              global_acl_default = "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES"
+#              local_direct_delivery_allowed = "true"
+network_mode = "open"
+
 
 # ── Database ────────────────────────────────────────────────────────────────
 [database]

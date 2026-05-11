@@ -19,10 +19,35 @@ pub const STORAGE_AZURE: &str = "azure_keyvault://";
 pub const STORAGE_VAULT: &str = "vault://";
 pub const STORAGE_VTA: &str = "vta://";
 
+/// Mediator persistence backend selectors written to `[storage].backend`
+/// in `mediator.toml`. Distinct from the `STORAGE_*` *secret* schemes
+/// above — those name the secret store; these name the *mediator's*
+/// runtime persistence layer (sessions, message queues, etc.).
+pub const STORAGE_BACKEND_REDIS: &str = "redis";
+pub const STORAGE_BACKEND_FJALL: &str = "fjall";
+/// Default backend when neither the wizard nor the recipe specify one.
+/// Matches the historical out-of-the-box experience (Redis sidecar).
+pub const DEFAULT_STORAGE_BACKEND: &str = STORAGE_BACKEND_REDIS;
+
 /// SSL mode display strings
 pub const SSL_NONE: &str = "No SSL (TLS proxy)";
 pub const SSL_EXISTING: &str = "Existing certificates";
 pub const SSL_SELF_SIGNED: &str = "Self-signed";
+
+/// Network mode display strings. Drives the trio of `[security]`
+/// keys the wizard writes (`mediator_acl_mode`, `global_acl_default`,
+/// `local_direct_delivery_allowed`).
+///
+/// `Open` is the wizard's default going forward — any DID can message
+/// any other DID by default; per-DID overrides flip individual flags.
+/// `Closed` keeps the historical posture: every cross-DID exchange
+/// requires an explicit ACL grant.
+pub const NETWORK_MODE_OPEN: &str = "open";
+pub const NETWORK_MODE_CLOSED: &str = "closed";
+/// Default network mode for fresh wizard runs and recipes that omit
+/// `[security].network_mode`. Open by request — see the network-mode
+/// switch in the Security step.
+pub const DEFAULT_NETWORK_MODE: &str = NETWORK_MODE_OPEN;
 
 /// JWT secret provisioning mode. `generate` (default) tells the wizard to
 /// mint a fresh Ed25519 PKCS8 key and push it into the unified secret
@@ -87,6 +112,10 @@ pub const VTA_MODE_EXPORT: &str = VTA_MODE_SEALED_EXPORT;
 /// Default values
 pub const DEFAULT_CONFIG_PATH: &str = "conf/mediator.toml";
 pub const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1/";
+/// Default on-disk path for the Fjall data directory written to
+/// `[storage].data_dir`. Mirrors `WizardConfig::default()`'s value so
+/// the constant and the in-memory default never drift.
+pub const DEFAULT_FJALL_DATA_DIR: &str = "./data/mediator";
 pub const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:7037";
 
 /// Default `[server] api_prefix` written to `mediator.toml`. The

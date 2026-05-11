@@ -205,6 +205,12 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
         render_sealed_request(frame, area, state);
         return;
     }
+    if let Some(state) = app.sealed_handoff.as_ref()
+        && state.phase == crate::sealed_handoff::SealedPhase::Complete
+    {
+        render_sealed_complete(frame, area, state);
+        return;
+    }
 
     // Split right panel: options area + info box
     let chunks = Layout::default()
@@ -286,36 +292,60 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
             }
             SealedPhase::CollectMediatorUrl => {
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "The public URL this mediator will serve on. Fed to the VTA's \
-                     `didcomm-mediator` template as the required `URL` variable, \
-                     which the rendered mediator DID's service endpoints point to."
+                    // Embed `\n\n` so the prompt widget renders three
+                    // distinct paragraphs (typical shape, why it
+                    // matters, what goes wrong with a bare host)
+                    // instead of one wall of wrapped text.
+                    "Include the FULL path — typically \
+                     `https://example.com/mediator/v1`.\n\n\
+                     This URL is fed verbatim to the VTA's `didcomm-mediator` \
+                     template as the `URL` variable. The rendered mediator DID's \
+                     service endpoints (#didcomm, #auth, #whois) are appended \
+                     to it.\n\n\
+                     A bare host with no path will publish endpoints under the \
+                     host root, which won't match the mediator's `api_prefix`."
                         .into()
                 });
                 prompt::render_prompt(
                     frame,
                     chunks[0],
                     "Sealed handoff — mediator URL",
-                    "Public URL this mediator will serve at.",
+                    "Full public URL the mediator will serve at, including the \
+                     api_prefix path.",
                     None,
                     &app.text_input,
-                    "https://mediator.example.com",
+                    "https://mediator.example.com/mediator/v1",
                     &hint,
                 );
                 info_box::render_info_box(
                     frame,
                     chunks[1],
                     "Info",
-                    "The VTA renders the mediator's DID with this URL baked into \
-                     the service endpoints. Changing it later means re-provisioning.",
+                    "Typically `https://<host>/mediator/v1` (matching the wizard's \
+                     default `api_prefix`). The VTA bakes this URL into the \
+                     mediator's DID document — changing it later means re-provisioning.",
                 );
                 return;
             }
             SealedPhase::CollectWebvhServer => {
+                // Hint paragraphs separated by blank lines so the
+                // prompt widget renders them as distinct chunks
+                // instead of one wrapped wall: what the field is,
+                // how to discover ids, what blank does, and the
+                // registration precondition.
                 let hint = state.last_error.clone().unwrap_or_else(|| {
-                    "Optional — id of a webvh hosting server already registered \
-                     on the VTA (matches the `id` returned by the VTA's \
-                     `list_webvh_servers` RPC). Leave blank to self-host at \
-                     the URL above."
+                    "Optional — id of an existing webvh hosting server registered \
+                     on the VTA. Matches the `id` field returned by the VTA's \
+                     `list_webvh_servers` RPC.\n\n\
+                     To discover ids, run on a host with an authenticated pnm \
+                     session against this VTA:\n\
+                       pnm webvh list-servers\n\n\
+                     Leave blank to self-host: the VTA renders a serverless webvh \
+                     DID whose log lives at the mediator URL above.\n\n\
+                     Precondition (if registering): the server must exist before \
+                     this step. Register it via `pnm webvh add-server --id <id> \
+                     --did <webvh-did>` (online) or `vta webvh add-server` on the \
+                     VTA host (offline)."
                         .into()
                 });
                 prompt::render_prompt(
@@ -323,11 +353,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     chunks[0],
                     "Sealed handoff — webvh server (optional)",
                     "Pin a webvh hosting server for this DID's log (optional).",
-                    Some(
-                        "Precondition: the id must already exist on the VTA — \
-                         register it first with `vta webvh add-server --id <id> \
-                         --did <webvh-did>` on the VTA host.",
-                    ),
+                    Some("Discover ids: `pnm webvh list-servers` (authenticated pnm session)."),
                     &app.text_input,
                     "webvh-prod-1",
                     &hint,
@@ -338,9 +364,47 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     "Info",
                     "Sent to the VTA as the `WEBVH_SERVER` template var. The VTA \
                      validates the id against its server catalogue before minting \
-                     — an unknown id fails with a clear error. Blank → VTA uses \
-                     the serverless path (self-host at `URL`). The bootstrap \
-                     request is generated on Enter.",
+                     — an unknown id fails with a clear error. Blank uses the \
+                     serverless path. The bootstrap request is generated on Enter.",
+                );
+                return;
+            }
+            SealedPhase::CollectWebvhPath => {
+                // Reached only when the operator picked a webvh server
+                // on the prior phase. Optional — blank lets the server
+                // auto-assign. Forwarded to the VTA as `WEBVH_PATH`.
+                let hint = state.last_error.clone().unwrap_or_else(|| {
+                    format!(
+                        "Optional — DID path / mnemonic the chosen webvh server \
+                         ('{}') should publish the minted DID under.\n\n\
+                         The minted DID will look like:\n  \
+                         did:webvh:<server-host>:<your-path>\n\n\
+                         Use a memorable slug (e.g. `prod-mediator`, `acme-mediator`) \
+                         so the DID is easy to recognise in audit logs and ACL \
+                         entries.\n\n\
+                         Leave blank to let the server auto-assign a random mnemonic.",
+                        state.webvh_server,
+                    )
+                });
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "Sealed handoff — webvh path / mnemonic (optional)",
+                    "DID path the webvh server should publish the minted DID under \
+                     (optional).",
+                    None,
+                    &app.text_input,
+                    "prod-mediator",
+                    &hint,
+                );
+                info_box::render_info_box(
+                    frame,
+                    chunks[1],
+                    "Info",
+                    "Sent to the VTA as the `WEBVH_PATH` template var; the VTA \
+                     forwards it to the chosen webvh server's `request_uri` call. \
+                     Empty → server auto-assigns. The bootstrap request is \
+                     generated on Enter.",
                 );
                 return;
             }
@@ -423,97 +487,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 return;
             }
             SealedPhase::Complete => {
-                let session = state
-                    .session
-                    .as_ref()
-                    .expect("Complete phase always has a session");
-
-                // Build the body line-by-line so each reply variant
-                // surfaces the material it actually carries. All
-                // three show Admin + VTA DIDs; FullSetup /
-                // OfflineExport additionally show the minted (or
-                // exported) integration DID + key-pair summary so
-                // the operator can visually confirm the bundle
-                // matches what PNM shows and knows the Did step
-                // will be auto-skipped.
-                let mut body = String::from("Bundle opened successfully.\n\n");
-                body.push_str(&format!("Admin DID:     {}\n", session.admin_did()));
-                body.push_str(&format!("VTA DID:       {}\n", session.vta_did));
-                if let Some(did) = session.integration_did() {
-                    body.push_str(&format!("Mediator DID:  {did}\n"));
-                }
-                if let Some(bundle) = session.as_context_export() {
-                    // Key-pair summary: type counts, no private
-                    // bytes. Matches what the mediator's operating
-                    // secrets loader expects (Ed25519 signing +
-                    // X25519 key-agreement as the standard pair).
-                    if let Some(d) = bundle.did.as_ref() {
-                        let mut signing = 0usize;
-                        let mut ka = 0usize;
-                        let mut other = 0usize;
-                        for entry in &d.secrets {
-                            match entry.key_type {
-                                vta_sdk::keys::KeyType::Ed25519 => signing += 1,
-                                vta_sdk::keys::KeyType::X25519 => ka += 1,
-                                _ => other += 1,
-                            }
-                        }
-                        body.push_str(&format!(
-                            "Keys:          {signing} signing + {ka} key-agreement"
-                        ));
-                        if other > 0 {
-                            body.push_str(&format!(" (+{other} other)"));
-                        }
-                        body.push('\n');
-                        if d.did_document.is_some() {
-                            body.push_str("DID document:  included (matches exported DID)\n");
-                        }
-                        if d.log_entry.is_some() {
-                            body.push_str(
-                                "did.jsonl:     included (will be written next to mediator.toml)\n",
-                            );
-                        }
-                    }
-                } else if let Some(provision) = session.as_full_provision() {
-                    // FullSetup summary — key shape is inferable from
-                    // `integration_key()` presence; mirror the
-                    // ContextExport summary for consistency.
-                    if let Some(material) = provision.integration_key() {
-                        body.push_str(&format!(
-                            "Keys:          {} signing + {} key-agreement\n",
-                            if material.signing_key.private_key_multibase.is_empty() {
-                                0
-                            } else {
-                                1
-                            },
-                            if material.ka_key.private_key_multibase.is_empty() {
-                                0
-                            } else {
-                                1
-                            }
-                        ));
-                    }
-                    if provision.webvh_log().is_some() {
-                        body.push_str(
-                            "did.jsonl:     included (will be written next to mediator.toml)\n",
-                        );
-                    }
-                }
-                body.push_str(
-                    "\nPress Enter — the wizard will skip the Did step (already provisioned) \
-                     and continue to Protocol. Keys will be written to your secret backend at \
-                     the end.",
-                );
-
-                info_box::render_info_box(frame, chunks[0], "Sealed handoff — complete", &body);
-                info_box::render_info_box(
-                    frame,
-                    chunks[1],
-                    "Info",
-                    "The wizard did NOT see your private key bytes — those are handled by \
-                     `Secret::from_multibase` at the end of the flow and pushed into the \
-                     backend without passing through the TUI.",
-                );
+                // Handled by `render_sealed_complete` above the dispatch
+                // — we still need an exhaustive arm here to satisfy the
+                // match. Unreachable in practice.
                 return;
             }
         }
@@ -555,14 +531,21 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     frame,
                     chunks[0],
                     "Mediator public URL",
-                    "URL this mediator will serve at — the VTA bakes it into \
-                     the minted DID's service endpoints.",
+                    "Full URL this mediator will serve at, including the \
+                     api_prefix path — the VTA bakes it into the minted DID's \
+                     service endpoints.",
                     None,
                     &app.text_input,
-                    "https://mediator.example.com",
-                    "Passed to the VTA's didcomm-mediator template as the \
-                     `URL` variable. The wizard reuses this value for the \
-                     mediator's own config — you won't be asked again later.",
+                    "https://mediator.example.com/mediator/v1",
+                    // `\n\n` between paragraphs — the prompt widget
+                    // splits on newlines so each chunk renders on its
+                    // own line, separated by a blank.
+                    "Include the FULL path — typically \
+                     `https://example.com/mediator/v1`.\n\n\
+                     Passed verbatim to the VTA's `didcomm-mediator` template \
+                     as the `URL` variable.\n\n\
+                     The wizard reuses this value for the mediator's own config, \
+                     so you won't be asked again later.",
                 );
                 return;
             }
@@ -693,16 +676,26 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     ),
                     KeyStoragePhase::FilePassphrase => (
                         "File-backend passphrase",
-                        "Used to derive an AES-256-GCM key (Argon2id, mem=64MiB, t=3, p=4). \
-                         Type carefully — there is no recovery if you lose it. The mediator \
-                         will need the same passphrase at boot via MEDIATOR_FILE_BACKEND_PASSPHRASE \
-                         or MEDIATOR_FILE_BACKEND_PASSPHRASE_FILE.",
+                        "Derives an AES-256-GCM key via Argon2id (mem=64MiB, t=3, p=4).",
                         "(passphrase — input is hidden)",
-                        "Empty input is rejected. Pick something long and high-entropy: a \
-                         passphrase manager entry or a 6+ word diceware string. The wizard \
-                         exports this passphrase to its own process env so it can write \
-                         the initial entries; you must arrange for the mediator to see the \
-                         same value at boot.",
+                        "Type carefully — there is no recovery if you lose it.\n\n\
+                         The mediator needs the same passphrase at boot via\n  \
+                         MEDIATOR_FILE_BACKEND_PASSPHRASE\n  \
+                         MEDIATOR_FILE_BACKEND_PASSPHRASE_FILE\n\n\
+                         Empty input is rejected. Pick something long and high-entropy: \
+                         a passphrase-manager entry or a 6+ word diceware string.\n\n\
+                         The wizard exports this passphrase to its own process env so \
+                         it can write the initial entries; you must arrange for the \
+                         mediator to see the same value at boot.",
+                    ),
+                    KeyStoragePhase::FilePassphraseConfirm => (
+                        "Confirm file-backend passphrase",
+                        "Re-type the passphrase exactly to guard against typos.",
+                        "(passphrase — input is hidden)",
+                        "If the two entries don't match, the wizard returns to the \
+                         previous screen and you start over. The first entry is held \
+                         in memory only between these two screens and zeroed on \
+                         success or mismatch.",
                     ),
                     KeyStoragePhase::KeyringService => (
                         "Keyring service name",
@@ -780,7 +773,19 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                          can see the live layout.",
                     ),
                 };
-                prompt::render_prompt(
+                // Passphrase entry + confirm get the masked variant so
+                // characters render as bullets. All other key-storage
+                // sub-phases collect non-secret config (paths, region,
+                // namespace, …) and stay on the standard prompt.
+                let render = if matches!(
+                    phase,
+                    KeyStoragePhase::FilePassphrase | KeyStoragePhase::FilePassphraseConfirm,
+                ) {
+                    prompt::render_secret_prompt
+                } else {
+                    prompt::render_prompt
+                };
+                render(
                     frame,
                     chunks[0],
                     title,
@@ -848,31 +853,55 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 );
                 return;
             }
-            // Database step: surface the supported Redis URL shapes
-            // (auth, TLS, partitions) inline so the operator doesn't
-            // have to read the example mediator.toml. Mirrors the
-            // commentary at conf/mediator.toml `[database]`.
+            // Database step: render the prompt that matches the
+            // backend the operator picked on the prior screen. Redis
+            // gets the URL prompt with auth/TLS/partition examples;
+            // Fjall gets a directory prompt with an existence-check
+            // hint (validated on confirm).
             if app.current_step == crate::app::WizardStep::Database {
-                prompt::render_prompt(
-                    frame,
-                    chunks[0],
-                    "Redis URL",
-                    "Connection string for the mediator's Redis-compatible database.",
-                    Some(
-                        "Production: always require auth and use rediss:// for any \
-                         non-loopback host.",
-                    ),
-                    &app.text_input,
-                    crate::consts::DEFAULT_REDIS_URL,
-                    "Examples:\n  \
-                     redis://127.0.0.1/                  local, no auth (dev only)\n  \
-                     redis://:password@host:6379/        password auth (requirepass)\n  \
-                     redis://user:password@host:6379/    ACL user + password\n  \
-                     rediss://:password@host:6379/       TLS-encrypted connection\n  \
-                     redis://127.0.0.1/1                 select database partition 1\n\n\
-                     The trailing `/<n>` picks a numbered partition (Redis SELECT). \
-                     Use partitions to isolate dev/staging/prod on a shared host.",
-                );
+                if app.config.storage_backend == "fjall" {
+                    prompt::render_prompt(
+                        frame,
+                        chunks[0],
+                        "Fjall data directory",
+                        "On-disk path where the embedded Fjall LSM keeps its data. \
+                         The mediator opens (and creates) the directory on startup.",
+                        Some(
+                            "Use an absolute path on a persistent volume in production \
+                             — relative paths are resolved against the mediator's CWD.",
+                        ),
+                        &app.text_input,
+                        crate::consts::DEFAULT_FJALL_DATA_DIR,
+                        "Examples:\n  \
+                         ./data/mediator              relative to the mediator CWD (dev)\n  \
+                         /var/lib/affinidi-mediator   system-managed persistent volume\n  \
+                         /opt/mediator/data           container bind-mount target\n\n\
+                         Missing directories are created on first run — the mediator \
+                         calls `std::fs::create_dir_all` on this path, so any depth of \
+                         missing parents is fine.",
+                    );
+                } else {
+                    prompt::render_prompt(
+                        frame,
+                        chunks[0],
+                        "Redis URL",
+                        "Connection string for the mediator's Redis-compatible database.",
+                        Some(
+                            "Production: always require auth and use rediss:// for any \
+                             non-loopback host.",
+                        ),
+                        &app.text_input,
+                        crate::consts::DEFAULT_REDIS_URL,
+                        "Examples:\n  \
+                         redis://127.0.0.1/                  local, no auth (dev only)\n  \
+                         redis://:password@host:6379/        password auth (requirepass)\n  \
+                         redis://user:password@host:6379/    ACL user + password\n  \
+                         rediss://:password@host:6379/       TLS-encrypted connection\n  \
+                         redis://127.0.0.1/1                 select database partition 1\n\n\
+                         The trailing `/<n>` picks a numbered partition (Redis SELECT). \
+                         Use partitions to isolate dev/staging/prod on a shared host.",
+                    );
+                }
                 return;
             }
             text_input::render_text_input(
@@ -990,10 +1019,13 @@ fn render_sealed_request(
         "── Producer commands ─────────────────────────────────────",
         header_style,
     )));
-    let (primary_header, primary_hotkey, fallback_header) = match state.intent {
+    let (primary_header, primary_hotkey, pnm_header, fallback_header) = match state.intent {
         crate::vta::VtaIntent::AdminOnly => (
             "Recommended — VTA admin runs on any host with an authenticated pnm session:",
             "  [p] ",
+            // AdminOnly's primary is already a `pnm` command, so the
+            // dedicated `[p]` line below would just duplicate it.
+            None,
             Some(
                 "Fallback — only if `pnm` isn't available. Requires a hand-authored \
                  AdminCredential JSON payload at <ADMIN_CREDENTIAL_JSON>:",
@@ -1003,6 +1035,11 @@ fn render_sealed_request(
             "VTA admin runs this on the VTA host (has local super-admin access to the \
              keyspace — no `pnm acl create` required):",
             "  [v] ",
+            Some(
+                "Or, with an authenticated `pnm` session against a live VTA. \
+                 `--create-context` is idempotent: it provisions the context \
+                 inline if missing and is a no-op if it already exists.",
+            ),
             None,
         ),
         crate::vta::VtaIntent::OfflineExport => (
@@ -1010,6 +1047,10 @@ fn render_sealed_request(
              admin credential, mediator DID, and operational keys (auto-mints a \
              fresh admin identity by default — no `--admin-key` needed):",
             "  [v] ",
+            Some(
+                "Or, with an authenticated `pnm` session against a live VTA — \
+                 emits the armored bundle on stdout (redirect to `bundle.armor`):",
+            ),
             Some(
                 "Advanced — exports DID + operational keys only (no admin credential). \
                  Use when admin material is being managed out-of-band:",
@@ -1022,6 +1063,15 @@ fn render_sealed_request(
         Span::styled(primary_hotkey, cmd),
         Span::styled(state.primary_command(), cmd),
     ]));
+    if let Some(header) = pnm_header {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(header, value)));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  [p] ", cmd),
+            Span::styled(state.pnm_command(), cmd),
+        ]));
+    }
     if let (Some(header), Some(fb)) = (fallback_header, state.fallback_command()) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(header, value)));
@@ -1083,6 +1133,187 @@ fn render_sealed_request(
         // renders empty rows past content without erroring, so we
         // don't need to know the total line count up-front.
         .scroll((state.request_scroll, 0));
+    frame.render_widget(para, area);
+}
+
+/// Full-height render for the sealed-handoff "complete" screen.
+///
+/// Replaces the prior plain-text info-box dump (every line packed
+/// into one `Paragraph` with no styling) with a vertically laid out
+/// summary that puts the mediator and admin DIDs on their own lines
+/// in a highlighted color, plus a hotkey strip pointing at `[m]`,
+/// `[a]`, `[v]` for clipboard copy.
+///
+/// Field order is mediator → admin → VTA so the operator's eye lands
+/// on the DID they're most likely to need next (the mediator's own
+/// identity) without having to scan past unrelated material.
+fn render_sealed_complete(
+    frame: &mut Frame,
+    area: Rect,
+    state: &crate::sealed_handoff::SealedHandoffState,
+) {
+    use ratatui::widgets::Padding;
+
+    let session = state
+        .session
+        .as_ref()
+        .expect("Complete phase always carries a session");
+
+    let label = theme::title_style();
+    let value = Style::default().fg(theme::TEXT);
+    let hint = theme::muted_style();
+    let did_style = Style::default()
+        .fg(theme::ACCENT)
+        .add_modifier(Modifier::BOLD);
+    let cmd = Style::default().fg(theme::ACCENT);
+    let header_style = theme::title_style();
+    let good = theme::success_style();
+    let warn = Style::default().fg(Color::Yellow);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        "Bundle opened successfully — sealed handoff complete.",
+        good,
+    )));
+    lines.push(Line::from(""));
+
+    // ── DID block ────────────────────────────────────────────────
+    // Mediator DID first (most operator-relevant), then admin, then
+    // VTA. Each DID gets its own pair of lines: a label line and the
+    // DID itself indented + highlighted.
+    if let Some(did) = session.integration_did() {
+        lines.push(Line::from(Span::styled("Mediator DID  [m]", label)));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(did.to_string(), did_style),
+        ]));
+        lines.push(Line::from(""));
+    }
+    lines.push(Line::from(Span::styled("Admin DID  [a]", label)));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(session.admin_did().to_string(), did_style),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("VTA DID  [v]", label)));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(session.vta_did.clone(), did_style),
+    ]));
+    lines.push(Line::from(""));
+
+    // ── Bundle contents summary ──────────────────────────────────
+    if let Some(bundle) = session.as_context_export() {
+        if let Some(d) = bundle.did.as_ref() {
+            let mut signing = 0usize;
+            let mut ka = 0usize;
+            let mut other = 0usize;
+            for entry in &d.secrets {
+                match entry.key_type {
+                    vta_sdk::keys::KeyType::Ed25519 => signing += 1,
+                    vta_sdk::keys::KeyType::X25519 => ka += 1,
+                    _ => other += 1,
+                }
+            }
+            let mut keys_line = format!("{signing} signing + {ka} key-agreement");
+            if other > 0 {
+                keys_line.push_str(&format!(" (+{other} other)"));
+            }
+            lines.push(Line::from(Span::styled(
+                "── Bundle contents ───────────────────────────────────────",
+                header_style,
+            )));
+            lines.push(Line::from(vec![
+                Span::styled("Keys:          ", label),
+                Span::styled(keys_line, value),
+            ]));
+            if d.did_document.is_some() {
+                lines.push(Line::from(vec![
+                    Span::styled("DID document:  ", label),
+                    Span::styled("included (matches exported DID)", value),
+                ]));
+            }
+            if d.log_entry.is_some() {
+                lines.push(Line::from(vec![
+                    Span::styled("did.jsonl:     ", label),
+                    Span::styled("included (will be written next to mediator.toml)", value),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+    } else if let Some(provision) = session.as_full_provision() {
+        lines.push(Line::from(Span::styled(
+            "── Bundle contents ───────────────────────────────────────",
+            header_style,
+        )));
+        if let Some(material) = provision.integration_key() {
+            let signing = if material.signing_key.private_key_multibase.is_empty() {
+                0
+            } else {
+                1
+            };
+            let ka = if material.ka_key.private_key_multibase.is_empty() {
+                0
+            } else {
+                1
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Keys:          ", label),
+                Span::styled(format!("{signing} signing + {ka} key-agreement"), value),
+            ]));
+        }
+        if provision.webvh_log().is_some() {
+            lines.push(Line::from(vec![
+                Span::styled("did.jsonl:     ", label),
+                Span::styled("included (will be written next to mediator.toml)", value),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // ── Hotkey strip + clipboard status ─────────────────────────
+    let mut hotkey_spans: Vec<Span<'static>> = vec![Span::styled("Hotkeys:  ", label)];
+    if session.integration_did().is_some() {
+        hotkey_spans.push(Span::styled("[m]", cmd));
+        hotkey_spans.push(Span::styled(" copy mediator DID   ", value));
+    }
+    hotkey_spans.push(Span::styled("[a]", cmd));
+    hotkey_spans.push(Span::styled(" copy admin DID   ", value));
+    hotkey_spans.push(Span::styled("[v]", cmd));
+    hotkey_spans.push(Span::styled(" copy VTA DID", value));
+    lines.push(Line::from(hotkey_spans));
+    if let Some(status) = state.clipboard_status.as_deref() {
+        let style = if status.starts_with("Copied") {
+            good
+        } else {
+            warn
+        };
+        lines.push(Line::from(vec![
+            Span::styled("Status:   ", label),
+            Span::styled(status.to_string(), style),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press Enter — the wizard will skip the Did step (already provisioned) \
+         and continue to Protocol. Private key bytes are written to your secret \
+         backend at the end of the flow without passing through the TUI.",
+        hint,
+    )));
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Sealed handoff — complete ",
+            theme::info_style(),
+        ))
+        .borders(Borders::ALL)
+        .border_style(theme::border_style())
+        .padding(Padding::new(2, 2, 1, 0));
+
+    let para = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
 

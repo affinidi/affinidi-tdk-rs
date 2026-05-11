@@ -45,10 +45,22 @@ use crate::vta::{VtaIntent, VtaSession};
 pub enum HeadlessOutcome {
     /// Phase 1: request file + seed written. The caller should print
     /// the operator instructions and exit with code 0.
+    ///
+    /// Both producer commands are returned so the next-steps printer
+    /// can surface the live-API alternative — operators routinely run
+    /// the offline `vta …` form into a sealed VTA and get back
+    /// `VTA is sealed (…). Offline CLI commands are disabled` with no
+    /// hint that `pnm …` (live session) would have worked.
     RequestEmitted {
         request_path: PathBuf,
         bundle_id_hex: String,
+        /// Offline `vta …` producer command — requires an unsealed VTA.
         producer_command: String,
+        /// `pnm …` equivalent — works against a live API session
+        /// regardless of VTA seal state. Identical to `producer_command`
+        /// for `AdminOnly` (both flavours share the same `pnm contexts
+        /// bootstrap` shape there).
+        pnm_command: String,
     },
     /// Phase 2: sealed bundle opened, session materialised. Caller
     /// passes this to the generate-and-write pipeline, then invokes
@@ -237,6 +249,9 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
         if let Some(ref server) = config.vta_webvh_server_id {
             state.webvh_server = server.clone();
         }
+        if let Some(ref path) = config.vta_webvh_path {
+            state.webvh_path = path.clone();
+        }
     }
 
     state
@@ -251,6 +266,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     })?;
     let bundle_id_hex = hex_lower(&state.nonce);
     let producer_command = state.primary_command();
+    let pnm_command = state.pnm_command();
 
     // Persist the HPKE recipient seed into the configured backend.
     // Phase 2 reads it back by bundle id to derive `recipient_secret`
@@ -272,6 +288,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
         request_path,
         bundle_id_hex,
         producer_command,
+        pnm_command,
     })
 }
 
@@ -589,6 +606,7 @@ mod tests {
             request_path,
             bundle_id_hex,
             producer_command,
+            pnm_command,
         } = outcome
         else {
             panic!("phase 1 with no --bundle must emit a request, not apply");
@@ -601,6 +619,22 @@ mod tests {
         assert!(
             producer_command.contains("--id prod-mediator"),
             "context id must propagate into the command: {producer_command}"
+        );
+        // Sealed-VTA escape hatch: phase-1 must also surface the
+        // pnm-flavour reprovision command so an operator who hits
+        // "VTA is sealed (… Offline CLI commands are disabled)" has a
+        // live-API alternative right there in the next-steps printout.
+        assert!(
+            pnm_command.contains("pnm contexts reprovision"),
+            "pnm equivalent must be surfaced for the OfflineExport intent: {pnm_command}"
+        );
+        assert!(
+            pnm_command.contains("--id prod-mediator"),
+            "pnm command must carry the same context id: {pnm_command}"
+        );
+        assert_ne!(
+            producer_command, pnm_command,
+            "OfflineExport's offline and live-API commands differ; they must not be aliased"
         );
 
         // Seed must be reachable via the backend, not via any
@@ -760,6 +794,123 @@ mod tests {
                 .iter()
                 .any(|e| e.bundle_id_hex == aged_id),
             "aged entry must be removed from the sweep index",
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn phase2_happy_path_unseals_and_deletes_seed() {
+        // End-to-end round-trip — exercises the seam every error-path
+        // test stops short of: phase 2 reads a real seed from the
+        // backend, derives `recipient_secret`, opens a bundle the
+        // producer sealed to the matching recipient pubkey, projects
+        // onto a `VtaSession`, and deletes the seed on success.
+        //
+        // Before this test, all phase-2 coverage stopped at error
+        // surfaces (no seed / aged seed / "no bundle" / etc.). A
+        // happy-path regression in seed-load → recipient_secret
+        // derivation → open_with_digest would slip through. This is
+        // the missing-test gap the review called out.
+        use affinidi_messaging_mediator_common::MediatorSecrets;
+        use vta_sdk::context_provision::ContextProvisionBundle;
+        use vta_sdk::credentials::CredentialBundle;
+        use vta_sdk::sealed_transfer::{
+            AssertionProof, InMemoryNonceStore, ProducerAssertion, SealedPayloadV1, armor,
+            bundle_digest, generate_ed25519_keypair, seal_payload,
+        };
+
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+
+        // Producer + consumer keypairs. The consumer's *seed* is what
+        // gets persisted to the backend — phase 2 derives the X25519
+        // recipient secret from it via `ed25519_seed_to_x25519_secret`,
+        // and the producer must seal to the matching recipient pubkey.
+        let (_prod_seed, prod_ed_pub) = generate_ed25519_keypair();
+        let (consumer_seed, consumer_ed_pub) = generate_ed25519_keypair();
+        let consumer_seed_bytes: [u8; 32] = *consumer_seed;
+        let recipient_pk = affinidi_crypto::did_key::ed25519_pub_to_x25519_bytes(&consumer_ed_pub)
+            .expect("derive recipient X25519 pubkey from consumer ed25519 pub");
+
+        // Fixed nonce → deterministic bundle id, so the backend lookup
+        // key and the bundle's embedded id agree.
+        let nonce = [0xCDu8; 16];
+        let assertion = ProducerAssertion {
+            producer_did: affinidi_crypto::did_key::ed25519_pub_to_did_key(&prod_ed_pub),
+            proof: AssertionProof::PinnedOnly,
+        };
+        // sealed_export_config sets vta_mode = sealed-export, which
+        // maps to OfflineExport intent in `intent_for_mode` — that
+        // intent expects a `ContextProvision` payload variant, NOT
+        // `AdminCredential`. Mismatched payload triggers
+        // "bundle did not contain a mediator admin credential".
+        let payload = SealedPayloadV1::ContextProvision(Box::new(ContextProvisionBundle {
+            context_id: "prod-mediator".into(),
+            context_name: "Mediator (prod-mediator)".into(),
+            vta_url: Some("https://vta.example.com".into()),
+            vta_did: Some("did:webvh:vta.example.com".into()),
+            credential: CredentialBundle::new(
+                "did:key:z6MkAdminHappy",
+                "zAdminPrivateHappy",
+                "did:webvh:vta.example.com",
+            ),
+            admin_did: "did:key:z6MkAdminHappy".into(),
+            did: None,
+        }));
+        let store_for_seal = InMemoryNonceStore::new();
+        let bundle = seal_payload(&recipient_pk, nonce, assertion, &payload, &store_for_seal)
+            .await
+            .expect("producer-side seal");
+        // PinnedOnly producer must be unsealed against the OOB digest
+        // — compute it before armoring so the test can pass it through
+        // to phase 2.
+        let digest = bundle_digest(&bundle);
+        let armored = armor::encode(&bundle);
+        let bundle_path = dir.join("bundle.armor");
+        std::fs::write(&bundle_path, armored).unwrap();
+
+        // Persist the consumer seed in the backend at the bundle-id
+        // key, mimicking what phase 1 would have left behind.
+        let bundle_id_hex = hex_lower(&nonce);
+        let config = sealed_export_config("prod-mediator", &dir);
+        let backend_url = crate::config_writer::build_backend_url(&config);
+        let backend_store = MediatorSecrets::from_url(&backend_url).expect("open backend");
+        backend_store
+            .store_bootstrap_seed(&bundle_id_hex, &consumer_seed_bytes)
+            .await
+            .expect("store seed");
+
+        // Phase 2 — passes the OOB digest so the PinnedOnly bundle
+        // unseals cleanly.
+        let outcome = dispatch(&config, Some(&bundle_path), Some(&digest))
+            .await
+            .expect("phase 2 must succeed when seed + bundle align");
+
+        match outcome {
+            HeadlessOutcome::Applied { session, .. } => {
+                assert_eq!(session.admin_did(), "did:key:z6MkAdminHappy");
+                assert_eq!(session.vta_did, "did:webvh:vta.example.com");
+            }
+            HeadlessOutcome::RequestEmitted { .. } => {
+                panic!("dispatch took the phase-1 branch despite --bundle being set");
+            }
+        }
+
+        // Seed must have been removed from the backend on successful
+        // apply — re-running phase 2 would otherwise rehydrate the
+        // same secret and waste backend storage forever. Re-open the
+        // backend handle so any in-process index cache from before
+        // dispatch is invalidated; the file-backed store persists
+        // through both handles.
+        let backend_store_after =
+            MediatorSecrets::from_url(&backend_url).expect("re-open backend post-dispatch");
+        let after = backend_store_after
+            .load_bootstrap_seed(&bundle_id_hex)
+            .await
+            .expect("load_bootstrap_seed");
+        assert!(
+            after.is_none(),
+            "seed must be deleted from backend on phase-2 success"
         );
     }
 

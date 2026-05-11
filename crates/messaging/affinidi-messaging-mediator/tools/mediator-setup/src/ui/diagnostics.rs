@@ -13,6 +13,12 @@ use crate::ui::selection::SelectionOption;
 use crate::ui::theme;
 use crate::vta::{ConnectPhase, DiagEntry, DiagStatus, VtaConnectState};
 
+// TUI render helpers carry a stable, intentional 8-param shape
+// (frame / area / title / description / state / options / selection_index
+// / focused). Grouping into a struct would just shift the same cognitive
+// load to a struct definition + 5 callers without changing what each
+// param does at the call site.
+#[allow(clippy::too_many_arguments)]
 pub fn render_diagnostics(
     frame: &mut Frame,
     area: Rect,

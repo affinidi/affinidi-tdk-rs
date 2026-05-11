@@ -10,7 +10,12 @@ pub fn write_secrets_file(secrets: &[Secret], path: &str) -> anyhow::Result<()> 
     }
 
     let json = serde_json::to_string_pretty(secrets)?;
-    fs::write(path, json)?;
+    // file:// backend stores plaintext private keys — restrict perms
+    // to owner-only so a co-tenant on the wizard host can't read
+    // them. AEAD-encrypted file backends (`?encrypt=1`) handle their
+    // own envelope, but tightening regardless is cheap defence in
+    // depth.
+    crate::secure_fs::write_sensitive(path, json)?;
 
     Ok(())
 }
