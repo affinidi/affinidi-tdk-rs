@@ -102,11 +102,5 @@ affinidi-tsp = { path = "crates/messaging/affinidi-tsp" }
 affinidi-did-web = { path = "crates/identity/did-methods/did-web" }
 did-scid = { path = "crates/identity/did-methods/did-scid" }
 
-# Local pin for upstream VTA work — picks up unreleased pnm-cli changes
-# (notably `pnm bootstrap provision-integration --create-context`). Revert
-# to the published vta-sdk crate before merging once the next VTA release
-# ships.
-vta-sdk = { path = "../../fpp/verifiable-trust-infrastructure/vta-sdk" }
-
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
