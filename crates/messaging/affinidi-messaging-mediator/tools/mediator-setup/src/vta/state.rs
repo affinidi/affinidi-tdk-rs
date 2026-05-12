@@ -380,6 +380,10 @@ impl VtaConnectState {
             SdkVtaReply::Full(p) => p.admin_did().to_string(),
             SdkVtaReply::AdminOnly(a) => a.admin_did.clone(),
         };
+        if did.is_empty() {
+            self.clipboard_status = Some("Admin DID is empty in this reply".into());
+            return;
+        }
         self.copy_text_to_clipboard(&did, "admin DID");
     }
 

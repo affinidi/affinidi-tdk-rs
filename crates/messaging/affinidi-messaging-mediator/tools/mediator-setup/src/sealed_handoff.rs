@@ -506,7 +506,10 @@ impl SealedHandoffState {
     /// Hotkey `[m]` on the Complete panel.
     pub fn copy_mediator_did_to_clipboard(&mut self) {
         match self.session.as_ref().and_then(|s| s.integration_did()) {
-            Some(did) => self.set_clipboard(did.to_string(), "mediator DID"),
+            Some(did) if !did.is_empty() => self.set_clipboard(did.to_string(), "mediator DID"),
+            Some(_) => {
+                self.clipboard_status = Some("Mediator DID slot is empty in this bundle".into());
+            }
             None => {
                 self.clipboard_status =
                     Some("No mediator DID in this bundle (AdminOnly handoff)".into());
@@ -521,19 +524,31 @@ impl SealedHandoffState {
             self.clipboard_status = Some("No session yet — open the bundle first".into());
             return;
         };
-        let did = session.admin_did().to_string();
-        self.set_clipboard(did, "admin DID");
+        let did = session.admin_did();
+        if did.is_empty() {
+            self.clipboard_status = Some("Admin DID is empty in this bundle".into());
+            return;
+        }
+        self.set_clipboard(did.to_string(), "admin DID");
     }
 
     /// Copy the VTA DID to the clipboard. Hotkey `[v]` on the
-    /// Complete panel — every reply variant carries this.
+    /// Complete panel — every reply variant carries this *slot*,
+    /// but a `ContextExport` bundle whose producer didn't populate
+    /// `vta_did` will resolve to an empty string (see
+    /// [`VtaSession::context_export`]). Treat empty as "not in this
+    /// bundle" rather than silently clearing the operator's clipboard
+    /// (which is what an empty OSC 52 payload does on some terminals).
     pub fn copy_vta_did_to_clipboard(&mut self) {
         let Some(session) = self.session.as_ref() else {
             self.clipboard_status = Some("No session yet — open the bundle first".into());
             return;
         };
-        let did = session.vta_did.clone();
-        self.set_clipboard(did, "VTA DID");
+        if session.vta_did.is_empty() {
+            self.clipboard_status = Some("No VTA DID in this bundle".into());
+            return;
+        }
+        self.set_clipboard(session.vta_did.clone(), "VTA DID");
     }
 
     /// Copy the wizard-computed bundle digest to the clipboard.
