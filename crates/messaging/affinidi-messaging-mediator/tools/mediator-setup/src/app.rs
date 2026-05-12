@@ -706,6 +706,10 @@ impl WizardApp {
     /// clipboard. Hotkey `[c]` on the Summary panel.
     pub fn copy_config_path_to_clipboard(&mut self) {
         let path = self.config.config_path.clone();
+        if path.is_empty() {
+            self.clipboard_status = Some("No config path set yet".into());
+            return;
+        }
         self.copy_text_to_clipboard(&path, "config path");
     }
 
@@ -714,6 +718,10 @@ impl WizardApp {
     /// clipboard. Hotkey `[b]` on the Summary panel.
     pub fn copy_backend_url_to_clipboard(&mut self) {
         let url = crate::config_writer::build_backend_url(&self.config);
+        if url.is_empty() {
+            self.clipboard_status = Some("Backend URL not yet resolved".into());
+            return;
+        }
         self.copy_text_to_clipboard(&url, "backend URL");
     }
 
