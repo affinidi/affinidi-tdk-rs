@@ -7,6 +7,8 @@ pub enum DIDSCIDError {
     UnsupportedFormat,
     #[error("DID URL Error: {0}")]
     DidUrlError(String),
+    #[error("Invalid src parameter: {0}")]
+    InvalidSrc(String),
     #[error("WebVH error")]
     WebVHError(#[from] DIDWebVHError),
     #[error("Cheqd error: {0}")]

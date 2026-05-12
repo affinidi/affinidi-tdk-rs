@@ -1,14 +1,38 @@
-/*! Implementation of the
-*/
+/*! Implementation of the `did:scid` (Self-Certifying Identifier) DID method.
+ *
+ * Supported sub-methods:
+ *   - `did:scid:vh:1` — Verifiable History via did:webvh or did:cheqd
+ *
+ * Two invocation modes are supported:
+ *   - **URL mode**: `did:scid:vh:1:<scid>?src=<source>` — the `src` parameter
+ *     encodes either a `did:cheqd:<network>` prefix or a WebVH host/path.
+ *   - **Peer mode**: `did:scid:vh:1:<scid>` with the source supplied
+ *     out-of-band via [`ScidMethod`].
+ *
+ * ### WebVH `src` formats accepted
+ *
+ * The `src` parameter for WebVH is intentionally permissive — any of the
+ * following are normalised to the canonical did:webvh tail:
+ *
+ *   - `example.com`
+ *   - `example.com/path/to/dir`
+ *   - `localhost:3000` / `localhost:3000/path` (the port is `%3A`-encoded)
+ *   - `https://example.com/path` (scheme is stripped)
+ *   - Any of the above with a trailing slash
+ */
 
 use crate::errors::DIDSCIDError;
 use affinidi_did_common::Document;
 use didwebvh_rs::{DIDWebVHState, log_entry::LogEntryMethods};
 use regex::Regex;
+use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::{debug, error};
 
 pub mod errors;
+
+static SCID_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^did:scid:vh:1:([^\?]*)(?:\?src=(.*))?$").unwrap());
 
 #[derive(Clone, Debug)]
 pub enum ScidMethod {
@@ -19,12 +43,14 @@ pub enum ScidMethod {
 }
 
 /// Resolve a SCID DID Method
-/// did: id of the DID to resolve
-/// peer_src: Optional Source when did:scid is being used as a peer DID
-///   webvh: peer_src should be the path that gets concatenated to the SCID
-///   (did:webvh:{SCID}:<domain:path>)
-///   cheqd: peer_src should be mainnet or testnet
-/// timeout: Optional Time for timeout
+///
+/// * `did` — the `did:scid:vh:1:...` identifier to resolve.
+/// * `peer_src` — out-of-band source when `did` has no `?src=` query (peer mode):
+///   - [`ScidMethod::WebVH`]: host/path string. Accepts the same formats as
+///     URL-mode `src` (see `normalize_webvh_src`) — bare host, host with port,
+///     optional scheme/trailing slash, etc.
+///   - [`ScidMethod::Cheqd`]: the network name (`mainnet` or `testnet`).
+/// * `timeout` — optional resolution timeout.
 pub async fn resolve(
     did: &str,
     peer_src: Option<ScidMethod>,
@@ -61,10 +87,12 @@ pub async fn resolve(
                 use ssi_dids_core::{DID, DIDResolver};
 
                 debug!("Resolving Cheqd DID: {}", cheqd_did);
-                match DIDCheqd::default()
-                    .resolve(DID::new::<str>(&cheqd_did).unwrap())
-                    .await
-                {
+                let parsed = DID::new::<str>(&cheqd_did).map_err(|e| {
+                    DIDSCIDError::DidUrlError(format!(
+                        "derived cheqd DID is not a valid DID ({cheqd_did}): {e}"
+                    ))
+                })?;
+                match DIDCheqd::default().resolve(parsed).await {
                     Ok(res) => {
                         let doc_value = serde_json::to_value(res.document.into_document())?;
                         Ok(serde_json::from_value(doc_value)?)
@@ -87,67 +115,259 @@ fn convert_scid_to_method(
     id: &str,
     peer_src: Option<ScidMethod>,
 ) -> Result<ScidMethod, DIDSCIDError> {
-    let re = Regex::new(r"^did:scid:vh:1:([^\?]*)(?:\?src=(.*))?$").unwrap();
-    if let Some(caps) = re.captures(id) {
-        if let Some(src) = caps.get(2).map(|m| m.as_str()) {
-            // Has source
-            if src.starts_with("did:cheqd") {
-                // Cheqd Method
-                let mut cheqd = String::new();
-                cheqd.push_str(src);
-                cheqd.push(':');
-                cheqd.push_str(&caps[1]);
+    let Some(caps) = SCID_RE.captures(id) else {
+        return Err(DIDSCIDError::UnsupportedFormat);
+    };
 
-                debug!("derived cheqd DID: {cheqd}");
-                Ok(ScidMethod::Cheqd(cheqd))
-            } else if src.starts_with("did:") {
-                // Invalid DID method as source
-                Err(DIDSCIDError::UnsupportedFormat)
-            } else {
-                // WebVH URL
-                let mut webvh = String::new();
-                webvh.push_str("did:webvh:");
-                webvh.push_str(&caps[1]);
-                webvh.push(':');
-                webvh.push_str(&src.replace("/", ":"));
+    let scid = &caps[1];
 
-                debug!("derived webvh DID: {webvh}");
-                Ok(ScidMethod::WebVH(webvh))
-            }
+    if let Some(src) = caps.get(2).map(|m| m.as_str()) {
+        if src.starts_with("did:cheqd:") {
+            let cheqd = format!("{src}:{scid}");
+            debug!("derived cheqd DID: {cheqd}");
+            Ok(ScidMethod::Cheqd(cheqd))
+        } else if src.starts_with("did:") {
+            Err(DIDSCIDError::UnsupportedFormat)
         } else {
-            // Peer Mode
-            match peer_src {
-                Some(ScidMethod::WebVH(src)) => {
-                    let mut webvh = String::new();
-                    webvh.push_str("did:webvh:");
-                    webvh.push_str(&caps[1]);
-                    webvh.push(':');
-                    webvh.push_str(&src);
-
-                    debug!("derived peer webvh DID: {webvh}");
-                    Ok(ScidMethod::WebVH(webvh))
-                }
-                Some(ScidMethod::Cheqd(src)) => {
-                    let mut cheqd = String::new();
-                    cheqd.push_str("did:cheqd:");
-                    cheqd.push_str(&src);
-                    cheqd.push(':');
-                    cheqd.push_str(&caps[1]);
-
-                    debug!("derived peer cheqd DID: {cheqd}");
-                    Ok(ScidMethod::Cheqd(cheqd))
-                }
-                None => Err(DIDSCIDError::MissingPeerSource),
-            }
+            let tail = normalize_webvh_src(src)?;
+            let webvh = format!("did:webvh:{scid}:{tail}");
+            debug!("derived webvh DID: {webvh}");
+            Ok(ScidMethod::WebVH(webvh))
         }
     } else {
-        Err(DIDSCIDError::UnsupportedFormat)
+        // Peer Mode — caller supplies the source out-of-band.
+        match peer_src {
+            Some(ScidMethod::WebVH(src)) => {
+                let tail = normalize_webvh_src(&src)?;
+                let webvh = format!("did:webvh:{scid}:{tail}");
+                debug!("derived peer webvh DID: {webvh}");
+                Ok(ScidMethod::WebVH(webvh))
+            }
+            Some(ScidMethod::Cheqd(src)) => {
+                let cheqd = format!("did:cheqd:{src}:{scid}");
+                debug!("derived peer cheqd DID: {cheqd}");
+                Ok(ScidMethod::Cheqd(cheqd))
+            }
+            None => Err(DIDSCIDError::MissingPeerSource),
+        }
     }
+}
+
+/// Normalises a WebVH `src` (URL-style or partial) into a did:webvh method tail.
+///
+/// Accepts:
+///   - bare host:           `example.com`
+///   - host with port:      `localhost:3000`
+///   - host + path:         `example.com/path/seg`
+///   - scheme prefix:       `https://example.com/path` (scheme is stripped)
+///   - trailing slash:      `example.com/` (slash is trimmed)
+///
+/// Per the did:webvh spec, a colon in `host:port` is encoded as `%3A`, while
+/// `/` in the path is mapped to `:`. Already-encoded `%3A` in the input is
+/// preserved.
+fn normalize_webvh_src(src: &str) -> Result<String, DIDSCIDError> {
+    let stripped = src
+        .strip_prefix("https://")
+        .or_else(|| src.strip_prefix("http://"))
+        .unwrap_or(src);
+
+    let stripped = stripped.trim_end_matches('/');
+    if stripped.is_empty() {
+        return Err(DIDSCIDError::InvalidSrc(
+            "source is empty after stripping scheme/slashes".to_string(),
+        ));
+    }
+
+    let (host, path) = match stripped.split_once('/') {
+        Some((h, p)) => (h, Some(p)),
+        None => (stripped, None),
+    };
+
+    if host.is_empty() {
+        return Err(DIDSCIDError::InvalidSrc(
+            "missing host component".to_string(),
+        ));
+    }
+
+    let host_encoded = match host.split_once(':') {
+        Some((h, port)) => {
+            if h.is_empty() {
+                return Err(DIDSCIDError::InvalidSrc(
+                    "missing host component before port".to_string(),
+                ));
+            }
+            port.parse::<u16>()
+                .map_err(|_| DIDSCIDError::InvalidSrc(format!("invalid port in host {host:?}")))?;
+            format!("{h}%3A{port}")
+        }
+        None => host.to_string(),
+    };
+
+    let mut out = host_encoded;
+    if let Some(path) = path {
+        let path = path.trim_end_matches('/');
+        if !path.is_empty() {
+            out.push(':');
+            out.push_str(&path.replace('/', ":"));
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{convert_scid_to_method, errors::DIDSCIDError, resolve};
+    use crate::{convert_scid_to_method, errors::DIDSCIDError, normalize_webvh_src, resolve};
+
+    // -- normalize_webvh_src ------------------------------------------------
+
+    #[test]
+    fn normalize_bare_host() {
+        assert_eq!(normalize_webvh_src("example.com").unwrap(), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_with_path() {
+        assert_eq!(
+            normalize_webvh_src("example.com/a/b/c").unwrap(),
+            "example.com:a:b:c",
+        );
+    }
+
+    #[test]
+    fn normalize_host_with_port() {
+        assert_eq!(
+            normalize_webvh_src("localhost:3000").unwrap(),
+            "localhost%3A3000",
+        );
+    }
+
+    #[test]
+    fn normalize_host_with_port_and_path() {
+        assert_eq!(
+            normalize_webvh_src("localhost:3000/path/to/dir").unwrap(),
+            "localhost%3A3000:path:to:dir",
+        );
+    }
+
+    #[test]
+    fn normalize_strips_https_scheme() {
+        assert_eq!(
+            normalize_webvh_src("https://localhost:3000/path").unwrap(),
+            "localhost%3A3000:path",
+        );
+    }
+
+    #[test]
+    fn normalize_strips_http_scheme() {
+        assert_eq!(
+            normalize_webvh_src("http://example.com/").unwrap(),
+            "example.com",
+        );
+    }
+
+    #[test]
+    fn normalize_trims_trailing_slash() {
+        assert_eq!(normalize_webvh_src("example.com/").unwrap(), "example.com",);
+        assert_eq!(
+            normalize_webvh_src("https://localhost:3000/").unwrap(),
+            "localhost%3A3000",
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_existing_percent_3a() {
+        // Already-encoded port should pass through unchanged.
+        assert_eq!(
+            normalize_webvh_src("localhost%3A3000/path").unwrap(),
+            "localhost%3A3000:path",
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_empty() {
+        assert!(matches!(
+            normalize_webvh_src(""),
+            Err(DIDSCIDError::InvalidSrc(_))
+        ));
+        assert!(matches!(
+            normalize_webvh_src("https:///"),
+            Err(DIDSCIDError::InvalidSrc(_))
+        ));
+    }
+
+    #[test]
+    fn normalize_rejects_bad_port() {
+        assert!(matches!(
+            normalize_webvh_src("localhost:notaport/x"),
+            Err(DIDSCIDError::InvalidSrc(_))
+        ));
+        assert!(matches!(
+            normalize_webvh_src("localhost:999999"),
+            Err(DIDSCIDError::InvalidSrc(_))
+        ));
+    }
+
+    // -- convert_scid_to_method via URL mode -------------------------------
+
+    #[test]
+    fn url_mode_with_port_encodes_colon() {
+        match convert_scid_to_method("did:scid:vh:1:abcde?src=localhost:3000/path", None) {
+            Ok(crate::ScidMethod::WebVH(did)) => {
+                assert_eq!(did, "did:webvh:abcde:localhost%3A3000:path")
+            }
+            other => panic!("Incorrect conversion: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn url_mode_with_scheme_strips_it() {
+        match convert_scid_to_method("did:scid:vh:1:abcde?src=https://localhost:3000/path", None) {
+            Ok(crate::ScidMethod::WebVH(did)) => {
+                assert_eq!(did, "did:webvh:abcde:localhost%3A3000:path")
+            }
+            other => panic!("Incorrect conversion: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn url_mode_with_trailing_slash() {
+        match convert_scid_to_method("did:scid:vh:1:abcde?src=example.com/", None) {
+            Ok(crate::ScidMethod::WebVH(did)) => {
+                assert_eq!(did, "did:webvh:abcde:example.com")
+            }
+            other => panic!("Incorrect conversion: {other:?}"),
+        }
+    }
+
+    // -- peer mode normalisation -------------------------------------------
+
+    #[test]
+    fn peer_mode_with_port_url() {
+        match convert_scid_to_method(
+            "did:scid:vh:1:abcde",
+            Some(crate::ScidMethod::WebVH(
+                "https://localhost:3000/path".to_string(),
+            )),
+        ) {
+            Ok(crate::ScidMethod::WebVH(did)) => {
+                assert_eq!(did, "did:webvh:abcde:localhost%3A3000:path")
+            }
+            other => panic!("Incorrect conversion: {other:?}"),
+        }
+    }
+
+    // -- prefix tightening / robustness ------------------------------------
+
+    #[test]
+    fn rejects_cheqd_lookalike_prefix() {
+        // "did:cheqdXYZ" must NOT be treated as a cheqd source.
+        match convert_scid_to_method("did:scid:vh:1:abcde?src=did:cheqdXYZ:mainnet", None) {
+            Err(DIDSCIDError::UnsupportedFormat) => {}
+            other => panic!("Expected UnsupportedFormat, got: {other:?}"),
+        }
+    }
+
+    // -- pre-existing happy paths ------------------------------------------
 
     #[test]
     fn test_cheqd_conversion() {
