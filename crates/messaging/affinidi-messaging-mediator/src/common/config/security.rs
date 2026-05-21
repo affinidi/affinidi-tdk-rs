@@ -12,8 +12,54 @@ use std::{
     fmt::{self, Debug},
     sync::Arc,
 };
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use vta_sdk::did_secrets::DidSecretsBundle;
+
+/// Resolved cross-origin policy for browser clients.
+///
+/// Built from the `security.cors_allow_origin` config value. Held
+/// alongside the pre-built [`CorsLayer`] so the WebSocket handler can
+/// apply the *same* allowlist as a defence-in-depth `Origin` check
+/// (WebSocket upgrades aren't subject to CORS, but browsers still send
+/// an `Origin` header on them).
+#[derive(Clone, Debug)]
+pub enum CorsOriginPolicy {
+    /// No cross-origin browser access (the default — `cors_allow_origin`
+    /// unset). Browser requests/upgrades carrying an `Origin` are
+    /// refused; header-less native clients are unaffected.
+    None,
+    /// Any origin (`cors_allow_origin = "*"`). Defensible here because
+    /// these endpoints authenticate with a bearer token in the
+    /// `Authorization` header, not an ambient cookie — a wildcard does
+    /// not expose them to CSRF, since a cross-origin page would still
+    /// need a valid token to do anything. Emits `Access-Control-Allow-
+    /// Origin: *` and never sets `allow_credentials`.
+    Any,
+    /// An explicit allowlist of scheme-qualified origins.
+    List(Vec<HeaderValue>),
+}
+
+/// Build the mediator's [`CorsLayer`] for the given origin policy. The
+/// allowed methods/headers are fixed; only the origin matching varies.
+fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
+    let base = CorsLayer::new()
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::OPTIONS,
+            Method::DELETE,
+            Method::PATCH,
+            Method::PUT,
+        ]);
+
+    match policy {
+        // Default-closed: an empty allowlist never echoes an origin.
+        CorsOriginPolicy::None => base,
+        CorsOriginPolicy::Any => base.allow_origin(AllowOrigin::any()),
+        CorsOriginPolicy::List(origins) => base.allow_origin(origins.clone()),
+    }
+}
 
 /// Security configuration for the mediator.
 ///
@@ -58,6 +104,10 @@ pub struct SecurityConfig {
     pub jwt_refresh_expiry: u64,
     #[serde(skip_serializing)]
     pub cors_allow_origin: CorsLayer,
+    /// The same origin policy the `cors_allow_origin` layer enforces,
+    /// kept in an inspectable form for the WebSocket `Origin` check.
+    #[serde(skip_serializing)]
+    pub cors_origins: CorsOriginPolicy,
     pub block_anonymous_outer_envelope: bool,
     pub force_session_did_match: bool,
     pub block_remote_admin_msgs: bool,
@@ -85,6 +135,7 @@ impl Debug for SecurityConfig {
             .field("jwt_access_expiry", &self.jwt_access_expiry)
             .field("jwt_refresh_expiry", &self.jwt_refresh_expiry)
             .field("cors_allow_origin", &self.cors_allow_origin)
+            .field("cors_origins", &self.cors_origins)
             .field(
                 "block_anonymous_outer_envelope",
                 &self.block_anonymous_outer_envelope,
@@ -122,16 +173,8 @@ impl SecurityConfig {
             jwt_decoding_key: DecodingKey::from_ed_der(&[0; 32]),
             jwt_access_expiry: 900,
             jwt_refresh_expiry: 86_400,
-            cors_allow_origin: CorsLayer::new()
-                .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-                .allow_methods([
-                    Method::GET,
-                    Method::POST,
-                    Method::OPTIONS,
-                    Method::DELETE,
-                    Method::PATCH,
-                    Method::PUT,
-                ]),
+            cors_allow_origin: build_cors_layer(&CorsOriginPolicy::None),
+            cors_origins: CorsOriginPolicy::None,
             block_anonymous_outer_envelope: true,
             force_session_did_match: true,
             block_remote_admin_msgs: true,
@@ -141,22 +184,50 @@ impl SecurityConfig {
 }
 
 impl SecurityConfigRaw {
-    fn parse_cors_allow_origin(
-        &self,
-        cors_allow_origin: &str,
-    ) -> Result<Vec<HeaderValue>, MediatorError> {
-        cors_allow_origin
+    /// Parse the raw `cors_allow_origin` config value into a
+    /// [`CorsOriginPolicy`].
+    ///
+    /// - empty / whitespace-only ⇒ [`CorsOriginPolicy::None`]
+    /// - a `*` token ⇒ [`CorsOriginPolicy::Any`] (a bare wildcard;
+    ///   `tower_http`'s origin list would otherwise *panic* on `*`).
+    ///   If `*` is mixed with explicit origins the explicit entries are
+    ///   redundant and a warning is logged.
+    /// - otherwise ⇒ [`CorsOriginPolicy::List`] of the explicit origins.
+    fn parse_cors_origins(cors_allow_origin: &str) -> Result<CorsOriginPolicy, MediatorError> {
+        let tokens: Vec<&str> = cors_allow_origin
             .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        if tokens.is_empty() {
+            return Ok(CorsOriginPolicy::None);
+        }
+
+        if tokens.contains(&"*") {
+            if tokens.len() > 1 {
+                tracing::warn!(
+                    "security.cors_allow_origin contains '*' alongside explicit origins; \
+                     treating as allow-any (the explicit entries are redundant)"
+                );
+            }
+            return Ok(CorsOriginPolicy::Any);
+        }
+
+        let origins = tokens
+            .iter()
             .map(|o| {
-                o.trim().parse::<HeaderValue>().map_err(|err| {
+                o.parse::<HeaderValue>().map_err(|err| {
                     MediatorError::ConfigError(
                         12,
                         "NA".into(),
-                        format!("Invalid CORS origin '{}': {}", o.trim(), err),
+                        format!("Invalid CORS origin '{o}': {err}"),
                     )
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(CorsOriginPolicy::List(origins))
     }
 
     /// Build the runtime `SecurityConfig` from the raw TOML values.
@@ -283,8 +354,9 @@ impl SecurityConfigRaw {
         })?;
 
         if let Some(cors_allow_origin) = &self.cors_allow_origin {
-            config.cors_allow_origin =
-                CorsLayer::new().allow_origin(self.parse_cors_allow_origin(cors_allow_origin)?);
+            let policy = Self::parse_cors_origins(cors_allow_origin)?;
+            config.cors_allow_origin = build_cors_layer(&policy);
+            config.cors_origins = policy;
         }
 
         // ── Populate the DIDComm secrets resolver ────────────────────────
@@ -384,5 +456,55 @@ impl SecurityConfigRaw {
         config.jwt_decoding_key = DecodingKey::from_ed_der(pair.public_key().as_ref());
 
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CorsOriginPolicy, SecurityConfigRaw};
+
+    #[test]
+    fn empty_origins_parse_to_none() {
+        assert!(matches!(
+            SecurityConfigRaw::parse_cors_origins("").unwrap(),
+            CorsOriginPolicy::None
+        ));
+        // Whitespace / stray commas collapse to nothing.
+        assert!(matches!(
+            SecurityConfigRaw::parse_cors_origins("  ,  ").unwrap(),
+            CorsOriginPolicy::None
+        ));
+    }
+
+    #[test]
+    fn bare_wildcard_parses_to_any() {
+        // A literal "*" must NOT reach tower_http's origin list (which
+        // panics on it) — it maps to the allow-any policy instead.
+        assert!(matches!(
+            SecurityConfigRaw::parse_cors_origins("*").unwrap(),
+            CorsOriginPolicy::Any
+        ));
+    }
+
+    #[test]
+    fn wildcard_mixed_with_origins_is_any() {
+        assert!(matches!(
+            SecurityConfigRaw::parse_cors_origins("https://a.example,*").unwrap(),
+            CorsOriginPolicy::Any
+        ));
+    }
+
+    #[test]
+    fn explicit_origins_parse_to_list() {
+        let policy =
+            SecurityConfigRaw::parse_cors_origins("https://a.example, https://b.example").unwrap();
+        match policy {
+            CorsOriginPolicy::List(origins) => {
+                assert_eq!(origins.len(), 2);
+                assert_eq!(origins[0], "https://a.example");
+                assert_eq!(origins[1], "https://b.example");
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
     }
 }
