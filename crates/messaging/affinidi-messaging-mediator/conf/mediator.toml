@@ -180,8 +180,32 @@ jwt_access_expiry = "900"
 jwt_refresh_expiry = "86400"
 
 ### Env: CORS_ALLOW_ORIGIN
-### Comma separated list of allowed origins. Use * for all origins
-### Example: "https://affinidi.com,https://example2.com"
+### Controls cross-origin browser access on the REST endpoints. Leave
+### unset (the default) to disable cross-origin access entirely.
+###
+### Accepts either:
+###   - a comma-separated list of explicit, scheme-qualified origins,
+###     each echoed back in `Access-Control-Allow-Origin` only for a
+###     matching request Origin, e.g.
+###     "https://affinidi.com,https://example2.com"; or
+###   - a single "*" to allow ANY origin. A wildcard is safe here only
+###     because these endpoints authenticate with a bearer token in the
+###     `Authorization` header (not an ambient cookie): a cross-origin
+###     page still needs a valid token, so "*" does not create CSRF
+###     exposure. `allow_credentials` is never set.
+###
+### The mediator also applies this allowlist as a defence-in-depth
+### `Origin` check on the WebSocket upgrade (/ws): browser upgrades
+### from non-allowlisted origins are refused (header-less native
+### clients are unaffected — for them the JWT is the gate).
+###
+### Operational note: with the browser WebSocket auth path the JWT
+### travels in the `Sec-WebSocket-Protocol` request header. Over wss://
+### it is TLS-encrypted in transit and the mediator never logs it, but
+### configure any fronting proxy/load-balancer NOT to log
+### `Sec-WebSocket-Protocol` request headers (as you would already
+### redact `Authorization`). Short access-token TTLs (jwt_access_expiry)
+### further limit exposure.
 # cors_allow_origin = "https://affinidi.com"
 
 ### Env: BLOCK_ANONYMOUS_OUTER_ENVELOPE

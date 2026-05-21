@@ -4,6 +4,8 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat;
 use crate::{
     SharedData,
+    common::config::CorsOriginPolicy,
+    common::jwt_auth::{AuthError, authenticate_token},
     common::session::Session,
     messages::inbound::handle_inbound,
     tasks::websocket_streaming::{StreamingUpdate, StreamingUpdateState, WebSocketCommands},
@@ -19,9 +21,13 @@ use axum::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
-use http::StatusCode;
+use axum_extra::{
+    TypedHeader,
+    headers::{Authorization, authorization::Bearer},
+};
+use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -32,24 +38,154 @@ use tokio::{
 use tracing::{Instrument, debug, info, span, warn};
 use uuid::Uuid;
 
-/// Handles the switching of the protocol to a websocket connection
-/// ACL_MODE: Requires LOCAL access
+/// Subprotocol prefix used to carry the bearer JWT through the
+/// `Sec-WebSocket-Protocol` request header.
+///
+/// Browsers cannot set an `Authorization` header on `new WebSocket(url,
+/// protocols)`, but they *can* offer subprotocols. By convention the
+/// browser offers a single entry of the form `bearer.<jwt>` (optionally
+/// alongside genuine application subprotocols). The server detects the
+/// entry carrying this prefix, strips the literal 7-character `bearer.`
+/// prefix, and treats the remainder as the raw JWT — identical to the
+/// token a native client would send in the `Authorization` header.
+///
+/// A *prefix strip* (not a `.`-split) is deliberate: a JWT is three
+/// base64url segments joined by `.`, so splitting on `.` would be
+/// ambiguous. Every JWT character (`[A-Za-z0-9-_]` plus `.`) is a valid
+/// RFC 6455 subprotocol token char, so no extra encoding is needed.
+///
+/// Browser client usage:
+/// ```js
+/// new WebSocket("wss://…/mediator/v1/ws", ["bearer." + accessToken]);
+/// ```
+const WS_BEARER_SUBPROTOCOL_PREFIX: &str = "bearer.";
+
+/// Extract the raw JWT from a `bearer.<jwt>` entry in the client's
+/// requested WebSocket subprotocols, returning the first match.
+///
+/// Returns `None` when no entry carries the `bearer.` prefix or the
+/// remainder is empty. Uses [`str::strip_prefix`] (not `split`) so the
+/// `.` separators inside the JWT are preserved verbatim.
+fn extract_bearer_subprotocol<'a, I>(protocols: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a HeaderValue>,
+{
+    protocols.into_iter().find_map(|p| {
+        p.to_str()
+            .ok()
+            .and_then(|s| s.strip_prefix(WS_BEARER_SUBPROTOCOL_PREFIX))
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+    })
+}
+
+/// The subprotocols the server may safely echo back in the 101
+/// response: every requested entry that is **not** a bearer token.
+///
+/// Reflecting a `bearer.<jwt>` entry would leak the secret token in the
+/// `Sec-WebSocket-Protocol` response header, so those entries are
+/// filtered out here and never offered to [`WebSocketUpgrade::protocols`].
+fn app_subprotocols<'a, I>(protocols: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a HeaderValue>,
+{
+    protocols
+        .into_iter()
+        .filter_map(|p| p.to_str().ok())
+        .filter(|s| !s.starts_with(WS_BEARER_SUBPROTOCOL_PREFIX))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether a WebSocket upgrade carrying this `Origin` header is allowed
+/// by the configured CORS policy.
+///
+/// WebSocket upgrades aren't subject to CORS preflight, but browsers
+/// still send an `Origin` header on them. This mirrors the REST CORS
+/// allowlist ([`CorsOriginPolicy`]) as defence-in-depth: a browser from
+/// a non-allowlisted origin is refused even if it somehow holds a valid
+/// token. Native clients send no `Origin` header and are always allowed
+/// — for them the JWT is the only (and sufficient) gate.
+fn ws_origin_allowed(policy: &CorsOriginPolicy, origin: Option<&HeaderValue>) -> bool {
+    match origin {
+        // No Origin ⇒ not a browser cross-origin context (native client).
+        None => true,
+        Some(origin) => match policy {
+            CorsOriginPolicy::Any => true,
+            CorsOriginPolicy::List(allowed) => allowed.iter().any(|a| a == origin),
+            // No cross-origin browser access configured ⇒ refuse any
+            // request that announces an Origin.
+            CorsOriginPolicy::None => false,
+        },
+    }
+}
+
+/// Handles the switching of the protocol to a websocket connection.
+///
+/// ACL_MODE: Requires LOCAL access.
+///
+/// Authentication accepts the JWT from either channel, in priority
+/// order:
+/// 1. `Authorization: Bearer <jwt>` request header — the existing path
+///    used by native clients (e.g. the Rust SDK). Unchanged.
+/// 2. The `bearer.<jwt>` entry of the `Sec-WebSocket-Protocol` request
+///    header — the browser-friendly path (browsers can't set request
+///    headers on a WebSocket upgrade). See
+///    [`WS_BEARER_SUBPROTOCOL_PREFIX`].
+///
+/// Both channels validate the token identically via
+/// [`authenticate_token`]; the resulting [`Session`] (and therefore the
+/// per-connection JWT-expiry timeout enforced in [`handle_socket`]) is
+/// the same regardless of how the token arrived. If neither channel
+/// yields a valid token the upgrade is rejected, exactly as before.
 pub async fn websocket_handler(
-    session: Session,
-    ws: WebSocketUpgrade,
     State(state): State<SharedData>,
-) -> impl IntoResponse {
+    auth_header: Option<TypedHeader<Authorization<Bearer>>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    // 0. Defence-in-depth Origin check. WebSocket upgrades aren't
+    //    subject to CORS, but browsers send an `Origin` header — refuse
+    //    cross-origin browsers outside the configured allowlist. Native
+    //    clients send no Origin and pass straight through.
+    let origin = headers.get(ORIGIN);
+    if !ws_origin_allowed(&state.config.security.cors_origins, origin) {
+        warn!(
+            ?origin,
+            "WebSocket upgrade rejected: Origin not permitted by CORS policy"
+        );
+        return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+    }
+
+    // 1. Resolve the JWT: Authorization header first (native clients),
+    //    then the Sec-WebSocket-Protocol subprotocol (browsers).
+    let token = if let Some(TypedHeader(Authorization(bearer))) = &auth_header {
+        Some(bearer.token().to_string())
+    } else {
+        extract_bearer_subprotocol(ws.requested_protocols())
+    };
+
+    let Some(token) = token else {
+        warn!(
+            "WebSocket upgrade rejected: no bearer token in Authorization header or Sec-WebSocket-Protocol"
+        );
+        return AuthError::MissingCredentials.into_response();
+    };
+
+    // 2. Validate the token → Session (identical checks for both paths).
+    let session = match authenticate_token(&state, &token).await {
+        Ok(session) => session,
+        Err(e) => return e.into_response(),
+    };
+
     let _span = span!(
         tracing::Level::INFO,
         "websocket_handler",
         session = session.session_id
     );
-    // ACL Check (websockets only work on local DID's)
-    if session.acls.get_local() {
-        async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
-            .instrument(_span)
-            .await
-    } else {
+
+    // 3. ACL Check (websockets only work on local DID's).
+    if !session.acls.get_local() {
         let error: AppError = MediatorError::problem(
             40,
             session.session_id,
@@ -63,8 +199,25 @@ pub async fn websocket_handler(
         )
         .into();
 
-        error.into_response()
+        return error.into_response();
     }
+
+    // 4. Echo back only genuine application subprotocols (if any) — and
+    //    NEVER the `bearer.<jwt>` entry, which would leak the token in
+    //    the 101 response header. When the client offered only the
+    //    bearer entry, no subprotocol is selected and the response
+    //    carries no `Sec-WebSocket-Protocol` header (RFC 6455 permits
+    //    this; browsers accept it).
+    let app_protocols = app_subprotocols(ws.requested_protocols());
+    let ws = if app_protocols.is_empty() {
+        ws
+    } else {
+        ws.protocols(app_protocols)
+    };
+
+    async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
+        .instrument(_span)
+        .await
 }
 
 /// WebSocket state machine. This is spawned per connection.
@@ -336,4 +489,101 @@ async fn _package_problem_report(
     })?;
 
     Ok(packed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CorsOriginPolicy, app_subprotocols, extract_bearer_subprotocol, ws_origin_allowed,
+    };
+    use http::HeaderValue;
+
+    fn hv(s: &str) -> HeaderValue {
+        HeaderValue::from_str(s).expect("valid header value")
+    }
+
+    #[test]
+    fn extract_strips_prefix_and_preserves_jwt_dots() {
+        // A JWT is three base64url segments joined by '.'. The bearer
+        // entry must be prefix-stripped, not split, so the inner dots
+        // survive intact.
+        let protos = [hv("bearer.aaa.bbb.ccc")];
+        assert_eq!(
+            extract_bearer_subprotocol(protos.iter()),
+            Some("aaa.bbb.ccc".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_finds_bearer_among_app_subprotocols() {
+        // The browser may offer a genuine app subprotocol alongside the
+        // bearer entry; the token must still be found regardless of order.
+        let protos = [hv("didcomm/v2"), hv("bearer.tok.en.value")];
+        assert_eq!(
+            extract_bearer_subprotocol(protos.iter()),
+            Some("tok.en.value".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_returns_none_without_bearer_entry() {
+        let protos = [hv("didcomm/v2"), hv("soap")];
+        assert_eq!(extract_bearer_subprotocol(protos.iter()), None);
+    }
+
+    #[test]
+    fn extract_returns_none_for_empty_token() {
+        // "bearer." with nothing after it is not a usable token.
+        let protos = [hv("bearer.")];
+        assert_eq!(extract_bearer_subprotocol(protos.iter()), None);
+    }
+
+    #[test]
+    fn app_subprotocols_drops_bearer_entries() {
+        // Guards the "never echo the token" requirement: the bearer
+        // entry must be excluded from anything the server may reflect.
+        let protos = [hv("didcomm/v2"), hv("bearer.secret.jwt.here")];
+        assert_eq!(app_subprotocols(protos.iter()), vec!["didcomm/v2"]);
+    }
+
+    #[test]
+    fn app_subprotocols_empty_when_only_bearer() {
+        // Bearer-only offer ⇒ nothing safe to echo ⇒ no subprotocol
+        // selected in the 101 response.
+        let protos = [hv("bearer.secret.jwt.here")];
+        assert!(app_subprotocols(protos.iter()).is_empty());
+    }
+
+    #[test]
+    fn origin_check_allows_header_less_native_clients() {
+        // Native clients (SDK) send no Origin — must always pass,
+        // regardless of policy, since the JWT is their gate.
+        assert!(ws_origin_allowed(&CorsOriginPolicy::None, None));
+        assert!(ws_origin_allowed(&CorsOriginPolicy::Any, None));
+        assert!(ws_origin_allowed(
+            &CorsOriginPolicy::List(vec![hv("https://app.example")]),
+            None
+        ));
+    }
+
+    #[test]
+    fn origin_check_none_policy_rejects_browser_origins() {
+        let origin = hv("https://evil.example");
+        assert!(!ws_origin_allowed(&CorsOriginPolicy::None, Some(&origin)));
+    }
+
+    #[test]
+    fn origin_check_any_policy_allows_browser_origins() {
+        let origin = hv("https://anything.example");
+        assert!(ws_origin_allowed(&CorsOriginPolicy::Any, Some(&origin)));
+    }
+
+    #[test]
+    fn origin_check_list_policy_matches_allowlist() {
+        let policy = CorsOriginPolicy::List(vec![hv("https://app.example")]);
+        let allowed = hv("https://app.example");
+        let denied = hv("https://other.example");
+        assert!(ws_origin_allowed(&policy, Some(&allowed)));
+        assert!(!ws_origin_allowed(&policy, Some(&denied)));
+    }
 }

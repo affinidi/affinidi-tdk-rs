@@ -2,6 +2,67 @@
 
 ## Changelog history
 
+## 21st May 2026
+
+### 0.15.4 — browser-friendly WebSocket auth + configurable CORS wildcard
+
+Lets a browser-based DIDComm client talk to the mediator directly. All
+changes are additive for existing native clients — the
+`Authorization: Bearer` WebSocket path is unchanged and exercised by a
+regression test.
+
+- **FEAT (WebSocket auth):** the `/ws` upgrade now also accepts the
+  session JWT via the `Sec-WebSocket-Protocol` request header as a
+  `bearer.<jwt>` entry, because browsers can't set an `Authorization`
+  header on `new WebSocket(...)`. The server strips the literal
+  `bearer.` prefix (prefix-strip, not split, so the JWT's own `.`
+  separators survive) and validates the token identically to the
+  header path — same signature/claims/expiry/DID-match/ACL checks,
+  same `Session`, same JWT-expiry timeout. The 101 response **never**
+  echoes the bearer entry; only genuine (non-`bearer.`) application
+  subprotocols the client offered are echoed.
+  - Client call: `new WebSocket("wss://…/ws", ["bearer." + token])`.
+    Real browsers accept a 101 that selects no subprotocol; strict
+    non-browser clients that require subprotocol confirmation should
+    offer a benign app subprotocol alongside the bearer entry
+    (Kubernetes `base64url.bearer.authorization.k8s.io` convention),
+    which the server echoes.
+- **FEAT (CORS):** `security.cors_allow_origin` now accepts a single
+  `*` to allow ANY origin (maps to `AllowOrigin::any()`), in addition
+  to the existing comma-separated explicit allowlist. Safe here because
+  these endpoints authenticate with a bearer token, not an ambient
+  cookie — a wildcard creates no CSRF exposure, and `allow_credentials`
+  is never set. Previously a `*` value would **panic at startup**
+  (tower-http's origin list rejects wildcards); it is now parsed into
+  the allow-any policy. Default remains unset = no cross-origin access.
+- **FEAT / behavioural note (WebSocket `Origin` check):** as
+  defence-in-depth, `/ws` upgrades now enforce a server-side `Origin`
+  allowlist mirroring the CORS policy (WebSocket upgrades aren't subject
+  to CORS preflight, but browsers still send `Origin`). A browser
+  upgrade whose `Origin` isn't permitted is refused with 403 — the
+  check runs before auth, so a disallowed origin is rejected even with
+  a valid token. **Requests with no `Origin` header (all native
+  clients, incl. the Rust SDK) are unaffected.** With the default
+  (unset) CORS policy, any upgrade that announces an `Origin` is
+  refused; set `cors_allow_origin` (explicit origins or `*`) to permit
+  browser WebSocket clients. No released client could have relied on
+  the prior behaviour — browser WebSocket auth did not exist before
+  this release, and native clients send no `Origin`.
+- **DOCS:** `conf/mediator.toml` `cors_allow_origin` comment rewritten —
+  documents `*` support and its bearer-token safety rationale, the
+  WebSocket `Origin` check, and an operational note to redact the
+  `Sec-WebSocket-Protocol` request header at fronting proxies /
+  load-balancers (the JWT rides in it for the browser path; `wss://` +
+  short `jwt_access_expiry` mitigate; the mediator itself never logs
+  it).
+- **REFACTOR:** JWT token→`Session` validation extracted into a shared
+  `authenticate_token()` in `common/jwt_auth.rs`, called by both the
+  `Authorization` header extractor and the new WebSocket subprotocol
+  path so both apply byte-identical checks.
+- **TEST:** 14 unit tests (subprotocol token extraction, echo-filter,
+  `Origin` allowlist, CORS `*`/list/none parsing). End-to-end coverage
+  ships in `affinidi-messaging-test-mediator` 0.2.3.
+
 ## 9th May 2026
 
 ### 0.15.3 — `/admin/status` auth + `/readyz` redaction

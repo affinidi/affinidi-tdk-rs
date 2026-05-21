@@ -86,6 +86,92 @@ impl IntoResponse for AuthError {
     }
 }
 
+/// Validate a raw JWT bearer token and resolve it to an authenticated
+/// [`Session`].
+///
+/// This is the single source of truth for token validation. It is
+/// shared by two callers so both apply *identical* signature, claim,
+/// expiry, DID-match and ACL checks:
+/// - [`Session::from_request_parts`] — the `Authorization: Bearer`
+///   header path used by all REST endpoints and by native WebSocket
+///   clients (which can set request headers on the upgrade).
+/// - [`crate::handlers::websocket::websocket_handler`] — the
+///   `Sec-WebSocket-Protocol` subprotocol path used by browsers, which
+///   cannot set an `Authorization` header on `new WebSocket(...)`.
+///
+/// The token's origin (header vs. subprotocol) is irrelevant here: the
+/// same JWT yields the same `Session`.
+pub(crate) async fn authenticate_token(
+    state: &SharedData,
+    token: &str,
+) -> Result<Session, AuthError> {
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::EdDSA);
+    validation.set_audience(&["ATM"]);
+    validation.set_required_spec_claims(&["exp", "sub", "aud", "session_id"]);
+
+    let token_data: TokenData<SessionClaims> = match jsonwebtoken::decode::<SessionClaims>(
+        token,
+        &state.config.security.jwt_decoding_key,
+        &validation,
+    ) {
+        Ok(token_data) => token_data,
+        Err(err) => {
+            event!(Level::WARN, "Decoding JWT failed {:?}", err);
+            return Err(AuthError::InvalidToken);
+        }
+    };
+
+    let session_id = token_data.claims.session_id.clone();
+    let did = token_data.claims.sub.clone();
+    let did_hash = digest(&did);
+
+    // Everything has passed token wise - expensive database operations happen here
+    let mut saved_session: Session = state
+        .database
+        .get_session(&session_id, &did)
+        .await
+        .map_err(|e| {
+            error!(
+                "{}: Couldn't get session from database! Reason: {}",
+                session_id, e
+            );
+            AuthError::InternalServerError(format!(
+                "Couldn't get session from database! Reason: {e}"
+            ))
+        })?
+        .into();
+
+    // Defence in depth: the session record's DID must match the
+    // JWT's `sub`. If they diverge, the session was either created
+    // with a different DID (storage corruption, replay across
+    // tenants) or get_session returned a partially populated
+    // record (legacy data, schema drift). Either way the handler
+    // would silently see the wrong DID — surface as InvalidToken
+    // here so the failure is loud and the client re-authenticates.
+    if saved_session.did != did {
+        warn!(
+            session_id = %session_id,
+            jwt_did = %did,
+            session_did = %saved_session.did,
+            "JWT sub does not match session DID — rejecting"
+        );
+        return Err(AuthError::InvalidToken);
+    }
+
+    // Check if ACL is satisfied
+    if saved_session.acls.get_blocked() {
+        info!("DID({}) is blocked from connecting", did);
+        return Err(AuthError::Blocked);
+    }
+
+    // Update the expires at time
+    saved_session.expires_at = token_data.claims.exp;
+
+    debug!(session_id, did_hash, "JWT auth accepted");
+
+    Ok(saved_session)
+}
+
 impl<S> FromRequestParts<S> for Session
 where
     SharedData: FromRef<S>,
@@ -115,10 +201,6 @@ where
             }
         };
 
-        let mut validation = Validation::new(jsonwebtoken::Algorithm::EdDSA);
-        validation.set_audience(&["ATM"]);
-        validation.set_required_spec_claims(&["exp", "sub", "aud", "session_id"]);
-
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -127,66 +209,6 @@ where
                 AuthError::MissingCredentials
             })?;
 
-        let token_data: TokenData<SessionClaims> = match jsonwebtoken::decode::<SessionClaims>(
-            bearer.token(),
-            &state.config.security.jwt_decoding_key,
-            &validation,
-        ) {
-            Ok(token_data) => token_data,
-            Err(err) => {
-                event!(Level::WARN, "Decoding JWT failed {:?}", err);
-                return Err(AuthError::InvalidToken);
-            }
-        };
-
-        let session_id = token_data.claims.session_id.clone();
-        let did = token_data.claims.sub.clone();
-        let did_hash = digest(&did);
-
-        // Everything has passed token wise - expensive database operations happen here
-        let mut saved_session: Session = state
-            .database
-            .get_session(&session_id, &did)
-            .await
-            .map_err(|e| {
-                error!(
-                    "{}: Couldn't get session from database! Reason: {}",
-                    session_id, e
-                );
-                AuthError::InternalServerError(format!(
-                    "Couldn't get session from database! Reason: {e}"
-                ))
-            })?
-            .into();
-
-        // Defence in depth: the session record's DID must match the
-        // JWT's `sub`. If they diverge, the session was either created
-        // with a different DID (storage corruption, replay across
-        // tenants) or get_session returned a partially populated
-        // record (legacy data, schema drift). Either way the handler
-        // would silently see the wrong DID — surface as InvalidToken
-        // here so the failure is loud and the client re-authenticates.
-        if saved_session.did != did {
-            warn!(
-                session_id = %session_id,
-                jwt_did = %did,
-                session_did = %saved_session.did,
-                "JWT sub does not match session DID — rejecting"
-            );
-            return Err(AuthError::InvalidToken);
-        }
-
-        // Check if ACL is satisfied
-        if saved_session.acls.get_blocked() {
-            info!("DID({}) is blocked from connecting", did);
-            return Err(AuthError::Blocked);
-        }
-
-        // Update the expires at time
-        saved_session.expires_at = token_data.claims.exp;
-
-        debug!(session_id, did_hash, "JWT auth accepted");
-
-        Ok(saved_session)
+        authenticate_token(&state, bearer.token()).await
     }
 }

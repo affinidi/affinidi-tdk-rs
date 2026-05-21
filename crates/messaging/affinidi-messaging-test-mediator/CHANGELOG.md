@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 21st May 2026
+
+### 0.2.3 — WebSocket subprotocol auth integration tests
+
+Test-only release — the shipped fixture API (`src/`) is unchanged.
+
+- **TEST:** new `websocket_subprotocol_auth` integration suite covering
+  the mediator's browser-friendly WebSocket auth (paired with
+  `affinidi-messaging-mediator` 0.15.4): subprotocol `bearer.<jwt>`
+  authentication, the `Authorization` header regression path, the 101
+  response not echoing the token, invalid-token rejection, and the
+  WebSocket `Origin` check. Uses raw `tokio-tungstenite` clients plus a
+  hand-rolled handshake for the bearer-only browser case (which
+  tokio-tungstenite's strict client can't express, since it errors when
+  the server selects no subprotocol).
+- **CHORE:** add the `tokio` `io-util` dev-dependency feature for the
+  raw-socket handshake test.
+
 ## 5th May 2026
 
 ### 0.2.2 — ACL / security mode simulation + admin identity
