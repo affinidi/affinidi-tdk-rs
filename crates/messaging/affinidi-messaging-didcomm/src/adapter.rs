@@ -115,11 +115,24 @@ impl MessagingProtocol for DIDCommAdapter {
                 // Extract payload from message body
                 let payload = extract_payload(&message.body);
 
+                // The cryptographically authenticated sender (from ECDH-1PU
+                // skid), not the plaintext `from` header which the sender can
+                // set to anything.
+                let auth_sender = sender_kid
+                    .as_ref()
+                    .map(|kid| kid.split('#').next().unwrap_or(kid).to_string());
+                if authenticated
+                    && let (Some(from), Some(auth)) = (&message.from, &auth_sender)
+                    && from != auth
+                {
+                    return Err(MessagingError::Unpack(format!(
+                        "plaintext `from` ({from}) does not match authenticated sender ({auth})"
+                    )));
+                }
+
                 Ok(ReceivedMessage {
                     id: message.id,
-                    sender: message.from.or_else(|| {
-                        sender_kid.map(|kid| kid.split('#').next().unwrap_or(&kid).to_string())
-                    }),
+                    sender: auth_sender.or(message.from),
                     recipient: message
                         .to
                         .and_then(|t| t.into_iter().next())
@@ -142,11 +155,20 @@ impl MessagingProtocol for DIDCommAdapter {
             } => {
                 let payload = extract_payload(&message.body);
 
+                let auth_sender = signer_kid
+                    .as_ref()
+                    .map(|kid| kid.split('#').next().unwrap_or(kid).to_string());
+                if let (Some(from), Some(auth)) = (&message.from, &auth_sender)
+                    && from != auth
+                {
+                    return Err(MessagingError::Unpack(format!(
+                        "plaintext `from` ({from}) does not match JWS signer ({auth})"
+                    )));
+                }
+
                 Ok(ReceivedMessage {
                     id: message.id,
-                    sender: message.from.or_else(|| {
-                        signer_kid.map(|kid| kid.split('#').next().unwrap_or(&kid).to_string())
-                    }),
+                    sender: auth_sender.or(message.from),
                     recipient: message
                         .to
                         .and_then(|t| t.into_iter().next())
@@ -356,6 +378,32 @@ mod tests {
         assert_eq!(
             std::str::from_utf8(&received.payload).unwrap(),
             "Hello from messaging-core!"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_spoofed_from_in_authcrypt() {
+        // Alice authcrypts with her own key (so skid == alice) but lies in the
+        // plaintext `from` header. Bob's adapter must refuse to surface this as
+        // a verified message claiming to be from the victim.
+        let (alice, bob) = setup();
+
+        let spoofed = crate::message::Message::new(
+            "https://didcomm.org/basicmessage/2.0/message",
+            serde_json::Value::String("hi".into()),
+        )
+        .from("did:example:victim")
+        .to(vec!["did:example:bob".to_string()]);
+
+        let packed = alice
+            .agent()
+            .pack_authcrypt(&spoofed, "did:example:alice", "did:example:bob")
+            .unwrap();
+
+        let err = bob.unpack(packed.as_bytes()).await.unwrap_err();
+        assert!(
+            matches!(err, MessagingError::Unpack(_)),
+            "expected Unpack error, got {err:?}"
         );
     }
 
