@@ -47,7 +47,7 @@ pub struct AuthenticationChallenge {
 }
 impl GenericDataStruct for AuthenticationChallenge {}
 
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AuthorizationResponse {
     pub access_token: String,
     pub access_expires_at: u64,
@@ -55,6 +55,17 @@ pub struct AuthorizationResponse {
     pub refresh_expires_at: u64,
 }
 impl GenericDataStruct for AuthorizationResponse {}
+
+impl std::fmt::Debug for AuthorizationResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizationResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("access_expires_at", &self.access_expires_at)
+            .field("refresh_token", &"[REDACTED]")
+            .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
+}
 
 /// Response from message_delete
 /// - successful: Contains list of message_id's that were deleted successfully

@@ -8,6 +8,44 @@ we find little issues that only affect deployment.
 Missing versions on the changelog simply reflect minor deployment changes on our
 tooling.
 
+## 24th May 2026
+
+### DIDComm (0.13.3)
+
+Security fixes; no API changes.
+
+- **FIX (security):** `DIDCommAdapter::unpack` now derives the reported
+  `sender` from the cryptographically authenticated key (ECDH-1PU
+  `skid` for authcrypt, JWS `signer_kid` for signed) instead of
+  preferring the plaintext `from` header. When the authenticated
+  message's plaintext `from` disagrees with the authenticated sender
+  DID, unpack now errors. Previously an attacker who authcrypted with
+  their own key could set `from: did:victim` in the plaintext body and
+  the caller received `{ sender: "did:victim", verified: true }`.
+  Anoncrypt (`verified: false`) still passes the unverified `from`
+  through. Adds `adapter::tests::rejects_spoofed_from_in_authcrypt`.
+- **FIX (security):** `PrivateIdentity` no longer derives `Debug`. A
+  manual impl keeps `did` / kid fields visible and redacts the
+  Ed25519 `signing_private` seed. The derived impl previously printed
+  the raw 32-byte signing key any time a `PrivateIdentity` (or an
+  agent store holding one) was formatted with `{:?}`.
+
+### SDK (0.18.3)
+
+Security fixes; no API changes.
+
+- **FIX (security):** `OOBDiscovery::retrieve_invite` returns
+  `ATMError::TransportError` for malformed invitation responses
+  instead of panicking. Affects the response envelope parse,
+  base64url decode, UTF-8 decode and inner `Message` parse — a
+  misbehaving or hostile mediator could previously crash the SDK
+  client.
+- **FIX (security):** `AuthorizationResponse` no longer derives
+  `Debug`; a manual impl redacts `access_token` and `refresh_token`
+  while leaving `*_expires_at` visible. The derived impl leaked
+  full-session credentials into any `debug!`/`warn!("{:?}", resp)`
+  call or panic dump.
+
 ## 5th May 2026
 
 ### Test Mediator (0.2.0)

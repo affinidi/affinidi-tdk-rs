@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.3] - 2026-05-24
+
+### Security
+
+- `OOBDiscovery::retrieve_invite` no longer panics on malformed
+  responses from the invitation endpoint. The four `.unwrap()` /
+  `.expect()` sites on the response envelope, base64url payload,
+  UTF-8 decode and inner `Message` parse now return
+  `ATMError::TransportError`. Previously a misbehaving or hostile
+  mediator could crash the SDK client.
+- `AuthorizationResponse` no longer derives `Debug`; a manual impl
+  redacts `access_token` and `refresh_token` while leaving the
+  `*_expires_at` fields visible. The derived impl printed both
+  tokens verbatim, so any `debug!`/`warn!("{:?}", resp)` or panic
+  dump leaked credentials granting a full authenticated session.
+  Matches the redaction already applied to the equivalent structs
+  in `affinidi-did-authentication`.
+
 ## [0.18.1] - 2026-05-05
 
 ### Changed

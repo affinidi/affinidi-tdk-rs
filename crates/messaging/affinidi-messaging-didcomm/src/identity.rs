@@ -5,7 +5,6 @@
 
 use crate::crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 /// A local identity with private keys for DIDComm operations.
-#[derive(Debug)]
 pub struct PrivateIdentity {
     /// The DID for this identity
     pub did: String,
@@ -17,6 +16,21 @@ pub struct PrivateIdentity {
     pub signing_kid: Option<String>,
     /// Ed25519 signing private key (32 bytes), if available
     pub signing_private: Option<[u8; 32]>,
+}
+
+impl std::fmt::Debug for PrivateIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrivateIdentity")
+            .field("did", &self.did)
+            .field("key_agreement_kid", &self.key_agreement_kid)
+            .field("key_agreement_private", &self.key_agreement_private)
+            .field("signing_kid", &self.signing_kid)
+            .field(
+                "signing_private",
+                &self.signing_private.map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl PrivateIdentity {
