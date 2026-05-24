@@ -1,11 +1,11 @@
 //! ML-DSA (FIPS 204) key operations.
 //!
 //! Private key material is stored as the 32-byte seed `xi`; the expanded
-//! signing key is derived on demand via `<Params as KeyGen>::from_seed`.
+//! signing key is derived on demand via `SigningKey::<P>::from_seed`.
 //! Public key material is the FIPS 204 encoded verifying key.
 
 use ml_dsa::signature::{Keypair, Signer, Verifier};
-use ml_dsa::{B32, KeyGen, MlDsa44, MlDsa65, MlDsa87, Signature};
+use ml_dsa::{B32, MlDsa44, MlDsa65, MlDsa87, Signature, SigningKey};
 use rand_10::RngExt;
 
 use crate::{CryptoError, KeyType, error::Result};
@@ -35,7 +35,7 @@ fn seed_from(seed: Option<&[u8; 32]>) -> B32 {
 /// Generates an ML-DSA-44 key pair, optionally from a 32-byte seed.
 pub fn generate_ml_dsa_44(seed: Option<&[u8; 32]>) -> KeyPair {
     let xi = seed_from(seed);
-    let sk = <MlDsa44 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa44>::from_seed(&xi);
     let vk_bytes: &[u8] = &sk.verifying_key().encode();
     // The caller is expected to move the returned private_bytes into a
     // ZeroizeOnDrop container (e.g. `Secret`) for proper cleanup. `xi`
@@ -50,7 +50,7 @@ pub fn generate_ml_dsa_44(seed: Option<&[u8; 32]>) -> KeyPair {
 /// Generates an ML-DSA-65 key pair, optionally from a 32-byte seed.
 pub fn generate_ml_dsa_65(seed: Option<&[u8; 32]>) -> KeyPair {
     let xi = seed_from(seed);
-    let sk = <MlDsa65 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa65>::from_seed(&xi);
     let vk_bytes: &[u8] = &sk.verifying_key().encode();
     KeyPair {
         key_type: KeyType::MlDsa65,
@@ -62,7 +62,7 @@ pub fn generate_ml_dsa_65(seed: Option<&[u8; 32]>) -> KeyPair {
 /// Generates an ML-DSA-87 key pair, optionally from a 32-byte seed.
 pub fn generate_ml_dsa_87(seed: Option<&[u8; 32]>) -> KeyPair {
     let xi = seed_from(seed);
-    let sk = <MlDsa87 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa87>::from_seed(&xi);
     let vk_bytes: &[u8] = &sk.verifying_key().encode();
     KeyPair {
         key_type: KeyType::MlDsa87,
@@ -113,9 +113,15 @@ impl MlDsaExpandedKey {
     pub fn from_seed(key_type: KeyType, seed: &[u8]) -> Result<Self> {
         let xi = seed_to_b32(seed)?;
         match key_type {
-            KeyType::MlDsa44 => Ok(Self::MlDsa44(Box::new(<MlDsa44 as KeyGen>::from_seed(&xi)))),
-            KeyType::MlDsa65 => Ok(Self::MlDsa65(Box::new(<MlDsa65 as KeyGen>::from_seed(&xi)))),
-            KeyType::MlDsa87 => Ok(Self::MlDsa87(Box::new(<MlDsa87 as KeyGen>::from_seed(&xi)))),
+            KeyType::MlDsa44 => Ok(Self::MlDsa44(Box::new(SigningKey::<MlDsa44>::from_seed(
+                &xi,
+            )))),
+            KeyType::MlDsa65 => Ok(Self::MlDsa65(Box::new(SigningKey::<MlDsa65>::from_seed(
+                &xi,
+            )))),
+            KeyType::MlDsa87 => Ok(Self::MlDsa87(Box::new(SigningKey::<MlDsa87>::from_seed(
+                &xi,
+            )))),
             other => Err(CryptoError::UnsupportedKeyType(format!(
                 "MlDsaExpandedKey::from_seed called with non-ML-DSA key type {other:?}"
             ))),
@@ -156,7 +162,7 @@ impl MlDsaExpandedKey {
 /// Signs `data` with ML-DSA-44, given a 32-byte seed.
 pub fn sign_ml_dsa_44(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let xi = seed_to_b32(seed)?;
-    let sk = <MlDsa44 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa44>::from_seed(&xi);
     let sig: Signature<MlDsa44> = sk.sign(data);
     let bytes: &[u8] = &sig.encode();
     Ok(bytes.to_vec())
@@ -165,7 +171,7 @@ pub fn sign_ml_dsa_44(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 /// Signs `data` with ML-DSA-65, given a 32-byte seed.
 pub fn sign_ml_dsa_65(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let xi = seed_to_b32(seed)?;
-    let sk = <MlDsa65 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa65>::from_seed(&xi);
     let sig: Signature<MlDsa65> = sk.sign(data);
     let bytes: &[u8] = &sig.encode();
     Ok(bytes.to_vec())
@@ -174,7 +180,7 @@ pub fn sign_ml_dsa_65(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 /// Signs `data` with ML-DSA-87, given a 32-byte seed.
 pub fn sign_ml_dsa_87(seed: &[u8], data: &[u8]) -> Result<Vec<u8>> {
     let xi = seed_to_b32(seed)?;
-    let sk = <MlDsa87 as KeyGen>::from_seed(&xi);
+    let sk = SigningKey::<MlDsa87>::from_seed(&xi);
     let sig: Signature<MlDsa87> = sk.sign(data);
     let bytes: &[u8] = &sig.encode();
     Ok(bytes.to_vec())

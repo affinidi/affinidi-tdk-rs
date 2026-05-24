@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.1.5"
+version = "0.1.6"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -45,8 +45,8 @@ p384 = { version = "0.13", features = [
   "ecdsa-core",
   "arithmetic",
 ], optional = true }
-ml-dsa = { version = "0.1.0-rc.8", features = ["rand_core", "zeroize"], optional = true }
-slh-dsa = { version = "0.2.0-rc.4", features = ["zeroize"], optional = true }
+ml-dsa = { version = "0.1.0", features = ["rand_core", "zeroize"], optional = true }
+slh-dsa = { version = "=0.2.0-rc.5", features = ["zeroize"], optional = true }
 # PQC crates (ml-dsa, slh-dsa) pull rand_core 0.10 transitively via
 # `signature` v3. A second copy coexists with the 0.6 one used by other
 # primitives; we never import it directly, so no explicit dep is needed.
