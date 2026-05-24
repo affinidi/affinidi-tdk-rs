@@ -215,6 +215,12 @@ pub async fn websocket_handler(
         ws.protocols(app_protocols)
     };
 
+    // 5. Enforce the configured `ws_size` cap at the tungstenite layer so
+    //    oversized frames are rejected during framing instead of being
+    //    buffered in full and only checked after `socket.recv()` returns.
+    let ws_size = state.config.limits.ws_size;
+    let ws = ws.max_message_size(ws_size).max_frame_size(ws_size);
+
     async move { ws.on_upgrade(move |socket| handle_socket(socket, state, session)) }
         .instrument(_span)
         .await
