@@ -153,9 +153,9 @@ impl OOBDiscovery {
             )));
         }
 
-        let body = serde_json::from_str::<SuccessResponse<String>>(&body)
-            .ok()
-            .unwrap();
+        let body = serde_json::from_str::<SuccessResponse<String>>(&body).map_err(|e| {
+            ATMError::TransportError(format!("Couldn't parse OOB invitation response: {e}"))
+        })?;
 
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -164,14 +164,15 @@ impl OOBDiscovery {
 
         if let Some(data) = body.data {
             // base64 decode the output
-            let msg_str = String::from_utf8(
-                BASE64_URL_SAFE_NO_PAD
-                    .decode(data)
-                    .expect("base64 decoding issue"),
-            )
-            .unwrap();
-            let msg: Message =
-                serde_json::from_str(&msg_str).expect("Can't deserialize Invitation");
+            let msg_bytes = BASE64_URL_SAFE_NO_PAD.decode(data).map_err(|e| {
+                ATMError::TransportError(format!("OOB invitation is not valid base64url: {e}"))
+            })?;
+            let msg_str = String::from_utf8(msg_bytes).map_err(|e| {
+                ATMError::TransportError(format!("OOB invitation is not valid UTF-8: {e}"))
+            })?;
+            let msg: Message = serde_json::from_str(&msg_str).map_err(|e| {
+                ATMError::TransportError(format!("Couldn't deserialize OOB invitation: {e}"))
+            })?;
 
             if let Some(expires_time) = msg.expires_time
                 && expires_time <= now
