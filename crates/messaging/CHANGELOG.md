@@ -46,6 +46,21 @@ Security fixes; no API changes.
   full-session credentials into any `debug!`/`warn!("{:?}", resp)`
   call or panic dump.
 
+### Text Client (0.12.2)
+
+Security fixes; no API changes.
+
+- **FIX (security):** `State::save_to_file` opens the state file
+  with mode `0o600` on Unix. The file holds `secrets: Vec<Secret>`
+  (DID private keys) but was previously created via `File::create()`,
+  which honours the process umask and typically left the file
+  world-readable (`0644`). No behavior change on non-Unix.
+- **FIX (security):** `send_invitation_accept` no longer panics on a
+  non-UTF-8 OOB invite payload. `String::from_utf8(invite).unwrap()`
+  on the base64-decoded bytes is replaced with the surrounding
+  warn-and-return pattern. A hostile invite endpoint returning valid
+  JSON wrapping base64 of non-UTF-8 bytes previously crashed the TUI.
+
 ## 5th May 2026
 
 ### Test Mediator (0.2.0)
