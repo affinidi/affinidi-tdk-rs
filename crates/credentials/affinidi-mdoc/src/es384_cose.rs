@@ -64,7 +64,6 @@ impl Es384CoseSigner {
 
     /// Get the public key as uncompressed SEC1 bytes (97 bytes).
     pub fn public_key_bytes(&self) -> Vec<u8> {
-        use p384::elliptic_curve::sec1::ToEncodedPoint;
         VerifyingKey::from(&self.signing_key)
             .to_encoded_point(false)
             .to_bytes()

@@ -173,10 +173,8 @@ pub fn parse_trust_list_xml(xml: &str) -> Result<TrustServiceStatusList> {
                     "TSLLocation" => {
                         current_pointer_location = text_buf.clone();
                     }
-                    "URI" => {
-                        if path_str.contains("TSPInformationURI") {
-                            current_tsp_uris.push(text_buf.clone());
-                        }
+                    "URI" if path_str.contains("TSPInformationURI") => {
+                        current_tsp_uris.push(text_buf.clone());
                     }
                     "X509Certificate" => {
                         in_x509_cert = false;

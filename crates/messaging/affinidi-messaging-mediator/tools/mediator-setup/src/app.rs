@@ -3280,27 +3280,23 @@ impl WizardApp {
                 }
                 let max = items.len() - 1;
                 match code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if *cursor > 0 {
-                            *cursor -= 1;
-                            // Keep cursor visible — scroll up if we
-                            // walked past the top of the viewport.
-                            if *cursor < *scroll {
-                                *scroll = *cursor;
-                            }
+                    KeyCode::Up | KeyCode::Char('k') if *cursor > 0 => {
+                        *cursor -= 1;
+                        // Keep cursor visible — scroll up if we
+                        // walked past the top of the viewport.
+                        if *cursor < *scroll {
+                            *scroll = *cursor;
                         }
                     }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if *cursor < max {
-                            *cursor += 1;
-                            // Viewport height is rendered-side knowledge;
-                            // we approximate with a generous 10-row
-                            // window. Worst case the renderer clips a
-                            // row — better than constraining input
-                            // logic to a magic-number height.
-                            if *cursor >= *scroll + 10 {
-                                *scroll = cursor.saturating_sub(9);
-                            }
+                    KeyCode::Down | KeyCode::Char('j') if *cursor < max => {
+                        *cursor += 1;
+                        // Viewport height is rendered-side knowledge;
+                        // we approximate with a generous 10-row
+                        // window. Worst case the renderer clips a
+                        // row — better than constraining input
+                        // logic to a magic-number height.
+                        if *cursor >= *scroll + 10 {
+                            *scroll = cursor.saturating_sub(9);
                         }
                     }
                     KeyCode::PageUp => {

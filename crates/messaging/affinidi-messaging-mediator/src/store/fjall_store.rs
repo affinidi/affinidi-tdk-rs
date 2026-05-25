@@ -2657,7 +2657,7 @@ mod tests {
             .expect("add");
 
         let resp = store
-            .access_list_add(100, &alice, &vec![bob.clone(), charlie.clone()])
+            .access_list_add(100, &alice, &[bob.clone(), charlie.clone()])
             .await
             .expect("add");
         assert_eq!(resp.did_hashes.len(), 2);
@@ -2665,13 +2665,13 @@ mod tests {
         assert_eq!(store.access_list_count(&alice).await.unwrap(), 2);
 
         let got = store
-            .access_list_get(&alice, &vec![bob.clone(), hash("eve")])
+            .access_list_get(&alice, &[bob.clone(), hash("eve")])
             .await
             .expect("get");
         assert_eq!(got.did_hashes, vec![bob.clone()]);
 
         let removed = store
-            .access_list_remove(&alice, &vec![bob.clone()])
+            .access_list_remove(&alice, std::slice::from_ref(&bob))
             .await
             .expect("remove");
         assert_eq!(removed, 1);
@@ -2697,7 +2697,7 @@ mod tests {
             .await
             .expect("add alice");
         store
-            .access_list_add(100, &alice, &vec![bob.clone()])
+            .access_list_add(100, &alice, std::slice::from_ref(&bob))
             .await
             .expect("add bob to list");
         assert!(store.access_list_allowed(&alice, Some(&bob)).await);

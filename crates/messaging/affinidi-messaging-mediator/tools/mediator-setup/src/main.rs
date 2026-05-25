@@ -1750,10 +1750,8 @@ fn inline_select(prompt: &str, options: &[&str], default: usize) -> Option<usize
                 KeyCode::Up | KeyCode::Char('k') => {
                     selected = selected.saturating_sub(1);
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if selected < options.len() - 1 {
-                        selected += 1;
-                    }
+                KeyCode::Down | KeyCode::Char('j') if selected < options.len() - 1 => {
+                    selected += 1;
                 }
                 KeyCode::Enter => {
                     let _ = disable_raw_mode();
