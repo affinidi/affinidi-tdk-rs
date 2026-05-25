@@ -10,6 +10,47 @@ tooling.
 
 ## 24th May 2026
 
+### Mediator (0.15.5)
+
+Security fixes plus the coordinated `vta-sdk` 0.7 wire bump.
+
+- **FIX (security):** direct-delivery ACL bypass. On the direct-
+  delivery branch the mediator cannot decrypt the JWE, so
+  `envelope.from_did` (from the unverified `skid` / `apu`) was
+  trusted for the per-DID send ACL and the recipient's
+  `access_list_allowed` check. An authenticated session could set
+  `skid` to any allow-listed DID and bypass both checks. When
+  `force_session_did_match` is on, the same policy now applies to
+  direct delivery as already applied to the mediator-destined
+  branch — ACL checks operate on the authenticated session
+  identity.
+- **FIX (security):** unbounded `/outbound` request list.
+  `message_outbound_handler` iterated `body.message_ids` issuing one
+  database get (+ optional delete) per id with no cap, letting any
+  LOCAL-authenticated client pin a worker on database round-trips
+  with a single request. Now rejects requests over
+  `config.limits.listed_messages` (default 100), matching the
+  existing `message_delete` pattern.
+- **FIX (security):** WebSocket `ws_size` cap enforced too late.
+  `limits.ws_size` was checked only after `socket.recv()` returned;
+  tungstenite had already buffered the full message (defaults: 64
+  MiB max message, 16 MiB max frame). Now sets `max_message_size`
+  / `max_frame_size` on the `WebSocketUpgrade` from
+  `limits.ws_size` so oversized frames are dropped during framing.
+- **FIX (security):** redact tokens in `AuthRefreshResponse`
+  `Debug`. The refresh response carried the freshly minted bearer
+  `access_token` plus the rotated one-time `refresh_token`; the
+  derived `Debug` printed both in the clear. Manual impl now
+  redacts both fields, matching the treatment applied to
+  `AuthorizationResponse` in 0.18.3.
+- **CHORE:** Bumps `vta-sdk` from `0.6` to `0.7` (coordinated wire
+  bump with the mediator-setup wizard; trust-task wire URIs
+  renamed, `did → subject` threaded through the auth payloads —
+  intentional break, no external consumers yet).
+- **CHORE:** Workspace MSRV raised from `1.94.0` to `1.95.0` for
+  `vta-sdk@0.7.0`. Both `rust-toolchain.toml` and the four CI
+  workflows bumped together.
+
 ### DIDComm (0.13.3)
 
 Security fixes; no API changes.
