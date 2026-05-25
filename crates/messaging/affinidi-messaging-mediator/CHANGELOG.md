@@ -2,6 +2,77 @@
 
 ## Changelog history
 
+## 24th May 2026
+
+### 0.15.5 — vta-sdk 0.7 + messaging security fixes
+
+Security fixes plus the coordinated `vta-sdk` 0.7 wire bump. No
+configuration changes required — `vta-sdk` was an internal dep and
+the trust-task surface has no external consumers yet.
+
+#### Security
+
+- **FIX (security):** direct-delivery ACL bypass. On the direct-
+  delivery branch (envelope addressed to a local account, not the
+  mediator), the mediator cannot decrypt the JWE and so cannot
+  cryptographically verify the sender. `envelope.from_did` is read
+  from the unverified `skid`/`apu` and was then trusted for the
+  per-DID send ACL and the recipient's `access_list_allowed` check.
+  An authenticated session could therefore set `skid` to any
+  allow-listed DID and bypass both checks. When
+  `force_session_did_match` is enabled, the mediator-destined branch
+  already bound the verified sender kid to `session.did`; this
+  release applies the same policy to direct delivery so the ACL
+  checks operate on the authenticated session identity.
+- **FIX (security):** unbounded `/outbound` request list.
+  `message_outbound_handler` iterated `body.message_ids` issuing one
+  database get (and optionally a delete) per id, with no upper
+  bound, letting any LOCAL-authenticated client pin a worker on
+  database round-trips with a single request. Now rejects requests
+  over `config.limits.listed_messages` (default 100), matching the
+  existing `message_delete` pattern.
+- **FIX (security):** WebSocket `ws_size` cap enforced too late.
+  The `/ws` handler only checked `msg.len() > limits.ws_size` *after*
+  `socket.recv()` returned, by which point tungstenite had already
+  buffered the full message (default `max_message_size` 64 MiB,
+  `max_frame_size` 16 MiB). With the default `ws_size` of 10 MiB an
+  authenticated client could push frames ~6× the configured cap and
+  have them allocated before rejection. Sets `max_message_size` /
+  `max_frame_size` on the `WebSocketUpgrade` from `limits.ws_size`
+  so oversized frames are dropped during framing.
+- **FIX (security):** redact tokens in `AuthRefreshResponse` `Debug`.
+  The mediator-side response carries the freshly minted bearer
+  `access_token` plus the rotated one-time `refresh_token`. The
+  derived `Debug` impl printed both in the clear; any tracing of
+  the response struct (or a panic in the refresh handler that
+  captured it) would dump session credentials into the mediator's
+  logs. Replaces the derived `Debug` with a manual impl that
+  redacts both token fields while keeping the expiry timestamps
+  visible, matching the treatment applied in `affinidi-did-
+  authentication` and `affinidi-messaging-sdk`.
+
+#### Dependencies
+
+- **CHORE:** Bumps `vta-sdk` from `0.6` to `0.7` to stay on a single
+  wire version with the mediator-setup wizard. The 0.7 release
+  renames the trust-task wire URIs to the framework-canonical
+  `trusttasks.org/spec/...` form and threads `did → subject`
+  through the auth challenge / authenticate payloads. The wire
+  break is intentional — the trust-task surface has no external
+  consumers yet.
+- **CHORE:** Workspace MSRV raised from `1.94.0` to `1.95.0` to
+  satisfy `vta-sdk@0.7.0`'s MSRV (workspace `rust-toolchain.toml`
+  and the four GitHub Actions workflows that pin the toolchain).
+- **CHORE:** Picks up `affinidi-messaging-didcomm 0.13.3` and
+  `affinidi-messaging-sdk 0.18.3` via the workspace path deps
+  (released the same day for additional security hardening). All
+  dependents pin major.minor (`0.13` / `0.18`), so no
+  `Cargo.toml` edits required.
+
+`affinidi-messaging-test-mediator` re-exports the mediator with a
+caret `version = "0.15"` pin and picks up 0.15.5 automatically — no
+cascade bump needed.
+
 ## 21st May 2026
 
 ### 0.15.4 — browser-friendly WebSocket auth + configurable CORS wildcard

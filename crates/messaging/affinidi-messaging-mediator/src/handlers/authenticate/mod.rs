@@ -30,7 +30,7 @@ impl GenericDataStruct for AuthenticationChallenge {}
 
 /// Refresh tokens response from the authentication service.
 /// Includes a rotated refresh token (one-time use).
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AuthRefreshResponse {
     pub access_token: String,
     pub access_expires_at: u64,
@@ -38,6 +38,17 @@ pub struct AuthRefreshResponse {
     pub refresh_expires_at: u64,
 }
 impl GenericDataStruct for AuthRefreshResponse {}
+
+impl std::fmt::Debug for AuthRefreshResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthRefreshResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("access_expires_at", &self.access_expires_at)
+            .field("refresh_token", &"[REDACTED]")
+            .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
+}
 
 /// Request body for POST /authenticate/challenge
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]

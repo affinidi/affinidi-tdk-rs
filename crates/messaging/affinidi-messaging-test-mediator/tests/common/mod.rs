@@ -6,6 +6,11 @@ use std::sync::Once;
 /// default `TestMediator` backend is now in-memory and tests don't
 /// need Redis to run. Retained so existing call sites
 /// (`if skip_if_no_redis() { return; }`) keep compiling without churn.
+///
+/// `#[allow(dead_code)]` because `tests/common/mod.rs` is built
+/// separately for each integration-test binary and not every binary
+/// calls this helper.
+#[allow(dead_code)]
 pub fn skip_if_no_redis() -> bool {
     false
 }

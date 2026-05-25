@@ -98,17 +98,15 @@ impl CircuitBreaker {
         let failures = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
 
         match self.state.load(Ordering::Relaxed) {
-            STATE_CLOSED => {
-                if failures >= self.failure_threshold {
-                    self.state.store(STATE_OPEN, Ordering::Release);
-                    self.opened_at.store(now_secs(), Ordering::Release);
-                    metrics::counter!(METRIC_CIRCUIT_BREAKER_TRIPS_TOTAL).increment(1);
-                    metrics::gauge!(METRIC_CIRCUIT_BREAKER_STATE).set(1.0);
-                    error!(
-                        "Circuit breaker: Closed → Open (threshold {} reached, {} consecutive failures)",
-                        self.failure_threshold, failures
-                    );
-                }
+            STATE_CLOSED if failures >= self.failure_threshold => {
+                self.state.store(STATE_OPEN, Ordering::Release);
+                self.opened_at.store(now_secs(), Ordering::Release);
+                metrics::counter!(METRIC_CIRCUIT_BREAKER_TRIPS_TOTAL).increment(1);
+                metrics::gauge!(METRIC_CIRCUIT_BREAKER_STATE).set(1.0);
+                error!(
+                    "Circuit breaker: Closed → Open (threshold {} reached, {} consecutive failures)",
+                    self.failure_threshold, failures
+                );
             }
             STATE_HALF_OPEN => {
                 self.state.store(STATE_OPEN, Ordering::Release);

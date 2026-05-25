@@ -155,6 +155,20 @@ impl State {
     }
 
     pub fn save_to_file(&self, file_path: &str) -> Result<(), std::io::Error> {
+        // State serializes `secrets` (private keys); restrict to owner-only on
+        // Unix so other local users can't read them. `File::create` would use
+        // the process umask (typically 0644).
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(file_path)?
+        };
+        #[cfg(not(unix))]
         let file = std::fs::File::create(file_path)?;
 
         serde_json::to_writer_pretty(file, self)?;

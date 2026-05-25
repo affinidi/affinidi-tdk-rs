@@ -194,10 +194,8 @@ pub(crate) async fn process(
 
                         // Creates a string placement for each error. E.g. {1}, {2}, {3}
                         let mut s = String::new();
-                        let mut i = 1;
-                        for _ in &errors {
+                        for (i, _) in (1..).zip(errors.iter()) {
                             s.push_str(&format!(" ({{{i}}})"));
-                            i += 1;
                         }
 
                         return Err(MediatorError::problem_with_log(

@@ -145,11 +145,16 @@ pub async fn send_invitation_accept(
         return Ok(());
     };
 
-    let invite = if let Ok(invite) = BASE64_URL_SAFE_NO_PAD.decode(base64_invite) {
-        String::from_utf8(invite).unwrap()
-    } else {
-        warn!("Bas64 decoding failed on invite!");
-        return Ok(());
+    let invite = match BASE64_URL_SAFE_NO_PAD
+        .decode(base64_invite)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+    {
+        Some(invite) => invite,
+        None => {
+            warn!("OOB invite is not valid base64url-encoded UTF-8");
+            return Ok(());
+        }
     };
 
     let invite_message = match serde_json::from_str::<Message>(&invite) {

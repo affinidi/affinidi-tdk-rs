@@ -70,7 +70,7 @@ license = "Apache-2.0"
 keywords = ["ssi", "affinidi"]
 repository = "https://github.com/affinidi/affinidi-tdk-rs"
 publish = true
-rust-version = "1.94.0"
+rust-version = "1.95.0"
 
 [workspace.dependencies]
 tokio = "1"
