@@ -3,7 +3,6 @@
  * and optionally verify Key Binding JWT.
  */
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::Value;
 
 use crate::SdJwt;
@@ -99,12 +98,18 @@ pub fn verify(
                     )
                 })?;
 
-            // Verify KB-JWT signature if a holder verifier is provided (S5)
-            let kb_payload = if let Some(hv) = holder_verifier {
-                hv.verify_jwt(kb_jwt_str)?
-            } else {
-                decode_jwt_payload(kb_jwt_str)?
+            // RFC 9901 §8.3: key binding only holds if the KB-JWT signature is
+            // verified against the holder key the issuer committed to in
+            // `cnf.jwk`. Decoding the KB-JWT *unverified* (the previous
+            // fallback) lets anyone who obtains the SD-JWT mint a KB-JWT and
+            // be reported as `kb_verified: true`. Callers MUST construct
+            // `holder_verifier` from `cnf.jwk` above.
+            let Some(hv) = holder_verifier else {
+                return Err(SdJwtError::KeyBinding(
+                    "holder_verifier required when verify_kb is true".into(),
+                ));
             };
+            let kb_payload = hv.verify_jwt(kb_jwt_str)?;
 
             // Verify sd_hash
             let expected_sd_hash = hasher.hash_b64(sd_jwt.serialize_without_kb().as_bytes());
@@ -225,20 +230,6 @@ fn collect_digests(value: &Value, digests: &mut std::collections::HashSet<String
         }
         _ => {}
     }
-}
-
-/// Decode a JWT payload without verifying the signature.
-fn decode_jwt_payload(jws: &str) -> Result<Value> {
-    let parts: Vec<&str> = jws.splitn(3, '.').collect();
-    if parts.len() != 3 {
-        return Err(SdJwtError::InvalidFormat("invalid JWT format".into()));
-    }
-
-    let payload_bytes = URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| SdJwtError::InvalidFormat(format!("JWT payload decode: {e}")))?;
-    let payload: Value = serde_json::from_slice(&payload_bytes)?;
-    Ok(payload)
 }
 
 #[cfg(test)]
@@ -402,7 +393,9 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = HmacSha256Signer::new(test_key());
         let jwt_verifier = HmacSha256Verifier::new(test_key());
-        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+        let holder_key = b"holder-key-for-hmac-signing!!!";
+        let holder_signer = HmacSha256Signer::new(holder_key);
+        let holder_verifier = HmacSha256Verifier::new(holder_key);
 
         let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
         let claims = serde_json::json!({ "sub": "user123", "name": "John" });
@@ -425,7 +418,13 @@ mod tests {
             expected_nonce: Some("xyz789"),
         };
 
-        let result = verify(&presentation, &jwt_verifier, &hasher, &opts, None);
+        let result = verify(
+            &presentation,
+            &jwt_verifier,
+            &hasher,
+            &opts,
+            Some(&holder_verifier),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("aud mismatch"));
     }
@@ -435,7 +434,9 @@ mod tests {
         let hasher = Sha256Hasher;
         let signer = HmacSha256Signer::new(test_key());
         let jwt_verifier = HmacSha256Verifier::new(test_key());
-        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+        let holder_key = b"holder-key-for-hmac-signing!!!";
+        let holder_signer = HmacSha256Signer::new(holder_key);
+        let holder_verifier = HmacSha256Verifier::new(holder_key);
 
         let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
         let claims = serde_json::json!({ "sub": "user123", "name": "John" });
@@ -458,9 +459,47 @@ mod tests {
             expected_nonce: Some("wrong-nonce"),
         };
 
-        let result = verify(&presentation, &jwt_verifier, &hasher, &opts, None);
+        let result = verify(
+            &presentation,
+            &jwt_verifier,
+            &hasher,
+            &opts,
+            Some(&holder_verifier),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("nonce mismatch"));
+    }
+
+    #[test]
+    fn verify_kb_without_holder_verifier_fails() {
+        let hasher = Sha256Hasher;
+        let signer = HmacSha256Signer::new(test_key());
+        let jwt_verifier = HmacSha256Verifier::new(test_key());
+        let holder_signer = HmacSha256Signer::new(b"holder-key-for-hmac-signing!!!");
+
+        let holder_jwk = serde_json::json!({ "kty": "oct", "k": "holder-key" });
+        let claims = serde_json::json!({ "sub": "user123" });
+        let frame = serde_json::json!({});
+
+        let sd_jwt = issuer::issue(&claims, &frame, &signer, &hasher, Some(&holder_jwk)).unwrap();
+        let kb_input = KbJwtInput {
+            audience: "https://verifier.example.com",
+            nonce: "n",
+            signer: &holder_signer,
+            iat: 1700000000,
+        };
+        let presentation = holder::present(&sd_jwt, &[], Some(&kb_input), &hasher).unwrap();
+
+        let opts = VerificationOptions {
+            verify_kb: true,
+            expected_audience: Some("https://verifier.example.com"),
+            expected_nonce: Some("n"),
+        };
+
+        // No holder_verifier => must refuse rather than report kb_verified=true
+        // on an unverified KB-JWT signature.
+        let err = verify(&presentation, &jwt_verifier, &hasher, &opts, None).unwrap_err();
+        assert!(matches!(err, SdJwtError::KeyBinding(_)), "got {err:?}");
     }
 
     #[test]
