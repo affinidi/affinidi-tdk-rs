@@ -222,6 +222,7 @@ fn spec_example_full_flow() {
     let signer = HmacSha256Signer::new(issuer_key);
     let jwt_verifier = HmacSha256Verifier::new(issuer_key);
     let holder_signer = HmacSha256Signer::new(holder_key);
+    let holder_verifier = HmacSha256Verifier::new(holder_key);
 
     let holder_jwk = json!({
         "kty": "oct",
@@ -283,7 +284,14 @@ fn spec_example_full_flow() {
         expected_audience: Some("https://verifier.example.com"),
         expected_nonce: Some("XZOUco1u_gEPknxS78sWWg"),
     };
-    let result = verifier::verify(&parsed, &jwt_verifier, &hasher, &opts, None).unwrap();
+    let result = verifier::verify(
+        &parsed,
+        &jwt_verifier,
+        &hasher,
+        &opts,
+        Some(&holder_verifier),
+    )
+    .unwrap();
 
     assert!(result.is_verified());
     assert_eq!(result.claims["given_name"], "John");
