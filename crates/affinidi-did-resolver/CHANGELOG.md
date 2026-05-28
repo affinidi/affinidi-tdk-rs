@@ -2,6 +2,38 @@
 
 ## Changelog history
 
+### 28th May 2026
+
+#### did-ebsi (0.1.2)
+
+- **SECURITY (HIGH — SSRF + path injection):** `resolve_ebsi_did()`
+  interpolated the caller-supplied DID string straight into the request
+  path and used `reqwest::get()`, which follows up to 10 redirects with
+  no timeout. A DID embedded in untrusted input could inject path/query
+  components, and a 3xx from the registry (or anything on-path) could
+  pivot the resolver to an internal address and serve a forged DID
+  document. The resolver now strips the `did:ebsi:` prefix and runs
+  `validate_ebsi_identifier()` (base58btc, fixed length, version byte)
+  before building the URL, and uses an explicit `Client` with
+  `redirect::Policy::none()` and a 20 s timeout.
+
+#### affinidi-did-resolver-cache-server (0.7.5)
+
+- **SECURITY (HIGH — SSRF reflection + body DoS):** `fetch_webvh_log()`
+  derives the target host from the caller-supplied
+  `did:webvh:{scid}:{host}` and was duplicated in `handlers/http.rs` and
+  `handlers/websocket.rs`. Both copies built a `reqwest::Client` with the
+  default redirect policy (10 hops) and read the body with unbounded
+  `.text().await`, then reflected the body to the requesting client in
+  the `_did_log` / `did_witness_log` response fields. An attacker
+  hosting a valid `did:webvh` log could have their endpoint return a 3xx
+  to an internal address (cloud metadata, RFC1918, loopback) on the
+  second fetch — the cache server followed it, buffered the response,
+  and handed it back to the attacker. The unbounded read also let a
+  hostile endpoint OOM the resolver. Consolidated into `handlers/mod.rs`
+  with `redirect::Policy::none()` and a streaming 1 MiB body cap
+  (`read_text_limited`).
+
 ### 15th March 2026
 
 #### did-scid (0.1.4)

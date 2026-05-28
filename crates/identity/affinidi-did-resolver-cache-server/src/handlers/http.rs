@@ -1,4 +1,4 @@
-use crate::SharedData;
+use crate::{SharedData, handlers::fetch_webvh_log};
 use affinidi_did_resolver_cache_sdk::DIDMethod;
 use axum::{
     Json,
@@ -6,72 +6,7 @@ use axum::{
 };
 use http::StatusCode;
 use serde_json::{Value, json};
-use tracing::{error, warn};
-
-/// For did:webvh DIDs, fetch the raw DID log from the source HTTP endpoint
-/// so clients can independently verify the cryptographic chain.
-async fn fetch_webvh_log(did: &str) -> (Option<String>, Option<String>) {
-    let parsed_url = match didwebvh_rs::url::WebVHURL::parse_did_url(did) {
-        Ok(url) => url,
-        Err(e) => {
-            warn!("Failed to parse WebVH DID URL for log fetch: {e}");
-            return (None, None);
-        }
-    };
-
-    let log_url = match parsed_url.get_http_url(Some("did.jsonl")) {
-        Ok(url) => url,
-        Err(e) => {
-            warn!("Failed to construct log URL for WebVH DID: {e}");
-            return (None, None);
-        }
-    };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to create HTTP client for WebVH log fetch: {e}");
-            return (None, None);
-        }
-    };
-
-    let did_log = match client.get(log_url).send().await {
-        Ok(resp) if resp.status().is_success() => match resp.text().await {
-            Ok(text) => Some(text),
-            Err(e) => {
-                warn!("Failed to read WebVH log response body: {e}");
-                None
-            }
-        },
-        Ok(resp) => {
-            warn!("WebVH log fetch returned HTTP {}: {}", resp.status(), did);
-            None
-        }
-        Err(e) => {
-            warn!("Failed to fetch WebVH log for {}: {e}", did);
-            None
-        }
-    };
-
-    // Fetch witness proofs if log was successfully retrieved
-    let did_witness_log = if did_log.is_some() {
-        let witness_url = match parsed_url.get_http_url(Some("did-witness.json")) {
-            Ok(url) => url,
-            Err(_) => return (did_log, None),
-        };
-        match client.get(witness_url).send().await {
-            Ok(resp) if resp.status().is_success() => resp.text().await.ok(),
-            _ => None,
-        }
-    } else {
-        None
-    };
-
-    (did_log, did_witness_log)
-}
+use tracing::error;
 
 pub async fn resolver_handler(
     State(state): State<SharedData>,

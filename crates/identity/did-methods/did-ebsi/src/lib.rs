@@ -130,9 +130,29 @@ pub async fn resolve_ebsi_did(
     did: &str,
     api_base: &str,
 ) -> Result<affinidi_did_common::Document, EbsiError> {
-    let url = format!("{api_base}/{did}");
+    // Validate before interpolating into the URL: a did:ebsi method-specific
+    // id is base58btc, so once validated it can only contain [1-9A-HJ-NP-Za-km-z]
+    // and cannot inject `/`, `?`, `#`, `..` etc. into the request path.
+    let identifier = did
+        .strip_prefix("did:ebsi:")
+        .ok_or_else(|| EbsiError::InvalidDid("must start with did:ebsi:".into()))?;
+    validate_ebsi_identifier(identifier)?;
 
-    let response = reqwest::get(&url)
+    let url = format!("{api_base}/did:ebsi:{identifier}");
+
+    // The EBSI registry is the trust anchor here; following a 3xx would let
+    // it (or anything on-path) pivot the resolver to an arbitrary internal
+    // address (SSRF) and serve a forged DID document.
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("affinidi-did-ebsi/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| EbsiError::Http(format!("building HTTP client: {e}")))?;
+
+    let response = client
+        .get(&url)
+        .send()
         .await
         .map_err(|e| EbsiError::Http(format!("GET {url}: {e}")))?;
 
