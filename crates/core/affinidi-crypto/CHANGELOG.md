@@ -1,5 +1,16 @@
 # Affinidi Crypto Changelog
 
+## 28th May 2026 (0.1.7)
+
+- **SECURITY (HIGH):** Redact the private `d` scalar in `Debug` output for
+  `ECParams` (P-256 / P-384 / secp256k1) and `OctectParams` (Ed25519 /
+  X25519). Both structs derived `Debug`, so any `{:?}` format of a JWK
+  that carried a private key would print the base64url private scalar
+  verbatim — `ZeroizeOnDrop` covered heap lifetime but not the print-side
+  leak. Manual `Debug` impls now print the public coordinates and render
+  `d` as `<redacted>` when present. Regression test asserts the private
+  scalar never appears in formatted output.
+
 ## 24th May 2026 (0.1.6)
 
 - **FIX:** Build against stable `ml-dsa 0.1.0`. The `KeyGen` trait was
