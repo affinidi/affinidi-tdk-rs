@@ -41,7 +41,7 @@ struct SecretShadow {
 }
 
 /// Public Structure that manages everything to do with Keys and Secrets
-#[derive(Debug, Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Deserialize, Serialize, Zeroize, ZeroizeOnDrop)]
 #[serde(try_from = "SecretShadow")]
 pub struct Secret {
     /// A key ID identifying a secret (private key).
@@ -66,6 +66,19 @@ pub struct Secret {
     /// What crypto type is this secret
     #[serde(skip)]
     pub(crate) key_type: KeyType,
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secret")
+            .field("id", &self.id)
+            .field("type_", &self.type_)
+            .field("key_type", &self.key_type)
+            .field("secret_material", &"[REDACTED]")
+            .field("private_bytes", &"[REDACTED]")
+            .field("public_bytes", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Converts the inner Secret Shadow to a public Shadow Struct
@@ -462,7 +475,7 @@ pub enum SecretType {
 // KeyType is re-exported from affinidi_crypto
 
 /// Represents secret crypto material.
-#[derive(Debug, Clone, Deserialize, Serialize, Zeroize)]
+#[derive(Clone, Deserialize, Serialize, Zeroize)]
 #[serde(rename_all = "camelCase")]
 pub enum SecretMaterial {
     #[serde(rename = "privateKeyJwk")]
@@ -479,6 +492,19 @@ pub enum SecretMaterial {
     Multibase {
         private_key_multibase: String,
     },
+}
+
+impl std::fmt::Debug for SecretMaterial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every variant carries private key bytes; never print them.
+        let variant = match self {
+            SecretMaterial::JWK(_) => "JWK",
+            SecretMaterial::PrivateKeyMultibase(_) => "PrivateKeyMultibase",
+            SecretMaterial::Base58 { .. } => "Base58",
+            SecretMaterial::Multibase { .. } => "Multibase",
+        };
+        f.debug_tuple(variant).field(&"[REDACTED]").finish()
+    }
 }
 
 #[cfg(test)]
