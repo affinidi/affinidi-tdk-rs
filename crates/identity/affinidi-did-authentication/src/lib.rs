@@ -39,12 +39,23 @@ pub mod errors;
 pub use custom_auth::{CustomAuthHandler, CustomAuthHandlers, CustomRefreshHandler};
 
 /// The authorization tokens received in the fourth step of the DID authentication process
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AuthorizationTokens {
     pub access_token: String,
     pub access_expires_at: u64,
     pub refresh_token: String,
     pub refresh_expires_at: u64,
+}
+
+impl std::fmt::Debug for AuthorizationTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizationTokens")
+            .field("access_token", &"[REDACTED]")
+            .field("access_expires_at", &self.access_expires_at)
+            .field("refresh_token", &"[REDACTED]")
+            .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -119,7 +130,7 @@ struct HTTPResponse<T> {
 }
 
 /// The authorization tokens received in the fourth step of the DID authentication process
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct MPAuthorizationTokens {
     pub access_token: String,
     pub access_expires_at: String,
@@ -127,9 +138,20 @@ pub struct MPAuthorizationTokens {
     pub refresh_expires_at: String,
 }
 
+impl std::fmt::Debug for MPAuthorizationTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MPAuthorizationTokens")
+            .field("access_token", &"[REDACTED]")
+            .field("access_expires_at", &self.access_expires_at)
+            .field("refresh_token", &"[REDACTED]")
+            .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
+}
+
 /// Refresh tokens response from the authentication service.
 /// Includes rotated refresh token (one-time use).
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AuthRefreshResponse {
     pub access_token: String,
     pub access_expires_at: u64,
@@ -137,6 +159,17 @@ pub struct AuthRefreshResponse {
     pub refresh_token: String,
     #[serde(default)]
     pub refresh_expires_at: u64,
+}
+
+impl std::fmt::Debug for AuthRefreshResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthRefreshResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("access_expires_at", &self.access_expires_at)
+            .field("refresh_token", &"[REDACTED]")
+            .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]
