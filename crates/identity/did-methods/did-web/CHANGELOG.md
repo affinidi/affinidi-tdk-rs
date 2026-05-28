@@ -2,6 +2,28 @@
 
 ## Changelog history
 
+## 28th May 2026
+
+### Affinidi DID Web (0.1.1)
+
+- **SECURITY (HIGH — SSRF):** The default reqwest client follows up to
+  10 redirects. A hostile `did:web` origin could 302 the resolver to
+  `169.254.169.254`, `127.0.0.1`, or any internal address — an SSRF
+  pivot that bypasses whatever host-level filtering a deployer puts in
+  front of the DID string. The default client now sets
+  `redirect::Policy::none()`; callers passing their own
+  `reqwest::Client` via `DIDWeb::with_client` are responsible for their
+  own redirect policy.
+- **SECURITY (HIGH — path traversal):** `build_url()` percent-decoded
+  each colon-separated segment and appended it verbatim, so e.g.
+  `did:web:example.com:%2E%2E:admin` produced
+  `https://example.com/../admin/did.json` and
+  `did:web:example.com:a%2Fb` produced `https://example.com/a/b/did.json`
+  — a crafted DID could escape the expected `/{segments}/did.json`
+  shape. `build_url` now rejects decoded segments that are empty, `.`,
+  `..`, or contain `/` or `\`. New regression test
+  `url_rejects_path_traversal_segments`.
+
 ## 17th April 2026
 
 ### Affinidi DID Web (0.1.0) — initial release

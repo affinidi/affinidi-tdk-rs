@@ -1,5 +1,21 @@
 # Affinidi DID Authentication
 
+## 28th May 2026 (0.3.3)
+
+- **SECURITY (HIGH):** Redact bearer / refresh tokens in `Debug` output for
+  three sibling structs. Each derived `Debug` while holding `access_token`
+  and the long-lived (or rotated one-time) `refresh_token`. Any
+  `debug!`/`warn!("{:?}", x)` on either side of the wire — client session
+  state, threaded SDK profiles, mediator refresh handlers — would leak full
+  session credentials to logs.
+  - `AuthorizationTokens` — primary client-side session credential.
+  - `MPAuthorizationTokens` — Meeting Place auth flow.
+  - `AuthRefreshResponse` — server-side response wrapping the rotated
+    refresh + new access token.
+  Manual `Debug` impls now keep the `*_expires_at` timestamps visible and
+  render the token values as `[REDACTED]`. `Serialize`/`Deserialize`
+  unchanged — wire format and persistence are unaffected.
+
 ## 28th March 2026 (0.3.1)
 
 - **FIX:** Republish with `affinidi-messaging-didcomm` 0.13 dependency
