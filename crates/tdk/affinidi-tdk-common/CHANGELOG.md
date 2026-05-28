@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.2 — 2026-05-28
+
+### Security
+
+- **`TDKEnvironments::save()` now opens the environments file with `0600`
+  permissions on Unix** (medium severity). The file serialises every
+  `TDKProfile` — including its `secrets: Vec<Secret>` (DID private keys) —
+  and previously used `File::create()`, which honours the process umask
+  and typically yields a world-readable (0644) file. On a multi-user host
+  any local account could read every profile's signing keys. Windows
+  paths fall back to `File::create()` as before; ACL behaviour there is
+  governed by the parent directory.
+
 ## 0.6.1 — 2026-05-02
 
 Ergonomic additions to soften the 0.6 migration. No breaking changes.

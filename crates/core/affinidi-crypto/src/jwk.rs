@@ -70,7 +70,7 @@ pub enum Params {
 }
 
 /// Elliptic Curve parameters (P-256, P-384, secp256k1)
-#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
+#[derive(Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
 pub struct ECParams {
     #[serde(rename = "crv")]
     pub curve: String,
@@ -79,13 +79,34 @@ pub struct ECParams {
     pub d: Option<String>,
 }
 
+impl std::fmt::Debug for ECParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ECParams")
+            .field("curve", &self.curve)
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("d", &self.d.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 /// Octet Key Pair parameters (Ed25519, X25519)
-#[derive(Debug, Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
+#[derive(Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
 pub struct OctectParams {
     #[serde(rename = "crv")]
     pub curve: String,
     pub x: String,
     pub d: Option<String>,
+}
+
+impl std::fmt::Debug for OctectParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OctectParams")
+            .field("curve", &self.curve)
+            .field("x", &self.x)
+            .field("d", &self.d.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +155,28 @@ mod tests {
                 d: Some("kQrTUKhBU-6bHbCdiY0dIfg3knd5U2-1FlLGGHSbF6U".to_string())
             })
         );
+    }
+
+    #[test]
+    fn debug_redacts_private_d() {
+        let okp = OctectParams {
+            curve: "Ed25519".to_string(),
+            x: "Xx4_L89E6RsyvDTzN9wuN3cDwgifPkXMgFJv_HMIxdk".to_string(),
+            d: Some("jybTAuX6NlN7cJLWNCSOLUnJpblpsGr05TTp7scjSvE".to_string()),
+        };
+        let dbg = format!("{okp:?}");
+        assert!(!dbg.contains("jybTAuX6NlN7cJLWNCSOLUnJpblpsGr05TTp7scjSvE"));
+        assert!(dbg.contains("<redacted>"));
+
+        let ec = ECParams {
+            curve: "P-256".to_string(),
+            x: "sl56LMzaiR5efwwWU1jzC_dfbxQ8gzyLj_N1q2cJmkE".to_string(),
+            y: "UnAimUtlHMPj_T_wIDVPoJAolKHy8DoXXTb8wch4hgU".to_string(),
+            d: Some("kQrTUKhBU-6bHbCdiY0dIfg3knd5U2-1FlLGGHSbF6U".to_string()),
+        };
+        let dbg = format!("{ec:?}");
+        assert!(!dbg.contains("kQrTUKhBU-6bHbCdiY0dIfg3knd5U2-1FlLGGHSbF6U"));
+        assert!(dbg.contains("<redacted>"));
     }
 
     #[test]

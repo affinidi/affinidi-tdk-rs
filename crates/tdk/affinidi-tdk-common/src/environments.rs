@@ -254,6 +254,23 @@ impl TDKEnvironments {
             TDKError::Profile(format!("Failed to serialise TDKEnvironments: {err}"))
         })?;
 
+        // TDKEnvironments serialises `TDKProfile.secrets` (DID private keys);
+        // restrict to owner-only on Unix so other local users can't read them.
+        // `File::create` would honour the process umask (typically 0644).
+        #[cfg(unix)]
+        let mut f = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(file_name)
+                .map_err(|err| {
+                    TDKError::Profile(format!("Couldn't create file ({file_name}): {err}"))
+                })?
+        };
+        #[cfg(not(unix))]
         let mut f = File::create(file_name).map_err(|err| {
             TDKError::Profile(format!(
                 "Failed to create environments file ({file_name}): {err}"

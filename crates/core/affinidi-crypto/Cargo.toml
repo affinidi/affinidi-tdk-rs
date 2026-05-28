@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.1.6"
+version = "0.1.7"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true

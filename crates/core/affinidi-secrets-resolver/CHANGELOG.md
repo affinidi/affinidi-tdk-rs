@@ -1,5 +1,19 @@
 # Affinidi Secrets Manager
 
+## 28th May 2026 (0.5.6)
+
+- **SECURITY (HIGH):** Redact private key material in `Debug` output for
+  both `Secret` and `SecretMaterial`. `Secret` derived `Debug` while
+  holding `private_bytes` (raw key) and `secret_material` (the JWK
+  including `d`), so any `{:?}` in a tracing span, error context, panic
+  message, or stray `dbg!()` would dump the key to logs. `SecretMaterial`
+  is `pub` and every variant (`JWK` with `d`, `PrivateKeyMultibase`,
+  `Base58`, `Multibase`) carries the raw private key, so a direct `{:?}`
+  on a value would leak there too. Manual `Debug` impls now print
+  identifying metadata (id / type / key_type / variant name) and render
+  the key bytes as `[REDACTED]`. `ZeroizeOnDrop` continues to cover heap
+  lifetime; this closes the print-side leak.
+
 ## 18th April 2026 (0.5.5)
 
 - **FEATURE:** `post-quantum` Cargo feature (off by default) with
