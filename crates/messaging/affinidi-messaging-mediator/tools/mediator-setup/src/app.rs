@@ -269,8 +269,15 @@ pub enum SecurityPhase {
     /// Pick the mediator's network posture — Open (any DID can message
     /// any other; per-DID overrides flip individual flags) vs Closed
     /// (every cross-DID exchange needs an explicit ACL grant). Renders
-    /// after `JwtMode` and before the step advances to `Database`.
+    /// after `JwtMode` and before `CorsPolicy`.
     NetworkMode,
+    /// Pick the browser CORS policy for the REST/WebSocket endpoints —
+    /// Any (`*`) / None (default, deny all) / Specific domains. The
+    /// "Specific" choice drops into a text-input sub-phase (still
+    /// `CorsPolicy`, `InputMode::TextInput`) collecting the allowlist.
+    /// Renders after `NetworkMode`; confirming it (or the domains input)
+    /// is what finally advances the step to `Database`.
+    CorsPolicy,
 }
 
 /// Sub-phases of the `Database` step. The wizard now asks up to three
@@ -402,6 +409,17 @@ pub struct WizardConfig {
     /// `global_acl_default`, and `local_direct_delivery_allowed` that
     /// `config_writer::write_config` emits.
     pub network_mode: String,
+    /// Browser CORS policy mode written to `[security].cors_allow_origin`:
+    /// `"none"` (default — key unset, deny all cross-origin), `"any"`
+    /// (`*`), or `"list"` (the [`Self::cors_domains`] allowlist). See
+    /// [`crate::consts::CORS_MODE_NONE`] / `_ANY` / `_LIST`.
+    pub cors_mode: String,
+    /// Comma-separated CORS origin allowlist, meaningful only when
+    /// `cors_mode == "list"`. Each entry is an exact, scheme-qualified
+    /// origin (`https://app.affinidi.com`) or a leftmost-label sub-domain
+    /// wildcard (`https://*.affinidi.com`). Validated by
+    /// [`validate_cors_domains`] before the wizard accepts it.
+    pub cors_domains: String,
     pub database_url: String,
     /// Storage backend the generated `mediator.toml` selects:
     /// `"redis"` (default) or `"fjall"`. Mirrors `[storage].backend`
@@ -520,6 +538,8 @@ impl Default for WizardConfig {
             vta_webvh_self_host_url: String::new(),
             jwt_mode: JWT_MODE_GENERATE.into(),
             network_mode: crate::consts::DEFAULT_NETWORK_MODE.into(),
+            cors_mode: crate::consts::DEFAULT_CORS_MODE.into(),
+            cors_domains: String::new(),
             database_url: DEFAULT_REDIS_URL.into(),
             storage_backend: crate::consts::DEFAULT_STORAGE_BACKEND.into(),
             fjall_data_dir: crate::consts::DEFAULT_FJALL_DATA_DIR.into(),
@@ -552,6 +572,111 @@ pub(crate) fn validate_fjall_data_dir(path: &str) -> Result<(), String> {
     if p.exists() && !p.is_dir() {
         return Err(format!(
             "'{trimmed}' exists but is not a directory — pick another path.",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the CORS "Specific domains" allowlist the operator typed and
+/// return its normalised (trimmed, comma-joined) form.
+///
+/// Each comma-separated entry must be one of:
+///   * an exact, scheme-qualified origin — `https://app.affinidi.com`; or
+///   * a leftmost-label sub-domain wildcard — `https://*.affinidi.com`
+///     (optionally with a port: `https://*.affinidi.com:8443`).
+///
+/// Unlike the mediator's lenient server-side parse, the wizard *requires*
+/// a scheme on every entry (per the operator's chosen validation policy)
+/// and rejects a bare `*` — that's the separate "Allow any origin"
+/// choice, not a domain. The matching semantics enforced at runtime live
+/// in `affinidi_messaging_mediator`'s `OriginMatcher`; this function
+/// mirrors its accepted syntax so typos surface at wizard time rather
+/// than on first mediator boot.
+pub fn validate_cors_domains(input: &str) -> Result<String, String> {
+    let entries: Vec<&str> = input
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if entries.is_empty() {
+        return Err(
+            "Enter at least one origin (e.g. https://app.affinidi.com), or go back and pick \
+             \"Allow any origin\" / \"Deny all\"."
+                .into(),
+        );
+    }
+
+    for entry in &entries {
+        validate_cors_entry(entry)?;
+    }
+
+    Ok(entries.join(","))
+}
+
+/// Validate a single CORS allowlist entry. See [`validate_cors_domains`].
+fn validate_cors_entry(entry: &str) -> Result<(), String> {
+    if entry == "*" {
+        return Err(
+            "A bare '*' is not a domain — go back and pick \"Allow any origin\" instead.".into(),
+        );
+    }
+
+    let Some((scheme, host_port)) = entry.split_once("://") else {
+        return Err(format!(
+            "'{entry}' is missing a scheme — write e.g. 'https://app.affinidi.com' or \
+             'https://*.affinidi.com'."
+        ));
+    };
+    if scheme.is_empty() {
+        return Err(format!("'{entry}' is missing a scheme before '://'."));
+    }
+    if host_port.is_empty() {
+        return Err(format!("'{entry}' is missing a host after '://'."));
+    }
+    // No path / query / fragment / userinfo — an Origin is scheme + host
+    // (+ optional port) only.
+    if host_port.contains(['/', '?', '#', '@', '\\']) {
+        return Err(format!(
+            "'{entry}' must be an origin only (scheme + host [+ :port]) — drop any path, \
+             query, or '@'."
+        ));
+    }
+
+    // Wildcard form: '*' is allowed only as the entire leftmost label.
+    if entry.contains('*') {
+        let Some(suffix) = host_port.strip_prefix("*.") else {
+            return Err(format!(
+                "'{entry}': '*' is only allowed as the leftmost host label, written as \
+                 '{scheme}://*.suffix'."
+            ));
+        };
+        if suffix.contains('*') {
+            return Err(format!(
+                "'{entry}': only one leftmost '*' wildcard is allowed."
+            ));
+        }
+        // Validate the suffix shape. We intentionally do NOT require the
+        // suffix to contain a dot — `https://*.localhost` and other
+        // single-label internal hosts are legitimate, and this keeps the
+        // wizard in step with the mediator's own (dot-agnostic) matcher.
+        let host_suffix = suffix.rsplit_once(':').map_or(suffix, |(h, _)| h);
+        if host_suffix.is_empty() || host_suffix.starts_with('.') {
+            return Err(format!(
+                "'{entry}': '{host_suffix}' is not a valid wildcard suffix — use e.g. \
+                 '{scheme}://*.example.com'."
+            ));
+        }
+    }
+
+    // Final shape check: an origin carries no whitespace or control
+    // characters (the mediator parses exact origins into an HTTP
+    // `HeaderValue`, which rejects exactly these). Checked here without
+    // pulling in the `http` crate — the setup tool intentionally has no
+    // dependency on the mediator runtime.
+    if entry.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "'{entry}' contains whitespace or control characters that aren't valid in an origin."
         ));
     }
     Ok(())
@@ -649,6 +774,11 @@ pub struct WizardApp {
     /// Cleared on a successful confirm or when the operator backs
     /// out of the step.
     pub database_validation_error: Option<String>,
+    /// Inline validation error surfaced on the Security step's CORS
+    /// "Specific domains" text-input screen when an entered origin isn't
+    /// a valid scheme-qualified origin or `*.subdomain` wildcard. Cleared
+    /// on a successful confirm or when re-entering the CORS phase.
+    pub cors_validation_error: Option<String>,
     /// First passphrase typed on the [`KeyStoragePhase::FilePassphrase`]
     /// screen. Held just long enough for the operator to retype it on
     /// the [`KeyStoragePhase::FilePassphraseConfirm`] screen — cleared
@@ -697,6 +827,7 @@ impl WizardApp {
             discovery_rx: None,
             clipboard_status: None,
             database_validation_error: None,
+            cors_validation_error: None,
             pending_passphrase: None,
             passphrase_validation_error: None,
         }
@@ -2231,7 +2362,25 @@ impl WizardApp {
                 ]
             }
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                if self.security_phase == Some(SecurityPhase::CorsPolicy) {
+                    // Order: index 0 = None (the mediator's default-closed
+                    // posture), so the first Enter keeps cross-origin
+                    // access off unless the operator opts in.
+                    vec![
+                        SelectionOption::new(
+                            "Deny all cross-origin (default)",
+                            "No browser may call the REST/WebSocket API cross-origin. Pick this for mediators with no browser-based clients.",
+                        ),
+                        SelectionOption::new(
+                            "Allow any origin (*)",
+                            "Any website may call the API. Suggested for public mediators — endpoints gate on a bearer token, not a cookie, so a wildcard is not a CSRF risk.",
+                        ),
+                        SelectionOption::new(
+                            "Specific domains",
+                            "Only listed origins are allowed. Next screen collects the allowlist (exact origins and/or *.subdomain wildcards).",
+                        ),
+                    ]
+                } else if self.security_phase == Some(SecurityPhase::NetworkMode) {
                     // Order matches the wizard default — Open is index 0
                     // so the operator's first Enter confirms the recommended
                     // posture without re-selecting.
@@ -2462,7 +2611,14 @@ impl WizardApp {
                 }
             }
             WizardStep::Security => {
-                if self.security_phase == Some(SecurityPhase::NetworkMode) {
+                if self.security_phase == Some(SecurityPhase::CorsPolicy) {
+                    match self.selection_index {
+                        0 => "Leaves `cors_allow_origin` unset. Browsers carrying an `Origin` header are refused on both the REST API and the WebSocket upgrade. Native clients (no Origin) are unaffected. This is the mediator's default.".into(),
+                        1 => "Emits `cors_allow_origin = \"*\"`. The mediator echoes `Access-Control-Allow-Origin: *` and never sets credentials. Safe here because every endpoint requires a bearer token — a wildcard does not enable CSRF.".into(),
+                        2 => "Emits `cors_allow_origin = \"<your list>\"`. The next screen collects a comma-separated allowlist. Each request Origin must match an entry exactly, or fall under a `*.subdomain` wildcard; the matched origin is echoed back.".into(),
+                        _ => String::new(),
+                    }
+                } else if self.security_phase == Some(SecurityPhase::NetworkMode) {
                     match self.selection_index {
                         0 => "Open mode emits `mediator_acl_mode = \"explicit_deny\"`, `global_acl_default = \"ALLOW_ALL\"`, and `local_direct_delivery_allowed = \"true\"`. Any DID may reach any other by default; use the ACL to deny on a per-DID basis.".into(),
                         1 => "Closed mode keeps the historical posture: `mediator_acl_mode = \"explicit_allow\"` with a denying default ACL. Every cross-DID exchange requires an explicit ACL grant. Pick this for restricted or invitation-only deployments.".into(),
@@ -2771,18 +2927,43 @@ impl WizardApp {
                 }
             }
             WizardStep::Security => {
-                // Three-phase step: SSL → JWT mode → Network mode. Each
-                // sub-phase reuses `selection_index` for its own pick;
-                // the last one (NetworkMode) is what finally advances
-                // to `Database`.
+                // Four-phase step: SSL → JWT mode → Network mode → CORS
+                // policy. Each sub-phase reuses `selection_index` for its
+                // own pick; the last one (CorsPolicy) is what finally
+                // advances to `Database`.
+                if self.security_phase == Some(SecurityPhase::CorsPolicy) {
+                    match self.selection_index {
+                        0 => {
+                            self.config.cors_mode = crate::consts::CORS_MODE_NONE.into();
+                            self.security_phase = None;
+                            self.advance();
+                        }
+                        1 => {
+                            self.config.cors_mode = crate::consts::CORS_MODE_ANY.into();
+                            self.security_phase = None;
+                            self.advance();
+                        }
+                        2 => {
+                            // Specific domains: stay in the CorsPolicy
+                            // phase but switch to the text-input widget to
+                            // collect the allowlist. `confirm_text_input`
+                            // validates and advances.
+                            self.config.cors_mode = crate::consts::CORS_MODE_LIST.into();
+                            self.cors_validation_error = None;
+                            self.mode = InputMode::TextInput;
+                            self.text_input = Input::new(self.config.cors_domains.clone());
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 if self.security_phase == Some(SecurityPhase::NetworkMode) {
                     self.config.network_mode = match self.selection_index {
                         0 => crate::consts::NETWORK_MODE_OPEN.into(),
                         1 => crate::consts::NETWORK_MODE_CLOSED.into(),
                         _ => return,
                     };
-                    self.security_phase = None;
-                    self.advance();
+                    self.enter_cors_policy_phase();
                     return;
                 }
                 if self.security_phase == Some(SecurityPhase::JwtMode) {
@@ -3368,6 +3549,22 @@ impl WizardApp {
         };
     }
 
+    /// Enter the CORS-policy sub-phase. Runs after network mode has been
+    /// settled and is the final Security sub-phase before the step
+    /// advances. Pre-selects the operator's last choice so re-entry is
+    /// idempotent; defaults to None (index 0) on a fresh run — the
+    /// mediator's default-closed cross-origin posture.
+    fn enter_cors_policy_phase(&mut self) {
+        self.security_phase = Some(SecurityPhase::CorsPolicy);
+        self.mode = InputMode::Selecting;
+        self.cors_validation_error = None;
+        self.selection_index = match self.config.cors_mode.as_str() {
+            crate::consts::CORS_MODE_ANY => 1,
+            crate::consts::CORS_MODE_LIST => 2,
+            _ => 0,
+        };
+    }
+
     /// Strip any URL path so the stripped `<scheme>://<host>[:port]`
     /// lands on the VTA's `CreateDidWebvhRequest.url`. webvh resolves
     /// to `<url>/.well-known/did.jsonl`, so a trailing `/mediator/v1`
@@ -3491,6 +3688,26 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Security => {
+                // The CORS "Specific domains" allowlist runs as a
+                // text-input sub-phase of CorsPolicy. Validate before
+                // accepting; a bad entry surfaces inline and keeps the
+                // operator on the input screen.
+                if self.security_phase == Some(SecurityPhase::CorsPolicy) {
+                    let value = self.text_input.value().trim().to_string();
+                    match validate_cors_domains(&value) {
+                        Ok(normalised) => {
+                            self.config.cors_domains = normalised;
+                            self.cors_validation_error = None;
+                            self.security_phase = None;
+                            self.mode = InputMode::Selecting;
+                            self.advance();
+                        }
+                        Err(err) => {
+                            self.cors_validation_error = Some(err);
+                        }
+                    }
+                    return;
+                }
                 // First text input: cert path, then key path. After the
                 // key path is saved, drop into the JWT-mode selection
                 // rather than advancing straight to Database.
@@ -5321,9 +5538,17 @@ mod tests {
         assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
         assert_eq!(app.current_step, WizardStep::Security);
 
-        // Default network-mode selection is "open" (index 0).
+        // Default network-mode selection is "open" (index 0). Confirming
+        // it now transitions to the CORS sub-phase rather than advancing.
         app.select_current();
         assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
+        assert_eq!(app.security_phase, Some(SecurityPhase::CorsPolicy));
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // Default CORS selection is "none" (index 0) — confirming lands
+        // on Database.
+        app.select_current();
+        assert_eq!(app.config.cors_mode, crate::consts::CORS_MODE_NONE);
         assert!(app.security_phase.is_none());
         assert_eq!(app.current_step, WizardStep::Database);
     }
@@ -5343,17 +5568,23 @@ mod tests {
         assert_eq!(app.security_phase, Some(SecurityPhase::NetworkMode));
         assert_eq!(app.current_step, WizardStep::Security);
 
-        // Confirm the default open posture to land on Database.
+        // Confirm the default open posture; the CORS sub-phase follows.
         app.selection_index = 0;
         app.select_current();
         assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_OPEN);
+        assert_eq!(app.security_phase, Some(SecurityPhase::CorsPolicy));
+
+        // Default CORS = none → Database.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.config.cors_mode, crate::consts::CORS_MODE_NONE);
         assert_eq!(app.current_step, WizardStep::Database);
     }
 
     #[test]
     fn security_network_mode_closed_records_choice() {
         // Walk through the full Security flow and pick Closed at the
-        // last sub-phase to confirm the choice persists.
+        // network sub-phase to confirm the choice persists.
         let mut app = WizardApp::new("test.toml".into());
         app.current_step = WizardStep::Security;
         app.selection_index = 0; // No SSL
@@ -5364,7 +5595,95 @@ mod tests {
         app.selection_index = 1; // Closed
         app.select_current();
         assert_eq!(app.config.network_mode, crate::consts::NETWORK_MODE_CLOSED);
+        // Network mode now hands off to the CORS sub-phase.
+        assert_eq!(app.security_phase, Some(SecurityPhase::CorsPolicy));
+
+        // Confirm default CORS = none to land on Database.
+        app.selection_index = 0;
+        app.select_current();
+        assert_eq!(app.config.cors_mode, crate::consts::CORS_MODE_NONE);
         assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    // ── Security CORS sub-phase tests ────────────────────────────────
+
+    /// Advance an app to the CORS sub-phase via the common SSL-none /
+    /// JWT-generate / network-open path.
+    fn app_at_cors_phase() -> WizardApp {
+        let mut app = WizardApp::new("test.toml".into());
+        app.current_step = WizardStep::Security;
+        app.selection_index = 0; // No SSL
+        app.select_current();
+        app.select_current(); // JWT default = generate
+        app.select_current(); // Network default = open
+        assert_eq!(app.security_phase, Some(SecurityPhase::CorsPolicy));
+        app
+    }
+
+    #[test]
+    fn security_cors_any_advances() {
+        let mut app = app_at_cors_phase();
+        app.selection_index = 1; // Allow any origin
+        app.select_current();
+        assert_eq!(app.config.cors_mode, crate::consts::CORS_MODE_ANY);
+        assert!(app.security_phase.is_none());
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn security_cors_specific_collects_and_validates_domains() {
+        let mut app = app_at_cors_phase();
+        app.selection_index = 2; // Specific domains
+        app.select_current();
+        // We're now in the domains text-input sub-phase, still CorsPolicy.
+        assert_eq!(app.config.cors_mode, crate::consts::CORS_MODE_LIST);
+        assert_eq!(app.security_phase, Some(SecurityPhase::CorsPolicy));
+        assert_eq!(app.mode, InputMode::TextInput);
+
+        // An invalid entry keeps us on the screen with an error.
+        app.text_input = Input::new("app.affinidi.com".into());
+        app.confirm_text_input();
+        assert!(app.cors_validation_error.is_some());
+        assert_eq!(app.current_step, WizardStep::Security);
+
+        // A valid mixed exact + wildcard list advances and normalises.
+        app.text_input = Input::new("https://app.affinidi.com, https://*.affinidi.com".into());
+        app.confirm_text_input();
+        assert!(app.cors_validation_error.is_none());
+        assert_eq!(
+            app.config.cors_domains,
+            "https://app.affinidi.com,https://*.affinidi.com"
+        );
+        assert!(app.security_phase.is_none());
+        assert_eq!(app.current_step, WizardStep::Database);
+    }
+
+    #[test]
+    fn validate_cors_domains_accepts_exact_and_wildcard() {
+        assert_eq!(
+            validate_cors_domains("https://app.affinidi.com").unwrap(),
+            "https://app.affinidi.com"
+        );
+        assert_eq!(
+            validate_cors_domains(" https://*.affinidi.com:8443 ").unwrap(),
+            "https://*.affinidi.com:8443"
+        );
+        // Trims + normalises whitespace around the comma separator.
+        assert_eq!(
+            validate_cors_domains("https://a.com ,  https://b.com").unwrap(),
+            "https://a.com,https://b.com"
+        );
+    }
+
+    #[test]
+    fn validate_cors_domains_rejects_bad_input() {
+        assert!(validate_cors_domains("").is_err()); // empty
+        assert!(validate_cors_domains("app.affinidi.com").is_err()); // no scheme
+        assert!(validate_cors_domains("*").is_err()); // bare wildcard
+        assert!(validate_cors_domains("https://app.*.com").is_err()); // misplaced *
+        assert!(validate_cors_domains("https://*.").is_err()); // empty suffix
+        assert!(validate_cors_domains("https://app.affinidi.com/path").is_err()); // path
+        assert!(validate_cors_domains("https://a b.com").is_err()); // whitespace
     }
 
     #[test]

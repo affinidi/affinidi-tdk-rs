@@ -59,6 +59,26 @@ pub const DEFAULT_NETWORK_MODE: &str = NETWORK_MODE_OPEN;
 pub const JWT_MODE_GENERATE: &str = "generate";
 pub const JWT_MODE_PROVIDE: &str = "provide";
 
+/// CORS policy mode for the mediator's REST/WebSocket endpoints. Drives
+/// the `[security].cors_allow_origin` value the wizard writes:
+///
+/// - `none` (default) ⇒ key left unset ⇒ no cross-origin browser access.
+///   The right choice for mediators with no browser clients.
+/// - `any` ⇒ `cors_allow_origin = "*"` ⇒ any origin allowed. Suggested
+///   for public mediators (the endpoints gate on a bearer token, not an
+///   ambient cookie, so a wildcard does not expose them to CSRF).
+/// - `list` ⇒ `cors_allow_origin = "<comma-separated origins>"` ⇒ only
+///   the listed origins. Entries are exact, scheme-qualified origins
+///   (`https://app.affinidi.com`) or leftmost-label sub-domain wildcards
+///   (`https://*.affinidi.com`). See [`crate::app::validate_cors_domains`].
+pub const CORS_MODE_NONE: &str = "none";
+pub const CORS_MODE_ANY: &str = "any";
+pub const CORS_MODE_LIST: &str = "list";
+/// Default CORS mode for fresh wizard runs and recipes that omit
+/// `[security].cors` — default-closed, matching the mediator's own
+/// default when `cors_allow_origin` is unset.
+pub const DEFAULT_CORS_MODE: &str = CORS_MODE_NONE;
+
 /// Admin DID mode display strings
 pub const ADMIN_GENERATE: &str = "Generate did:key";
 pub const ADMIN_PASTE: &str = "Paste existing";

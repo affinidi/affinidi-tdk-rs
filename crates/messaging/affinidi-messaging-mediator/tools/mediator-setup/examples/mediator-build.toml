@@ -110,6 +110,21 @@ admin = "generate"
 #              local_direct_delivery_allowed = "true"
 network_mode = "open"
 
+# cors: "none" (default) | "any" | "list"
+#   none — deny all cross-origin browser access. `cors_allow_origin` is left
+#          unset. Right for mediators with no browser-based clients.
+#   any  — allow any origin. Wizard emits `cors_allow_origin = "*"`. Suggested
+#          for public mediators (endpoints gate on a bearer token, so a
+#          wildcard is not a CSRF risk).
+#   list — allow only the origins in `cors_domains` (required for this mode).
+#          Each entry is an exact, scheme-qualified origin
+#          (https://app.affinidi.com) or a leftmost-label sub-domain wildcard
+#          (https://*.affinidi.com, optionally with a :port). Scheme and port
+#          must match exactly; a wildcard does NOT cover its apex domain.
+cors = "none"
+# Required when cors = "list":
+# cors_domains = "https://app.affinidi.com,https://*.affinidi.com"
+
 
 # ── Database ────────────────────────────────────────────────────────────────
 [database]

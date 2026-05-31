@@ -4,7 +4,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat;
 use crate::{
     SharedData,
-    common::config::CorsOriginPolicy,
+    common::config::{CorsOriginPolicy, origin_matches},
     common::jwt_auth::{AuthError, authenticate_token},
     common::session::Session,
     messages::inbound::handle_inbound,
@@ -112,7 +112,10 @@ fn ws_origin_allowed(policy: &CorsOriginPolicy, origin: Option<&HeaderValue>) ->
         None => true,
         Some(origin) => match policy {
             CorsOriginPolicy::Any => true,
-            CorsOriginPolicy::List(allowed) => allowed.iter().any(|a| a == origin),
+            // Reuse the *same* matcher the REST CORS layer uses so the
+            // two enforcement points (incl. `*.suffix` wildcards) can't
+            // drift apart.
+            CorsOriginPolicy::List(matchers) => origin_matches(matchers, origin),
             // No cross-origin browser access configured ⇒ refuse any
             // request that announces an Origin.
             CorsOriginPolicy::None => false,
@@ -502,10 +505,15 @@ mod tests {
     use super::{
         CorsOriginPolicy, app_subprotocols, extract_bearer_subprotocol, ws_origin_allowed,
     };
+    use crate::common::config::OriginMatcher;
     use http::HeaderValue;
 
     fn hv(s: &str) -> HeaderValue {
         HeaderValue::from_str(s).expect("valid header value")
+    }
+
+    fn exact(s: &str) -> OriginMatcher {
+        OriginMatcher::Exact(hv(s))
     }
 
     #[test]
@@ -567,7 +575,7 @@ mod tests {
         assert!(ws_origin_allowed(&CorsOriginPolicy::None, None));
         assert!(ws_origin_allowed(&CorsOriginPolicy::Any, None));
         assert!(ws_origin_allowed(
-            &CorsOriginPolicy::List(vec![hv("https://app.example")]),
+            &CorsOriginPolicy::List(vec![exact("https://app.example")]),
             None
         ));
     }
@@ -586,10 +594,33 @@ mod tests {
 
     #[test]
     fn origin_check_list_policy_matches_allowlist() {
-        let policy = CorsOriginPolicy::List(vec![hv("https://app.example")]);
+        let policy = CorsOriginPolicy::List(vec![exact("https://app.example")]);
         let allowed = hv("https://app.example");
         let denied = hv("https://other.example");
         assert!(ws_origin_allowed(&policy, Some(&allowed)));
         assert!(!ws_origin_allowed(&policy, Some(&denied)));
+    }
+
+    #[test]
+    fn origin_check_list_policy_honours_wildcards() {
+        // Parity with the REST CORS layer: the WS check must accept the
+        // same `*.suffix` wildcards (and reject the apex / look-alikes).
+        let policy = CorsOriginPolicy::List(vec![OriginMatcher::WildcardSubdomain {
+            scheme: "https".into(),
+            suffix: "affinidi.com".into(),
+            port: None,
+        }]);
+        assert!(ws_origin_allowed(
+            &policy,
+            Some(&hv("https://app.affinidi.com"))
+        ));
+        assert!(!ws_origin_allowed(
+            &policy,
+            Some(&hv("https://affinidi.com"))
+        ));
+        assert!(!ws_origin_allowed(
+            &policy,
+            Some(&hv("https://evilaffinidi.com"))
+        ));
     }
 }
