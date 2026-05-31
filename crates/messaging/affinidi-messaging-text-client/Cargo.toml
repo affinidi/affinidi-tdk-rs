@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-text-client"
-version = "0.12.2"
+version = "0.12.3"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -16,7 +16,7 @@ repository.workspace = true
 # Affinidi Crates
 affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.7" }
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.13" }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.14" }
 affinidi-did-resolver-cache-sdk = "0.8"
 
 # External Crates

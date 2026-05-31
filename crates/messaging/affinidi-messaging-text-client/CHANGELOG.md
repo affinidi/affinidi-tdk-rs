@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.3] - 2026-05-31
+
+### Changed
+
+- Bump `affinidi-messaging-didcomm` to 0.14 (DIDComm v2.1 interop fixes:
+  ECDH-1PU authcrypt KDF #322, JWS unprotected `kid` #323,
+  sign-then-encrypt unpack #324). No text-client API change.
+
 ## [0.12.2] - 2026-05-24
 
 ### Security

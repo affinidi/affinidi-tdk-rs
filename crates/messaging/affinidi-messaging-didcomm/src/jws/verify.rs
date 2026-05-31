@@ -10,7 +10,8 @@ use crate::jws::envelope::*;
 pub struct VerifiedJws {
     /// The raw payload bytes.
     pub payload: Vec<u8>,
-    /// The signer KID (if present in the protected header).
+    /// The signer KID, taken from the protected header if present,
+    /// otherwise from the per-signature unprotected header (issue #323).
     pub signer_kid: Option<String>,
 }
 
@@ -58,9 +59,17 @@ pub fn verify_ed25519(jws_str: &str, public_key: &[u8; 32]) -> Result<VerifiedJw
     let payload = Base64UrlUnpadded::decode_vec(&jws.payload)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid payload base64: {e}")))?;
 
+    // Signer kid: prefer the protected header, fall back to the
+    // per-signature unprotected header (where DIDComm / credo-ts /
+    // didcomm-python place it). Verification itself doesn't depend on
+    // kid — the caller supplies the key — but attribution does.
+    let signer_kid = header
+        .kid
+        .or_else(|| sig_entry.header.as_ref().and_then(|h| h.kid.clone()));
+
     Ok(VerifiedJws {
         payload,
-        signer_kid: header.kid,
+        signer_kid,
     })
 }
 
@@ -97,5 +106,72 @@ mod tests {
             sign::sign_ed25519(b"test", "did:example:alice#key-1", &sk.to_bytes()).unwrap();
 
         assert!(verify_ed25519(&jws_str, &wrong_pk).is_err());
+    }
+
+    /// #323: a credo-ts / didcomm-python style JWS carries `kid` in the
+    /// per-signature *unprotected* header (the protected header has only
+    /// `typ`/`alg`). Verification must succeed AND attribute the signer
+    /// from the unprotected header.
+    #[test]
+    fn signer_kid_from_unprotected_header() {
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let pk = sk.verifying_key().to_bytes();
+        let payload = b"{\"type\":\"test\",\"body\":{}}";
+
+        // Protected header WITHOUT kid (only typ + alg).
+        let protected = JwsProtectedHeader {
+            typ: Some("application/didcomm-signed+json".into()),
+            alg: "EdDSA".into(),
+            kid: None,
+            jwk: None,
+        };
+        let protected_b64 =
+            Base64UrlUnpadded::encode_string(serde_json::to_string(&protected).unwrap().as_bytes());
+        let payload_b64 = Base64UrlUnpadded::encode_string(payload);
+        let signing_input = format!("{protected_b64}.{payload_b64}");
+        let sig = crate::crypto::signing::sign(signing_input.as_bytes(), &sk.to_bytes()).unwrap();
+
+        let jws = Jws {
+            payload: payload_b64,
+            signatures: vec![JwsSignature {
+                protected: protected_b64,
+                header: Some(JwsUnprotectedHeader {
+                    kid: Some("did:example:alice#key-1".into()),
+                }),
+                signature: Base64UrlUnpadded::encode_string(&sig),
+            }],
+        };
+        let jws_str = serde_json::to_string(&jws).unwrap();
+
+        let result = verify_ed25519(&jws_str, &pk).unwrap();
+        assert_eq!(result.payload, payload);
+        assert_eq!(
+            result.signer_kid.as_deref(),
+            Some("did:example:alice#key-1"),
+            "signer_kid must come from the unprotected header when absent from protected"
+        );
+    }
+
+    /// When kid is present in BOTH headers, the protected one wins
+    /// (it's integrity-protected).
+    #[test]
+    fn protected_kid_takes_precedence_over_unprotected() {
+        let sk = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+        let pk = sk.verifying_key().to_bytes();
+
+        // sign_ed25519 puts kid in the protected header.
+        let jws_str =
+            sign::sign_ed25519(b"x", "did:example:alice#protected", &sk.to_bytes()).unwrap();
+        let mut jws: Jws = serde_json::from_str(&jws_str).unwrap();
+        jws.signatures[0].header = Some(JwsUnprotectedHeader {
+            kid: Some("did:example:mallory#unprotected".into()),
+        });
+        let jws_str = serde_json::to_string(&jws).unwrap();
+
+        let result = verify_ed25519(&jws_str, &pk).unwrap();
+        assert_eq!(
+            result.signer_kid.as_deref(),
+            Some("did:example:alice#protected")
+        );
     }
 }

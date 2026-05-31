@@ -18,6 +18,12 @@ pub struct DecryptedJwe {
     pub sender_kid: Option<String>,
     /// The recipient KID that was used to decrypt.
     pub recipient_kid: String,
+    /// `true` if the message only decrypted under the legacy (pre-0.14,
+    /// issue #322) ECDH-1PU KEK — i.e. the sender is an unpatched peer.
+    /// Always `false` for anoncrypt and for spec-correct authcrypt.
+    /// Surfaced as a migration signal: once this stops occurring across
+    /// the deployment, the legacy fallback can be removed.
+    pub legacy_kek_used: bool,
 }
 
 /// Decrypt a JWE string.
@@ -90,8 +96,8 @@ pub fn decrypt(
     let apv_raw = Base64UrlUnpadded::decode_vec(&header.apv)
         .map_err(|e| DIDCommError::InvalidMessage(format!("invalid apv: {e}")))?;
 
-    // Determine algorithm and unwrap CEK
-    let (kek, authenticated, sender_kid_str) = match header.alg.as_str() {
+    // Determine algorithm, derive the KEK, and unwrap the CEK.
+    let (cek_bytes, authenticated, sender_kid_str, legacy_kek_used) = match header.alg.as_str() {
         "ECDH-1PU+A256KW" => {
             let sender_pub = sender_public.ok_or_else(|| {
                 DIDCommError::InvalidMessage(
@@ -99,7 +105,10 @@ pub fn decrypt(
                 )
             })?;
 
-            let kek = ecdh_1pu::derive_key_1pu_recipient(
+            let sender_kid_str = String::from_utf8(apu_raw.clone()).ok();
+
+            // Derive the spec-correct KEK (length-prefixed cc_tag).
+            let kek: [u8; 32] = ecdh_1pu::derive_key_1pu_recipient(
                 recipient_private,
                 sender_pub,
                 &epk,
@@ -108,20 +117,49 @@ pub fn decrypt(
                 &apv_raw,
                 &tag,
                 256,
-            )?;
-            let sender_kid_str = String::from_utf8(apu_raw).ok();
-            (kek, true, sender_kid_str)
+            )?
+            .try_into()
+            .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
+
+            // Try the spec-correct KEK first. If AES-Key-Wrap integrity
+            // fails, the sender may be an unpatched peer that derived the
+            // legacy (pre-0.14, unprefixed-tag) KEK — retry with that so
+            // we stay interoperable during migration (issue #322). A
+            // genuinely bad message fails both and returns the second
+            // error.
+            match aes_kw::unwrap(&kek, &wrapped_key) {
+                Ok(cek) => (cek, true, sender_kid_str, false),
+                Err(_) => {
+                    let legacy_kek: [u8; 32] = ecdh_1pu::derive_key_1pu_recipient_legacy(
+                        recipient_private,
+                        sender_pub,
+                        &epk,
+                        b"ECDH-1PU+A256KW",
+                        &apu_raw,
+                        &apv_raw,
+                        &tag,
+                        256,
+                    )?
+                    .try_into()
+                    .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
+                    let cek = aes_kw::unwrap(&legacy_kek, &wrapped_key)?;
+                    (cek, true, sender_kid_str, true)
+                }
+            }
         }
         "ECDH-ES+A256KW" => {
-            let kek = ecdh_es::derive_key_es_recipient(
+            let kek: [u8; 32] = ecdh_es::derive_key_es_recipient(
                 recipient_private,
                 &epk,
                 b"ECDH-ES+A256KW",
                 &apu_raw,
                 &apv_raw,
                 256,
-            )?;
-            (kek, false, None)
+            )?
+            .try_into()
+            .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
+            let cek = aes_kw::unwrap(&kek, &wrapped_key)?;
+            (cek, false, None, false)
         }
         alg => {
             return Err(DIDCommError::UnsupportedAlgorithm(format!(
@@ -130,11 +168,6 @@ pub fn decrypt(
         }
     };
 
-    let kek_arr: [u8; 32] = kek
-        .try_into()
-        .map_err(|_| DIDCommError::KeyAgreement("KEK wrong size".into()))?;
-
-    let cek_bytes = aes_kw::unwrap(&kek_arr, &wrapped_key)?;
     let cek: [u8; 64] = cek_bytes
         .try_into()
         .map_err(|_| DIDCommError::KeyWrap("unwrapped CEK wrong size".into()))?;
@@ -148,6 +181,7 @@ pub fn decrypt(
         authenticated,
         sender_kid: sender_kid_str,
         recipient_kid: recipient_kid.to_string(),
+        legacy_kek_used,
     })
 }
 
@@ -527,5 +561,81 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    // ── #322: dual-KEK migration fallback ────────────────────────────
+
+    /// A JWE packed by an unpatched (legacy, unprefixed-tag) peer must
+    /// still decrypt via the fallback, with `legacy_kek_used == true`.
+    /// Covers all three ECDH-1PU curves.
+    fn legacy_sender_decrypts_via_fallback(curve: Curve) {
+        let sender = PrivateKeyAgreement::generate(curve);
+        let recipient = PrivateKeyAgreement::generate(curve);
+
+        let jwe_str = encrypt::authcrypt_legacy(
+            b"from a legacy peer",
+            "did:example:alice#key-1",
+            &sender,
+            "did:example:bob#key-1",
+            &recipient.public_key(),
+        )
+        .unwrap();
+
+        let result = decrypt(
+            &jwe_str,
+            "did:example:bob#key-1",
+            &recipient,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+
+        assert_eq!(result.plaintext, b"from a legacy peer");
+        assert!(result.authenticated);
+        assert!(
+            result.legacy_kek_used,
+            "legacy-packed JWE should decrypt only under the legacy KEK"
+        );
+    }
+
+    #[test]
+    fn legacy_fallback_x25519() {
+        legacy_sender_decrypts_via_fallback(Curve::X25519);
+    }
+
+    #[test]
+    fn legacy_fallback_p256() {
+        legacy_sender_decrypts_via_fallback(Curve::P256);
+    }
+
+    #[test]
+    fn legacy_fallback_k256() {
+        legacy_sender_decrypts_via_fallback(Curve::K256);
+    }
+
+    /// A spec-correct (current) authcrypt JWE must decrypt on the first
+    /// (correct) KEK — the fallback must NOT be engaged.
+    #[test]
+    fn spec_correct_authcrypt_does_not_use_legacy_fallback() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient = PrivateKeyAgreement::generate(Curve::X25519);
+
+        let jwe_str = encrypt::authcrypt(
+            b"spec-correct",
+            "did:example:alice#key-1",
+            &sender,
+            &[("did:example:bob#key-1", &recipient.public_key())],
+        )
+        .unwrap();
+
+        let result = decrypt(
+            &jwe_str,
+            "did:example:bob#key-1",
+            &recipient,
+            Some(&sender.public_key()),
+        )
+        .unwrap();
+
+        assert_eq!(result.plaintext, b"spec-correct");
+        assert!(!result.legacy_kek_used);
     }
 }

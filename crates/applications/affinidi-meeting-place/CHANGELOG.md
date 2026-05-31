@@ -1,5 +1,11 @@
 # Meeting Place Changelog
 
+## 31st May 2026 (0.4.1)
+
+- Bump `affinidi-messaging-didcomm` to 0.14 (DIDComm v2.1 interop fixes:
+  ECDH-1PU authcrypt KDF #322, JWS unprotected `kid` #323,
+  sign-then-encrypt unpack #324). No Meeting Place API change.
+
 ## 2nd May 2026 (0.4.0)
 
 - **BREAKING:** Migrated to `affinidi-tdk-common` 0.6 — field accesses on

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.4] - 2026-05-31
+
+### Changed
+
+- Bump `affinidi-messaging-didcomm` to 0.14, which corrects the ECDH-1PU
+  authcrypt KDF and adds DIDComm v2.1 JWS/sign-then-encrypt interop fixes
+  (#322/#323/#324). The SDK's `unpack_jwe` decrypt path picks up the fix
+  and the transitional dual-KEK fallback transparently. No SDK API
+  change. (Note: the SDK's own unpack path does not yet auto-unwrap
+  sign-then-encrypt — tracked as follow-up.)
+
 ## [0.18.3] - 2026-05-24
 
 ### Security
