@@ -8,6 +8,10 @@
   spec-compliant peers; the 0.14 dual-KEK fallback preserves
   compatibility with not-yet-upgraded peers during rollout. No API
   change in this crate.
+- Internal: the key-agreement key extractor now delegates to
+  `affinidi-did-common`'s `VerificationMethod::decode_public_key`, so the
+  JWK/multibase parsing is shared with the messaging SDK rather than
+  duplicated here.
 
 ## 28th May 2026 (0.3.3)
 

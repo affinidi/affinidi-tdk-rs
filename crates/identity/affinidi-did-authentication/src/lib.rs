@@ -758,37 +758,27 @@ fn _resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyA
         .or_else(|| doc.get_verification_method(kid))
         .ok_or_else(|| DIDAuthError::DIDComm(format!("verification method not found: {kid}")))?;
 
-    // Try publicKeyJwk first
-    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {
-        return PublicKeyAgreement::from_jwk(jwk_value)
-            .map_err(|e| DIDAuthError::DIDComm(format!("invalid JWK: {e}")));
-    }
+    // Decode the verification material (publicKeyJwk or
+    // publicKeyMultibase) via the shared `affinidi-did-common` decoder —
+    // one parser for the whole stack — then map the multicodec onto a
+    // key-agreement curve.
+    let (codec, key_bytes) = vm
+        .decode_public_key()
+        .map_err(|e| DIDAuthError::DIDComm(format!("invalid verification material: {e}")))?;
 
-    // Try publicKeyMultibase (Multikey format)
-    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
-        && let Some(multibase_str) = multibase_value.as_str()
-    {
-        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
-            .map_err(|e| DIDAuthError::DIDComm(format!("invalid multikey: {e}")))?;
+    let curve = match codec {
+        affinidi_encoding::X25519_PUB => Curve::X25519,
+        affinidi_encoding::P256_PUB => Curve::P256,
+        affinidi_encoding::SECP256K1_PUB => Curve::K256,
+        _ => {
+            return Err(DIDAuthError::DIDComm(format!(
+                "unsupported multicodec for key agreement: 0x{codec:x}"
+            )));
+        }
+    };
 
-        let curve = match codec {
-            affinidi_encoding::X25519_PUB => Curve::X25519,
-            affinidi_encoding::P256_PUB => Curve::P256,
-            affinidi_encoding::SECP256K1_PUB => Curve::K256,
-            _ => {
-                return Err(DIDAuthError::DIDComm(format!(
-                    "unsupported multicodec for key agreement: 0x{codec:x}"
-                )));
-            }
-        };
-
-        return PublicKeyAgreement::from_raw_bytes(curve, &key_bytes)
-            .map_err(|e| DIDAuthError::DIDComm(format!("invalid key bytes: {e}")));
-    }
-
-    Err(DIDAuthError::DIDComm(format!(
-        "no supported key material in verification method: {kid}"
-    )))
+    PublicKeyAgreement::from_raw_bytes(curve, &key_bytes)
+        .map_err(|e| DIDAuthError::DIDComm(format!("invalid key bytes: {e}")))
 }
 
 /// Map from secrets resolver KeyType to DIDComm Curve.

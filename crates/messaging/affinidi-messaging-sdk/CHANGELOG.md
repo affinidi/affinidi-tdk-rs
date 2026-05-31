@@ -2,14 +2,35 @@
 
 ## [0.18.4] - 2026-05-31
 
+### Security
+
+- **`unpack()` now verifies JWS signatures.** Previously a signed
+  (JWS) message was parsed *without* checking the signature and returned
+  with `non_repudiation: true` — i.e. a forged signature was accepted and
+  labelled non-repudiable. `unpack()` now resolves the signer's Ed25519
+  key from its `kid` (via the DID resolver) and verifies the signature;
+  an unresolvable signer or an invalid signature is an **error**. The
+  signer is attributed in `UnpackMetadata.sign_from`, read from the
+  protected header and falling back to the unprotected header (#323).
+  Behaviour change: flows that relied on the previous lax parsing of
+  unverified JWS will now receive an error instead of a message.
+
+### Added
+
+- **Sign-then-encrypt support (#324).** When a decrypted JWE wraps a JWS
+  (DIDComm v2.1 non-repudiation), `unpack()` verifies the inner signature
+  and reports `non_repudiation` + `sign_from` alongside the encryption
+  metadata, instead of failing to parse.
+
 ### Changed
 
-- Bump `affinidi-messaging-didcomm` to 0.14, which corrects the ECDH-1PU
-  authcrypt KDF and adds DIDComm v2.1 JWS/sign-then-encrypt interop fixes
-  (#322/#323/#324). The SDK's `unpack_jwe` decrypt path picks up the fix
-  and the transitional dual-KEK fallback transparently. No SDK API
-  change. (Note: the SDK's own unpack path does not yet auto-unwrap
-  sign-then-encrypt — tracked as follow-up.)
+- Bump `affinidi-messaging-didcomm` to 0.14 (corrected ECDH-1PU authcrypt
+  KDF + dual-KEK fallback, #322). The decrypt path picks these up
+  transparently.
+- Verification-material parsing now delegates to
+  `affinidi-did-common`'s `VerificationMethod::decode_public_key`,
+  removing the SDK's bespoke JWK/multibase branch (shared with the
+  DID-authentication layer).
 
 ## [0.18.3] - 2026-05-24
 

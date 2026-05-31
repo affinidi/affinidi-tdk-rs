@@ -53,8 +53,10 @@ impl SharedState {
                         // JWE — encrypted message
                         self.unpack_jwe(&msg_string, &value, &sha256_hash).await?
                     } else if value.get("payload").is_some() && value.get("signatures").is_some() {
-                        // JWS — signed message (not yet fully supported, parse plaintext from payload)
-                        self.unpack_jws(&msg_string, &sha256_hash)?
+                        // JWS — signed message: verify the signature and
+                        // attribute the signer (resolving its key via the
+                        // DID resolver).
+                        self.unpack_jws(&value, &msg_string, &sha256_hash).await?
                     } else if value.get("type").is_some() {
                         // Plaintext DIDComm message
                         let msg = Message::from_json(msg_string.as_bytes()).map_err(|e| {
@@ -158,6 +160,34 @@ impl SharedState {
             ATMError::DidcommError("Couldn't unpack incoming message".into(), e.to_string())
         })?;
 
+        // DIDComm v2.1 sign-then-encrypt (non-repudiation): the decrypted
+        // payload may itself be a JWS, not a bare Message. Detect that,
+        // verify the inner signature, and surface non-repudiation + the
+        // signer — instead of trying to parse the JWS envelope as a
+        // Message (which would fail). Detection is unambiguous: a
+        // plaintext DIDComm message has `id`/`type`, never
+        // `payload`+`signatures`.
+        if let Ok(inner) = serde_json::from_slice::<serde_json::Value>(&decrypted.plaintext)
+            && inner.get("payload").is_some()
+            && inner.get("signatures").is_some()
+        {
+            let inner_str = std::str::from_utf8(&decrypted.plaintext)
+                .map_err(|e| ATMError::DidcommError("Invalid inner JWS".into(), e.to_string()))?;
+            let (msg, sign_from) = self.verify_inner_jws(inner_str, &inner).await?;
+            let metadata = UnpackMetadata {
+                encrypted: true,
+                authenticated: decrypted.authenticated,
+                anonymous_sender: !decrypted.authenticated,
+                encrypted_from_kid: decrypted.sender_kid,
+                encrypted_to_kids: vec![decrypted.recipient_kid],
+                non_repudiation: true,
+                sign_from: Some(sign_from),
+                sha256_hash: sha256_hash.to_string(),
+                ..Default::default()
+            };
+            return Ok((msg, metadata));
+        }
+
         let msg = Message::from_json(&decrypted.plaintext).map_err(|e| {
             ATMError::DidcommError("Cannot parse decrypted message".into(), e.to_string())
         })?;
@@ -242,64 +272,143 @@ impl SharedState {
             .next()
             .or_else(|| sender_doc.doc.get_verification_method(sender_kid))?;
 
-        if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {
-            return affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement::from_jwk(jwk_value).ok();
-        }
-
-        if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
-            && let Some(multibase_str) = multibase_value.as_str()
-        {
-            let (codec, key_bytes) =
-                affinidi_encoding::decode_multikey_with_codec(multibase_str).ok()?;
-            let curve = match codec {
-                affinidi_encoding::X25519_PUB => {
-                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::X25519
-                }
-                affinidi_encoding::P256_PUB => {
-                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::P256
-                }
-                affinidi_encoding::SECP256K1_PUB => {
-                    affinidi_messaging_didcomm::crypto::key_agreement::Curve::K256
-                }
-                _ => return None,
-            };
-            return affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok();
-        }
-
-        None
+        // Single source of truth for verification-material parsing lives
+        // in `affinidi-did-common` (`decode_public_key`); map its
+        // `(multicodec, bytes)` onto a key-agreement key here.
+        use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PublicKeyAgreement};
+        let (codec, key_bytes) = vm.decode_public_key().ok()?;
+        let curve = match codec {
+            affinidi_encoding::X25519_PUB => Curve::X25519,
+            affinidi_encoding::P256_PUB => Curve::P256,
+            affinidi_encoding::SECP256K1_PUB => Curve::K256,
+            _ => return None,
+        };
+        PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok()
     }
 
-    /// Unpack a JWS (signed) message — basic support
-    fn unpack_jws(
+    /// Unpack a JWS (signed) message: verify the signature against the
+    /// signer's resolved key and attribute the signer. Unlike the prior
+    /// behaviour, this never returns an unverified message marked
+    /// non-repudiable — an unresolvable signer or a bad signature is an
+    /// error.
+    async fn unpack_jws(
         &self,
-        _msg_string: &str,
+        value: &serde_json::Value,
+        msg_string: &str,
         sha256_hash: &str,
     ) -> Result<(Message, UnpackMetadata), ATMError> {
-        // For JWS, we parse the payload directly without verification for now
-        // Full JWS verification would require resolving the signer's public key
-        let value: serde_json::Value = serde_json::from_str(_msg_string)
-            .map_err(|e| ATMError::DidcommError("Cannot parse JWS".into(), e.to_string()))?;
-
-        let payload_b64 = value["payload"].as_str().ok_or_else(|| {
-            ATMError::DidcommError("Invalid JWS".into(), "missing payload".into())
-        })?;
-
-        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
-        let payload_bytes = BASE64_URL_SAFE_NO_PAD.decode(payload_b64).map_err(|e| {
-            ATMError::DidcommError("Invalid JWS".into(), format!("invalid payload base64: {e}"))
-        })?;
-
-        let msg = Message::from_json(&payload_bytes).map_err(|e| {
-            ATMError::DidcommError("Cannot parse JWS payload".into(), e.to_string())
-        })?;
+        let (msg, sign_from) = self.verify_inner_jws(msg_string, value).await?;
 
         let metadata = UnpackMetadata {
             non_repudiation: true,
+            sign_from: Some(sign_from),
             sha256_hash: sha256_hash.to_string(),
             ..Default::default()
         };
 
         Ok((msg, metadata))
+    }
+
+    /// Verify a JWS — resolving the signer's Ed25519 key from its `kid`
+    /// — and return the decoded [`Message`] plus the signer kid. Shared
+    /// by top-level signed messages and the inner JWS of a
+    /// sign-then-encrypt envelope. Errors if the signer key can't be
+    /// resolved or the signature is invalid; we never surface an
+    /// unverified message.
+    async fn verify_inner_jws(
+        &self,
+        jws_str: &str,
+        jws_value: &serde_json::Value,
+    ) -> Result<(Message, String), ATMError> {
+        use affinidi_messaging_didcomm::jws::verify::verify_ed25519;
+
+        let signer_kid = Self::jws_signer_kid(jws_value).ok_or_else(|| {
+            ATMError::DidcommError("Invalid JWS".into(), "no signer kid in JWS headers".into())
+        })?;
+        let signer_pk = self
+            .try_resolve_signer_ed25519(&signer_kid)
+            .await
+            .ok_or_else(|| {
+                ATMError::DidcommError(
+                    "Couldn't verify JWS".into(),
+                    format!("could not resolve an Ed25519 verification key for '{signer_kid}'"),
+                )
+            })?;
+        let verified = verify_ed25519(jws_str, &signer_pk).map_err(|e| {
+            ATMError::DidcommError("JWS signature verification failed".into(), e.to_string())
+        })?;
+        let msg = Message::from_json(&verified.payload).map_err(|e| {
+            ATMError::DidcommError("Cannot parse verified JWS payload".into(), e.to_string())
+        })?;
+        // Prefer the kid the verifier extracted (protected, then
+        // unprotected header); fall back to the one we resolved against.
+        Ok((msg, verified.signer_kid.unwrap_or(signer_kid)))
+    }
+
+    /// Extract the signer `kid` from a JWS's first signature, preferring
+    /// the protected header and falling back to the per-signature
+    /// unprotected header (RFC 7515 §4.1.4 — where DIDComm / credo-ts /
+    /// didcomm-python place it).
+    fn jws_signer_kid(jws_value: &serde_json::Value) -> Option<String> {
+        use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+        let sig = jws_value.get("signatures")?.as_array()?.first()?;
+        if let Some(protected) = sig.get("protected").and_then(|v| v.as_str())
+            && let Ok(bytes) = BASE64_URL_SAFE_NO_PAD.decode(protected)
+            && let Ok(header) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && let Some(kid) = header.get("kid").and_then(|v| v.as_str())
+        {
+            return Some(kid.to_string());
+        }
+        sig.get("header")?.get("kid")?.as_str().map(str::to_string)
+    }
+
+    /// Resolve the signer's Ed25519 verification key (32 octets) for a
+    /// `kid` by resolving its DID document. Looks in the `authentication`
+    /// relationship first (where DIDComm signing keys live), then any
+    /// verification method. Returns `None` if unresolvable or not
+    /// Ed25519. Mirrors [`Self::try_resolve_sender_public`] but for the
+    /// signing key, and shares the verification-material decoder
+    /// (`VerificationMethod::decode_public_key`).
+    async fn try_resolve_signer_ed25519(&self, kid: &str) -> Option<[u8; 32]> {
+        use affinidi_did_common::{
+            document::DocumentExt, verification_method::VerificationRelationship,
+        };
+
+        let did = kid.split('#').next().unwrap_or(kid);
+        let doc = self.tdk_common.did_resolver().resolve(did).await.ok()?;
+
+        // Fragment-qualified kid → that exact key; bare DID → first
+        // authentication key.
+        let lookup_owned: String;
+        let lookup_kid: &str = if kid.contains('#') {
+            kid
+        } else {
+            let auth = doc.doc.find_authentication(None);
+            lookup_owned = auth.first()?.to_string();
+            &lookup_owned
+        };
+
+        let vm = doc
+            .doc
+            .authentication
+            .iter()
+            .filter_map(|a| match a {
+                VerificationRelationship::VerificationMethod(vm)
+                    if vm.id.as_str() == lookup_kid =>
+                {
+                    Some(vm.as_ref())
+                }
+                _ => None,
+            })
+            .next()
+            .or_else(|| doc.doc.get_verification_method(lookup_kid))?;
+
+        let (codec, bytes) = vm.decode_public_key().ok()?;
+        if codec == affinidi_encoding::ED25519_PUB {
+            bytes.try_into().ok()
+        } else {
+            None
+        }
     }
 
     pub async fn unpack_forward(
@@ -894,6 +1003,158 @@ mod tests {
         assert_eq!(unpacked.id, "test-k256-anon-1");
         assert!(meta.encrypted);
         assert!(!meta.authenticated);
+    }
+
+    /// Generate a did:peer:2 with an Ed25519 signing key (V, #key-1) and
+    /// an X25519 key-agreement key (E, #key-2). Returns the DID, the
+    /// Ed25519 private key, the signer kid, and the X25519 secret.
+    fn generate_peer_did_signing_and_x25519() -> (String, [u8; 32], String, Secret) {
+        use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+        let x25519_secret = Secret::generate_x25519(Some("temp"), None).unwrap();
+        let x25519_multibase = x25519_secret.get_public_keymultibase().unwrap();
+
+        let keys = vec![
+            PeerCreateKey::new(PeerKeyPurpose::Verification, PeerKeyType::Ed25519),
+            PeerCreateKey::from_multibase(PeerKeyPurpose::Encryption, x25519_multibase),
+        ];
+        let (did, created) = DID::generate_peer(&keys, None).unwrap();
+        let did_string = did.to_string();
+
+        // V (Ed25519) is the first created key; `d` is its base64url private.
+        let v_priv: [u8; 32] = BASE64_URL_SAFE_NO_PAD
+            .decode(&created[0].d)
+            .unwrap()
+            .try_into()
+            .expect("Ed25519 private key is 32 bytes");
+        let signer_kid = format!("{did_string}#key-1");
+
+        let mut secret = x25519_secret;
+        secret.id = format!("{did_string}#key-2");
+
+        (did_string, v_priv, signer_kid, secret)
+    }
+
+    /// #323: a top-level signed (JWS) message must be cryptographically
+    /// verified — and the signer attributed — not parsed blindly. (The
+    /// prior behaviour returned the payload unverified with
+    /// `non_repudiation: true`.)
+    #[tokio::test]
+    async fn unpack_signed_jws_verifies_and_attributes() {
+        use affinidi_messaging_didcomm::message::pack;
+
+        let (did, v_priv, signer_kid, _x) = generate_peer_did_signing_and_x25519();
+        // No secrets needed to *verify* — the signer's key is resolved.
+        let atm = create_atm().await;
+
+        let msg = DcMessage::build(
+            "sig-1".to_string(),
+            "example/v1".to_string(),
+            json!({"signed": true}),
+        )
+        .from(did.clone())
+        .finalize();
+        let jws = pack::pack_signed(&msg, &signer_kid, &v_priv).unwrap();
+
+        let (unpacked, meta) = atm
+            .unpack(&jws)
+            .await
+            .expect("a validly-signed JWS should verify");
+        assert_eq!(unpacked.id, "sig-1");
+        assert!(!meta.encrypted);
+        assert!(
+            meta.non_repudiation,
+            "verified signature => non_repudiation"
+        );
+        assert_eq!(meta.sign_from.as_deref(), Some(signer_kid.as_str()));
+    }
+
+    /// #323 security: a JWS whose payload was tampered after signing must
+    /// be REJECTED, not accepted as non-repudiable.
+    #[tokio::test]
+    async fn unpack_signed_jws_tampered_payload_is_rejected() {
+        use affinidi_messaging_didcomm::message::pack;
+        use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+
+        let (did, v_priv, signer_kid, _x) = generate_peer_did_signing_and_x25519();
+        let atm = create_atm().await;
+
+        let msg = DcMessage::build("sig-ok".to_string(), "example/v1".to_string(), json!({}))
+            .from(did.clone())
+            .finalize();
+        let jws = pack::pack_signed(&msg, &signer_kid, &v_priv).unwrap();
+
+        // Swap the payload for a different message; the signature no
+        // longer covers it.
+        let mut v: serde_json::Value = serde_json::from_str(&jws).unwrap();
+        v["payload"] = json!(
+            BASE64_URL_SAFE_NO_PAD
+                .encode(br#"{"id":"evil","typ":"example/v1","type":"example/v1","body":{"x":1}}"#)
+        );
+        let tampered = serde_json::to_string(&v).unwrap();
+
+        assert!(
+            atm.unpack(&tampered).await.is_err(),
+            "a tampered JWS must fail verification, not be trusted"
+        );
+    }
+
+    /// #324: DIDComm v2.1 sign-then-encrypt through the SDK — the inner
+    /// JWS is verified after decryption, surfacing non-repudiation + the
+    /// signer.
+    #[tokio::test]
+    async fn unpack_sign_then_encrypt() {
+        use affinidi_messaging_didcomm::crypto::key_agreement::{
+            Curve, PrivateKeyAgreement, PublicKeyAgreement,
+        };
+        use affinidi_messaging_didcomm::jwe::encrypt;
+        use affinidi_messaging_didcomm::message::pack;
+
+        let (sender_did, v_priv, signer_kid, sender_x) = generate_peer_did_signing_and_x25519();
+        let (recipient_did, recipient_secret) = generate_peer_did_with_x25519();
+        let recipient_atm = create_atm_with_secrets(vec![recipient_secret.clone()]).await;
+
+        let msg = DcMessage::build(
+            "ste-1".to_string(),
+            "example/v1".to_string(),
+            json!({"v": 7}),
+        )
+        .from(sender_did.clone())
+        .to(recipient_did.clone())
+        .finalize();
+
+        // Sign first, then authcrypt the JWS bytes (sign-then-encrypt).
+        let jws = pack::pack_signed(&msg, &signer_kid, &v_priv).unwrap();
+
+        let sender_priv =
+            PrivateKeyAgreement::from_raw_bytes(Curve::X25519, sender_x.get_private_bytes())
+                .unwrap();
+        let (_, rpub) = affinidi_encoding::decode_multikey_with_codec(
+            &recipient_secret.get_public_keymultibase().unwrap(),
+        )
+        .unwrap();
+        let recipient_pub = PublicKeyAgreement::from_raw_bytes(Curve::X25519, &rpub).unwrap();
+
+        let jwe = encrypt::authcrypt(
+            jws.as_bytes(),
+            &format!("{sender_did}#key-2"),
+            &sender_priv,
+            &[(&format!("{recipient_did}#key-2"), &recipient_pub)],
+        )
+        .unwrap();
+
+        let (unpacked, meta) = recipient_atm
+            .unpack(&jwe)
+            .await
+            .expect("sign-then-encrypt should decrypt and verify");
+        assert_eq!(unpacked.id, "ste-1");
+        assert_eq!(unpacked.body, json!({"v": 7}));
+        assert!(meta.encrypted);
+        assert!(meta.authenticated, "authcrypt => authenticated");
+        assert!(
+            meta.non_repudiation,
+            "inner JWS verified => non_repudiation"
+        );
+        assert_eq!(meta.sign_from.as_deref(), Some(signer_kid.as_str()));
     }
 
     const FORWARD_TYPE: &str = "https://didcomm.org/routing/2.0/forward";
