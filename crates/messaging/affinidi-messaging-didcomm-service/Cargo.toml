@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.3.1"
+version = "0.3.2"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ rust-version.workspace = true
 [dependencies]
 affinidi-tdk-common = "0.6"
 affinidi-messaging-sdk = "0.18"
-affinidi-messaging-didcomm = "0.13"
+affinidi-messaging-didcomm = "0.14"
 affinidi-secrets-resolver = "0.5"
 
 async-trait = "0.1"

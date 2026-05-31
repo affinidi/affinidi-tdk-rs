@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.7.2] - 2026-05-31
+
+### Changed
+
+- Bump `affinidi-messaging-didcomm` to 0.14 (DIDComm v2.1 interop fixes:
+  ECDH-1PU authcrypt KDF #322, JWS unprotected `kid` #323,
+  sign-then-encrypt unpack #324). No `affinidi-tdk` API change.
+
 ## [0.7.1] - 2026-05-02
 
 ### Deprecated

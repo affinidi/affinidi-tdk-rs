@@ -4,6 +4,16 @@
 
 ## 31st May 2026
 
+### 0.15.7 — DIDComm v2.1 interop fixes (via affinidi-messaging-didcomm 0.14)
+
+Picks up `affinidi-messaging-didcomm` 0.14, which corrects the ECDH-1PU
+authcrypt KDF (#322), reads the signer `kid` from the JWS unprotected
+header (#323), and auto-unwraps sign-then-encrypt messages (#324). The
+mediator's authcrypt — including the DID-authentication handshake — is
+now spec-correct and interoperable with credo-ts / didcomm-python. The
+0.14 dual-KEK decrypt fallback keeps the mediator able to receive from
+not-yet-upgraded peers during rollout. No mediator config or API change.
+
 ### 0.15.6 — CORS policy in the setup wizard + sub-domain wildcards
 
 Additive, backward-compatible release. Existing `cors_allow_origin`

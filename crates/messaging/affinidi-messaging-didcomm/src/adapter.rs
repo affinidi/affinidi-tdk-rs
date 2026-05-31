@@ -111,6 +111,10 @@ impl MessagingProtocol for DIDCommAdapter {
                 authenticated,
                 sender_kid,
                 recipient_kid,
+                // New fields (legacy_kek_used / non_repudiation /
+                // signer_kid) aren't surfaced through this adapter yet —
+                // adopting non-repudiation here is follow-up work.
+                ..
             } => {
                 // Extract payload from message body
                 let payload = extract_payload(&message.body);

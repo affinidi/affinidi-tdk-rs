@@ -37,6 +37,9 @@ pub fn sign_ed25519(
         payload: payload_b64,
         signatures: vec![JwsSignature {
             protected: header_b64,
+            // We carry kid in the protected header, so no unprotected
+            // header is emitted (verify reads either — issue #323).
+            header: None,
             signature: Base64UrlUnpadded::encode_string(&sig),
         }],
     };

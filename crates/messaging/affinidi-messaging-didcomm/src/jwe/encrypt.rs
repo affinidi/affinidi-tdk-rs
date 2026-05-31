@@ -173,6 +173,69 @@ pub fn anoncrypt(
     serde_json::to_string(&jwe).map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
 }
 
+/// Test-only authcrypt that wraps the CEK under the **legacy** (pre-0.14,
+/// unprefixed-tag) ECDH-1PU KEK — i.e. a JWE exactly as an unpatched peer
+/// would emit it. Used to exercise the recipient-side decrypt fallback
+/// (issue #322). Mirrors [`authcrypt`] but for a single recipient.
+#[cfg(test)]
+pub(crate) fn authcrypt_legacy(
+    plaintext: &[u8],
+    sender_kid: &str,
+    sender_private: &PrivateKeyAgreement,
+    recipient_kid: &str,
+    recipient_pub: &PublicKeyAgreement,
+) -> Result<String, DIDCommError> {
+    let curve = recipient_pub.curve();
+    let ephemeral = EphemeralKeyPair::generate(curve);
+
+    let apu_raw = sender_kid.as_bytes();
+    let apv_raw = compute_apv(std::iter::once(recipient_kid));
+
+    let cek = content_encryption::generate_cek();
+    let iv = content_encryption::generate_iv();
+
+    let protected_header = ProtectedHeader {
+        typ: Some("application/didcomm-encrypted+json".into()),
+        alg: "ECDH-1PU+A256KW".into(),
+        enc: "A256CBC-HS512".into(),
+        skid: Some(sender_kid.to_string()),
+        apu: Some(Base64UrlUnpadded::encode_string(apu_raw)),
+        apv: Base64UrlUnpadded::encode_string(&apv_raw),
+        epk: ephemeral.public.to_jwk(),
+    };
+    let protected_str = serde_json::to_string(&protected_header)
+        .map_err(|e| DIDCommError::Serialization(format!("protected header: {e}")))?;
+    let protected_b64 = Base64UrlUnpadded::encode_string(protected_str.as_bytes());
+
+    let (ciphertext, tag) =
+        content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
+
+    let kek = ecdh_1pu::derive_sender_key_1pu_legacy(
+        &ephemeral,
+        sender_private,
+        recipient_pub,
+        apu_raw,
+        &apv_raw,
+        &tag,
+    )?;
+    let wrapped = aes_kw::wrap(&kek, &cek)?;
+
+    let jwe = Jwe {
+        protected: protected_b64,
+        recipients: vec![Recipient {
+            header: PerRecipientHeader {
+                kid: recipient_kid.to_string(),
+            },
+            encrypted_key: Base64UrlUnpadded::encode_string(&wrapped),
+        }],
+        iv: Base64UrlUnpadded::encode_string(&iv),
+        ciphertext: Base64UrlUnpadded::encode_string(&ciphertext),
+        tag: Base64UrlUnpadded::encode_string(&tag),
+    };
+
+    serde_json::to_string(&jwe).map_err(|e| DIDCommError::Serialization(format!("JWE: {e}")))
+}
+
 /// Compute APV: SHA-256 of sorted, dot-joined recipient KIDs.
 fn compute_apv<'a>(kids: impl Iterator<Item = &'a str>) -> Vec<u8> {
     let mut sorted: Vec<&str> = kids.collect();

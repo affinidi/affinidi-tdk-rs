@@ -78,7 +78,43 @@ pub fn derive_key_1pu_recipient(
     concat_kdf_1pu(&z, alg, apu, apv, key_len, cc_tag)
 }
 
-/// Concat KDF with SuppPrivInfo for ECDH-1PU (includes cc_tag).
+/// Recipient-side ECDH-1PU derivation using the **legacy** (pre-0.14)
+/// Concat KDF that fed `cc_tag` without a length prefix.
+///
+/// Transitional: used only by the decrypt fallback so a fixed node can
+/// still receive authcrypt messages packed by an unpatched peer during
+/// rollout. Delete once the ecosystem has upgraded. See
+/// [`concat_kdf_1pu_legacy`] and issue #322.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_key_1pu_recipient_legacy(
+    recipient_private: &PrivateKeyAgreement,
+    sender_public: &PublicKeyAgreement,
+    ephemeral_public: &PublicKeyAgreement,
+    alg: &[u8],
+    apu: &[u8],
+    apv: &[u8],
+    cc_tag: &[u8],
+    key_len: u32,
+) -> Result<Vec<u8>, DIDCommError> {
+    let ze = recipient_private.diffie_hellman(ephemeral_public)?;
+    let zs = recipient_private.diffie_hellman(sender_public)?;
+    let mut z = Vec::with_capacity(ze.len() + zs.len());
+    z.extend_from_slice(&ze);
+    z.extend_from_slice(&zs);
+
+    concat_kdf_1pu_legacy(&z, alg, apu, apv, key_len, cc_tag)
+}
+
+/// Concat KDF for ECDH-1PU. The content-encryption authentication tag is
+/// fed as the final OtherInfo entry, **length-prefixed** with a 32-bit
+/// big-endian length exactly like every other variable-length field.
+///
+/// This matches the ECDH-1PU draft (draft-madden-jose-ecdh-1pu-04 §2.3 /
+/// Appendix B.9 test vector) and the askar / didcomm-python
+/// implementations. The draft concatenates the length-prefixed tag onto
+/// SuppPubInfo after `keydatalen`; because Concat KDF hashes
+/// `… ‖ SuppPubInfo ‖ SuppPrivInfo`, feeding `keydatalen ‖ len ‖ tag`
+/// (here) produces an identical byte stream and KEK.
 fn concat_kdf_1pu(
     z: &[u8],
     alg: &[u8],
@@ -87,8 +123,36 @@ fn concat_kdf_1pu(
     key_len_bits: u32,
     cc_tag: &[u8],
 ) -> Result<Vec<u8>, DIDCommError> {
+    concat_kdf_1pu_inner(z, alg, apu, apv, key_len_bits, cc_tag, false)
+}
+
+/// Pre-0.14 ECDH-1PU Concat KDF that fed `cc_tag` **without** a length
+/// prefix — non-conformant, see issue #322. Retained only for the
+/// decrypt fallback during migration; do not use for packing.
+fn concat_kdf_1pu_legacy(
+    z: &[u8],
+    alg: &[u8],
+    apu: &[u8],
+    apv: &[u8],
+    key_len_bits: u32,
+    cc_tag: &[u8],
+) -> Result<Vec<u8>, DIDCommError> {
+    concat_kdf_1pu_inner(z, alg, apu, apv, key_len_bits, cc_tag, true)
+}
+
+fn concat_kdf_1pu_inner(
+    z: &[u8],
+    alg: &[u8],
+    apu: &[u8],
+    apv: &[u8],
+    key_len_bits: u32,
+    cc_tag: &[u8],
+    legacy_tag_encoding: bool,
+) -> Result<Vec<u8>, DIDCommError> {
     if cc_tag.is_empty() {
-        // No tag — same as standard Concat KDF
+        // No tag — same as standard Concat KDF (matches ECDH-ES). The
+        // legacy/spec distinction only concerns the tag encoding, so an
+        // empty tag is identical either way.
         return concat_kdf(z, alg, apu, apv, key_len_bits);
     }
 
@@ -118,7 +182,12 @@ fn concat_kdf_1pu(
     // SuppPubInfo: key length in bits
     hasher.update(key_len_bits.to_be_bytes());
 
-    // SuppPrivInfo: cc_tag (the auth tag from content encryption)
+    // SuppPrivInfo: cc_tag (the auth tag from content encryption),
+    // length-prefixed per the ECDH-1PU draft. The legacy path omits the
+    // prefix (issue #322) and exists only for the decrypt fallback.
+    if !legacy_tag_encoding {
+        hasher.update((cc_tag.len() as u32).to_be_bytes());
+    }
     hasher.update(cc_tag);
 
     let hash = hasher.finalize();
@@ -148,6 +217,30 @@ pub fn derive_sender_key_1pu(
         .try_into()
         .map_err(|_| DIDCommError::KeyAgreement("derived key wrong size".into()))?;
     Ok(arr)
+}
+
+/// Test-only sender-side KEK using the **legacy** (pre-0.14, unprefixed
+/// tag) Concat KDF. Lets tests synthesise a JWE exactly as an unpatched
+/// peer would, so the recipient-side decrypt fallback can be exercised.
+/// Deliberately `cfg(test)` — no legacy *sender* derivation ships in
+/// production; only [`derive_key_1pu_recipient_legacy`] does.
+#[cfg(test)]
+pub(crate) fn derive_sender_key_1pu_legacy(
+    ephemeral: &EphemeralKeyPair,
+    sender_private: &PrivateKeyAgreement,
+    recipient_public: &PublicKeyAgreement,
+    apu: &[u8],
+    apv: &[u8],
+    cc_tag: &[u8],
+) -> Result<[u8; 32], DIDCommError> {
+    let ze = ephemeral.private.diffie_hellman(recipient_public)?;
+    let zs = sender_private.diffie_hellman(recipient_public)?;
+    let mut z = Vec::with_capacity(ze.len() + zs.len());
+    z.extend_from_slice(&ze);
+    z.extend_from_slice(&zs);
+    let kek = concat_kdf_1pu_legacy(&z, b"ECDH-1PU+A256KW", apu, apv, 256, cc_tag)?;
+    kek.try_into()
+        .map_err(|_| DIDCommError::KeyAgreement("derived key wrong size".into()))
 }
 
 #[cfg(test)]
@@ -291,5 +384,88 @@ mod tests {
         .unwrap();
 
         assert_ne!(kek1, kek2);
+    }
+
+    /// Regression for #322: the spec-correct Concat KDF must
+    /// length-prefix `cc_tag` (32-bit big-endian) exactly like the other
+    /// OtherInfo fields, and must differ from the legacy (unprefixed)
+    /// derivation. Pins the byte-level encoding against a hand-built
+    /// hash so it can't silently regress.
+    #[test]
+    fn concat_kdf_1pu_length_prefixes_tag() {
+        use sha2::{Digest, Sha256};
+
+        let z = b"0123456789abcdef0123456789abcdef"; // 32 bytes
+        let alg = b"ECDH-1PU+A256KW".as_slice();
+        let apu = b"did:example:alice#key-1".as_slice();
+        let apv = b"apv-bytes".as_slice();
+        let tag = [0xABu8; 32];
+        let key_len_bits = 256u32;
+
+        // Independently build the spec-correct OtherInfo, with the tag
+        // length-prefixed (the bytes under test: `00 00 00 20`).
+        let mut h = Sha256::new();
+        h.update(1u32.to_be_bytes());
+        h.update(z);
+        h.update((alg.len() as u32).to_be_bytes());
+        h.update(alg);
+        h.update((apu.len() as u32).to_be_bytes());
+        h.update(apu);
+        h.update((apv.len() as u32).to_be_bytes());
+        h.update(apv);
+        h.update(key_len_bits.to_be_bytes());
+        h.update((tag.len() as u32).to_be_bytes());
+        h.update(tag);
+        let expected = h.finalize()[..32].to_vec();
+
+        let got = concat_kdf_1pu(z, alg, apu, apv, key_len_bits, &tag).unwrap();
+        assert_eq!(got, expected, "KDF must length-prefix the cc_tag");
+
+        let legacy = concat_kdf_1pu_legacy(z, alg, apu, apv, key_len_bits, &tag).unwrap();
+        assert_ne!(
+            got, legacy,
+            "the 4-byte length prefix must change the derived key"
+        );
+    }
+
+    /// Models the issue #322 interop break directly: a spec-correct
+    /// (length-prefixed) KEK — what credo-ts / didcomm-python and our own
+    /// fixed packer produce — must NOT equal the legacy (pre-0.14) KEK an
+    /// unpatched recipient would derive. I.e. an unpatched peer cannot
+    /// reconstruct the spec-correct KEK, which is exactly why authcrypt
+    /// failed bidirectionally before this fix.
+    #[test]
+    fn spec_correct_kek_differs_from_legacy_for_recipient() {
+        let sender = PrivateKeyAgreement::generate(Curve::X25519);
+        let recipient = PrivateKeyAgreement::generate(Curve::X25519);
+        let ephemeral = EphemeralKeyPair::generate(Curve::X25519);
+        let cc_tag = [0x5Au8; 32];
+
+        let correct = derive_key_1pu_recipient(
+            &recipient,
+            &sender.public_key(),
+            &ephemeral.public,
+            b"ECDH-1PU+A256KW",
+            b"did:example:alice#key-1",
+            b"apv",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+        let legacy = derive_key_1pu_recipient_legacy(
+            &recipient,
+            &sender.public_key(),
+            &ephemeral.public,
+            b"ECDH-1PU+A256KW",
+            b"did:example:alice#key-1",
+            b"apv",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+        assert_ne!(
+            correct, legacy,
+            "spec-correct and legacy KEKs must differ (the #322 interop break)"
+        );
     }
 }

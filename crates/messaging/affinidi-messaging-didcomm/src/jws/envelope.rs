@@ -17,8 +17,25 @@ pub struct Jws {
 pub struct JwsSignature {
     /// BASE64URL(UTF8(JWS Protected Header))
     pub protected: String,
+    /// Per-signature JWS **unprotected** header (RFC 7515 §7.2.1). Not
+    /// integrity-protected, so never part of the signing input — but
+    /// DIDComm and several implementations (credo-ts, SICPA
+    /// didcomm-python) carry the signer `kid` here rather than in the
+    /// protected header, so it must be parsed to attribute the signer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<JwsUnprotectedHeader>,
     /// BASE64URL(JWS Signature)
     pub signature: String,
+}
+
+/// Per-signature JWS unprotected header members DIDComm cares about.
+/// Only `kid` is modelled today; unknown members deserialize and are
+/// ignored.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct JwsUnprotectedHeader {
+    /// Signer KID (DID URL), when carried unprotected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
 }
 
 /// JWS protected header for DIDComm signed messages.
