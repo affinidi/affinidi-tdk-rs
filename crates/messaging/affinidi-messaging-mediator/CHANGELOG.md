@@ -2,6 +2,39 @@
 
 ## Changelog history
 
+## 31st May 2026
+
+### 0.15.6 — CORS policy in the setup wizard + sub-domain wildcards
+
+Additive, backward-compatible release. Existing `cors_allow_origin`
+configs keep their current behaviour; no configuration changes are
+required.
+
+#### Added
+
+- **CORS policy question in `mediator-setup`.** The Security series of
+  the setup wizard now asks for the browser CORS policy and writes the
+  result to `[security].cors_allow_origin`. Three choices:
+  - **Deny all cross-origin** (default) — leaves `cors_allow_origin`
+    unset (the mediator's existing default-closed posture).
+  - **Allow any origin** — writes `cors_allow_origin = "*"`. Suggested
+    for public mediators; safe because the endpoints gate on a bearer
+    token, not an ambient cookie.
+  - **Specific domains** — collects a validated, comma-separated
+    allowlist (written verbatim).
+  The choice is also surfaced on the review screen and round-trips
+  through the build-recipe (`[security].cors` / `cors_domains`).
+- **Sub-domain wildcard origins.** `cors_allow_origin` now accepts
+  leftmost-label wildcards such as `https://*.affinidi.com` alongside
+  exact origins. A wildcard matches any sub-domain of the suffix (at any
+  depth) with an exact scheme and port; the matched request `Origin` is
+  echoed back, so responses stay CORS-spec compliant (the
+  `Access-Control-Allow-Origin` header itself has no wildcard form). A
+  wildcard does **not** cover its own apex — add `https://affinidi.com`
+  explicitly if needed. The same matcher backs both the REST `CorsLayer`
+  and the WebSocket `Origin` defence-in-depth check, so the two cannot
+  drift apart.
+
 ## 24th May 2026
 
 ### 0.15.5 — vta-sdk 0.7 + messaging security fixes

@@ -184,10 +184,22 @@ jwt_refresh_expiry = "86400"
 ### unset (the default) to disable cross-origin access entirely.
 ###
 ### Accepts either:
-###   - a comma-separated list of explicit, scheme-qualified origins,
-###     each echoed back in `Access-Control-Allow-Origin` only for a
-###     matching request Origin, e.g.
-###     "https://affinidi.com,https://example2.com"; or
+###   - a comma-separated allowlist whose entries are each one of:
+###       * an exact, scheme-qualified origin, echoed back in
+###         `Access-Control-Allow-Origin` only for a matching request
+###         Origin, e.g. "https://affinidi.com,https://example2.com"; or
+###       * a leftmost-label sub-domain wildcard, e.g.
+###         "https://*.affinidi.com". This matches any sub-domain of
+###         affinidi.com at any depth (app.affinidi.com, a.b.affinidi.com)
+###         and echoes back the exact request Origin that matched. The
+###         scheme and port must match exactly (pin a port with
+###         "https://*.affinidi.com:8443"); the '*' is only valid as the
+###         entire leftmost host label. NOTE: a wildcard does NOT cover
+###         its own apex — "https://*.affinidi.com" does not match
+###         "https://affinidi.com"; add the apex explicitly if needed.
+###     (The CORS spec's Access-Control-Allow-Origin header has no
+###     wildcard-subdomain form; the mediator implements "*.suffix" by
+###     matching the request Origin and echoing the exact match.)
 ###   - a single "*" to allow ANY origin. A wildcard is safe here only
 ###     because these endpoints authenticate with a bearer token in the
 ###     `Authorization` header (not an ambient cookie): a cross-origin

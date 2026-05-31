@@ -7,8 +7,8 @@ use crate::{
     app::WizardConfig,
     config_writer::build_backend_url,
     consts::{
-        JWT_MODE_GENERATE, NETWORK_MODE_CLOSED, NETWORK_MODE_OPEN, SSL_EXISTING, SSL_SELF_SIGNED,
-        STORAGE_BACKEND_FJALL,
+        CORS_MODE_ANY, CORS_MODE_LIST, CORS_MODE_NONE, JWT_MODE_GENERATE, NETWORK_MODE_CLOSED,
+        NETWORK_MODE_OPEN, SSL_EXISTING, SSL_SELF_SIGNED, STORAGE_BACKEND_FJALL,
     },
     ui::theme,
     vta::{VtaReply, VtaSession},
@@ -193,6 +193,13 @@ pub fn render_summary(
     );
     add_field(
         &mut lines,
+        "  CORS policy",
+        &cors_policy_display(config),
+        label_style,
+        value_style,
+    );
+    add_field(
+        &mut lines,
         "  Admin DID",
         &config.admin_did_mode,
         label_style,
@@ -333,6 +340,18 @@ fn jwt_mode_display(mode: &str) -> String {
         // hasn't run yet (e.g. truncated wizard state in tests).
         "" => "—".into(),
         "provide" => "Operator provides at boot (env / file)".into(),
+        other => other.to_string(),
+    }
+}
+
+/// Friendly label for `WizardConfig::cors_mode`. For the allowlist mode
+/// the chosen domains are appended so the operator can audit them on the
+/// review screen. Same fall-through rule as `network_mode_display`.
+fn cors_policy_display(config: &WizardConfig) -> String {
+    match config.cors_mode.as_str() {
+        CORS_MODE_NONE | "" => "Deny all cross-origin (default)".into(),
+        CORS_MODE_ANY => "Allow any origin (*)".into(),
+        CORS_MODE_LIST => format!("Allowlist: {}", config.cors_domains),
         other => other.to_string(),
     }
 }

@@ -853,6 +853,40 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                 );
                 return;
             }
+            // Security step: the CORS "Specific domains" allowlist is
+            // collected in a text-input sub-phase of CorsPolicy. Render
+            // the supported syntax with examples; a failed validation
+            // surfaces as an accented tip line above the prompt and keeps
+            // the operator here until every entry is well-formed.
+            if app.current_step == crate::app::WizardStep::Security
+                && app.security_phase == Some(crate::app::SecurityPhase::CorsPolicy)
+            {
+                let tip = app
+                    .cors_validation_error
+                    .as_ref()
+                    .map(|e| format!("\u{26A0} {e}"));
+                prompt::render_prompt(
+                    frame,
+                    chunks[0],
+                    "CORS allowed origins",
+                    "Comma-separated origins permitted to call the mediator API from a browser.",
+                    tip.as_deref(),
+                    &app.text_input,
+                    "https://app.affinidi.com, https://*.affinidi.com",
+                    "Each entry is matched against the browser's Origin header; the matched \
+                     origin is echoed back.\n\n\
+                     Accepted forms:\n  \
+                     https://app.affinidi.com       exact, scheme-qualified origin\n  \
+                     https://*.affinidi.com         any sub-domain of affinidi.com (any depth)\n  \
+                     https://*.affinidi.com:8443    pin a non-default port\n\n\
+                     Notes:\n  \
+                     - scheme and port must match exactly; '*' is only the leftmost label.\n  \
+                     - '*.affinidi.com' does NOT cover the apex 'affinidi.com' — add it \
+                     explicitly if needed.\n  \
+                     - to allow every origin instead, go back and pick \"Allow any origin\".",
+                );
+                return;
+            }
             // Database step: render the prompt that matches the
             // backend the operator picked on the prior screen. Redis
             // gets the URL prompt with auth/TLS/partition examples;

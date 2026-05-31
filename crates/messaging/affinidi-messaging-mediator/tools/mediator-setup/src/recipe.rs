@@ -184,6 +184,16 @@ pub struct SecuritySection {
     /// `mediator.toml`.
     #[serde(default = "default_network_mode")]
     pub network_mode: String,
+    /// Browser CORS policy: `none` (default — deny all cross-origin),
+    /// `any` (`*`), or `list` (allow [`Self::cors_domains`]). Drives the
+    /// `[security].cors_allow_origin` value the writer emits.
+    #[serde(default = "default_cors")]
+    pub cors: String,
+    /// Comma-separated CORS origin allowlist, required when `cors =
+    /// "list"`. Entries are exact, scheme-qualified origins
+    /// (`https://app.affinidi.com`) or leftmost-label sub-domain
+    /// wildcards (`https://*.affinidi.com`).
+    pub cors_domains: Option<String>,
 }
 
 fn default_ssl() -> String {
@@ -202,6 +212,10 @@ fn default_network_mode() -> String {
     crate::consts::DEFAULT_NETWORK_MODE.into()
 }
 
+fn default_cors() -> String {
+    crate::consts::DEFAULT_CORS_MODE.into()
+}
+
 impl Default for SecuritySection {
     fn default() -> Self {
         Self {
@@ -212,6 +226,8 @@ impl Default for SecuritySection {
             admin_did: None,
             jwt_mode: default_jwt_mode(),
             network_mode: default_network_mode(),
+            cors: default_cors(),
+            cors_domains: None,
         }
     }
 }
@@ -521,6 +537,25 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
         }
     };
 
+    config.cors_mode = match recipe.security.cors.as_str() {
+        crate::consts::CORS_MODE_NONE | "" => crate::consts::CORS_MODE_NONE.into(),
+        crate::consts::CORS_MODE_ANY => crate::consts::CORS_MODE_ANY.into(),
+        crate::consts::CORS_MODE_LIST => {
+            // `list` is only meaningful with an allowlist — validate it
+            // here (same syntax the TUI enforces) so a bad recipe fails
+            // fast rather than emitting a config the mediator rejects.
+            let domains = recipe.security.cors_domains.clone().ok_or_else(|| {
+                anyhow::anyhow!("security.cors_domains is required when cors = 'list'")
+            })?;
+            config.cors_domains = crate::app::validate_cors_domains(&domains)
+                .map_err(|e| anyhow::anyhow!("Invalid security.cors_domains: {e}"))?;
+            crate::consts::CORS_MODE_LIST.into()
+        }
+        other => {
+            anyhow::bail!("Invalid security.cors '{other}': expected 'none', 'any', or 'list'")
+        }
+    };
+
     // Database
     config.database_url = recipe.database.url.clone();
 
@@ -694,7 +729,19 @@ pub fn from_wizard_config(config: &WizardConfig) -> String {
         // wizard's default `open` posture.
         _ => crate::consts::NETWORK_MODE_OPEN,
     };
-    out.push_str(&format!("network_mode = \"{network_mode}\"\n\n"));
+    out.push_str(&format!("network_mode = \"{network_mode}\"\n"));
+    let cors = match config.cors_mode.as_str() {
+        crate::consts::CORS_MODE_ANY => crate::consts::CORS_MODE_ANY,
+        crate::consts::CORS_MODE_LIST => crate::consts::CORS_MODE_LIST,
+        // Anything else (including unset / typo) round-trips as the
+        // default-closed `none` posture.
+        _ => crate::consts::CORS_MODE_NONE,
+    };
+    out.push_str(&format!("cors = \"{cors}\"\n"));
+    if cors == crate::consts::CORS_MODE_LIST {
+        out.push_str(&format!("cors_domains = \"{}\"\n", config.cors_domains));
+    }
+    out.push('\n');
 
     // Database — strip any embedded credentials
     out.push_str("[database]\n");
@@ -950,6 +997,72 @@ did_method = "did:peer"
         // the operator's chosen posture.
         let toml = from_wizard_config(&config);
         assert!(toml.contains("network_mode = \"closed\""));
+    }
+
+    #[test]
+    fn cors_defaults_to_none_when_unspecified() {
+        let recipe = minimal_recipe();
+        assert_eq!(recipe.security.cors, crate::consts::CORS_MODE_NONE);
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.cors_mode, crate::consts::CORS_MODE_NONE);
+    }
+
+    #[test]
+    fn cors_any_round_trips() {
+        let mut recipe = minimal_recipe();
+        recipe.security.cors = crate::consts::CORS_MODE_ANY.into();
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.cors_mode, crate::consts::CORS_MODE_ANY);
+
+        let toml = from_wizard_config(&config);
+        assert!(toml.contains("cors = \"any\""));
+    }
+
+    #[test]
+    fn cors_list_round_trips_with_domains() {
+        let mut recipe = minimal_recipe();
+        recipe.security.cors = crate::consts::CORS_MODE_LIST.into();
+        recipe.security.cors_domains =
+            Some("https://app.affinidi.com,https://*.affinidi.com".into());
+        let config = to_wizard_config(&recipe).unwrap();
+        assert_eq!(config.cors_mode, crate::consts::CORS_MODE_LIST);
+        assert_eq!(
+            config.cors_domains,
+            "https://app.affinidi.com,https://*.affinidi.com"
+        );
+
+        let toml = from_wizard_config(&config);
+        assert!(toml.contains("cors = \"list\""));
+        assert!(
+            toml.contains("cors_domains = \"https://app.affinidi.com,https://*.affinidi.com\"")
+        );
+    }
+
+    #[test]
+    fn cors_list_without_domains_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.security.cors = crate::consts::CORS_MODE_LIST.into();
+        recipe.security.cors_domains = None;
+        let err = to_wizard_config(&recipe).unwrap_err();
+        assert!(err.to_string().contains("cors_domains"));
+    }
+
+    #[test]
+    fn cors_list_with_invalid_domain_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.security.cors = crate::consts::CORS_MODE_LIST.into();
+        // Missing scheme — rejected by the shared validator.
+        recipe.security.cors_domains = Some("app.affinidi.com".into());
+        let err = to_wizard_config(&recipe).unwrap_err();
+        assert!(err.to_string().contains("cors_domains"));
+    }
+
+    #[test]
+    fn cors_invalid_mode_errors() {
+        let mut recipe = minimal_recipe();
+        recipe.security.cors = "everyone".into();
+        let err = to_wizard_config(&recipe).unwrap_err();
+        assert!(err.to_string().contains("cors"));
     }
 
     #[test]

@@ -236,6 +236,26 @@ fn generate_toml(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::
                 sec["local_direct_delivery_allowed"] = toml_edit::value("true");
             }
         }
+
+        // CORS policy. `none` (default) leaves `cors_allow_origin` unset
+        // so the mediator's default-closed posture applies — actively
+        // remove any key the template ships so a recipe round-trip can
+        // turn an allowlist back off. `any` emits `*`; `list` emits the
+        // validated allowlist verbatim.
+        match config.cors_mode.as_str() {
+            crate::consts::CORS_MODE_ANY => {
+                sec["cors_allow_origin"] = toml_edit::value("*");
+            }
+            crate::consts::CORS_MODE_LIST => {
+                sec["cors_allow_origin"] = toml_edit::value(&config.cors_domains);
+            }
+            // `none` and any unrecognised value → no cross-origin access.
+            _ => {
+                if let Some(table) = sec.as_table_mut() {
+                    table.remove("cors_allow_origin");
+                }
+            }
+        }
     }
 
     Ok(doc.to_string())
@@ -545,6 +565,47 @@ mod tests {
         let toml = generate_toml(&config, &test_generated()).unwrap();
         assert!(toml.contains("mediator_acl_mode = \"explicit_deny\""));
         assert!(toml.contains("global_acl_default = \"ALLOW_ALL\""));
+    }
+
+    #[test]
+    fn cors_mode_none_leaves_origin_unset() {
+        // Default-closed: no active `cors_allow_origin` assignment lands
+        // in the generated config (the template only carries it as a
+        // commented example).
+        let config = WizardConfig {
+            cors_mode: crate::consts::CORS_MODE_NONE.into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(
+            !toml.contains("\ncors_allow_origin ="),
+            "expected no active cors_allow_origin assignment, got:\n{toml}"
+        );
+    }
+
+    #[test]
+    fn cors_mode_any_emits_wildcard() {
+        let config = WizardConfig {
+            cors_mode: crate::consts::CORS_MODE_ANY.into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(toml.contains("cors_allow_origin = \"*\""));
+    }
+
+    #[test]
+    fn cors_mode_list_emits_domains_verbatim() {
+        let config = WizardConfig {
+            cors_mode: crate::consts::CORS_MODE_LIST.into(),
+            cors_domains: "https://app.affinidi.com,https://*.affinidi.com".into(),
+            ..WizardConfig::default()
+        };
+        let toml = generate_toml(&config, &test_generated()).unwrap();
+        assert!(
+            toml.contains(
+                "cors_allow_origin = \"https://app.affinidi.com,https://*.affinidi.com\""
+            )
+        );
     }
 
     #[test]
