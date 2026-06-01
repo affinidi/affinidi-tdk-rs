@@ -8,12 +8,17 @@ use serde::{Deserialize, Serialize};
 pub struct ProcessorsConfig {
     pub forwarding: ForwardingConfig,
     pub message_expiry_cleanup: MessageExpiryCleanupConfig,
+    pub session_expiry_cleanup: SessionExpiryCleanupConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ProcessorsConfigRaw {
     pub forwarding: ForwardingConfigRaw,
     pub message_expiry_cleanup: MessageExpiryCleanupConfigRaw,
+    // Added after the first release of this struct; default so configs
+    // written before the session sweeper existed still parse.
+    #[serde(default)]
+    pub session_expiry_cleanup: SessionExpiryCleanupConfigRaw,
 }
 
 /// Configuration for the in-process message expiry sweep. The standalone
@@ -41,6 +46,44 @@ impl std::convert::TryFrom<MessageExpiryCleanupConfigRaw> for MessageExpiryClean
 
     fn try_from(raw: MessageExpiryCleanupConfigRaw) -> Result<Self, Self::Error> {
         Ok(MessageExpiryCleanupConfig {
+            enabled: raw.enabled.parse().unwrap_or(true),
+        })
+    }
+}
+
+/// Configuration for the in-process session expiry sweep. Only does work
+/// on backends without native TTL (Fjall, memory); on Redis the sweep is
+/// a no-op, so leaving it enabled there is harmless.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionExpiryCleanupConfig {
+    pub enabled: bool,
+}
+
+impl Default for SessionExpiryCleanupConfig {
+    fn default() -> Self {
+        SessionExpiryCleanupConfig { enabled: true }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct SessionExpiryCleanupConfigRaw {
+    #[serde(default = "default_true")]
+    pub enabled: String,
+}
+
+impl Default for SessionExpiryCleanupConfigRaw {
+    fn default() -> Self {
+        SessionExpiryCleanupConfigRaw {
+            enabled: default_true(),
+        }
+    }
+}
+
+impl std::convert::TryFrom<SessionExpiryCleanupConfigRaw> for SessionExpiryCleanupConfig {
+    type Error = MediatorError;
+
+    fn try_from(raw: SessionExpiryCleanupConfigRaw) -> Result<Self, Self::Error> {
+        Ok(SessionExpiryCleanupConfig {
             enabled: raw.enabled.parse().unwrap_or(true),
         })
     }
@@ -106,6 +149,9 @@ fn default_forwarding_group() -> String {
 }
 fn default_false() -> String {
     "false".to_string()
+}
+fn default_true() -> String {
+    "true".to_string()
 }
 fn default_10() -> String {
     "10".to_string()

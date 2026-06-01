@@ -28,8 +28,8 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
-        MessageMetaData, MetadataStats, PubSubRecord, Session, StatCounter, StoreHealth,
-        StreamingClientState,
+        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
+        StoreHealth, StreamingClientState,
     },
 };
 use affinidi_messaging_sdk::{
@@ -1577,6 +1577,24 @@ impl MediatorStore for MemoryStore {
         }
         Ok(report)
     }
+
+    async fn sweep_expired_sessions(
+        &self,
+        _now_secs: u64,
+    ) -> Result<SessionSweepReport, MediatorError> {
+        // Session TTLs are tracked as `Instant`s here, so the wall-clock
+        // `now_secs` argument is ignored in favour of `Instant::now()`,
+        // exactly matching the lazy-expiry check in `get_session_record`.
+        let now = Instant::now();
+        let mut state = self.state.lock().await;
+        let before = state.sessions.len();
+        state.sessions.retain(|_, record| record.expires_at > now);
+        let expired = (before - state.sessions.len()) as u32;
+        Ok(SessionSweepReport {
+            scanned: before as u32,
+            expired,
+        })
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -1592,6 +1610,46 @@ mod tests {
         store.initialize().await.expect("initialize");
         assert!(matches!(store.health().await, StoreHealth::Healthy));
         store.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn sweep_expired_sessions_reclaims_orphans() {
+        let store = MemoryStore::new();
+
+        let expired = Session {
+            session_id: "sid-expired".into(),
+            ..Default::default()
+        };
+        let live = Session {
+            session_id: "sid-live".into(),
+            ..Default::default()
+        };
+        store
+            .put_session(&expired, Duration::from_secs(0))
+            .await
+            .expect("put expired");
+        store
+            .put_session(&live, Duration::from_secs(3600))
+            .await
+            .expect("put live");
+
+        // Let the monotonic clock advance past the 0s-TTL entry.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        // `now_secs` is ignored by the in-memory backend (it expires on
+        // `Instant`), so any value is fine here.
+        let report = store.sweep_expired_sessions(0).await.expect("sweep");
+        assert_eq!(report.scanned, 2, "both sessions inspected");
+        assert_eq!(report.expired, 1, "only the expired session removed");
+
+        assert!(
+            store.get_session("sid-expired", "").await.is_err(),
+            "expired session gone"
+        );
+        assert!(
+            store.get_session("sid-live", "").await.is_ok(),
+            "live session retained"
+        );
     }
 
     #[tokio::test]

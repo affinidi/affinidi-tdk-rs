@@ -4,6 +4,26 @@
 
 ## 1st June 2026
 
+### 0.15.9 — Fjall/in-memory session expiry sweeper
+
+Closes the missing background session sweeper tracked in #308.
+
+- **FIX:** Backends without native TTL (Fjall, in-memory) expire
+  sessions only lazily on `get_session`, so a session that is created
+  but never read again — e.g. a one-off DID running
+  `/authenticate/challenge` and disappearing — accumulated on disk / in
+  the map unbounded. A new background task now calls
+  `MediatorStore::sweep_expired_sessions` on a 300s cadence to reclaim
+  them. On Redis the sweep is a no-op (native `EXPIRE` already handles
+  it), so the loop just ticks and finds nothing.
+- **CONFIG:** New `[processors.session_expiry_cleanup]` block with a
+  single `enabled` flag (default `true`), overridable via
+  `PROCESSOR_SESSION_EXPIRY_CLEANUP_ENABLED`. The block is optional —
+  configs written before this release parse unchanged and default to
+  enabled.
+- Requires `affinidi-messaging-mediator-common` 0.15.2 (new
+  `sweep_expired_sessions` trait method + `SessionSweepReport`).
+
 ### 0.15.8 — vta-sdk 0.9 (didcomm 0.14 unification)
 
 Dependency-only release; no mediator config or API change.

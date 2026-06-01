@@ -48,8 +48,8 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
-        MessageMetaData, MetadataStats, PubSubRecord, Session, StatCounter, StoreHealth,
-        StreamingClientState,
+        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
+        StoreHealth, StreamingClientState,
     },
 };
 use affinidi_messaging_sdk::{
@@ -304,8 +304,10 @@ impl StoredAccount {
 
 /// Persisted session record. The `expires_at_unix` is checked
 /// lazily on read — Fjall has no native TTL, so expired sessions
-/// linger on disk until they're either touched or swept by an
-/// external janitor.
+/// linger on disk until they're either touched (lazy expiry in
+/// `get_session`) or reclaimed by the background
+/// [`sweep_expired_sessions`](MediatorStore::sweep_expired_sessions)
+/// pass.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct StoredSession {
     session: Session,
@@ -2249,6 +2251,40 @@ impl MediatorStore for FjallStore {
         }
         Ok(report)
     }
+
+    async fn sweep_expired_sessions(
+        &self,
+        now_secs: u64,
+    ) -> Result<SessionSweepReport, MediatorError> {
+        // Full scan of the sessions partition: collect the keys whose
+        // TTL has elapsed first, then remove them. Collecting before
+        // removing avoids mutating the partition mid-iteration, and
+        // keeps the (potentially large) scan off the cross-partition
+        // `write_lock` — the removes below are single-key and
+        // self-consistent. `expires_at_unix == 0` means "no expiry"
+        // and is never swept, matching the lazy-expiry guard in
+        // `get_session`.
+        let mut report = SessionSweepReport::default();
+        let mut to_remove: Vec<Vec<u8>> = Vec::new();
+        for guard in self.sessions.iter() {
+            let (key, value) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("sweep_expired_sessions:iter", e))?;
+            report.scanned += 1;
+            let stored: StoredSession = Self::decode(&value)?;
+            if stored.expires_at_unix > 0 && stored.expires_at_unix <= now_secs {
+                to_remove.push(key.as_ref().to_vec());
+            }
+        }
+
+        for key in to_remove {
+            self.sessions
+                .remove(&key)
+                .map_err(|e| Self::db_err("sweep_expired_sessions:remove", e))?;
+            report.expired += 1;
+        }
+        Ok(report)
+    }
 }
 
 // ─── Smoke tests ────────────────────────────────────────────────────────────
@@ -2587,6 +2623,54 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1100)).await;
         let result = store.get_session("sid-2", "").await;
         assert!(result.is_err(), "expired session must not return");
+    }
+
+    #[tokio::test]
+    async fn sweep_expired_sessions_reclaims_orphans() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        // One already-expired session (0s TTL) and one still-live one.
+        // Neither is ever read back, so only the sweep can remove them —
+        // this is the orphan case lazy expiry never reaches.
+        let expired = Session {
+            session_id: "sid-expired".into(),
+            ..Default::default()
+        };
+        let live = Session {
+            session_id: "sid-live".into(),
+            ..Default::default()
+        };
+        store
+            .put_session(&expired, Duration::from_secs(0))
+            .await
+            .expect("put expired");
+        store
+            .put_session(&live, Duration::from_secs(3600))
+            .await
+            .expect("put live");
+
+        // Sweep at a wall-clock one second past the 0s-TTL entry; the
+        // live entry's expiry is ~an hour out, so it must survive.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 1;
+        let report = store.sweep_expired_sessions(now).await.expect("sweep");
+
+        assert_eq!(report.scanned, 2, "both sessions inspected");
+        assert_eq!(report.expired, 1, "only the expired session removed");
+        // Removed from the partition by the sweep itself, not a lazy
+        // read on `get_session`.
+        assert!(
+            !store.sessions.contains_key(b"sid-expired").unwrap(),
+            "expired session swept from partition"
+        );
+        assert!(
+            store.sessions.contains_key(b"sid-live").unwrap(),
+            "live session retained"
+        );
     }
 
     #[tokio::test]
