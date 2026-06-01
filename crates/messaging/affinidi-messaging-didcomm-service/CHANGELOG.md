@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.3] - 2026-06-01
+
+### Changed
+
+- Offline sync no longer logs a misleading `Offline sync failed ... No
+  response from API` warning when a websocket reconnect (e.g. the mediator
+  closing the socket on access-token expiry) aborts an in-flight poll. The
+  reconnect race is now recognised via `ATMError::Disconnected` and logged
+  at `debug` ("Offline sync skipped: websocket reconnecting"); it self-heals
+  on the next 30s cycle. Genuine failures still warn. Bumps
+  `affinidi-messaging-sdk` to 0.18.5.
+
 ## [0.3.2] - 2026-05-31
 
 ### Changed

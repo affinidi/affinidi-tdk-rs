@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.4] - 2026-06-01
+
+### Changed
+
+- Handle the new `WebSocketResponses::Disconnected` variant on the inbound
+  stream (no-op). Bumps `affinidi-messaging-sdk` to 0.18.5.
+
 ## [0.12.3] - 2026-05-31
 
 ### Changed

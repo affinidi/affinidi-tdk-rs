@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.18.5] - 2026-06-01
+
+### Changed
+
+- **In-flight websocket requests now fail fast on disconnect.** When the
+  connection to the mediator drops (server `Close`, reset, missed pong, or
+  any socket error), every pending `live_stream_get` / `live_stream_next`
+  waiter is notified immediately instead of blocking until its own timeout
+  elapses. Previously a request that was in flight when the socket dropped
+  (e.g. the mediator closing the socket on access-token expiry) sat idle for
+  up to the full wait window and then surfaced as a misleading
+  `MsgSendError("No response from API")`.
+  - New `WebSocketResponses::Disconnected` variant carries the signal to
+    waiters. `live_stream_next` / `live_stream_next_packed` map it to
+    `Ok(None)` (streaming callers quietly retry on reconnect);
+    `live_stream_get` maps it to the new `ATMError::Disconnected` so
+    request/response callers can distinguish a reconnect race from a genuine
+    no-response.
+
 ## [0.18.4] - 2026-05-31
 
 ### Security

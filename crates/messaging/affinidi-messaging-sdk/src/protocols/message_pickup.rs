@@ -273,6 +273,14 @@ impl MessagePickup {
                             }
                             Ok(Some((*msg, meta)))
                         }
+                        Ok(WebSocketResponses::Disconnected) => {
+                            // Connection dropped while waiting. Treat as "no
+                            // message right now" so streaming callers quietly
+                            // retry on the reconnected socket instead of logging
+                            // a spurious receive error.
+                            debug!("WebSocket disconnected while awaiting next message");
+                            Ok(None)
+                        }
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             Err(ATMError::MsgReceiveError(
                                 "Received packed message when expecting unpacked message. Use live_stream_next_packed() for packed messages.".into()
@@ -358,6 +366,17 @@ impl MessagePickup {
                                 atm.delete_message_background(profile, &meta.sha256_hash).await?;
                             }
                             Ok(Some((*msg, meta)))
+                        }
+                        Ok(WebSocketResponses::Disconnected) => {
+                            // Connection dropped while waiting for this specific
+                            // response. The request was lost with the socket, so
+                            // fail fast with a typed error — this lets callers
+                            // tell a reconnect race apart from a genuine
+                            // no-response and avoid a misleading send-failure log.
+                            debug!("WebSocket disconnected while awaiting message {msg_id}");
+                            Err(ATMError::Disconnected(format!(
+                                "Connection reset while awaiting response for {msg_id}"
+                            )))
                         }
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             Err(ATMError::MsgReceiveError(
@@ -662,6 +681,13 @@ impl MessagePickup {
                                 debug!("Deleted message in background with hash: {}", sha256_hash);
                             }
                             Ok(Some(*packed_msg))
+                        }
+                        Ok(WebSocketResponses::Disconnected) => {
+                            // Connection dropped while waiting. Treat as "no
+                            // message right now" so streaming callers quietly
+                            // retry on the reconnected socket.
+                            debug!("WebSocket disconnected while awaiting next packed message");
+                            Ok(None)
                         }
                         Ok(WebSocketResponses::MessageReceived(_, _)) => {
                             Err(ATMError::MsgReceiveError(

@@ -26,4 +26,10 @@ pub enum WebSocketResponses {
 
     /// PackedMessageReceived - sent to SDK when a message is received (still packed as string)
     PackedMessageReceived(Box<String>),
+
+    /// Disconnected - sent to any in-flight request waiter when the underlying
+    /// websocket connection is lost, so the caller fails fast instead of
+    /// blocking until its own timeout elapses. The request is gone; it will not
+    /// be answered on the (re)connected socket.
+    Disconnected,
 }
