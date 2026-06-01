@@ -1,5 +1,33 @@
 # Affinidi Crypto Changelog
 
+## 1st June 2026 (0.1.8)
+
+- **FEATURE — `jose` module (#327, off by default).** Adds the JOSE
+  crypto primitives previously hand-rolled in
+  `affinidi-messaging-didcomm`, as the first code-bearing step of the
+  centralization in `docs/adr/0001`. This release lands the **stateless**
+  primitives plus an extensible trait layer; ECDH key agreement / curve
+  types follow in a later PR.
+  - `jose::aes_kw` — AES-256 Key Wrap (RFC 3394).
+  - `jose::content_encryption` — A256CBC-HS512.
+  - `jose::concat_kdf` — JOSE Concat KDF for ECDH-ES and ECDH-1PU
+    (including the #322-correct length-prefixed `cc_tag`, plus a
+    `_legacy` variant for the decrypt-fallback migration path).
+  - `jose::signing` — Ed25519 (EdDSA).
+  - `jose::traits` — one trait per JOSE role (`KeyWrap`,
+    `ContentEncryption`, `KeyDerivation`, `JwsSigner`/`JwsVerifier`) with
+    concrete impls (`A256Kw`, `A256CbcHs512`, `ConcatKdf`, `Ed25519`)
+    carrying their JOSE `alg`/`enc` identifiers — the open-for-extension
+    seam for new curves/AEADs/sig-algs and future PQC.
+  - Known-answer tests assert the **same** vectors as the didcomm harness
+    (PR #336) plus the RFC 3394 §4.6 spec vector, proving the port is
+    byte-identical.
+  - New `CryptoError` variants: `KeyDerivation`, `KeyWrap`,
+    `ContentEncryption`, `Signing`, `Verification`.
+  - Gated behind the new `jose` feature (pulls `aes` / `cbc` / `hmac` /
+    `subtle` and enables `ed25519`); **off by default**, so existing
+    dependents are unaffected.
+
 ## 28th May 2026 (0.1.7)
 
 - **SECURITY (HIGH):** Redact the private `d` scalar in `Debug` output for
