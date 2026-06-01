@@ -2,6 +2,7 @@
 version = 2
 ignore = [
   { id = "RUSTSEC-2022-0092", reason = "askalono always provides valid utf-8 files from a cache, this is not relevant" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error (unmaintained) is a build-time-only transitive dep of the ssi-json-ld stack (ssi-dids-core -> linked-data-derive); no runtime exposure. Drops out once upstream ssi-* releases migrate off it." },
 ]
 
 [bans]
