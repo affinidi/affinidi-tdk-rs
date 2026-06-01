@@ -63,8 +63,8 @@ pub mod redis;
 
 pub use types::{
     DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MessageMetaData,
-    MetadataStats, PubSubRecord, Session, SessionClaims, SessionState, StatCounter, StoreHealth,
-    StreamingClientState,
+    MetadataStats, PubSubRecord, Session, SessionClaims, SessionState, SessionSweepReport,
+    StatCounter, StoreHealth, StreamingClientState,
 };
 
 // ─── Trait ───────────────────────────────────────────────────────────────────
@@ -564,6 +564,25 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         now_secs: u64,
         admin_did_hash: &str,
     ) -> Result<ExpiryReport, MediatorError>;
+
+    /// Run one pass of the session expiry sweep, removing session
+    /// records whose TTL has elapsed (`expires_at <= now_secs`).
+    ///
+    /// Backends with native TTL (Redis `EXPIRE`) reclaim expired
+    /// sessions themselves, so the default is a no-op. Backends without
+    /// (Fjall, memory) expire sessions lazily on [`get_session`], which
+    /// means a session that is created but never read again — e.g. a
+    /// one-off DID that runs `/authenticate/challenge` and disappears —
+    /// lingers on disk/in the map indefinitely. The session processor
+    /// calls this on a fixed cadence so those orphaned records are
+    /// reclaimed regardless of whether they're ever read.
+    async fn sweep_expired_sessions(
+        &self,
+        now_secs: u64,
+    ) -> Result<SessionSweepReport, MediatorError> {
+        let _ = now_secs;
+        Ok(SessionSweepReport::default())
+    }
 
     // ─── Legacy aliases ─────────────────────────────────────────────────────
     //

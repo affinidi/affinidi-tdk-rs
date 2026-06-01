@@ -301,6 +301,7 @@ impl Config {
             processors: ProcessorsConfig {
                 forwarding: ForwardingConfig::default(),
                 message_expiry_cleanup: MessageExpiryCleanupConfig::default(),
+                session_expiry_cleanup: SessionExpiryCleanupConfig::default(),
             },
             limits: LimitsConfig::default(),
             tags: HashMap::from([("app".to_string(), "mediator".to_string())]),
@@ -737,6 +738,7 @@ impl TryFrom<ConfigRaw> for Config {
             processors: ProcessorsConfig {
                 forwarding: raw.processors.forwarding.clone().try_into()?,
                 message_expiry_cleanup: raw.processors.message_expiry_cleanup.clone().try_into()?,
+                session_expiry_cleanup: raw.processors.session_expiry_cleanup.clone().try_into()?,
             },
             limits: raw.limits.try_into()?,
             tags,

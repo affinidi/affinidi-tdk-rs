@@ -430,3 +430,9 @@ consumer_group = "forwarding"
 ### Env: PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED
 ### Enable the message expiry cleanup processor
 enabled = "true"
+
+[processors.session_expiry_cleanup]
+### Env: PROCESSOR_SESSION_EXPIRY_CLEANUP_ENABLED
+### Reclaim expired session records on backends without native TTL
+### (Fjall, in-memory). No-op on Redis, which expires sessions itself.
+enabled = "true"

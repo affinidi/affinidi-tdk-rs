@@ -402,6 +402,49 @@ pub async fn serve_internal(
         });
     }
 
+    // Session expiry sweep — reclaims expired session records on
+    // backends without native TTL (Fjall, memory). On Redis the trait
+    // default is a no-op, so this loop just ticks and finds nothing.
+    // Sessions expire over 15-minute / 24-hour horizons, so a full
+    // partition scan every second (as the message sweep does) would be
+    // wasteful — a coarser cadence is plenty.
+    if config.processors.session_expiry_cleanup.enabled {
+        let session_store = store.clone();
+        let cleanup_token = shutdown_token.clone();
+        tokio::spawn(async move {
+            const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
+            let mut tick = tokio::time::interval(SESSION_SWEEP_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = cleanup_token.cancelled() => {
+                        info!("Session expiry cleanup shutting down");
+                        return;
+                    }
+                    _ = tick.tick() => {}
+                }
+
+                let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+                match session_store.sweep_expired_sessions(now_secs).await {
+                    Ok(report) if report.expired > 0 => {
+                        info!(
+                            event_type = "SessionExpirySweep",
+                            scanned = report.scanned,
+                            expired = report.expired,
+                            "session expiry sweep reclaimed {} of {} sessions",
+                            report.expired,
+                            report.scanned,
+                        );
+                    }
+                    Ok(_) => {} // nothing expired
+                    Err(err) => {
+                        warn!("Session expiry sweep error: {err}");
+                    }
+                }
+            }
+        });
+    }
+
     // VTA secrets refresh — only present when this is a VTA-linked
     // deployment. Spawns a fire-and-forget loop that refreshes the
     // cached bundle and runtime resolver on a cadence derived from

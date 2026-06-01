@@ -342,6 +342,20 @@ pub struct ExpiryReport {
     pub already_deleted: u32,
 }
 
+/// Outcome of one full pass of the session expiry sweep.
+///
+/// Only meaningful for backends without native TTL (Fjall, memory),
+/// which expire sessions lazily on read and so accumulate untouched
+/// expired records until swept. Native-TTL backends (Redis) report
+/// zero — their default sweep is a no-op.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionSweepReport {
+    /// Number of session records inspected.
+    pub scanned: u32,
+    /// Number of expired sessions removed this pass.
+    pub expired: u32,
+}
+
 // ─── Health ──────────────────────────────────────────────────────────────────
 
 /// Reported health of the storage backend, surfaced via `/readyz`.

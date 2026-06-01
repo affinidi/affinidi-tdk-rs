@@ -267,6 +267,11 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED"
     );
 
+    env_override!(
+        config.processors.session_expiry_cleanup.enabled,
+        "PROCESSOR_SESSION_EXPIRY_CLEANUP_ENABLED"
+    );
+
     env_override!(config.secrets.backend, "MEDIATOR_SECRETS_BACKEND");
     env_override_opt!(config.secrets.cache_ttl, "MEDIATOR_SECRETS_CACHE_TTL");
 }

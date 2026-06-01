@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+## 1st June 2026
+
+### 0.15.2 — session expiry sweep trait method
+
+- Added `MediatorStore::sweep_expired_sessions(now_secs)` returning a new
+  `SessionSweepReport { scanned, expired }`. The trait method has a
+  **default no-op** so native-TTL backends (Redis) and any external
+  implementations compile and behave unchanged. Backends without native
+  TTL (Fjall, in-memory) override it to reclaim session records that have
+  expired but were never read again — closing the doc-promised-but-missing
+  session sweeper noted in #308. Purely additive; no breaking change.
+
 ## 9th May 2026
 
 ### 0.15.1 — `MediatorStore` access-list signatures take `&[String]`
