@@ -12,3 +12,9 @@ pub mod ecdh_1pu;
 pub mod ecdh_es;
 pub mod key_agreement;
 pub mod signing;
+
+/// Known-answer / golden-master tests that pin the byte-level output of
+/// every JOSE primitive. The #327 migration to `affinidi-crypto` must
+/// keep these passing unchanged.
+#[cfg(test)]
+mod kat;
