@@ -214,7 +214,7 @@ mod tests {
         // Each drained sender can still notify its waiter that the
         // connection was lost (the senders are live, not dropped).
         for sender in drained {
-            sender.send(WebSocketResponses::Disconnected).unwrap();
+            assert!(sender.send(WebSocketResponses::Disconnected).is_ok());
         }
         assert!(matches!(rx_a.await, Ok(WebSocketResponses::Disconnected)));
         assert!(matches!(rx_b.await, Ok(WebSocketResponses::Disconnected)));

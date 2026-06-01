@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.6] - 2026-06-01
+
+### Fixed
+
+- Fix `cargo test` compilation in the `ws_cache` unit tests: a `oneshot`
+  send was `.unwrap()`-ed, which requires `WebSocketResponses: Debug` (not
+  derived). Assert on `.is_ok()` instead. Test-only; no runtime change.
+
 ## [0.18.5] - 2026-06-01
 
 ### Changed
