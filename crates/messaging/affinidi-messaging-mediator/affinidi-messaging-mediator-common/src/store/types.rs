@@ -79,9 +79,20 @@ pub struct Session {
     pub authenticated: bool,
     pub acls: MediatorACLSet,
     pub account_type: AccountType,
-    /// Unix timestamp (seconds) when this session expires. Backends with
-    /// native TTL (Redis EXPIRE) honour this directly; backends without
-    /// (Fjall, memory) sweep expired sessions in a background task.
+    /// Unix timestamp (seconds) at which the **access token** issued for
+    /// this session expires. The auth handler stamps it from the JWT's
+    /// `exp` so the authorization-response builder has the value to hand.
+    /// It is *not* the session's storage TTL and is informational on the
+    /// record.
+    ///
+    /// Session **storage** lifetime is controlled solely by the `ttl`
+    /// argument to `MediatorStore::put_session`: Redis applies it via
+    /// `EXPIRE` (and doesn't even persist this field), while Fjall and
+    /// memory store their own expiry derived from that `ttl` and reclaim
+    /// lapsed records via lazy reads plus the background
+    /// `sweep_expired_sessions` task. No backend consults `expires_at`
+    /// to decide when a stored session expires, so mutating it will not
+    /// extend or shorten a session.
     pub expires_at: u64,
     /// Hash of the most recently issued refresh token. Used to enforce
     /// one-time-use semantics on refresh — the handler reads the session,

@@ -2797,6 +2797,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_session_flow_end_to_end() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
     async fn update_session_authenticated_renames_atomically() {
         let dir = TempDir::new().expect("tempdir");
         let store = FjallStore::open(dir.path()).expect("open");

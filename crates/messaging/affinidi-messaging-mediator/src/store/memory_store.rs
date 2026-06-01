@@ -1809,6 +1809,12 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_session_flow_end_to_end() {
+        let store = MemoryStore::new();
+        crate::store::auth_flow_harness::run_auth_session_flow(&store).await;
+    }
+
+    #[tokio::test]
     async fn session_auth_rename_preserves_did() {
         // Full challenge → authenticated rename flow. Catches the bug
         // where `update_session_authenticated` rewrites the session
