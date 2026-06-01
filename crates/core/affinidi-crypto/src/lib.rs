@@ -29,6 +29,9 @@ pub mod secp256k1;
 #[cfg(feature = "p384")]
 pub mod p384;
 
+#[cfg(feature = "jose")]
+pub mod jose;
+
 #[cfg(feature = "ml-dsa")]
 pub mod ml_dsa;
 
