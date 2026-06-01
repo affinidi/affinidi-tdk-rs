@@ -1,5 +1,10 @@
 # Meeting Place Changelog
 
+## 1st June 2026 (0.4.2)
+
+- Release on `affinidi-messaging-didcomm` 0.15 (#327). Dependency-only;
+  no Meeting Place API or behaviour change.
+
 ## 31st May 2026 (0.4.1)
 
 - Bump `affinidi-messaging-didcomm` to 0.14 (DIDComm v2.1 interop fixes:

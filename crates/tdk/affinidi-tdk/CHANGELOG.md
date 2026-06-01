@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.7.3] - 2026-06-01
+
+### Changed
+
+- Release on `affinidi-messaging-didcomm` 0.15 (#327). This crate
+  re-exports didcomm as `affinidi_tdk::didcomm`, so consumers now get the
+  0.15 envelope crate (crypto centralized in `affinidi-crypto`; the
+  `crypto` submodule was removed — its key-agreement types now live at
+  `affinidi_crypto::jose::key_agreement`). Wire behaviour is unchanged.
+  This release is what unblocks downstream crates (e.g. `vta-sdk`) from
+  pulling two incompatible didcomm `Message` types.
+
 ## [0.7.2] - 2026-05-31
 
 ### Changed

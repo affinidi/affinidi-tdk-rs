@@ -1,5 +1,13 @@
 # Affinidi DID Authentication
 
+## 1st June 2026 (0.3.5)
+
+- Release on `affinidi-messaging-didcomm` 0.15 (#327). The authcrypt
+  challenge/response now uses the key-agreement types from
+  `affinidi-crypto`'s `jose` module (the `didcomm::crypto` module was
+  removed); added a direct `affinidi-crypto` dependency. No behaviour
+  change — the ECDH-1PU authcrypt path is byte-identical.
+
 ## 31st May 2026 (0.3.4)
 
 - Bump `affinidi-messaging-didcomm` to 0.14. This crate authcrypts the
