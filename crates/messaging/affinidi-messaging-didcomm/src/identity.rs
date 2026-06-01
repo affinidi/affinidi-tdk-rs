@@ -3,7 +3,7 @@
 //! Mirrors the TSP's PrivateVid/ResolvedVid pattern but adapted for
 //! DIDComm's variable key types (key agreement + signing).
 
-use crate::crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 /// A local identity with private keys for DIDComm operations.
 pub struct PrivateIdentity {
     /// The DID for this identity
@@ -80,7 +80,7 @@ impl PrivateIdentity {
     /// Get the Ed25519 verifying key bytes (if available).
     pub fn verifying_key(&self) -> Option<[u8; 32]> {
         self.signing_private
-            .map(|sk| crate::crypto::signing::public_key_from_private(&sk))
+            .map(|sk| affinidi_crypto::jose::signing::public_key_from_private(&sk))
     }
 
     /// Create a resolved identity (public-only) from this private identity.

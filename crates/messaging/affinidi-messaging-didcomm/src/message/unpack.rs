@@ -1,8 +1,8 @@
 //! Message unpacking — detect format and dispatch to appropriate handler.
 
-use crate::crypto::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 use crate::error::DIDCommError;
 use crate::message::Message;
+use affinidi_crypto::jose::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 
 /// The result of unpacking a DIDComm message.
 ///
@@ -145,8 +145,8 @@ pub fn unpack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::key_agreement::Curve;
     use crate::message::pack;
+    use affinidi_crypto::jose::key_agreement::Curve;
 
     #[test]
     fn unpack_encrypted_authcrypt() {

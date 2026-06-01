@@ -1,10 +1,8 @@
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use affinidi_did_common::{
     Document, document::DocumentExt, verification_method::VerificationRelationship,
 };
-use affinidi_messaging_didcomm::{
-    crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement},
-    message::{Message, pack},
-};
+use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
 use tracing::{Instrument, Level, span};
 

@@ -3,9 +3,9 @@
 use base64ct::{Base64UrlUnpadded, Encoding};
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{aes_kw, content_encryption, ecdh_1pu, ecdh_es, key_agreement::*};
 use crate::error::DIDCommError;
 use crate::jwe::envelope::*;
+use affinidi_crypto::jose::{aes_kw, content_encryption, ecdh, key_agreement::*};
 
 /// Encrypt a plaintext payload for one or more recipients using authcrypt (ECDH-1PU).
 ///
@@ -72,7 +72,7 @@ pub fn authcrypt(
     // Wrap CEK for each recipient using ECDH-1PU (with tag-in-KDF)
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
     for (kid, recipient_pub) in recipients {
-        let kek = ecdh_1pu::derive_sender_key_1pu(
+        let kek = ecdh::derive_sender_key_1pu(
             &ephemeral,
             sender_private,
             recipient_pub,
@@ -152,7 +152,7 @@ pub fn anoncrypt(
 
     let mut jwe_recipients = Vec::with_capacity(recipients.len());
     for (kid, recipient_pub) in recipients {
-        let kek = ecdh_es::derive_sender_key(&ephemeral, recipient_pub, &[], &apv_raw)?;
+        let kek = ecdh::derive_sender_key(&ephemeral, recipient_pub, &[], &apv_raw)?;
         let wrapped = aes_kw::wrap(&kek, &cek)?;
         jwe_recipients.push(Recipient {
             header: PerRecipientHeader {
@@ -210,7 +210,7 @@ pub(crate) fn authcrypt_legacy(
     let (ciphertext, tag) =
         content_encryption::encrypt(plaintext, &cek, &iv, protected_b64.as_bytes())?;
 
-    let kek = ecdh_1pu::derive_sender_key_1pu_legacy(
+    let kek = ecdh::derive_sender_key_1pu_legacy(
         &ephemeral,
         sender_private,
         recipient_pub,

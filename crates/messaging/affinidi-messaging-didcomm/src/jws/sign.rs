@@ -2,9 +2,9 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 
-use crate::crypto::signing;
 use crate::error::DIDCommError;
 use crate::jws::envelope::*;
+use affinidi_crypto::jose::signing;
 
 /// Sign a payload using Ed25519 (EdDSA), producing a JWS General JSON string.
 ///

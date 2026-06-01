@@ -317,8 +317,8 @@ fn extract_payload(body: &serde_json::Value) -> Vec<u8> {
 }
 
 /// Get raw bytes from a PublicKeyAgreement for the ResolvedIdentity.
-fn public_key_bytes(key: &crate::crypto::key_agreement::PublicKeyAgreement) -> Vec<u8> {
-    use crate::crypto::key_agreement::PublicKeyAgreement;
+fn public_key_bytes(key: &affinidi_crypto::jose::key_agreement::PublicKeyAgreement) -> Vec<u8> {
+    use affinidi_crypto::jose::key_agreement::PublicKeyAgreement;
     match key {
         PublicKeyAgreement::X25519(bytes) => bytes.to_vec(),
         PublicKeyAgreement::P256(pk) => {

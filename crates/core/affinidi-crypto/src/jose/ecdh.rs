@@ -148,3 +148,27 @@ pub fn derive_sender_key_1pu(
     kek.try_into()
         .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
 }
+
+/// Sender-side `ECDH-1PU+A256KW` wrapping key using the **legacy**
+/// (pre-#322, unprefixed-tag) Concat KDF. Counterpart to
+/// [`derive_key_1pu_recipient_legacy`]. **Interop/testing only** — it
+/// reproduces the non-conformant KEK an unpatched peer would derive, so a
+/// fixed node can synthesise legacy JWEs to exercise its decrypt
+/// fallback. Never use it for production packing.
+pub fn derive_sender_key_1pu_legacy(
+    ephemeral: &EphemeralKeyPair,
+    sender_private: &PrivateKeyAgreement,
+    recipient_public: &PublicKeyAgreement,
+    apu: &[u8],
+    apv: &[u8],
+    cc_tag: &[u8],
+) -> Result<[u8; 32], CryptoError> {
+    let ze = ephemeral.private.diffie_hellman(recipient_public)?;
+    let zs = sender_private.diffie_hellman(recipient_public)?;
+    let mut z = Vec::with_capacity(ze.len() + zs.len());
+    z.extend_from_slice(&ze);
+    z.extend_from_slice(&zs);
+    let kek = concat_kdf_1pu_legacy(&z, b"ECDH-1PU+A256KW", apu, apv, 256, cc_tag)?;
+    kek.try_into()
+        .map_err(|_| CryptoError::KeyAgreement("derived key wrong size".into()))
+}

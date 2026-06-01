@@ -34,3 +34,25 @@ pub enum DIDCommError {
     #[error("no compatible key agreement key: {0}")]
     NoKeyAgreement(String),
 }
+
+/// Map `affinidi-crypto`'s JOSE errors onto the envelope-layer error so
+/// `?` works at call sites after the #327 crypto centralization. The
+/// variants line up one-to-one; the few without a direct counterpart fold
+/// into `KeyAgreement` (their original behaviour was a key/decoding
+/// failure surfaced there).
+impl From<affinidi_crypto::CryptoError> for DIDCommError {
+    fn from(e: affinidi_crypto::CryptoError) -> Self {
+        use affinidi_crypto::CryptoError as C;
+        match e {
+            C::KeyAgreement(m) => DIDCommError::KeyAgreement(m),
+            C::KeyDerivation(m) => DIDCommError::KeyAgreement(m),
+            C::KeyWrap(m) => DIDCommError::KeyWrap(m),
+            C::ContentEncryption(m) => DIDCommError::ContentEncryption(m),
+            C::Signing(m) => DIDCommError::Signing(m),
+            C::Verification(m) => DIDCommError::Verification(m),
+            C::UnsupportedKeyType(m) => DIDCommError::UnsupportedAlgorithm(m),
+            C::KeyError(m) | C::Decoding(m) => DIDCommError::KeyAgreement(m),
+            C::Encoding(err) => DIDCommError::KeyAgreement(err.to_string()),
+        }
+    }
+}

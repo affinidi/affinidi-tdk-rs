@@ -2,9 +2,9 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 
-use crate::crypto::signing;
 use crate::error::DIDCommError;
 use crate::jws::envelope::*;
+use affinidi_crypto::jose::signing;
 
 /// Result of verifying a JWS.
 pub struct VerifiedJws {
@@ -129,7 +129,8 @@ mod tests {
             Base64UrlUnpadded::encode_string(serde_json::to_string(&protected).unwrap().as_bytes());
         let payload_b64 = Base64UrlUnpadded::encode_string(payload);
         let signing_input = format!("{protected_b64}.{payload_b64}");
-        let sig = crate::crypto::signing::sign(signing_input.as_bytes(), &sk.to_bytes()).unwrap();
+        let sig =
+            affinidi_crypto::jose::signing::sign(signing_input.as_bytes(), &sk.to_bytes()).unwrap();
 
         let jws = Jws {
             payload: payload_b64,

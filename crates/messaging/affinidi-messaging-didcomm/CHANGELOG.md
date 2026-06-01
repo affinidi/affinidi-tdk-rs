@@ -4,6 +4,44 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-06-01
+
+Completes #327: this crate now contains **no bespoke crypto** — only the
+DIDComm/JOSE envelope layer. All key agreement, the Concat KDF, A256KW,
+A256CBC-HS512, and EdDSA now come from `affinidi-crypto`'s `jose` module
+(landed in affinidi-crypto 0.1.8–0.1.10). **Wire output is unchanged** —
+proven byte-identical by the known-answer vectors shared between the two
+crates (the ECDH-1PU KEK, Concat-KDF, A256CBC-HS512, and EdDSA vectors all
+match across the move; see affinidi-crypto `jose::kat` and PR #336).
+
+### Removed (breaking)
+
+- The `crypto` module (`affinidi_messaging_didcomm::crypto::*`:
+  `aes_kw`, `content_encryption`, `ecdh_1pu`, `ecdh_es`, `key_agreement`,
+  `signing`) is **deleted**. The key-agreement *types* (`Curve`,
+  `PublicKeyAgreement`, `PrivateKeyAgreement`, `EphemeralKeyPair`) now live
+  at `affinidi_crypto::jose::key_agreement`; import them from there.
+- This is the reason for the **minor** version bump.
+
+### Changed
+
+- `pack`/`unpack`, JWE encrypt/decrypt, and JWS sign/verify now call
+  `affinidi-crypto::jose`. `DIDCommError` gains `From<CryptoError>` so the
+  envelope layer surfaces the same error variants as before.
+- Dropped now-unused direct deps (`aes`, `cbc`, `hmac`, `subtle`,
+  `x25519-dalek`, `zeroize`); added `affinidi-crypto` with the `jose`
+  feature.
+
+### Compatibility note
+
+This minor bump un-unifies `vta-sdk` (which pins `didcomm ^0.14`) from the
+workspace `[patch.crates-io]` redirect: the tree temporarily carries two
+didcomm versions (internal `0.15`, vta-sdk's registry `0.14`). This is
+intentional and resolves once `vta-sdk` is republished against `0.15`
+(tracked alongside #328). Internal dependents' requirement pins were moved
+to `"0.15"` in the same change; their own release-version bumps are
+deferred to that coordinated vta-sdk release.
+
 ## [0.14.1] - 2026-06-01
 
 Test-only; no shipped behaviour change (the published crate is

@@ -5,7 +5,7 @@
 //!
 //! NOTE: The mediator is NOT used in this example.
 
-use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PrivateKeyAgreement};
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_didcomm::message::pack::{pack_encrypted_authcrypt, unpack_encrypted};
 use affinidi_messaging_didcomm::message::unpack;
@@ -74,7 +74,7 @@ async fn main() -> Result<(), ATMError> {
 
     let recipients_ref: Vec<(
         &str,
-        &affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement,
+        &affinidi_crypto::jose::key_agreement::PublicKeyAgreement,
     )> = vec![
         (bob_device1_kid, &bob_device1_pub),
         (bob_device2_kid, &bob_device2_pub),

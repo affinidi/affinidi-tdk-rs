@@ -2,9 +2,9 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 
-use crate::crypto::{aes_kw, content_encryption, ecdh_1pu, ecdh_es, key_agreement::*};
 use crate::error::DIDCommError;
 use crate::jwe::envelope::*;
+use affinidi_crypto::jose::{aes_kw, content_encryption, ecdh, key_agreement::*};
 
 /// Result of decrypting a JWE.
 pub struct DecryptedJwe {
@@ -108,7 +108,7 @@ pub fn decrypt(
             let sender_kid_str = String::from_utf8(apu_raw.clone()).ok();
 
             // Derive the spec-correct KEK (length-prefixed cc_tag).
-            let kek: [u8; 32] = ecdh_1pu::derive_key_1pu_recipient(
+            let kek: [u8; 32] = ecdh::derive_key_1pu_recipient(
                 recipient_private,
                 sender_pub,
                 &epk,
@@ -130,7 +130,7 @@ pub fn decrypt(
             match aes_kw::unwrap(&kek, &wrapped_key) {
                 Ok(cek) => (cek, true, sender_kid_str, false),
                 Err(_) => {
-                    let legacy_kek: [u8; 32] = ecdh_1pu::derive_key_1pu_recipient_legacy(
+                    let legacy_kek: [u8; 32] = ecdh::derive_key_1pu_recipient_legacy(
                         recipient_private,
                         sender_pub,
                         &epk,
@@ -148,7 +148,7 @@ pub fn decrypt(
             }
         }
         "ECDH-ES+A256KW" => {
-            let kek: [u8; 32] = ecdh_es::derive_key_es_recipient(
+            let kek: [u8; 32] = ecdh::derive_key_es_recipient(
                 recipient_private,
                 &epk,
                 b"ECDH-ES+A256KW",

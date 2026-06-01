@@ -106,7 +106,7 @@ impl SharedState {
         value: &serde_json::Value,
         sha256_hash: &str,
     ) -> Result<(Message, UnpackMetadata), ATMError> {
-        use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PrivateKeyAgreement};
+        use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
         use affinidi_messaging_didcomm::jwe::decrypt::decrypt;
 
         // Extract recipient KIDs from the JWE
@@ -209,7 +209,7 @@ impl SharedState {
     async fn try_resolve_sender_public(
         &self,
         jwe_str: &str,
-    ) -> Option<affinidi_messaging_didcomm::crypto::key_agreement::PublicKeyAgreement> {
+    ) -> Option<affinidi_crypto::jose::key_agreement::PublicKeyAgreement> {
         use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
         // Parse to get the protected header
@@ -275,7 +275,7 @@ impl SharedState {
         // Single source of truth for verification-material parsing lives
         // in `affinidi-did-common` (`decode_public_key`); map its
         // `(multicodec, bytes)` onto a key-agreement key here.
-        use affinidi_messaging_didcomm::crypto::key_agreement::{Curve, PublicKeyAgreement};
+        use affinidi_crypto::jose::key_agreement::{Curve, PublicKeyAgreement};
         let (codec, key_bytes) = vm.decode_public_key().ok()?;
         let curve = match codec {
             affinidi_encoding::X25519_PUB => Curve::X25519,
@@ -708,7 +708,7 @@ mod tests {
 
         // We can't use pack_encrypted directly because it picks the first key
         // agreement key. Instead, build the JWE manually using the second key.
-        use affinidi_messaging_didcomm::crypto::key_agreement::{
+        use affinidi_crypto::jose::key_agreement::{
             Curve, PrivateKeyAgreement, PublicKeyAgreement,
         };
         use affinidi_messaging_didcomm::message::pack;
@@ -1103,7 +1103,7 @@ mod tests {
     /// signer.
     #[tokio::test]
     async fn unpack_sign_then_encrypt() {
-        use affinidi_messaging_didcomm::crypto::key_agreement::{
+        use affinidi_crypto::jose::key_agreement::{
             Curve, PrivateKeyAgreement, PublicKeyAgreement,
         };
         use affinidi_messaging_didcomm::jwe::encrypt;
