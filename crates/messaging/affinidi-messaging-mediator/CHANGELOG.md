@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 1st June 2026
+
+### 0.15.8 — vta-sdk 0.9 (didcomm 0.14 unification)
+
+Dependency-only release; no mediator config or API change.
+
+- **CHORE:** Bumps `vta-sdk` from `0.7` to `0.9` (both the mediator's
+  `integration` dependency and the `mediator-setup` wizard's
+  `provision-client` / `test-support` dependencies). vta-sdk 0.7 pinned
+  `affinidi-messaging-didcomm` at `0.13`, which the workspace
+  `[patch.crates-io]` redirect (now at `0.14`) no longer satisfied — so
+  the build dragged in an unpatched `affinidi-messaging-didcomm 0.13.3`
+  from crates.io alongside the in-tree `0.14.0`. vta-sdk 0.9 pins
+  `0.14`, so the patch re-applies and the whole tree unifies on the
+  in-tree `0.14.0` (carrying the DIDComm v2.1 interop/security fixes
+  from 0.15.7). The duplicate `0.13.3` copy is gone.
+- `mediator-setup` bumped to `0.1.5` for the coordinated vta-sdk pin.
+
 ## 31st May 2026
 
 ### 0.15.7 — DIDComm v2.1 interop fixes (via affinidi-messaging-didcomm 0.14)
