@@ -15,7 +15,8 @@ repository.workspace = true
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = "0.6"
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.14" }
+affinidi-crypto = { version = "0.1", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths.

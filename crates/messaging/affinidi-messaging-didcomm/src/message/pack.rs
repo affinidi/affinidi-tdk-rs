@@ -1,10 +1,10 @@
 //! Message packing — encrypt, sign, or send plaintext DIDComm messages.
 
-use crate::crypto::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 use crate::error::DIDCommError;
 use crate::jwe::{decrypt, encrypt};
 use crate::jws::sign;
 use crate::message::Message;
+use affinidi_crypto::jose::key_agreement::{PrivateKeyAgreement, PublicKeyAgreement};
 
 /// Pack a message as encrypted (authcrypt — sender authenticated).
 ///
@@ -62,7 +62,7 @@ pub use decrypt::decrypt as unpack_encrypted;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::key_agreement::Curve;
+    use affinidi_crypto::jose::key_agreement::Curve;
 
     #[test]
     fn pack_unpack_authcrypt() {

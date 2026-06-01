@@ -37,7 +37,7 @@ memory-backend = []
 ## DIDComm v2 — industry-standard DID-based secure messaging.
 ## Enables inbound/outbound message handling, authentication, and OOB discovery.
 ## Mutually exclusive with `tsp` at runtime (only one protocol active).
-didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding"]
+didcomm = ["dep:affinidi-messaging-didcomm", "dep:affinidi-encoding", "dep:affinidi-crypto"]
 
 ## TSP (Trust Spanning Protocol) — lightweight alternative to DIDComm.
 ## EXPERIMENTAL: not all mediator features are supported yet.
@@ -62,7 +62,9 @@ aws = ["dep:aws-config", "dep:aws-sdk-ssm"]
 # ── Affinidi Crates ──────────────────────────────────────────────────────
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
-affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.14", optional = true }
+affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
+## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
+affinidi-crypto = { version = "0.1", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)

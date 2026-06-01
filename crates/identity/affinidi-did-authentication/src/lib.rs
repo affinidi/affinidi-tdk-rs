@@ -14,13 +14,11 @@
  * This needs to be refactored in the future when the services align on implementation
  */
 
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use affinidi_did_common::{
     Document, document::DocumentExt, verification_method::VerificationRelationship,
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
-use affinidi_messaging_didcomm::crypto::key_agreement::{
-    Curve, PrivateKeyAgreement, PublicKeyAgreement,
-};
 use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};

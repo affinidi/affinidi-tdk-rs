@@ -1,5 +1,14 @@
 # Affinidi Crypto Changelog
 
+## 1st June 2026 (0.1.10)
+
+- **FEATURE (#327, `jose`):** Added
+  `jose::ecdh::derive_sender_key_1pu_legacy`, the sender-side counterpart
+  to `derive_key_1pu_recipient_legacy`. Interop/testing only — reproduces
+  the pre-#322 unprefixed-tag KEK so a node can synthesise legacy JWEs to
+  exercise its decrypt fallback. Completes the surface didcomm needs to
+  drop its bespoke crypto (PR 5d).
+
 ## 1st June 2026 (0.1.9)
 
 - **FEATURE — `jose` key agreement + ECDH derivation (#327, off by

@@ -11,10 +11,10 @@
 //! - The protected header is decoded once during envelope creation and reused.
 //! - Sender public key resolution is done lazily during decryption, not eagerly.
 
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use affinidi_did_common::{document::DocumentExt, verification_method::VerificationRelationship};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::{
-    crypto::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement},
     jwe::decrypt::decrypt,
     message::{
         Message,

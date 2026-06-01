@@ -13,7 +13,8 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.14" }
+affinidi-crypto = { version = "0.1", features = ["jose"] }
+affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.15" }
 affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"

@@ -16,7 +16,6 @@
 //! high-level entry point. Both can be abstracted behind the same
 //! `MessagingProtocol` trait from `affinidi-messaging-core`.
 
-pub mod crypto;
 pub mod error;
 pub mod identity;
 pub mod jwe;
@@ -276,7 +275,7 @@ impl Default for DIDCommAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::key_agreement::Curve;
+    use affinidi_crypto::jose::key_agreement::Curve;
 
     #[test]
     fn agent_authcrypt_roundtrip() {
