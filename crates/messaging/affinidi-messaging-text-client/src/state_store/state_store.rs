@@ -19,7 +19,7 @@ use tokio::sync::{
     broadcast,
     mpsc::{self, UnboundedReceiver, UnboundedSender},
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub struct StateStore {
     state_tx: UnboundedSender<State>,
@@ -114,6 +114,12 @@ impl StateStore {
                         Ok(WebSocketResponses::PackedMessageReceived(_)) => {
                             // Ignore packed messages
                             warn!("Packed message received but not handled");
+                        },
+                        Ok(WebSocketResponses::Disconnected) => {
+                            // In-flight request waiters are notified of a dropped
+                            // connection via dedicated channels; nothing to do on
+                            // the broadcast inbound stream.
+                            debug!("WebSocket disconnected notification");
                         },
                         Err(e) => {
                             warn!("Failed to receive message: {}", e);

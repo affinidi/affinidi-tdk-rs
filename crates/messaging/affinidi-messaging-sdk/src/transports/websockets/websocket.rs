@@ -210,6 +210,7 @@ impl WebSocketTransport {
                                 let _ = web_socket.close(None).await;
                             }
                             self.web_socket = None;
+                            self.fail_pending_requests();
                             self.backoff_delay();
                         } else if let Some(web_socket) = self.web_socket.as_mut() {
                             let _ = web_socket.send(Message::Ping(Bytes::new())).await;
@@ -351,6 +352,7 @@ impl WebSocketTransport {
                 Message::Close(_) => {
                     debug!("WebSocket connection closed by server");
                     self.web_socket = None;
+                    self.fail_pending_requests();
                     self.backoff_delay();
                 }
                 _ => {
@@ -363,11 +365,13 @@ impl WebSocketTransport {
                 // Connection Dropped
                 warn!("WebSocket connection dropped");
                 self.web_socket = None;
+                self.fail_pending_requests();
                 self.backoff_delay();
             }
             Err(e) => {
                 error!("Generic websocket error: {:?}", e);
                 self.web_socket = None;
+                self.fail_pending_requests();
                 self.backoff_delay();
             }
         }
@@ -441,6 +445,37 @@ impl WebSocketTransport {
             Err(e) => {
                 error!("Error unpacking message: {:?}", e);
             }
+        }
+    }
+
+    /// Notify every in-flight request waiter that the connection was lost.
+    ///
+    /// Called on each disconnect transition so callers (`live_stream_get` /
+    /// `live_stream_next`) return immediately instead of blocking until their
+    /// own timeout elapses. These requests are gone — the mediator never saw
+    /// them, or their response was lost with the socket — so they will not be
+    /// answered on the reconnected socket.
+    fn fail_pending_requests(&mut self) {
+        let mut notified = 0usize;
+
+        // Pending `Next` waiters
+        for (_, sender) in self.next_requests.drain() {
+            let _ = sender.send(WebSocketResponses::Disconnected);
+            notified += 1;
+        }
+        self.next_requests_list.clear();
+
+        // Pending `GetMessage` (wanted) waiters
+        for sender in self.inbound_cache.drain_wanted() {
+            let _ = sender.send(WebSocketResponses::Disconnected);
+            notified += 1;
+        }
+
+        if notified > 0 {
+            debug!(
+                count = notified,
+                "Failed in-flight requests after websocket disconnect"
+            );
         }
     }
 

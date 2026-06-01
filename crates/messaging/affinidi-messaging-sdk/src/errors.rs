@@ -21,6 +21,8 @@ pub enum ATMError {
     MsgSendError(String),
     #[error("Message receive error: {0}")]
     MsgReceiveError(String),
+    #[error("WebSocket disconnected: {0}")]
+    Disconnected(String),
     #[error("Config error: {0}")]
     ConfigError(String),
     #[error("Authentication error: {0}")]

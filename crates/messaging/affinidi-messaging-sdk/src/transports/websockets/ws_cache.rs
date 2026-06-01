@@ -180,4 +180,49 @@ impl MessageCache {
     pub(crate) fn is_full(&self) -> bool {
         self.cache_full
     }
+
+    /// Remove and return every pending "wanted" sender.
+    ///
+    /// Used when the websocket connection drops: each in-flight `GetMessage`
+    /// waiter is handed back so the caller can be told the request was lost
+    /// (rather than leaving it to time out). Cached messages are left intact.
+    pub(crate) fn drain_wanted(&mut self) -> Vec<oneshot::Sender<WebSocketResponses>> {
+        self.wanted_list.drain().map(|(_, sender)| sender).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn drain_wanted_returns_and_clears_pending_senders() {
+        let mut cache = MessageCache::default();
+
+        let (tx_a, rx_a) = oneshot::channel();
+        let (tx_b, rx_b) = oneshot::channel();
+        cache.wanted_list.insert("msg-a".to_string(), tx_a);
+        cache.wanted_list.insert("msg-b".to_string(), tx_b);
+
+        let drained = cache.drain_wanted();
+
+        // Both waiters are handed back and the wanted list is now empty.
+        assert_eq!(drained.len(), 2);
+        assert!(cache.wanted_list.is_empty());
+        assert!(cache.drain_wanted().is_empty());
+
+        // Each drained sender can still notify its waiter that the
+        // connection was lost (the senders are live, not dropped).
+        for sender in drained {
+            sender.send(WebSocketResponses::Disconnected).unwrap();
+        }
+        assert!(matches!(rx_a.await, Ok(WebSocketResponses::Disconnected)));
+        assert!(matches!(rx_b.await, Ok(WebSocketResponses::Disconnected)));
+    }
+
+    #[test]
+    fn drain_wanted_on_empty_cache_is_noop() {
+        let mut cache = MessageCache::default();
+        assert!(cache.drain_wanted().is_empty());
+    }
 }

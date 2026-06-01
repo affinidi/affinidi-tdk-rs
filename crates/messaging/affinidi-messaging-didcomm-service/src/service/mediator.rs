@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use affinidi_messaging_sdk::errors::ATMError;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_messaging_sdk::{ATM, profiles::ATMProfile};
 use sha256::digest;
@@ -59,7 +60,19 @@ impl Listener {
                 }
                 _ = tokio::time::sleep(Duration::from_secs(OFFLINE_SYNC_INTERVAL_SECS)) => {
                     if let Err(e) = Listener::sync_offline_messages(listener_id, atm, profile, handler).await {
-                        warn!(profile = %profile_alias, error = %e, "Offline sync failed");
+                        // A websocket reconnect (e.g. when the mediator closes the
+                        // socket on access-token expiry) can land mid-poll and
+                        // abort an in-flight request. That is expected and self-
+                        // heals on the next cycle, so log it at debug rather than
+                        // raising a misleading "sync failed" warning.
+                        if matches!(
+                            e.downcast_ref::<ATMError>(),
+                            Some(ATMError::Disconnected(_))
+                        ) {
+                            debug!(profile = %profile_alias, "Offline sync skipped: websocket reconnecting");
+                        } else {
+                            warn!(profile = %profile_alias, error = %e, "Offline sync failed");
+                        }
                     }
                 }
             }
