@@ -1,5 +1,15 @@
 # Affinidi mdoc Changelog
 
+## 1st June 2026 Release 0.2.1
+
+### Security
+
+- **Drops the unmaintained `serde_cbor` dependency (RUSTSEC-2021-0127).**
+  `serde_cbor` was declared in `[dependencies]` but referenced nowhere
+  in the crate — all CBOR encoding/decoding already goes through
+  `ciborium`. Removing the unused dependency clears the advisory with
+  no code or behaviour change.
+
 ## 28th May 2026 Release 0.2.0
 
 ### Security
