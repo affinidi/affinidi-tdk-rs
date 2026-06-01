@@ -1,5 +1,28 @@
 # Affinidi Crypto Changelog
 
+## 1st June 2026 (0.1.9)
+
+- **FEATURE — `jose` key agreement + ECDH derivation (#327, off by
+  default).** Builds on 0.1.8, completing the curve-bearing half of the
+  JOSE port from `affinidi-messaging-didcomm`.
+  - `jose::key_agreement` — `Curve` (X25519 / P-256 / secp256k1) plus
+    `PublicKeyAgreement` / `PrivateKeyAgreement` / `EphemeralKeyPair`,
+    with `from_raw_bytes`, `public_key`, `diffie_hellman`, and JWK
+    `to_jwk` / `from_jwk`. Curves are runtime-dispatched (a message picks
+    its curve at runtime); adding one is a localized change here — all
+    derivation/KDF/wrap/AEAD code stays curve-agnostic over the raw
+    shared secret.
+  - `jose::ecdh` — `derive_key_es` / `derive_key_1pu` (+ recipient and
+    `_legacy` variants and the `derive_sender_key*` helpers) combining
+    key agreement with the Concat KDF from 0.1.8.
+  - KATs now include the ECDH-1PU KEK over X25519, asserting the **same**
+    golden as the didcomm harness (PR #336) — proving key agreement +
+    Concat-KDF-1PU port byte-identically end to end — plus ECDH-ES and
+    JWK round-trips across all three curves.
+  - New `CryptoError::KeyAgreement` variant. The `jose` feature now also
+    enables the `p256` / `k256` features, and those crates gain the
+    `ecdh` cargo feature. Still **off by default**.
+
 ## 1st June 2026 (0.1.8)
 
 - **FEATURE — `jose` module (#327, off by default).** Adds the JOSE

@@ -10,12 +10,17 @@
 //! - `aes256_kw_rfc3394_section_4_6` — real spec vector (RFC 3394 §4.6).
 //! - `concat_kdf_es_golden`, `a256cbc_hs512_golden`, `ed25519_eddsa_golden`
 //!   — same golden masters as #336; portable because the code is identical.
-//! - `concat_kdf_1pu_*` — structural lock of the #322 length-prefixed tag
-//!   (the full ECDH-1PU-with-key-agreement KEK golden from #336 needs the
-//!   curve types, which land in PR 5c).
+//! - `concat_kdf_1pu_*` — structural lock of the #322 length-prefixed tag.
+//! - `ecdh_1pu_x25519_kek_golden` — the full ECDH-1PU + Concat-KDF KEK,
+//!   asserting the **same** `f3cc56…` golden as didcomm #336 (closes the
+//!   vector 5b deferred until key agreement landed).
 
 #![cfg(test)]
 
+use super::ecdh::{
+    derive_key_1pu, derive_key_1pu_recipient, derive_key_es, derive_key_es_recipient,
+};
+use super::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
 use super::{A256CbcHs512, A256Kw, ContentEncryption, Ed25519, JwsSigner, JwsVerifier, KeyWrap};
 use super::{aes_kw, concat_kdf, content_encryption, signing};
 
@@ -114,6 +119,91 @@ fn concat_kdf_1pu_length_prefixes_tag() {
     let no_tag = concat_kdf::concat_kdf_1pu(z, alg, apu, apv, 256, b"").unwrap();
     let es = concat_kdf::concat_kdf(z, alg, apu, apv, 256).unwrap();
     assert_eq!(no_tag, es, "empty cc_tag must match ECDH-ES Concat KDF");
+}
+
+// ─── ECDH-1PU KEK over X25519 — same golden as didcomm #336 ─────────────────
+
+#[test]
+fn ecdh_1pu_x25519_kek_golden() {
+    // Identical fixed seeds, params, and expected KEK to didcomm
+    // src/crypto/kat.rs (#336) — proves key agreement + Concat-KDF-1PU
+    // port byte-identically end to end.
+    const EXPECTED_KEK: &str = "f3cc56f46a09991543b654ce36e0913bb8c9656ad53fa159f732c0edcf1a4f9c";
+
+    let sender = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, &[0x11; 32]).unwrap();
+    let recip = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, &[0x22; 32]).unwrap();
+    let eph = PrivateKeyAgreement::from_raw_bytes(Curve::X25519, &[0x33; 32]).unwrap();
+    let cc_tag = [0xABu8; 32];
+
+    let kek = derive_key_1pu(
+        &eph,
+        &sender,
+        &recip.public_key(),
+        b"ECDH-1PU+A256KW",
+        b"did:example:alice#key-1",
+        b"apv-bytes",
+        &cc_tag,
+        256,
+    )
+    .unwrap();
+    assert_eq!(hex(&kek), EXPECTED_KEK, "ECDH-1PU KEK drifted from didcomm");
+
+    let kek_r = derive_key_1pu_recipient(
+        &recip,
+        &sender.public_key(),
+        &eph.public_key(),
+        b"ECDH-1PU+A256KW",
+        b"did:example:alice#key-1",
+        b"apv-bytes",
+        &cc_tag,
+        256,
+    )
+    .unwrap();
+    assert_eq!(kek_r, kek, "sender and recipient must derive the same KEK");
+}
+
+#[test]
+fn ecdh_es_roundtrip_all_curves() {
+    for curve in [Curve::X25519, Curve::P256, Curve::K256] {
+        let recip = PrivateKeyAgreement::generate(curve);
+        let eph = PrivateKeyAgreement::generate(curve);
+        let s = derive_key_es(
+            &eph,
+            &recip.public_key(),
+            b"ECDH-ES+A256KW",
+            b"",
+            b"apv",
+            256,
+        )
+        .unwrap();
+        let r = derive_key_es_recipient(
+            &recip,
+            &eph.public_key(),
+            b"ECDH-ES+A256KW",
+            b"",
+            b"apv",
+            256,
+        )
+        .unwrap();
+        assert_eq!(s, r, "ECDH-ES KEK must agree for {curve:?}");
+        assert_eq!(s.len(), 32);
+    }
+}
+
+#[test]
+fn public_key_jwk_roundtrip_all_curves() {
+    for curve in [Curve::X25519, Curve::P256, Curve::K256] {
+        let pk = PrivateKeyAgreement::generate(curve).public_key();
+        let jwk = pk.to_jwk();
+        let parsed = PublicKeyAgreement::from_jwk(&jwk).unwrap();
+        // Re-encoding the parsed key must reproduce the same JWK.
+        assert_eq!(
+            parsed.to_jwk(),
+            jwk,
+            "JWK round-trip mismatch for {curve:?}"
+        );
+        assert_eq!(parsed.curve(), curve);
+    }
 }
 
 // ─── A256CBC-HS512 — same golden as didcomm #336 ────────────────────────────

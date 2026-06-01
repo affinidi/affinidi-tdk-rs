@@ -17,6 +17,9 @@ pub enum CryptoError {
     Encoding(#[from] affinidi_encoding::EncodingError),
 
     // ─── JOSE primitives (`jose` feature) ───────────────────────────────────
+    #[error("Key agreement error: {0}")]
+    KeyAgreement(String),
+
     #[error("Key derivation error: {0}")]
     KeyDerivation(String),
 
