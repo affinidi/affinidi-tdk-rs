@@ -4,6 +4,17 @@
 
 ## 1st June 2026
 
+### 0.15.3 — clarify `Session::expires_at` semantics (docs)
+
+- **DOCS:** Corrected the `Session::expires_at` doc comment (#308 item 6).
+  It previously claimed Redis "honours this directly" and that Fjall/
+  memory "sweep expired sessions" based on it — both wrong. The field is
+  the issued **access-token** expiry, stamped by the auth handler for the
+  authorization response; it is *not* the storage TTL. Session storage
+  lifetime is driven solely by the `ttl` argument to `put_session` (Redis
+  `EXPIRE`, which doesn't even persist this field; Fjall/memory store
+  their own derived expiry). No code change.
+
 ### 0.15.2 — session expiry sweep trait method
 
 - Added `MediatorStore::sweep_expired_sessions(now_secs)` returning a new

@@ -4,6 +4,20 @@
 
 ## 1st June 2026
 
+### 0.15.11 — backend-parameterised auth-flow tests
+
+Completes #308 (items 5–6). Test-only + docs; no shipped behaviour change.
+
+- **TEST:** Added a backend-agnostic auth-flow harness
+  (`store::auth_flow_harness::run_auth_session_flow`) that drives the full
+  `create_session → update_session_authenticated → get_session(new, did)
+  → refresh-hash rotation → delete_session` sequence the auth handlers
+  run, and call it from both the Fjall and in-memory test modules. Fjall
+  and memory now have parity with the Redis path's auth integration
+  coverage.
+- Pairs with the `Session::expires_at` doc clarification in
+  `affinidi-messaging-mediator-common` 0.15.3 (#308 item 6).
+
 ### 0.15.10 — Fjall session-op consistency & atomicity
 
 Hardening for the Fjall backend's session path (items 2–4 of #308). No
