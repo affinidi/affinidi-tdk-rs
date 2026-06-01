@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 1st June 2026
+
+### 0.2.4 — rebuilt against the didcomm 0.15 mediator
+
+- Release rebuilt against `affinidi-messaging-mediator` 0.15.12 /
+  `affinidi-messaging-didcomm` 0.15 (#327). Test fixture only; no
+  behaviour change. Lets downstream test trees (e.g. `vta-sdk`) build on
+  a single didcomm 0.15.
+
 ## 21st May 2026
 
 ### 0.2.3 — WebSocket subprotocol auth integration tests

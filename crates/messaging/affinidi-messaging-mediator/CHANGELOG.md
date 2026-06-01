@@ -4,6 +4,14 @@
 
 ## 1st June 2026
 
+### 0.15.12 — release on didcomm 0.15
+
+- Release on `affinidi-messaging-didcomm` 0.15 (#327). The
+  `didcomm_compat` layer now imports key-agreement types from
+  `affinidi-crypto`'s `jose` module (the `didcomm::crypto` module was
+  removed); `affinidi-crypto` is added as an optional dep under the
+  `didcomm` feature. No behaviour change.
+
 ### 0.15.11 — backend-parameterised auth-flow tests
 
 Completes #308 (items 5–6). Test-only + docs; no shipped behaviour change.
