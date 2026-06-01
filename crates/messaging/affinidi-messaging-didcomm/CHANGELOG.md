@@ -4,6 +4,23 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.1] - 2026-06-01
+
+Test-only; no shipped behaviour change (the published crate is
+byte-identical to 0.14.0). Patch-level so the workspace `[patch.crates-io]`
+keeps `vta-sdk` unified on one didcomm version.
+
+### Added
+
+- **Known-answer test harness for the JOSE crypto primitives**
+  (`src/crypto/kat.rs`). Pins the byte-level output of AES-256 Key Wrap
+  (a real RFC 3394 §4.6 vector), the ECDH-ES Concat KDF, the ECDH-1PU KEK
+  derivation (including the #322 length-prefixed `cc_tag`), A256CBC-HS512,
+  and EdDSA. This is the safety net for the #327 migration of this
+  crate's hand-rolled crypto into `affinidi-crypto`: the relocated
+  implementation must keep these vectors passing byte-for-byte. See
+  `docs/adr/0001-centralize-jose-crypto-in-affinidi-crypto.md`.
+
 ## [0.14.0] - 2026-05-31
 
 DIDComm v2.1 interop fixes found via an interop matrix against

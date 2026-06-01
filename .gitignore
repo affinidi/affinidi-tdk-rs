@@ -5,7 +5,9 @@ environments.json
 Cargo.lock
 **/environments.json*
 
-docs
+docs/*
+# Architecture Decision Records are first-class, tracked docs.
+!docs/adr/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json
