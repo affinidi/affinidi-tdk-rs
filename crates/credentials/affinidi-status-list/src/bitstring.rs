@@ -145,6 +145,13 @@ impl BitstringStatusList {
             self.bits[byte_index] &= !(1 << bit_index);
         }
 
+        // Setting a status declares this index a real entry, so reserve it.
+        // `assigned` is the authority for which indices are free; keeping it in
+        // sync here stops `add_decoys` from later landing a decoy on top of a
+        // real entry (which would collide and undercount). Marked regardless of
+        // `revoked` — an un-revoked entry is still a real, allocated slot.
+        self.assigned[index] = true;
+
         Ok(())
     }
 
@@ -157,6 +164,12 @@ impl BitstringStatusList {
         while added < count {
             let index = rng.random_range(0..self.size);
             if !self.assigned[index] {
+                // Reserve the index before counting it. Without this, a later
+                // iteration could pick the same free index again — passing the
+                // `!assigned` check, re-setting an already-set bit (a no-op),
+                // and still incrementing `added`. That let `add_decoys(N)` set
+                // fewer than `N` distinct bits and made the count flaky.
+                self.assigned[index] = true;
                 let byte_index = index / 8;
                 let bit_index = 7 - (index % 8);
                 self.bits[byte_index] |= 1 << bit_index;
@@ -379,6 +392,22 @@ mod tests {
         assert_eq!(list.count_set(), 11);
         // Original revocation still present
         assert!(list.get(42).unwrap());
+    }
+
+    #[test]
+    fn decoys_are_always_distinct() {
+        // Regression for the decoy-collision flake: `add_decoys(N)` must set
+        // exactly N new distinct bits, never colliding with each other or with
+        // a real entry. Two decoys landing on the same free index (or on the
+        // `set()` entry below) used to leave `count_set() < 1 + N` a few percent
+        // of the time. Run many rounds so a reintroduced collision can't hide.
+        for _ in 0..500 {
+            let mut list = BitstringStatusList::new(1000, StatusPurpose::Revocation);
+            list.set(42, true).unwrap();
+            list.add_decoys(10);
+            assert_eq!(list.count_set(), 11);
+            assert!(list.get(42).unwrap());
+        }
     }
 
     #[test]
