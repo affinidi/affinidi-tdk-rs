@@ -48,8 +48,8 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
-        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState,
+        MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState, SessionSweepReport,
+        StatCounter, StoreHealth, StreamingClientState,
     },
 };
 use affinidi_messaging_sdk::{
@@ -1174,6 +1174,12 @@ impl MediatorStore for FjallStore {
     // ─── Sessions ───────────────────────────────────────────────────────────
 
     async fn put_session(&self, session: &Session, ttl: Duration) -> Result<(), MediatorError> {
+        // Take the cross-partition write lock like every other write op
+        // in this backend. Session writes are single-key today, but
+        // holding the lock keeps them sequenced against other partitions
+        // so a future composite op (e.g. "delete session + clear
+        // streaming registration") stays consistent.
+        let _guard = self.write_lock.lock().await;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1240,9 +1246,126 @@ impl MediatorStore for FjallStore {
     }
 
     async fn delete_session(&self, session_id: &str) -> Result<(), MediatorError> {
+        // See `put_session` — session ops take the write lock for
+        // consistency with the rest of the backend.
+        let _guard = self.write_lock.lock().await;
         self.sessions
             .remove(session_id.as_bytes())
             .map_err(|e| Self::db_err("delete_session:remove", e))?;
+        Ok(())
+    }
+
+    /// Override the trait default's `get_session → mutate → put_session
+    /// → delete_session` sequence with a single atomic batch. The
+    /// default leaves a brief window where both the old
+    /// (`ChallengeSent`) and new (`Authenticated`) session keys exist —
+    /// and if the process crashes between the put and the delete, the
+    /// old key lingers until lazy expiry or the session sweeper reaps
+    /// it. Doing the promote-and-rename as one `db.batch()` removes that
+    /// window: the new key appears and the old one disappears together
+    /// or not at all.
+    async fn update_session_authenticated(
+        &self,
+        old_session_id: &str,
+        new_session_id: &str,
+        did: &str,
+        refresh_token_hash: &str,
+    ) -> Result<(), MediatorError> {
+        let did_hash = digest(did);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        {
+            let _guard = self.write_lock.lock().await;
+
+            // Read the old record directly; fall back to a fresh session
+            // if it's already gone, matching the trait default's
+            // defensive `unwrap_or_else`.
+            let mut stored: StoredSession = match self
+                .sessions
+                .get(old_session_id.as_bytes())
+                .map_err(|e| Self::db_err("update_session_authenticated:get", e))?
+            {
+                Some(raw) => Self::decode(&raw)?,
+                None => StoredSession {
+                    session: Session {
+                        did: did.to_string(),
+                        did_hash: did_hash.clone(),
+                        ..Default::default()
+                    },
+                    expires_at_unix: 0,
+                },
+            };
+
+            if stored.session.did.is_empty() {
+                stored.session.did = did.to_string();
+                stored.session.did_hash = did_hash;
+            }
+            stored.session.state = SessionState::Authenticated;
+            stored.session.authenticated = true;
+            stored.session.refresh_token_hash = Some(refresh_token_hash.to_string());
+            stored.expires_at_unix = now.saturating_add(86_400);
+
+            let mut batch = self.db.batch();
+            batch.insert(
+                &self.sessions,
+                new_session_id.as_bytes(),
+                Self::encode(&stored)?,
+            );
+            // Guard against old == new: removing the key we just wrote
+            // would undo the promotion. (Session IDs are freshly
+            // randomised, so this is defensive.)
+            if old_session_id != new_session_id {
+                batch.remove(&self.sessions, old_session_id.as_bytes());
+            }
+            batch
+                .commit()
+                .map_err(|e| Self::db_err("update_session_authenticated:commit", e))?;
+
+            // `bump_global` is the non-locking sync counter helper (the
+            // same one `store_message` uses inside its guard), so it
+            // won't deadlock on the non-reentrant `write_lock`.
+            let _ = self.bump_global("SESSIONS_SUCCESS", 1);
+        }
+
+        Ok(())
+    }
+
+    /// Override the trait default with a targeted in-place mutation.
+    /// The default round-trips through `get_session(session_id, "")` +
+    /// `put_session`, which (a) can substitute a corrupt
+    /// `Session::default()` (state `Unknown`, empty DID) if the
+    /// empty-DID account join misbehaves, and (b) resets the TTL to 24h.
+    /// Reading the record by key and rewriting only `refresh_token_hash`
+    /// preserves every other field — including the existing expiry —
+    /// exactly as Redis' targeted `HSET` does.
+    async fn update_refresh_token_hash(
+        &self,
+        session_id: &str,
+        refresh_token_hash: &str,
+    ) -> Result<(), MediatorError> {
+        let _guard = self.write_lock.lock().await;
+        let raw = self
+            .sessions
+            .get(session_id.as_bytes())
+            .map_err(|e| Self::db_err("update_refresh_token_hash:get", e))?
+            .ok_or_else(|| {
+                // A refresh on a session that no longer exists must fail
+                // rather than fabricate a record — the rotation has
+                // nothing to attach to.
+                MediatorError::SessionError(
+                    14,
+                    session_id.into(),
+                    format!("Session not found: {session_id}"),
+                )
+            })?;
+        let mut stored: StoredSession = Self::decode(&raw)?;
+        stored.session.refresh_token_hash = Some(refresh_token_hash.to_string());
+        self.sessions
+            .insert(session_id.as_bytes(), Self::encode(&stored)?)
+            .map_err(|e| Self::db_err("update_refresh_token_hash:insert", e))?;
         Ok(())
     }
 
@@ -2670,6 +2793,102 @@ mod tests {
         assert!(
             store.sessions.contains_key(b"sid-live").unwrap(),
             "live session retained"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_session_authenticated_renames_atomically() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        let did = "did:peer:auth";
+        let old = Session {
+            session_id: "challenge-sid".into(),
+            challenge: "chal".into(),
+            state: SessionState::ChallengeSent,
+            did: did.into(),
+            did_hash: hash(did),
+            ..Default::default()
+        };
+        store
+            .put_session(&old, Duration::from_secs(900))
+            .await
+            .expect("put challenge");
+
+        store
+            .update_session_authenticated("challenge-sid", "auth-sid", did, "refresh-hash")
+            .await
+            .expect("promote");
+
+        // The rename is atomic: old key gone, new key present — no window
+        // where both linger.
+        assert!(
+            !store.sessions.contains_key(b"challenge-sid").unwrap(),
+            "old ChallengeSent key removed"
+        );
+        assert!(
+            store.sessions.contains_key(b"auth-sid").unwrap(),
+            "new Authenticated key written"
+        );
+
+        let got = store.get_session("auth-sid", did).await.expect("get new");
+        assert_eq!(got.state, SessionState::Authenticated);
+        assert!(got.authenticated);
+        assert_eq!(got.did, did, "did preserved through promotion");
+        assert_eq!(got.did_hash, hash(did));
+        assert_eq!(got.refresh_token_hash.as_deref(), Some("refresh-hash"));
+    }
+
+    #[tokio::test]
+    async fn update_refresh_token_hash_preserves_record() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        let did = "did:peer:refresh";
+        let session = Session {
+            session_id: "auth-sid".into(),
+            state: SessionState::Authenticated,
+            did: did.into(),
+            did_hash: hash(did),
+            authenticated: true,
+            refresh_token_hash: Some("hash-1".into()),
+            ..Default::default()
+        };
+        store
+            .put_session(&session, Duration::from_secs(86_400))
+            .await
+            .expect("put");
+        let ttl_before: StoredSession =
+            FjallStore::decode(&store.sessions.get(b"auth-sid").unwrap().unwrap()).unwrap();
+
+        store
+            .update_refresh_token_hash("auth-sid", "hash-2")
+            .await
+            .expect("rotate");
+
+        // did/state survive (the corruption the trait default risks) and
+        // only the hash changed.
+        let got = store.get_session("auth-sid", did).await.expect("get");
+        assert_eq!(got.did, did);
+        assert_eq!(got.state, SessionState::Authenticated);
+        assert_eq!(got.refresh_token_hash.as_deref(), Some("hash-2"));
+
+        // TTL is preserved in place, not reset — matching Redis' HSET.
+        let ttl_after: StoredSession =
+            FjallStore::decode(&store.sessions.get(b"auth-sid").unwrap().unwrap()).unwrap();
+        assert_eq!(
+            ttl_after.expires_at_unix, ttl_before.expires_at_unix,
+            "expiry must not move on refresh-hash rotation"
+        );
+
+        // Rotating a non-existent session fails rather than fabricating a
+        // corrupt record.
+        assert!(
+            store
+                .update_refresh_token_hash("ghost-sid", "x")
+                .await
+                .is_err(),
+            "refresh on missing session must error"
         );
     }
 

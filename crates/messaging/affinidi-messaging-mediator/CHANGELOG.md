@@ -4,6 +4,29 @@
 
 ## 1st June 2026
 
+### 0.15.10 — Fjall session-op consistency & atomicity
+
+Hardening for the Fjall backend's session path (items 2–4 of #308). No
+config or API change; behaviour-preserving except where noted.
+
+- **FIX (consistency):** `put_session` / `delete_session` now take the
+  cross-partition `write_lock` like every other write op in the backend,
+  so session writes stay sequenced against other partitions.
+- **FIX (atomicity):** `update_session_authenticated` is overridden to
+  promote-and-rename a session in a single `db.batch()`. The trait
+  default does `put_session(new)` then `delete_session(old)`, leaving a
+  window where both keys exist — and on a crash mid-rename the old
+  `ChallengeSent` key lingered until lazy expiry. The new + old keys now
+  appear/disappear together.
+- **FIX (robustness):** `update_refresh_token_hash` is overridden with a
+  targeted read-by-key/mutate/write-back. The trait default round-trips
+  through `get_session(session_id, "")` + `put_session`, which can
+  substitute a corrupt `Session::default()` (state `Unknown`) and resets
+  the TTL. The override rewrites only `refresh_token_hash`, preserving
+  every other field **including the existing expiry** (matching Redis'
+  `HSET`), and now **errors on a missing session** instead of fabricating
+  a record.
+
 ### 0.15.9 — Fjall/in-memory session expiry sweeper
 
 Closes the missing background session sweeper tracked in #308.
