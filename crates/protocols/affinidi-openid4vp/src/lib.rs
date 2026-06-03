@@ -32,8 +32,8 @@ pub mod verifier;
 pub mod wallet;
 
 pub use dcql::{
-    ClaimPathSegment, ClaimsQuery, CredentialQuery, CredentialSetQuery, DcqlQuery,
-    TrustedAuthoritiesQuery, TrustedAuthorityType,
+    CandidateCredential, ClaimPathSegment, ClaimsQuery, CredentialMatch, CredentialQuery,
+    CredentialSetQuery, DcqlMatch, DcqlQuery, TrustedAuthoritiesQuery, TrustedAuthorityType,
 };
 pub use error::Oid4vpError;
 pub use types::*;
