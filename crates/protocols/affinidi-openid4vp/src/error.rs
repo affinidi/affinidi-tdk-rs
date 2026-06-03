@@ -19,6 +19,10 @@ pub enum Oid4vpError {
     #[error("Invalid presentation definition: {0}")]
     InvalidPresentationDefinition(String),
 
+    /// The DCQL query is structurally invalid.
+    #[error("Invalid DCQL query: {0}")]
+    InvalidDcqlQuery(String),
+
     /// No matching credentials found for the request.
     #[error("No matching credentials: {0}")]
     NoMatchingCredentials(String),
