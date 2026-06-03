@@ -18,7 +18,13 @@ use crate::types::*;
 /// Checks:
 /// - The format is supported
 /// - Required fields are present
-/// - Proof of possession (if present) has the right structure
+/// - Proof of possession (if present) has the right *structure*
+///
+/// **This is a structural check only — it does NOT verify the proof.** A
+/// request whose proof JWT is forged, expired, or for the wrong audience still
+/// passes here. Before issuing, the credential endpoint MUST cryptographically
+/// verify the key-binding proof with [`crate::proof::KeyProof`] (parse → resolve
+/// the `kid`/`jwk` to a key → [`KeyProof::verify`](crate::proof::KeyProof::verify)).
 pub fn validate_credential_request(request: &CredentialRequest) -> Result<()> {
     if request.format.is_empty() {
         return Err(Oid4vciError::InvalidRequest("format is required".into()));

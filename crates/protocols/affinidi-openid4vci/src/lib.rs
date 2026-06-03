@@ -33,8 +33,10 @@
 
 pub mod error;
 pub mod issuer;
+pub mod proof;
 pub mod types;
 pub mod wallet;
 
 pub use error::Oid4vciError;
+pub use proof::{KeyProof, KeyProofClaims, ProofPolicy, build_key_proof_jwt};
 pub use types::*;
