@@ -6,7 +6,41 @@
  */
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// A JWT `aud` (audience) claim, which RFC 7519 §4.1.3 allows to be **either**
+/// a single string or an array of strings. Deserialising into this type accepts
+/// both wire shapes so consumers don't each re-implement the string-or-array
+/// dance (and don't silently mishandle the array form).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Audience {
+    /// A single audience value.
+    One(String),
+    /// Multiple audience values.
+    Many(Vec<String>),
+}
+
+impl Audience {
+    /// Whether `value` is one of the audiences.
+    pub fn contains(&self, value: &str) -> bool {
+        match self {
+            Self::One(a) => a == value,
+            Self::Many(a) => a.iter().any(|v| v == value),
+        }
+    }
+
+    /// Iterate the audience values.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        // Box to unify the two arm types behind one iterator.
+        let items: Box<dyn Iterator<Item = &str>> = match self {
+            Self::One(a) => Box::new(std::iter::once(a.as_str())),
+            Self::Many(a) => Box::new(a.iter().map(String::as_str)),
+        };
+        items
+    }
+}
 
 /// Error type for JWT operations.
 #[derive(Debug, thiserror::Error)]
@@ -293,6 +327,17 @@ mod tests {
     fn invalid_jwt_format() {
         assert!(decode_compact_jws_unverified("not.a.valid.jwt.too.many.parts").is_err());
         assert!(decode_compact_jws_unverified("only-one-part").is_err());
+    }
+
+    #[test]
+    fn audience_accepts_string_or_array() {
+        let one: Audience = serde_json::from_value(json!("a")).unwrap();
+        assert!(one.contains("a") && !one.contains("b"));
+        assert_eq!(one.iter().collect::<Vec<_>>(), vec!["a"]);
+
+        let many: Audience = serde_json::from_value(json!(["a", "b"])).unwrap();
+        assert!(many.contains("a") && many.contains("b") && !many.contains("c"));
+        assert_eq!(many.iter().collect::<Vec<_>>(), vec!["a", "b"]);
     }
 
     #[test]
