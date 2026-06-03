@@ -36,7 +36,7 @@
  * [pe]: https://identity.foundation/presentation-exchange/spec/v2.0.0/
  */
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::de::{self, Deserialize, Deserializer};
 use serde::ser::{Serialize, Serializer};
@@ -404,6 +404,277 @@ pub enum TrustedAuthorityType {
     OpenidFederation,
 }
 
+// ===========================================================================
+// Matching: evaluate a DcqlQuery against the holder's held credentials.
+// ===========================================================================
+
+/// A held credential projected into the shape [`DcqlQuery::match_credentials`]
+/// evaluates.
+///
+/// The holder builds one per credential it holds — for an SD-JWT-VC,
+/// `format = "dc+sd-jwt"`, `vct = Some(<vct>)`, and `claims` the JSON object of
+/// (disclosable) claims. The matcher reads only these fields and never parses a
+/// wire credential itself, so format-specific decoding (SD-JWT disclosure, mdoc
+/// CBOR, …) stays on the holder's side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateCredential {
+    /// Caller-chosen identifier, echoed back in [`CredentialMatch::candidate_id`].
+    pub id: String,
+    /// The credential format, compared against [`CredentialQuery::format`].
+    pub format: String,
+    /// The credential's claims as a JSON object — the tree a claim `path` walks.
+    pub claims: Json,
+    /// SD-JWT-VC type, matched against the query's `meta.vct_values` (if present).
+    pub vct: Option<String>,
+    /// mdoc doctype, matched against the query's `meta.doctype_value` (if present).
+    pub doctype: Option<String>,
+    /// Whether this credential can prove cryptographic holder binding. A query
+    /// that requires holder binding (the DCQL default) will not match a
+    /// candidate that cannot.
+    pub supports_holder_binding: bool,
+}
+
+/// A satisfying selection produced by [`DcqlQuery::match_credentials`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DcqlMatch {
+    /// One entry per (credential query → candidate) pairing that contributes to
+    /// the satisfied request, in credential-query order.
+    pub matches: Vec<CredentialMatch>,
+}
+
+/// One matched (credential query → candidate) pairing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CredentialMatch {
+    /// The [`CredentialQuery::id`] that matched.
+    pub credential_query_id: String,
+    /// The [`CandidateCredential::id`] that satisfied it.
+    pub candidate_id: String,
+    /// The claim paths to disclose. **Empty** means "no per-claim constraint" —
+    /// the query named no `claims`, so the holder discloses per its own policy.
+    pub disclosed_paths: Vec<Vec<ClaimPathSegment>>,
+}
+
+/// Walk a DCQL claim `path` over a JSON value, returning every selected node.
+///
+/// A [`Name`](ClaimPathSegment::Name) selects an object member, an
+/// [`Index`](ClaimPathSegment::Index) an array element, and a
+/// [`Wildcard`](ClaimPathSegment::Wildcard) every element of an array. Returns
+/// empty as soon as a segment selects nothing (the path does not resolve).
+fn select_path<'a>(root: &'a Json, path: &[ClaimPathSegment]) -> Vec<&'a Json> {
+    let mut current = vec![root];
+    for segment in path {
+        let mut next = Vec::new();
+        for value in current {
+            match segment {
+                ClaimPathSegment::Name(name) => {
+                    if let Some(child) = value.as_object().and_then(|o| o.get(name)) {
+                        next.push(child);
+                    }
+                }
+                ClaimPathSegment::Index(index) => {
+                    if let Some(child) = value.as_array().and_then(|a| a.get(*index as usize)) {
+                        next.push(child);
+                    }
+                }
+                ClaimPathSegment::Wildcard => {
+                    if let Some(array) = value.as_array() {
+                        next.extend(array.iter());
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            return Vec::new();
+        }
+        current = next;
+    }
+    current
+}
+
+impl ClaimsQuery {
+    /// Whether this claim resolves against a candidate's `claims`: the `path`
+    /// selects at least one value, and — when `values` is set — some selected
+    /// value equals one of them.
+    fn is_satisfied_by(&self, claims: &Json) -> bool {
+        let selected = select_path(claims, &self.path);
+        if selected.is_empty() {
+            return false;
+        }
+        match &self.values {
+            None => true,
+            Some(allowed) => selected
+                .iter()
+                .any(|value| allowed.iter().any(|a| a == *value)),
+        }
+    }
+}
+
+impl CredentialQuery {
+    /// Whether `candidate` satisfies this query's `format` and `meta`
+    /// (`vct_values` / `doctype_value`) constraints.
+    fn format_and_meta_match(&self, candidate: &CandidateCredential) -> bool {
+        if self.format != candidate.format {
+            return false;
+        }
+        let Some(meta) = &self.meta else {
+            return true;
+        };
+        if let Some(vct_values) = meta.get("vct_values").and_then(|v| v.as_array()) {
+            let ok = candidate
+                .vct
+                .as_deref()
+                .is_some_and(|vct| vct_values.iter().any(|v| v.as_str() == Some(vct)));
+            if !ok {
+                return false;
+            }
+        }
+        if let Some(doctype_value) = meta.get("doctype_value").and_then(|v| v.as_str())
+            && candidate.doctype.as_deref() != Some(doctype_value)
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Evaluate this query against one candidate: returns the claim paths to
+    /// disclose when it matches (possibly empty — no `claims` constraint), or
+    /// `None` when it does not.
+    fn evaluate(&self, candidate: &CandidateCredential) -> Option<Vec<Vec<ClaimPathSegment>>> {
+        if !self.format_and_meta_match(candidate) {
+            return None;
+        }
+        if self.require_cryptographic_holder_binding() && !candidate.supports_holder_binding {
+            return None;
+        }
+        let Some(claims) = &self.claims else {
+            // No per-claim constraint: the credential as a whole matches.
+            return Some(Vec::new());
+        };
+        match &self.claim_sets {
+            // claim_sets: the first option whose every referenced claim resolves.
+            Some(claim_sets) => claim_sets.iter().find_map(|option| {
+                let mut paths = Vec::with_capacity(option.len());
+                for claim_id in option {
+                    let claim = claims.iter().find(|c| c.id.as_deref() == Some(claim_id))?;
+                    if !claim.is_satisfied_by(&candidate.claims) {
+                        return None;
+                    }
+                    paths.push(claim.path.clone());
+                }
+                Some(paths)
+            }),
+            // No claim_sets: every claim must resolve.
+            None => {
+                let mut paths = Vec::with_capacity(claims.len());
+                for claim in claims {
+                    if !claim.is_satisfied_by(&candidate.claims) {
+                        return None;
+                    }
+                    paths.push(claim.path.clone());
+                }
+                Some(paths)
+            }
+        }
+    }
+}
+
+impl DcqlQuery {
+    /// Match this query against the holder's `candidates`, returning a satisfying
+    /// [`DcqlMatch`] or [`Oid4vpError::NoMatchingCredentials`] when the request
+    /// cannot be met.
+    ///
+    /// A credential query matches a candidate when `format`, `meta`
+    /// (`vct_values` / `doctype_value`), cryptographic holder binding, and the
+    /// `claims` / `claim_sets` all hold. When `multiple` is false (the default)
+    /// the first matching candidate is taken; when true, all matching candidates
+    /// are returned.
+    ///
+    /// Request satisfaction:
+    /// - **With `credential_sets`:** every *required* set must have an `options`
+    ///   entry whose credential queries all matched; an optional set contributes
+    ///   its matches when satisfiable but never fails the request. Credential
+    ///   queries not referenced by any satisfied set are omitted from the result.
+    /// - **Without `credential_sets`:** *every* credential query must match.
+    ///
+    /// `self` is assumed [valid](DcqlQuery::validate); call `validate` first when
+    /// the query came off the wire.
+    pub fn match_credentials(
+        &self,
+        candidates: &[CandidateCredential],
+    ) -> Result<DcqlMatch, Oid4vpError> {
+        // Per credential query, the candidate matches (respecting `multiple`).
+        let mut per_query: HashMap<&str, Vec<CredentialMatch>> = HashMap::new();
+        for cq in &self.credentials {
+            let mut matches = Vec::new();
+            for candidate in candidates {
+                if let Some(disclosed_paths) = cq.evaluate(candidate) {
+                    matches.push(CredentialMatch {
+                        credential_query_id: cq.id.clone(),
+                        candidate_id: candidate.id.clone(),
+                        disclosed_paths,
+                    });
+                    if !cq.multiple() {
+                        break;
+                    }
+                }
+            }
+            per_query.insert(cq.id.as_str(), matches);
+        }
+
+        let query_matched = |id: &str| per_query.get(id).is_some_and(|m| !m.is_empty());
+
+        // Which credential queries are selected by the (set-driven) request.
+        let mut selected: Vec<&str> = Vec::new();
+        match &self.credential_sets {
+            Some(sets) => {
+                for set in sets {
+                    match set
+                        .options
+                        .iter()
+                        .find(|option| option.iter().all(|id| query_matched(id)))
+                    {
+                        Some(option) => {
+                            for id in option {
+                                if !selected.contains(&id.as_str()) {
+                                    selected.push(id.as_str());
+                                }
+                            }
+                        }
+                        None if set.is_required() => {
+                            return Err(Oid4vpError::NoMatchingCredentials(
+                                "no option of a required credential set could be satisfied".into(),
+                            ));
+                        }
+                        None => {} // optional set, unsatisfied — skip.
+                    }
+                }
+            }
+            None => {
+                for cq in &self.credentials {
+                    if !query_matched(&cq.id) {
+                        return Err(Oid4vpError::NoMatchingCredentials(format!(
+                            "credential query `{}` matched no held credential",
+                            cq.id
+                        )));
+                    }
+                    selected.push(cq.id.as_str());
+                }
+            }
+        }
+
+        // Emit the matches for the selected queries, in credential-query order.
+        let mut matches = Vec::new();
+        for cq in &self.credentials {
+            if selected.contains(&cq.id.as_str())
+                && let Some(found) = per_query.get(cq.id.as_str())
+            {
+                matches.extend(found.iter().cloned());
+            }
+        }
+        Ok(DcqlMatch { matches })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,5 +881,242 @@ mod tests {
             query.to_json().unwrap()["credentials"][0]["trusted_authorities"][0]["type"],
             "etsi_tl"
         );
+    }
+}
+
+#[cfg(test)]
+mod match_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An SD-JWT-VC candidate with the given vct + claims (holder-binding on).
+    fn sd_jwt(id: &str, vct: &str, claims: Json) -> CandidateCredential {
+        CandidateCredential {
+            id: id.into(),
+            format: "dc+sd-jwt".into(),
+            claims,
+            vct: Some(vct.into()),
+            doctype: None,
+            supports_holder_binding: true,
+        }
+    }
+
+    const MEMBERSHIP_VCT: &str = "https://openvtc.org/credentials/MembershipCredential";
+
+    #[test]
+    fn matches_membership_and_selects_consented_paths() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "membership",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": [MEMBERSHIP_VCT] },
+                "claims": [{ "path": ["givenName"] }, { "path": ["memberSince"] }]
+            }]
+        }))
+        .unwrap();
+
+        let held = vec![sd_jwt(
+            "cred-1",
+            MEMBERSHIP_VCT,
+            json!({ "givenName": "Alice", "memberSince": "2020", "dateOfBirth": "1990-01-01" }),
+        )];
+
+        let m = query.match_credentials(&held).expect("should match");
+        assert_eq!(m.matches.len(), 1);
+        assert_eq!(m.matches[0].credential_query_id, "membership");
+        assert_eq!(m.matches[0].candidate_id, "cred-1");
+        // Only the two requested claim paths — never dateOfBirth.
+        assert_eq!(
+            m.matches[0].disclosed_paths,
+            vec![
+                vec![ClaimPathSegment::Name("givenName".into())],
+                vec![ClaimPathSegment::Name("memberSince".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn wrong_vct_does_not_match() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "m",
+                "format": "dc+sd-jwt",
+                "meta": { "vct_values": [MEMBERSHIP_VCT] }
+            }]
+        }))
+        .unwrap();
+        let held = vec![sd_jwt("c", "https://example/SomethingElse", json!({}))];
+        let err = query.match_credentials(&held).unwrap_err();
+        assert!(
+            matches!(err, Oid4vpError::NoMatchingCredentials(_)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn missing_required_claim_does_not_match() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "m", "format": "dc+sd-jwt",
+                "claims": [{ "path": ["givenName"] }, { "path": ["memberSince"] }]
+            }]
+        }))
+        .unwrap();
+        // Candidate lacks memberSince.
+        let held = vec![sd_jwt("c", MEMBERSHIP_VCT, json!({ "givenName": "Alice" }))];
+        assert!(query.match_credentials(&held).is_err());
+    }
+
+    #[test]
+    fn value_constraint_is_enforced() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "m", "format": "dc+sd-jwt",
+                "claims": [{ "path": ["address", "country"], "values": ["US", "CA"] }]
+            }]
+        }))
+        .unwrap();
+        let us = vec![sd_jwt(
+            "us",
+            MEMBERSHIP_VCT,
+            json!({ "address": { "country": "US" } }),
+        )];
+        let fr = vec![sd_jwt(
+            "fr",
+            MEMBERSHIP_VCT,
+            json!({ "address": { "country": "FR" } }),
+        )];
+        assert_eq!(query.match_credentials(&us).unwrap().matches.len(), 1);
+        assert!(query.match_credentials(&fr).is_err());
+    }
+
+    #[test]
+    fn claim_sets_pick_first_satisfiable_option() {
+        // Prefer {given, country}; fall back to {given}.
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "id_card", "format": "dc+sd-jwt",
+                "claims": [
+                    { "id": "given", "path": ["givenName"] },
+                    { "id": "country", "path": ["address", "country"] }
+                ],
+                "claim_sets": [["given", "country"], ["given"]]
+            }]
+        }))
+        .unwrap();
+
+        // Has both → first option; discloses two paths.
+        let both = vec![sd_jwt(
+            "c",
+            MEMBERSHIP_VCT,
+            json!({ "givenName": "Alice", "address": { "country": "US" } }),
+        )];
+        let m = query.match_credentials(&both).unwrap();
+        assert_eq!(m.matches[0].disclosed_paths.len(), 2);
+
+        // Only givenName → falls back to second option; discloses one path.
+        let only_given = vec![sd_jwt("c", MEMBERSHIP_VCT, json!({ "givenName": "Alice" }))];
+        let m = query.match_credentials(&only_given).unwrap();
+        assert_eq!(
+            m.matches[0].disclosed_paths,
+            vec![vec![ClaimPathSegment::Name("givenName".into())]]
+        );
+    }
+
+    #[test]
+    fn holder_binding_requirement_excludes_unbound_candidate() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{ "id": "m", "format": "dc+sd-jwt" }]  // require_* defaults true
+        }))
+        .unwrap();
+        let mut cand = sd_jwt("c", MEMBERSHIP_VCT, json!({}));
+        cand.supports_holder_binding = false;
+        assert!(query.match_credentials(&[cand]).is_err());
+    }
+
+    #[test]
+    fn credential_set_options_are_alternatives() {
+        const PID_VCT: &str = "https://openvtc.org/credentials/PID";
+        const ENDORSEMENT_VCT: &str = "https://openvtc.org/credentials/Endorsement";
+
+        // Require a PID, AND (membership OR endorsement). Each query is pinned to
+        // a distinct vct so a candidate satisfies exactly one query.
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [
+                { "id": "pid", "format": "dc+sd-jwt", "meta": { "vct_values": [PID_VCT] } },
+                { "id": "membership", "format": "dc+sd-jwt", "meta": { "vct_values": [MEMBERSHIP_VCT] } },
+                { "id": "endorsement", "format": "dc+sd-jwt", "meta": { "vct_values": [ENDORSEMENT_VCT] } }
+            ],
+            "credential_sets": [
+                { "options": [["pid"]] },
+                { "options": [["membership"], ["endorsement"]] }
+            ]
+        }))
+        .unwrap();
+
+        // Holder has a PID + an endorsement (no membership) → satisfied via the
+        // second option of the second set.
+        let held = vec![
+            sd_jwt("p", PID_VCT, json!({})),
+            sd_jwt("e", ENDORSEMENT_VCT, json!({})),
+        ];
+        let m = query
+            .match_credentials(&held)
+            .expect("pid + endorsement satisfies");
+        let ids: Vec<&str> = m
+            .matches
+            .iter()
+            .map(|x| x.credential_query_id.as_str())
+            .collect();
+        assert!(ids.contains(&"pid") && ids.contains(&"endorsement"));
+        assert!(
+            !ids.contains(&"membership"),
+            "membership query had no candidate"
+        );
+
+        // Missing the PID entirely → the required first set fails.
+        let only_endorsement = vec![sd_jwt("e", ENDORSEMENT_VCT, json!({}))];
+        assert!(query.match_credentials(&only_endorsement).is_err());
+    }
+
+    #[test]
+    fn multiple_returns_all_matching_candidates() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "m", "format": "dc+sd-jwt",
+                "meta": { "vct_values": [MEMBERSHIP_VCT] },
+                "multiple": true
+            }]
+        }))
+        .unwrap();
+        let held = vec![
+            sd_jwt("a", MEMBERSHIP_VCT, json!({})),
+            sd_jwt("b", MEMBERSHIP_VCT, json!({})),
+        ];
+        let m = query.match_credentials(&held).unwrap();
+        assert_eq!(m.matches.len(), 2);
+    }
+
+    #[test]
+    fn wildcard_path_matches_an_array_element_value() {
+        let query = DcqlQuery::from_json(&json!({
+            "credentials": [{
+                "id": "m", "format": "dc+sd-jwt",
+                "claims": [{ "path": ["nationalities", null], "values": ["US"] }]
+            }]
+        }))
+        .unwrap();
+        let us = vec![sd_jwt(
+            "c",
+            MEMBERSHIP_VCT,
+            json!({ "nationalities": ["CA", "US"] }),
+        )];
+        let de = vec![sd_jwt(
+            "c",
+            MEMBERSHIP_VCT,
+            json!({ "nationalities": ["DE"] }),
+        )];
+        assert_eq!(query.match_credentials(&us).unwrap().matches.len(), 1);
+        assert!(query.match_credentials(&de).is_err());
     }
 }
