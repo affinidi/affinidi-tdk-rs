@@ -318,6 +318,51 @@ fn url_host(url: &str) -> Option<String> {
     parsed.host_str().map(|h| h.to_string())
 }
 
+/// Build a well-formed `file://` backend URL from the operator's storage
+/// path.
+///
+/// The mediator's `SecretStore` parser treats a `file://` URL per RFC 3986:
+/// the segment between `//` and the next `/` is the *authority*, not part of
+/// the path. So a relative `file://conf/secrets.json` parses to
+/// authority=`conf`, path=`/secrets.json` — the mediator opens `/secrets.json`
+/// at the filesystem root, silently writing outside the working directory as
+/// root and failing the backend probe with `permission denied` for everyone
+/// else (#350).
+///
+/// A correct local URL needs an empty authority and an absolute path:
+/// `file:///<abs>` (three slashes). We get there by resolving the path to
+/// absolute against the current working directory before formatting — an
+/// already-absolute path contributes its own leading `/`, yielding the third
+/// slash. We also tolerate an operator pasting a full `file://` URL into the
+/// path prompt by stripping a leading `file://` scheme first.
+fn file_backend_url(raw_path: &str, encrypted: bool) -> String {
+    // Tolerate a `file://`-prefixed value in the path field: `file:///abs`
+    // strips to `/abs` (absolute), `file://rel` strips to `rel` (relative).
+    let path_str = raw_path.trim();
+    let path_str = path_str.strip_prefix("file://").unwrap_or(path_str);
+    let path = std::path::Path::new(path_str);
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        // Resolve against the wizard's working directory so the secrets file
+        // lands where the operator expects. If `current_dir` is unavailable
+        // (e.g. the dir was deleted), fall back to the raw path — the probe
+        // will then surface a clear error rather than us guessing.
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => path.to_path_buf(),
+        }
+    };
+
+    let absolute = absolute.to_string_lossy();
+    if encrypted {
+        format!("file://{absolute}?encrypt=1")
+    } else {
+        format!("file://{absolute}")
+    }
+}
+
 /// Construct the `[secrets].backend` URL from the wizard's per-backend
 /// config choices. Mirrors the URL shape the mediator's `SecretStore`
 /// parser accepts. `vta://` is no longer supported as a storage scheme —
@@ -330,18 +375,7 @@ fn url_host(url: &str) -> Option<String> {
 /// than only being discovered when the mediator next boots.
 pub fn build_backend_url(config: &WizardConfig) -> String {
     match config.secret_storage.as_str() {
-        STORAGE_FILE => {
-            // Template default is `conf/secrets.json`; callers in
-            // `generate_and_write` may extend this later via absolute
-            // paths. Append `?encrypt=1` when the operator opted into
-            // envelope encryption — the mediator's `open_store` parser
-            // routes that flag to the AEAD-backed file store.
-            if config.secret_file_encrypted {
-                format!("file://{}?encrypt=1", config.secret_file_path)
-            } else {
-                format!("file://{}", config.secret_file_path)
-            }
-        }
+        STORAGE_FILE => file_backend_url(&config.secret_file_path, config.secret_file_encrypted),
         STORAGE_KEYRING => format!("keyring://{}", config.secret_keyring_service),
         STORAGE_AWS => format!(
             "aws_secrets://{}/{}",
@@ -378,27 +412,70 @@ mod tests {
     // so a typo in any branch silently misroutes secret storage.
 
     #[test]
-    fn build_backend_url_file_plain() {
+    fn build_backend_url_file_relative_resolves_to_absolute_three_slash() {
+        // A relative path must be resolved against the CWD into a
+        // three-slash `file:///<abs>` URL — a bare `file://conf/secrets.json`
+        // is RFC-malformed (authority=`conf`) and opens `/secrets.json` (#350).
         let cfg = WizardConfig {
             secret_storage: STORAGE_FILE.into(),
             secret_file_path: "conf/secrets.json".into(),
             secret_file_encrypted: false,
             ..WizardConfig::default()
         };
-        assert_eq!(build_backend_url(&cfg), "file://conf/secrets.json");
+        let expected = format!(
+            "file://{}",
+            std::env::current_dir()
+                .unwrap()
+                .join("conf/secrets.json")
+                .display()
+        );
+        let url = build_backend_url(&cfg);
+        assert_eq!(url, expected);
+        // Empty authority: exactly three slashes, then an absolute path.
+        assert!(url.starts_with("file:///"), "must be three-slash: {url}");
+    }
+
+    #[test]
+    fn build_backend_url_file_absolute_passes_through() {
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_FILE.into(),
+            secret_file_path: "/var/lib/mediator/secrets.json".into(),
+            secret_file_encrypted: false,
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "file:///var/lib/mediator/secrets.json"
+        );
+    }
+
+    #[test]
+    fn build_backend_url_file_tolerates_pasted_file_url() {
+        // An operator who pastes a full `file://` URL into the path prompt
+        // must not get a double-prefixed `file://file:///…`.
+        let cfg = WizardConfig {
+            secret_storage: STORAGE_FILE.into(),
+            secret_file_path: "file:///var/lib/mediator/secrets.json".into(),
+            secret_file_encrypted: false,
+            ..WizardConfig::default()
+        };
+        assert_eq!(
+            build_backend_url(&cfg),
+            "file:///var/lib/mediator/secrets.json"
+        );
     }
 
     #[test]
     fn build_backend_url_file_encrypted_appends_query() {
         let cfg = WizardConfig {
             secret_storage: STORAGE_FILE.into(),
-            secret_file_path: "conf/secrets.json".into(),
+            secret_file_path: "/var/lib/mediator/secrets.json".into(),
             secret_file_encrypted: true,
             ..WizardConfig::default()
         };
         assert_eq!(
             build_backend_url(&cfg),
-            "file://conf/secrets.json?encrypt=1"
+            "file:///var/lib/mediator/secrets.json?encrypt=1"
         );
     }
 
@@ -984,8 +1061,18 @@ mod tests {
         // `[secrets].backend = "<url>"` in mediator.toml. `string://` and
         // `vta://` are no longer storage backends (string:// dropped;
         // vta:// is a key *source*, not a store).
+        // The file:// backend resolves its (default, relative) path against
+        // the CWD into a three-slash absolute URL (#350), so compute the
+        // expected value the same way rather than hard-coding it.
+        let file_backend = format!(
+            "file://{}",
+            std::env::current_dir()
+                .unwrap()
+                .join(crate::consts::DEFAULT_SECRET_FILE_PATH)
+                .display()
+        );
         let cases = [
-            (STORAGE_FILE, "file://conf/secrets.json"),
+            (STORAGE_FILE, file_backend.as_str()),
             (STORAGE_KEYRING, "keyring://affinidi-mediator"),
             (STORAGE_AWS, "aws_secrets://us-east-1/mediator/"),
         ];
