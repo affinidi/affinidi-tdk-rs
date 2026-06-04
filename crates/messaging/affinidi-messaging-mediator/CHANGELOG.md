@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+## 5th June 2026
+
+### 0.15.13 — coverage-build fix + redis 1.2
+
+- **FIX (#351):** Gated the `store::auth_flow_harness` module (added in
+  0.15.11) to `#[cfg(all(test, any(feature = "fjall-backend", feature =
+  "memory-backend")))]`. Its only callers live in the Fjall and memory
+  test modules, so under a `redis-backend`-only build (the coverage CI
+  job) the harness was dead code and tripped `-D warnings`, failing the
+  job. Test-only; no shipped behaviour change.
+- **DEPS:** Bumped `redis` `1.1` → `1.2` (compatible upgrade).
+
 ## 1st June 2026
 
 ### 0.15.12 — release on didcomm 0.15

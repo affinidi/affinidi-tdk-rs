@@ -72,7 +72,11 @@ pub fn encode_oob_invite(invite: &Message) -> Result<String, MediatorError> {
 /// whole sequence against any [`MediatorStore`] so every backend gets
 /// parity — each backend's test module constructs its store and calls
 /// [`run_auth_session_flow`](auth_flow_harness::run_auth_session_flow).
-#[cfg(test)]
+// Only the fjall and memory backends call this harness (the Redis path has
+// its own integration tests). Gating it to those features keeps it from being
+// dead code — and tripping `-D warnings` — under a redis-backend-only build
+// such as the coverage job (#351).
+#[cfg(all(test, any(feature = "fjall-backend", feature = "memory-backend")))]
 pub(crate) mod auth_flow_harness {
     use affinidi_messaging_mediator_common::store::{MediatorStore, Session, SessionState};
     use sha256::digest;
