@@ -26,6 +26,10 @@ pub enum KeyType {
     P384,
     P521,
     Secp256k1,
+    /// BLS12-381 G2 public key — the verification key of a BBS+ issuer
+    /// (`bbs-2023` Data-Integrity cryptosuite). A 96-byte compressed G2 point,
+    /// multicodec `0xeb`.
+    Bls12381G2,
     /// ML-DSA-44 (FIPS 204) — post-quantum signature scheme.
     #[cfg(feature = "ml-dsa")]
     MlDsa44,
@@ -54,6 +58,7 @@ impl TryFrom<&str> for KeyType {
             "P-384" => Ok(KeyType::P384),
             "P-521" => Ok(KeyType::P521),
             "secp256k1" => Ok(KeyType::Secp256k1),
+            "Bls12381G2" => Ok(KeyType::Bls12381G2),
             #[cfg(feature = "ml-dsa")]
             "ML-DSA-44" => Ok(KeyType::MlDsa44),
             #[cfg(feature = "ml-dsa")]
@@ -76,6 +81,7 @@ impl fmt::Display for KeyType {
             KeyType::P384 => write!(f, "P-384"),
             KeyType::P521 => write!(f, "P-521"),
             KeyType::Secp256k1 => write!(f, "secp256k1"),
+            KeyType::Bls12381G2 => write!(f, "Bls12381G2"),
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => write!(f, "ML-DSA-44"),
             #[cfg(feature = "ml-dsa")]
