@@ -25,6 +25,10 @@ pub const P384_PUB: u64 = 0x1201;
 pub const P384_PRIV: u64 = 0x1307;
 pub const P521_PUB: u64 = 0x1202;
 pub const P521_PRIV: u64 = 0x1308;
+// BLS12-381 public keys (used by BBS+ issuers). Compressed group elements:
+// G1 = 48 bytes, G2 = 96 bytes. A BBS issuer's verification key is a G2 point.
+pub const BLS12381_G1_PUB: u64 = 0xea;
+pub const BLS12381_G2_PUB: u64 = 0xeb;
 
 // Post-quantum codecs — draft entries from the official multicodec table.
 // We store ML-DSA private keys as the 32-byte seed, so we use the
@@ -56,6 +60,8 @@ pub enum Codec {
     P384Priv,
     P521Pub,
     P521Priv,
+    Bls12381G1Pub,
+    Bls12381G2Pub,
     MlDsa44Pub,
     MlDsa44PrivSeed,
     MlDsa65Pub,
@@ -82,6 +88,8 @@ impl Codec {
             P384_PRIV => Codec::P384Priv,
             P521_PUB => Codec::P521Pub,
             P521_PRIV => Codec::P521Priv,
+            BLS12381_G1_PUB => Codec::Bls12381G1Pub,
+            BLS12381_G2_PUB => Codec::Bls12381G2Pub,
             ML_DSA_44_PUB => Codec::MlDsa44Pub,
             ML_DSA_44_PRIV_SEED => Codec::MlDsa44PrivSeed,
             ML_DSA_65_PUB => Codec::MlDsa65Pub,
@@ -108,6 +116,8 @@ impl Codec {
             Codec::P384Priv => P384_PRIV,
             Codec::P521Pub => P521_PUB,
             Codec::P521Priv => P521_PRIV,
+            Codec::Bls12381G1Pub => BLS12381_G1_PUB,
+            Codec::Bls12381G2Pub => BLS12381_G2_PUB,
             Codec::MlDsa44Pub => ML_DSA_44_PUB,
             Codec::MlDsa44PrivSeed => ML_DSA_44_PRIV_SEED,
             Codec::MlDsa65Pub => ML_DSA_65_PUB,
@@ -129,6 +139,8 @@ impl Codec {
                 | Codec::P256Pub
                 | Codec::P384Pub
                 | Codec::P521Pub
+                | Codec::Bls12381G1Pub
+                | Codec::Bls12381G2Pub
                 | Codec::MlDsa44Pub
                 | Codec::MlDsa65Pub
                 | Codec::MlDsa87Pub
@@ -145,6 +157,9 @@ impl Codec {
             Codec::P256Pub => Some(33),      // compressed
             Codec::P384Pub => Some(49),      // compressed
             Codec::P521Pub => Some(67),      // compressed
+            // BLS12-381 compressed group elements.
+            Codec::Bls12381G1Pub => Some(48),
+            Codec::Bls12381G2Pub => Some(96),
             // ML-DSA public keys: FIPS 204 fixed sizes
             Codec::MlDsa44Pub => Some(1312),
             Codec::MlDsa65Pub => Some(1952),

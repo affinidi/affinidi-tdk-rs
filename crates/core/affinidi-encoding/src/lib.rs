@@ -13,9 +13,9 @@ pub use multibase::{
     encode_base58btc, encode_multikey, validate_base58btc,
 };
 pub use multicodec::{
-    Codec, ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB,
-    P384_PRIV, P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV,
-    X25519_PUB,
+    BLS12381_G1_PUB, BLS12381_G2_PUB, Codec, ED25519_PRIV, ED25519_PUB, MultiEncoded,
+    MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV, P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV,
+    SECP256K1_PUB, X25519_PRIV, X25519_PUB,
 };
 
 mod error;

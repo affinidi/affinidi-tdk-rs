@@ -14,6 +14,10 @@ mod error;
 mod jwk;
 mod key_type;
 
+/// BLS12-381 G2 `did:key` framing (BBS+ issuer keys). Curve-free, so it needs
+/// no feature gate.
+pub mod bls12381;
+
 #[cfg(feature = "ed25519")]
 pub mod did_key;
 
