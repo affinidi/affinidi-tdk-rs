@@ -1,5 +1,23 @@
 # Affinidi Crypto Changelog
 
+## 4th June 2026 (0.1.12)
+
+- **FIX (#348):** Tightened the `affinidi-encoding` dependency from the
+  loose `"0.1"` to `"0.1.4"`. The `bls12381` module (added in 0.1.11)
+  imports `affinidi_encoding::BLS12381_G2_PUB`, which only exists from
+  `affinidi-encoding 0.1.4`. The loose requirement let a fresh resolve
+  against an existing lock keep `affinidi-encoding` at a `0.1.x < 0.1.4`,
+  breaking the build with `unresolved import ...::BLS12381_G2_PUB` for
+  external consumers. The workspace `[patch.crates-io]` redirect masked
+  this in-tree. No API change.
+
+## 1st June 2026 (0.1.11)
+
+- **FEATURE (#346):** BLS12-381 G2 `did:key` support for BBS+ issuer
+  keys. Adds `KeyType::Bls12381G2` and a new `bls12381` module that
+  encodes a G2 public key as a `did:key` (multicodec `0xeb`). Requires
+  `affinidi-encoding >= 0.1.4` for the `BLS12381_G2_PUB` codec constant.
+
 ## 1st June 2026 (0.1.10)
 
 - **FEATURE (#327, `jose`):** Added

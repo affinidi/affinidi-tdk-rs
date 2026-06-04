@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-crypto"
-version = "0.1.11"
+version = "0.1.12"
 description = "Cryptographic primitives and JWK types for Affinidi TDK"
 edition.workspace = true
 authors.workspace = true
@@ -30,7 +30,10 @@ slh-dsa = ["dep:slh-dsa", "dep:rand_10"]
 jose = ["dep:aes", "dep:cbc", "dep:hmac", "dep:subtle", "ed25519", "p256", "k256"]
 
 [dependencies]
-affinidi-encoding = "0.1"
+# Requires >= 0.1.4: the `bls12381` module imports
+# `affinidi_encoding::BLS12381_G2_PUB`, added in 0.1.4 (#346). A loose "0.1"
+# resolved against an older lock to a 0.1.x < 0.1.4 and failed to compile (#348).
+affinidi-encoding = "0.1.4"
 
 base58 = "0.2"
 base64 = "0.22"
