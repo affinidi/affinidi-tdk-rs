@@ -26,6 +26,8 @@
  */
 
 use affinidi_bbs::{self as bbs, PublicKey, SecretKey, Signature};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::DataIntegrityError;
@@ -168,6 +170,345 @@ pub fn compute_bbs_header(proof_options: &[u8], mandatory_statements: &[&[u8]]) 
     header.extend_from_slice(&mandatory_hash);
 
     header
+}
+
+// ===========================================================================
+// Document-level bbs-2023 (W3C Verifiable Credential API)
+//
+// The functions above operate on message arrays; the ones below wrap them in
+// the W3C VC document model, so callers sign / derive / verify a VC JSON
+// document directly. The claim <-> message mapping is defined here:
+//
+//   * The document (minus its `proof`) is flattened into per-leaf *statements*
+//     `(json_pointer, jcs_value)`, ordered by pointer (deterministic).
+//   * Objects are recursed; **scalars and arrays are leaves** — selective
+//     disclosure is at object-field granularity (an array is disclosed whole),
+//     which keeps every disclosed statement's pointer stable when hidden
+//     siblings are removed (object keys don't shift, unlike array indices).
+//   * `mandatory_pointers` select statements ALWAYS disclosed; they are folded
+//     into the BBS *header* (not signed as individual messages). The remaining
+//     (non-mandatory) statements are the BBS *messages* — the selectively
+//     disclosable claims.
+//
+// NOTE: this uses affinidi-bbs' simple statement encoding (not RDF dataset
+// canonicalization), so it interoperates within the affinidi stack rather than
+// with arbitrary W3C vc-di-bbs implementations.
+// ===========================================================================
+
+const PROOF_TYPE: &str = "DataIntegrityProof";
+const PROOF_CRYPTOSUITE: &str = "bbs-2023";
+
+/// A `(rfc6901_pointer, canonical_value_bytes)` statement.
+type Statement = (String, Vec<u8>);
+
+/// The base-proof `proofValue` payload: the holder needs the issuer signature
+/// and the mandatory-pointer set to derive a presentation.
+#[derive(Serialize, Deserialize)]
+struct BaseProofValue {
+    /// multibase(base64url) of the 80-byte BBS signature.
+    signature: String,
+    mandatory_pointers: Vec<String>,
+}
+
+/// The derived-proof `proofValue` payload.
+#[derive(Serialize, Deserialize)]
+struct DerivedProofValue {
+    /// multibase(base64url) of the BBS proof bytes.
+    proof: String,
+    /// Original indexes (into the non-mandatory message list) of the disclosed
+    /// statements, ascending.
+    disclosed_indexes: Vec<usize>,
+    mandatory_pointers: Vec<String>,
+}
+
+/// Sign a VC document with a BBS **base proof** (issuer side).
+///
+/// `mandatory_pointers` are RFC-6901 pointers to claims that must always be
+/// disclosed (typically `/@context`, `/type`, `/issuer`,
+/// `/credentialSubject/id`, validity dates). The returned document carries a
+/// `proof` with `cryptosuite: bbs-2023`.
+pub fn sign_vc_base(
+    document: &Value,
+    mandatory_pointers: &[&str],
+    verification_method: &str,
+    sk: &SecretKey,
+    pk: &PublicKey,
+) -> Result<Value, DataIntegrityError> {
+    let mut doc = document.clone();
+    doc.as_object_mut()
+        .ok_or_else(|| DataIntegrityError::Conformance("document must be a JSON object".into()))?
+        .remove("proof");
+
+    let statements = flatten_statements(&doc)?;
+    let mandatory: Vec<String> = mandatory_pointers.iter().map(|s| s.to_string()).collect();
+
+    let proof_config = serde_json::json!({
+        "type": PROOF_TYPE,
+        "cryptosuite": PROOF_CRYPTOSUITE,
+        "proofPurpose": "assertionMethod",
+        "verificationMethod": verification_method,
+    });
+    let proof_options = jcs_bytes(&proof_config)?;
+
+    let mut mandatory_msgs = Vec::new();
+    let mut non_mandatory_msgs = Vec::new();
+    for stmt in &statements {
+        let msg = statement_message(stmt);
+        if pointer_matches(&stmt.0, &mandatory) {
+            mandatory_msgs.push(msg);
+        } else {
+            non_mandatory_msgs.push(msg);
+        }
+    }
+    let header = compute_bbs_header(&proof_options, &as_refs(&mandatory_msgs));
+
+    let signature = bbs::sign(sk, pk, &header, &as_refs(&non_mandatory_msgs))
+        .map_err(DataIntegrityError::signing)?;
+
+    let base_value = BaseProofValue {
+        signature: mb_encode(&signature.to_bytes()),
+        mandatory_pointers: mandatory,
+    };
+    let mut proof = proof_config;
+    proof["proofValue"] = Value::String(encode_proof_value(&base_value)?);
+    doc.as_object_mut().unwrap().insert("proof".into(), proof);
+    Ok(doc)
+}
+
+/// Create a **derived proof** from a base-proof document (holder side),
+/// disclosing only the claims under `selective_pointers` (plus the mandatory
+/// ones). `presentation_header` is the verifier's nonce/challenge. `pk` is the
+/// issuer's BBS public key.
+pub fn derive_vc(
+    base_document: &Value,
+    selective_pointers: &[&str],
+    presentation_header: &[u8],
+    pk: &PublicKey,
+) -> Result<Value, DataIntegrityError> {
+    let proof = base_document
+        .get("proof")
+        .ok_or_else(|| DataIntegrityError::MalformedProof("base document has no proof".into()))?;
+    let base_value: BaseProofValue = decode_proof_value(proof)?;
+    let signature = Signature::from_bytes(&mb_decode(&base_value.signature)?)
+        .map_err(|e| DataIntegrityError::MalformedProof(format!("decode signature: {e}")))?;
+
+    let mut doc = base_document.clone();
+    doc.as_object_mut()
+        .ok_or_else(|| DataIntegrityError::Conformance("document must be a JSON object".into()))?
+        .remove("proof");
+    let statements = flatten_statements(&doc)?;
+    let proof_config = proof_config_without_value(proof);
+    let proof_options = jcs_bytes(&proof_config)?;
+    let selective: Vec<String> = selective_pointers.iter().map(|s| s.to_string()).collect();
+
+    // Non-mandatory statements in order; record the indexes of the disclosed ones.
+    let mut mandatory_msgs = Vec::new();
+    let mut non_mandatory_msgs = Vec::new();
+    let mut disclosed_indexes = Vec::new();
+    for stmt in &statements {
+        if pointer_matches(&stmt.0, &base_value.mandatory_pointers) {
+            mandatory_msgs.push(statement_message(stmt));
+            continue;
+        }
+        if pointer_matches(&stmt.0, &selective) {
+            disclosed_indexes.push(non_mandatory_msgs.len());
+        }
+        non_mandatory_msgs.push(statement_message(stmt));
+    }
+    let header = compute_bbs_header(&proof_options, &as_refs(&mandatory_msgs));
+
+    let bbs_proof = bbs::proof_gen(
+        pk,
+        &signature,
+        &header,
+        presentation_header,
+        &as_refs(&non_mandatory_msgs),
+        &disclosed_indexes,
+    )
+    .map_err(DataIntegrityError::signing)?;
+
+    // Build the derived document: keep mandatory + selectively-disclosed leaves,
+    // prune everything else.
+    let kept: Vec<String> = base_value
+        .mandatory_pointers
+        .iter()
+        .cloned()
+        .chain(selective.iter().cloned())
+        .collect();
+    let mut derived =
+        retain_disclosed(&doc, "", &kept).unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+
+    let derived_value = DerivedProofValue {
+        proof: mb_encode(bbs_proof.to_bytes()),
+        disclosed_indexes,
+        mandatory_pointers: base_value.mandatory_pointers,
+    };
+    let mut proof_obj = proof_config;
+    proof_obj["proofValue"] = Value::String(encode_proof_value(&derived_value)?);
+    derived
+        .as_object_mut()
+        .ok_or_else(|| DataIntegrityError::Conformance("derived document is not an object".into()))?
+        .insert("proof".into(), proof_obj);
+    Ok(derived)
+}
+
+/// Verify a **derived proof** document (verifier side). `presentation_header`
+/// must match the one the holder derived with; `pk` is the issuer's BBS public
+/// key. Returns `Ok(true)` iff the proof is valid for the disclosed claims.
+pub fn verify_vc_derived(
+    derived_document: &Value,
+    presentation_header: &[u8],
+    pk: &PublicKey,
+) -> Result<bool, DataIntegrityError> {
+    let proof = derived_document
+        .get("proof")
+        .ok_or_else(|| DataIntegrityError::MalformedProof("document has no proof".into()))?;
+    let derived_value: DerivedProofValue = decode_proof_value(proof)?;
+    let bbs_proof = bbs::Proof::from_bytes(&mb_decode(&derived_value.proof)?);
+
+    let mut doc = derived_document.clone();
+    doc.as_object_mut()
+        .ok_or_else(|| DataIntegrityError::Conformance("document must be a JSON object".into()))?
+        .remove("proof");
+    let statements = flatten_statements(&doc)?;
+    let proof_config = proof_config_without_value(proof);
+    let proof_options = jcs_bytes(&proof_config)?;
+
+    let mut mandatory_msgs = Vec::new();
+    let mut disclosed_msgs = Vec::new();
+    for stmt in &statements {
+        if pointer_matches(&stmt.0, &derived_value.mandatory_pointers) {
+            mandatory_msgs.push(statement_message(stmt));
+        } else {
+            disclosed_msgs.push(statement_message(stmt));
+        }
+    }
+    let header = compute_bbs_header(&proof_options, &as_refs(&mandatory_msgs));
+
+    verify_proof(
+        pk,
+        &bbs_proof,
+        &header,
+        presentation_header,
+        &as_refs(&disclosed_msgs),
+        &derived_value.disclosed_indexes,
+    )
+}
+
+// --- document-level helpers ------------------------------------------------
+
+/// Flatten a JSON document into per-leaf statements, sorted by pointer.
+/// Objects are recursed; scalars and arrays are leaves (see module note).
+fn flatten_statements(doc: &Value) -> Result<Vec<Statement>, DataIntegrityError> {
+    let mut leaves: Vec<(String, Value)> = Vec::new();
+    collect_leaves("", doc, &mut leaves);
+    leaves.sort_by(|a, b| a.0.cmp(&b.0));
+    leaves
+        .into_iter()
+        .map(|(ptr, val)| Ok((ptr, jcs_bytes(&val)?)))
+        .collect()
+}
+
+fn collect_leaves(prefix: &str, v: &Value, out: &mut Vec<(String, Value)>) {
+    match v {
+        Value::Object(map) => {
+            for (k, val) in map {
+                let p = format!("{prefix}/{}", escape_token(k));
+                collect_leaves(&p, val, out);
+            }
+        }
+        // Scalars and arrays are leaves: an array is disclosed atomically.
+        leaf => out.push((prefix.to_string(), leaf.clone())),
+    }
+}
+
+/// Rebuild a document keeping only leaves whose pointer is disclosed, pruning
+/// objects with no kept descendants. Returns `None` when nothing is kept.
+fn retain_disclosed(v: &Value, prefix: &str, disclosed: &[String]) -> Option<Value> {
+    match v {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, val) in map {
+                let p = format!("{prefix}/{}", escape_token(k));
+                if let Some(kept) = retain_disclosed(val, &p, disclosed) {
+                    out.insert(k.clone(), kept);
+                }
+            }
+            if out.is_empty() {
+                None
+            } else {
+                Some(Value::Object(out))
+            }
+        }
+        leaf => pointer_matches(prefix, disclosed).then(|| leaf.clone()),
+    }
+}
+
+/// RFC 6901 token escaping (`~` -> `~0`, `/` -> `~1`).
+fn escape_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// `pointer` is disclosed iff some entry of `pointers` equals it or is a parent
+/// of it at a path-segment boundary.
+fn pointer_matches(pointer: &str, pointers: &[String]) -> bool {
+    pointers
+        .iter()
+        .any(|p| pointer == p || pointer.starts_with(&format!("{p}/")))
+}
+
+/// Encode one statement as a BBS message: `pointer \0 jcs_value`.
+fn statement_message((ptr, val): &Statement) -> Vec<u8> {
+    let mut m = Vec::with_capacity(ptr.len() + 1 + val.len());
+    m.extend_from_slice(ptr.as_bytes());
+    m.push(0);
+    m.extend_from_slice(val);
+    m
+}
+
+fn as_refs(msgs: &[Vec<u8>]) -> Vec<&[u8]> {
+    msgs.iter().map(|m| m.as_slice()).collect()
+}
+
+fn proof_config_without_value(proof: &Value) -> Value {
+    let mut c = proof.clone();
+    if let Some(obj) = c.as_object_mut() {
+        obj.remove("proofValue");
+    }
+    c
+}
+
+fn jcs_bytes(v: &Value) -> Result<Vec<u8>, DataIntegrityError> {
+    serde_json_canonicalizer::to_string(v)
+        .map(String::into_bytes)
+        .map_err(|e| DataIntegrityError::Canonicalization(format!("jcs: {e}")))
+}
+
+fn mb_encode(bytes: &[u8]) -> String {
+    multibase::encode(multibase::Base::Base64Url, bytes)
+}
+
+fn mb_decode(s: &str) -> Result<Vec<u8>, DataIntegrityError> {
+    multibase::decode(s)
+        .map(|(_, b)| b)
+        .map_err(|e| DataIntegrityError::MalformedProof(format!("multibase decode: {e}")))
+}
+
+fn encode_proof_value<T: Serialize>(value: &T) -> Result<String, DataIntegrityError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| DataIntegrityError::MalformedProof(format!("encode proofValue: {e}")))?;
+    Ok(mb_encode(&bytes))
+}
+
+fn decode_proof_value<T: for<'de> Deserialize<'de>>(
+    proof: &Value,
+) -> Result<T, DataIntegrityError> {
+    let s = proof
+        .get("proofValue")
+        .and_then(Value::as_str)
+        .ok_or_else(|| DataIntegrityError::MalformedProof("proof has no proofValue".into()))?;
+    serde_json::from_slice(&mb_decode(s)?)
+        .map_err(|e| DataIntegrityError::MalformedProof(format!("decode proofValue: {e}")))
 }
 
 #[cfg(test)]
@@ -315,5 +656,101 @@ mod tests {
         let h1 = compute_bbs_header(b"opts1", &[b"stmt"]);
         let h2 = compute_bbs_header(b"opts2", &[b"stmt"]);
         assert_ne!(h1, h2);
+    }
+
+    // --- document-level (W3C VC) round-trip -------------------------------
+
+    fn sample_vc() -> Value {
+        serde_json::json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "issuer": "did:webvh:issuer.example",
+            "validFrom": "2020-01-01T00:00:00Z",
+            "credentialSubject": {
+                "id": "did:key:zHolder",
+                "givenName": "Alice",
+                "familyName": "Smith",
+                "memberLevel": "gold"
+            }
+        })
+    }
+
+    const MANDATORY: &[&str] = &["/@context", "/type", "/issuer", "/credentialSubject/id"];
+    const VM: &str = "did:webvh:issuer.example#bbs-key-0";
+
+    fn assert_invalid(r: Result<bool, DataIntegrityError>) {
+        assert!(!matches!(r, Ok(true)), "expected invalid, got {r:?}");
+    }
+
+    #[test]
+    fn vc_base_derive_verify_round_trip() {
+        let (sk, pk) = test_keypair();
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        assert_eq!(base["proof"]["cryptosuite"], "bbs-2023");
+
+        // Disclose only givenName (+ the mandatory claims).
+        let derived = derive_vc(&base, &["/credentialSubject/givenName"], b"nonce-1", &pk).unwrap();
+
+        // Disclosed + mandatory claims are present; hidden ones are gone.
+        let cs = &derived["credentialSubject"];
+        assert_eq!(cs["givenName"], "Alice");
+        assert_eq!(cs["id"], "did:key:zHolder");
+        assert_eq!(derived["issuer"], "did:webvh:issuer.example");
+        assert!(cs.get("familyName").is_none(), "familyName must be hidden");
+        assert!(
+            cs.get("memberLevel").is_none(),
+            "memberLevel must be hidden"
+        );
+
+        assert!(verify_vc_derived(&derived, b"nonce-1", &pk).unwrap());
+    }
+
+    #[test]
+    fn verify_fails_on_wrong_presentation_header() {
+        let (sk, pk) = test_keypair();
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        let derived = derive_vc(&base, &["/credentialSubject/givenName"], b"nonce-1", &pk).unwrap();
+        assert_invalid(verify_vc_derived(&derived, b"different-nonce", &pk));
+    }
+
+    #[test]
+    fn verify_fails_on_wrong_public_key() {
+        let (sk, pk) = test_keypair();
+        let other = bbs::sk_to_pk(&bbs::keygen(b"another-bbs-key-material-32bytes", b"").unwrap());
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        let derived = derive_vc(&base, &["/credentialSubject/givenName"], b"nonce-1", &pk).unwrap();
+        assert_invalid(verify_vc_derived(&derived, b"nonce-1", &other));
+    }
+
+    #[test]
+    fn verify_fails_on_tampered_disclosed_claim() {
+        let (sk, pk) = test_keypair();
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        let mut derived =
+            derive_vc(&base, &["/credentialSubject/givenName"], b"nonce-1", &pk).unwrap();
+        derived["credentialSubject"]["givenName"] = Value::String("Mallory".into());
+        assert_invalid(verify_vc_derived(&derived, b"nonce-1", &pk));
+    }
+
+    #[test]
+    fn verify_fails_on_tampered_mandatory_claim() {
+        let (sk, pk) = test_keypair();
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        let mut derived =
+            derive_vc(&base, &["/credentialSubject/givenName"], b"nonce-1", &pk).unwrap();
+        // Mandatory claims are bound via the header — tampering must fail too.
+        derived["issuer"] = Value::String("did:webvh:attacker.example".into());
+        assert_invalid(verify_vc_derived(&derived, b"nonce-1", &pk));
+    }
+
+    #[test]
+    fn disclosing_nothing_still_verifies_mandatory() {
+        let (sk, pk) = test_keypair();
+        let base = sign_vc_base(&sample_vc(), MANDATORY, VM, &sk, &pk).unwrap();
+        let derived = derive_vc(&base, &[], b"nonce-1", &pk).unwrap();
+        // No selective claims disclosed, but the mandatory set is bound + present.
+        assert!(derived["credentialSubject"].get("givenName").is_none());
+        assert_eq!(derived["credentialSubject"]["id"], "did:key:zHolder");
+        assert!(verify_vc_derived(&derived, b"nonce-1", &pk).unwrap());
     }
 }
