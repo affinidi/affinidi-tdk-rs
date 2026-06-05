@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.15.12"
+version = "0.15.13"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -98,7 +98,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 # ── Database (Redis) ─────────────────────────────────────────────────────
 ## Redis 7.1+ required. Uses multiplexed connection (not pool).
 ## TLS: use `rediss://` URL scheme. Auth: `redis://:password@host/`.
-redis = { version = "1.1", features = [
+redis = { version = "1.2", features = [
   "tokio-rustls-comp",       # TLS via rustls (for rediss:// URLs)
   "tls-rustls-insecure",     # Allow self-signed certs (dev only, controlled by config)
   "connection-manager",      # Auto-reconnecting multiplexed connection
