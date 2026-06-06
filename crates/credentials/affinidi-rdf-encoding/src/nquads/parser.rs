@@ -109,15 +109,36 @@ impl<'a> Cursor<'a> {
 
     fn parse_iri(&mut self) -> Result<NamedNode> {
         self.expect_char('<')?;
-        let start = self.pos;
+        let mut iri = String::new();
         loop {
             match self.peek() {
                 Some('>') => {
-                    let iri = &self.input[start..self.pos];
                     self.advance(1); // skip '>'
                     return Ok(NamedNode::new(iri));
                 }
-                Some(_) => self.advance(1),
+                // IRIs permit UCHAR escapes (`\uXXXX` / `\UXXXXXXXX`); these must
+                // be unescaped so the canonical form carries the literal
+                // character (e.g. `⁰` → `⁰`), not the escape sequence.
+                Some('\\') => {
+                    self.advance(1);
+                    let width = match self.peek() {
+                        Some('u') => 4,
+                        Some('U') => 8,
+                        other => {
+                            return Err(RdfError::parse(format!(
+                                "line {}: invalid IRI escape \\{}",
+                                self.line_num,
+                                other.unwrap_or(' ')
+                            )));
+                        }
+                    };
+                    self.advance(1); // skip 'u'/'U'
+                    iri.push(self.read_hex_char(width)?);
+                }
+                Some(ch) => {
+                    iri.push(ch);
+                    self.advance(ch.len_utf8());
+                }
                 None => {
                     return Err(RdfError::parse(format!(
                         "line {}: unterminated IRI",
@@ -126,6 +147,34 @@ impl<'a> Cursor<'a> {
                 }
             }
         }
+    }
+
+    /// Read `n` hex digits and return the decoded scalar value as a `char`.
+    fn read_hex_char(&mut self, n: usize) -> Result<char> {
+        let mut hex = String::with_capacity(n);
+        for _ in 0..n {
+            match self.peek() {
+                Some(c) if c.is_ascii_hexdigit() => {
+                    hex.push(c);
+                    self.advance(1);
+                }
+                _ => {
+                    return Err(RdfError::parse(format!(
+                        "line {}: incomplete unicode escape",
+                        self.line_num
+                    )));
+                }
+            }
+        }
+        let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
+            RdfError::parse(format!("line {}: invalid unicode escape", self.line_num))
+        })?;
+        char::from_u32(cp).ok_or_else(|| {
+            RdfError::parse(format!(
+                "line {}: invalid unicode codepoint U+{hex}",
+                self.line_num
+            ))
+        })
     }
 
     fn parse_blank_node(&mut self) -> Result<BlankNode> {

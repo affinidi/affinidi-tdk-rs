@@ -157,15 +157,49 @@ fn value_object_to_literal(val: &Value, obj: &serde_json::Map<String, Value>) ->
     // Determine default datatype from the value type
     match val {
         Value::Bool(_) => Ok(Literal::typed(string_value, NamedNode::new(xsd::BOOLEAN))),
-        Value::Number(n) => {
-            if n.is_f64() && n.to_string().contains('.') {
-                Ok(Literal::typed(string_value, NamedNode::new(xsd::DOUBLE)))
-            } else {
-                Ok(Literal::typed(string_value, NamedNode::new(xsd::INTEGER)))
-            }
-        }
+        Value::Number(n) => Ok(number_to_literal(n)),
         _ => Ok(Literal::new(string_value)),
     }
+}
+
+/// Convert a native JSON number to an RDF literal per the JSON-LD "Value Object
+/// to RDF Conversion" / "Data Round Tripping" rules:
+///
+/// - A number with **no non-zero fractional part** (e.g. `7`, `7.0`, `2023`)
+///   becomes `xsd:integer` with its canonical lexical form (`"7"`).
+/// - Any other number becomes `xsd:double` in **canonical lexical form**
+///   (`5.5` → `"5.5E0"`, `100.0` is integral so `"100"`, `0.001` → `"1.0E-3"`).
+///
+/// Getting this exactly right is interop-critical: the canonical N-Quads (and
+/// therefore every RDFC-1.0 hash) depend on these literal strings byte-for-byte.
+fn number_to_literal(n: &serde_json::Number) -> Literal {
+    if let Some(i) = n.as_i64() {
+        return Literal::typed(i.to_string(), NamedNode::new(xsd::INTEGER));
+    }
+    if let Some(u) = n.as_u64() {
+        return Literal::typed(u.to_string(), NamedNode::new(xsd::INTEGER));
+    }
+    let f = n.as_f64().unwrap_or(f64::NAN);
+    // Integral doubles (e.g. `7.0`) map to xsd:integer, within the JS safe range.
+    if f.is_finite() && f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
+        return Literal::typed((f as i64).to_string(), NamedNode::new(xsd::INTEGER));
+    }
+    Literal::typed(canonical_xsd_double(f), NamedNode::new(xsd::DOUBLE))
+}
+
+/// Canonical XSD `double` lexical form (mantissa `d.ddd`, uppercase `E`, plain
+/// exponent), mirroring the JSON-LD reference algorithm: `toExponential(15)`,
+/// trim trailing mantissa zeros, keep at least one fractional digit.
+fn canonical_xsd_double(f: f64) -> String {
+    let s = format!("{f:.15e}"); // e.g. "5.500000000000000e0"
+    let (mantissa, exp) = s.split_once('e').unwrap_or((s.as_str(), "0"));
+    let trimmed = mantissa.trim_end_matches('0');
+    let mantissa = match trimmed.strip_suffix('.') {
+        Some(intpart) => format!("{intpart}.0"),
+        None => trimmed.to_string(),
+    };
+    let exp: i64 = exp.parse().unwrap_or(0);
+    format!("{mantissa}E{exp}")
 }
 
 /// Convert a @list to RDF using rdf:first/rdf:rest/rdf:nil.
@@ -277,5 +311,39 @@ mod tests {
             ds.quads()[0].object,
             Object::Named(NamedNode::new("http://example.org/target"))
         );
+    }
+
+    fn num(json: &str) -> Literal {
+        let n: serde_json::Number = serde_json::from_str(json).unwrap();
+        number_to_literal(&n)
+    }
+
+    #[test]
+    fn native_number_conversion_matches_jsonld() {
+        // Integers (incl. integral doubles like 7.0) → xsd:integer, canonical form.
+        for (input, expected) in [
+            ("7", "7"),
+            ("7.0", "7"),
+            ("2023", "2023"),
+            ("0", "0"),
+            ("100.0", "100"),
+            ("-5.0", "-5"),
+        ] {
+            let lit = num(input);
+            assert_eq!(lit.datatype.iri, xsd::INTEGER, "{input} should be integer");
+            assert_eq!(lit.value, expected, "{input} integer value");
+        }
+        // Non-integral → xsd:double in canonical lexical form.
+        for (input, expected) in [
+            ("5.5", "5.5E0"),
+            ("6.1", "6.1E0"),
+            ("7.8", "7.8E0"),
+            ("0.001", "1.0E-3"),
+            ("-1.234", "-1.234E0"),
+        ] {
+            let lit = num(input);
+            assert_eq!(lit.datatype.iri, xsd::DOUBLE, "{input} should be double");
+            assert_eq!(lit.value, expected, "{input} double canonical form");
+        }
     }
 }

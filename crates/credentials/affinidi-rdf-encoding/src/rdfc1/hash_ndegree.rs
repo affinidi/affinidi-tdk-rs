@@ -49,7 +49,7 @@ pub fn hash_ndegree_quads(
         }
     }
 
-    // Process hash groups in sorted order
+    // Process hash groups in sorted order (RDFC-1.0 Hash N-Degree Quads, step 5).
     let mut data_to_hash = String::new();
     let mut chosen_issuer = issuer.clone();
     let mut permutation_count: usize = 0;
@@ -57,13 +57,11 @@ pub fn hash_ndegree_quads(
     for (hash, blank_node_list) in &hash_to_related {
         data_to_hash.push_str(hash);
 
-        // Find the permutation that produces the smallest hash path
+        // Find the permutation that produces the smallest hash path.
         let mut chosen_path = String::new();
         let mut chosen_perm_issuer: Option<IdentifierIssuer> = None;
 
-        // Generate permutations
         let mut perm_indices: Vec<usize> = (0..blank_node_list.len()).collect();
-        let mut first = true;
 
         loop {
             permutation_count += 1;
@@ -73,48 +71,61 @@ pub fn hash_ndegree_quads(
                 )));
             }
 
+            // Each permutation starts from a fresh copy of the current issuer.
+            let mut issuer_copy = chosen_issuer.clone();
             let mut path = String::new();
-            let mut path_issuer = chosen_issuer.clone();
+            let mut recursion_list: Vec<String> = Vec::new();
             let mut skip = false;
 
+            // Phase 1: build the path. A related node that has no canonical id
+            // yet is issued a TEMPORARY id here and deferred to the recursion
+            // list. Issuing before recursing is what makes cyclic graphs
+            // (e.g. a circle of blank nodes) terminate instead of recursing
+            // forever.
             for &idx in &perm_indices {
                 let related = &blank_node_list[idx];
-
                 if canonical_issuer.is_issued(related) {
                     path.push_str(canonical_issuer.get(related).unwrap());
-                } else if path_issuer.is_issued(related) {
-                    path.push_str(path_issuer.get(related).unwrap());
                 } else {
-                    // Recursively hash this related blank node
-                    let (result_hash, result_issuer) = hash_ndegree_quads(
-                        related,
-                        blank_node_to_quads,
-                        canonical_issuer,
-                        &path_issuer,
-                        blank_node_to_hash,
-                    )?;
-                    path_issuer = result_issuer;
-                    path.push_str(path_issuer.get(related).unwrap_or(""));
-                    path.push('<');
-                    path.push_str(&result_hash);
-                    path.push('>');
+                    if !issuer_copy.is_issued(related) {
+                        recursion_list.push(related.clone());
+                    }
+                    path.push_str(&issuer_copy.issue(related));
                 }
-
-                // Early termination: if path is already larger than chosen, skip
-                if !chosen_path.is_empty() && !first && path > chosen_path {
+                if !chosen_path.is_empty() && path > chosen_path {
                     skip = true;
                     break;
                 }
             }
 
-            if !skip && (chosen_path.is_empty() || path < chosen_path) {
-                chosen_path = path;
-                chosen_perm_issuer = Some(path_issuer);
+            // Phase 2: recurse into the deferred related nodes, in order.
+            if !skip {
+                for related in &recursion_list {
+                    let (result_hash, result_issuer) = hash_ndegree_quads(
+                        related,
+                        blank_node_to_quads,
+                        canonical_issuer,
+                        &issuer_copy,
+                        blank_node_to_hash,
+                    )?;
+                    issuer_copy = result_issuer;
+                    path.push_str(issuer_copy.get(related).unwrap_or(""));
+                    path.push('<');
+                    path.push_str(&result_hash);
+                    path.push('>');
+                    if !chosen_path.is_empty() && path > chosen_path {
+                        skip = true;
+                        break;
+                    }
+                }
             }
 
-            first = false;
+            if !skip && (chosen_path.is_empty() || path < chosen_path) {
+                chosen_path = path;
+                chosen_perm_issuer = Some(issuer_copy);
+            }
 
-            // Generate next permutation (lexicographic order)
+            // Generate next permutation (lexicographic order).
             if !next_permutation(&mut perm_indices) {
                 break;
             }

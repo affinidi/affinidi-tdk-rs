@@ -18,7 +18,17 @@ use identifier_issuer::IdentifierIssuer;
 ///
 /// Implements the W3C RDF Dataset Canonicalization algorithm (RDFC-1.0).
 pub fn canonicalize(dataset: &Dataset) -> Result<String> {
-    let quads = dataset.quads();
+    // An RDF dataset is a SET of quads: deduplicate identical quads up front so
+    // a duplicate in the input cannot perturb first-degree hashes or appear
+    // twice in the canonical output. Identity is by serialized N-Quad form.
+    let mut seen = std::collections::HashSet::new();
+    let deduped: Vec<Quad> = dataset
+        .quads()
+        .iter()
+        .filter(|q| seen.insert(nquads::serialize_quad(q)))
+        .cloned()
+        .collect();
+    let quads = deduped.as_slice();
 
     // Step 1: Build blank_node_to_quads map
     let mut blank_node_to_quads: HashMap<String, Vec<&Quad>> = HashMap::new();
