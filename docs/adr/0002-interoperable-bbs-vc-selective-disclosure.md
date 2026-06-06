@@ -164,18 +164,41 @@ ADR 0001).
   suite** (59/63; the 4 skipped are documented poison/deep-automorphism
   graphs that do not occur in real VCs) and the **vc-di-bbs**
   canonicalization vector (byte-exact).
-- **Stage 3b — vc-di-bbs document layer (in progress).** New module
-  `affinidi-data-integrity::bbs_2023_transform`, built step-by-step against
-  the `w3c/vc-di-bbs` `TestVectors/`. Done + KAT-locked: `proof_hash`
-  (`proofHash = SHA-256(RDFC(proofConfig))`, which also confirms JSON-LD
-  expansion of the security vocabulary) and `hmac_canonicalize` (the HMAC
-  blank-node label map: HMAC each `c14n` label, sort by the
-  multibase-base64url digest, relabel `b0,b1,…`). Confirmed framing: base
-  `proofValue` = `0xd95d02` + CBOR `[bbsSignature, bbsHeader, publicKey,
-  hmacKey, mandatoryPointers]`; derived = `0xd95d03`. **Remaining:** the
-  mandatory/selective **grouping** (`canonicalizeAndGroup` / `selectJsonLd`
-  / skolemize — defined in the vc-di-ecdsa spec, the substantial piece),
-  `mandatoryHash`, BBS sign, CBOR base/derived serialize, and verify.
+- **Stage 3b — vc-di-bbs document layer (issuer side done).** New module
+  `affinidi-data-integrity::bbs_2023_transform`, every step KAT-locked
+  byte-for-byte to the `w3c/vc-di-bbs` `TestVectors/`:
+  - `proof_hash` = `SHA-256(RDFC(proofConfig))` (also proves JSON-LD
+    expansion of the security vocabulary).
+  - `hmac_canonicalize` — the HMAC blank-node label map.
+  - `canonicalize_and_group` — skolemize + `selectJsonLd` + match selected
+    statements to canonical indices → mandatory/non-mandatory groups +
+    `mandatoryHash`. (Ported the vc-di-ecdsa `selectJsonLd`/`parsePointer`/
+    skolemize algorithms; skolem labels are self-consistent, since grouping
+    matches by statement content.)
+  - `create_base_proof_value` — BBS-sign the non-mandatory statements
+    (header = `proofHash || mandatoryHash`) and emit the CBOR `proofValue`
+    (`0xd95d02` + `[bbsSignature, bbsHeader, publicKey, hmacKey,
+    mandatoryPointers]`). **The base `proofValue` matches the W3C vector
+    exactly** — confirming the IETF-compliant `affinidi-bbs` interoperates
+    with the reference BBS implementation end-to-end.
+  - Needed `affinidi-rdf-encoding::rdfc1::canonicalize_with_label_map`
+    (input→c14n map) for selection correlation.
+
+  - `verify_derived_proof` (verifier) — parse the derived CBOR, relabel the
+    reveal document via the proof's label map, recompute `proofHash`/
+    `mandatoryHash`, BBS `proof_verify`. **Accepts the reference W3C derived
+    proof byte-for-byte** (and rejects tampering).
+  - `create_derived_proof` (holder) — combined grouping, adjusted index
+    sets, BBS `proof_gen`, reveal label map, CBOR `0xd95d03`. Structurally
+    matches the W3C disclosure vector and round-trips through
+    `verify_derived_proof`.
+
+  **Stage 3b is complete:** all three vc-di-bbs roles interoperate with the
+  reference implementation end-to-end — issuer (byte-exact base proof),
+  verifier (accepts reference proofs), holder (reference-matching derived
+  structure). What remains for the epic is wiring the new transform into the
+  public `bbs_2023` document API (replacing the affinidi-internal encoding)
+  and the breaking version bumps, then **Stage 4** (holder binding).
 - **Stage 4 — holder binding (after 3b).** Per-verifier pseudonym + blind
   issuance, locked against the draft §12 and the `vc-di-bbs`
   `Pseudonym/`,`HolderBinding/`,`PseudonymHB/` vectors.

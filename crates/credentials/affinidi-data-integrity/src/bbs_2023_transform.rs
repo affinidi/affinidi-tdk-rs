@@ -6,17 +6,23 @@
  * [W3C vc-di-bbs](https://www.w3.org/TR/vc-di-bbs/) `bbs-2023` cryptosuite over
  * the conformant RDFC-1.0 canonicalizer in `affinidi-rdf-encoding`.
  *
- * Each step here is pinned byte-for-byte against the official `w3c/vc-di-bbs`
- * `TestVectors/` (see the KATs at the bottom). Implemented so far:
+ * Every step is pinned byte-for-byte against the official `w3c/vc-di-bbs`
+ * `TestVectors/` (see the KATs at the bottom). All three roles are implemented
+ * and interoperate with the reference implementation end-to-end:
  *
- * - [`proof_hash`] — `proofHash = SHA-256(RDFC(proofConfig))`.
- * - [`hmac_canonicalize`] — the HMAC blank-node label map: canonicalize, HMAC
- *   each `c14n` label, sort by the multibase-base64url digest, relabel
- *   `b0, b1, …`, re-sort.
+ * - [`create_base_proof_value`] (issuer) — `proofHash`, the HMAC blank-node
+ *   label map ([`hmac_canonicalize`]), mandatory/non-mandatory grouping
+ *   ([`canonicalize_and_group`]), BBS sign, and the CBOR base `proofValue`
+ *   (`0xd95d02`). Matches the W3C base proof exactly.
+ * - [`create_derived_proof`] (holder) — selective disclosure: combined
+ *   grouping, BBS `proof_gen`, the reveal label map, and the CBOR derived
+ *   `proofValue` (`0xd95d03`).
+ * - [`verify_derived_proof`] (verifier) — relabel + recompute hashes + BBS
+ *   `proof_verify`; accepts the reference derived proof byte-for-byte.
  *
- * Still to come (tracked): mandatory/selective grouping (`canonicalizeAndGroup`
- * / `selectJsonLd` / skolemize, per vc-di-ecdsa), `mandatoryHash`, BBS signing,
- * and the CBOR `proofValue` (base `0xd95d02` / derived `0xd95d03`).
+ * Grouping uses the vc-di-ecdsa `selectJsonLd` / `parsePointer` / skolemize
+ * algorithms; skolem labels are self-consistent (grouping matches by statement
+ * content), so they never leak into the output.
  */
 
 use std::collections::{BTreeMap, BTreeSet};
