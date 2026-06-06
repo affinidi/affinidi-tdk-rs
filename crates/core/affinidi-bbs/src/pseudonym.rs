@@ -42,7 +42,14 @@ use crate::ciphersuite::Ciphersuite;
 /// The same `context_id` always yields the same `OP`, which is what makes a
 /// holder's pseudonym stable per verifier and unlinkable across verifiers.
 pub fn calculate_pseudonym_generator(context_id: &[u8], cs: Ciphersuite) -> G1Projective {
-    G1Projective::hash::<ExpandMsgXmd<Sha256>>(context_id, &cs.api_id())
+    calculate_pseudonym_generator_with_api_id(context_id, &cs.api_id())
+}
+
+/// [`calculate_pseudonym_generator`] with an explicit hash-to-curve domain
+/// separation tag. Blind/pseudonym (nym) proofs derive `OP` under the pseudonym
+/// api_id ([`Ciphersuite::pseudonym_api_id`]).
+pub fn calculate_pseudonym_generator_with_api_id(context_id: &[u8], api_id: &[u8]) -> G1Projective {
+    G1Projective::hash::<ExpandMsgXmd<Sha256>>(context_id, api_id)
 }
 
 #[cfg(test)]

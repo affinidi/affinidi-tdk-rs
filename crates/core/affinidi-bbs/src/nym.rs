@@ -26,8 +26,10 @@ use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
 use crate::generators::{calculate_domain_with_api_id, create_generators_with_api_id};
 use crate::hash::messages_to_scalars_with_api_id;
+use crate::proof::{ProofRandomScalars, proof_gen_core, proof_verify_core};
+use crate::pseudonym::calculate_pseudonym_generator_with_api_id;
 use crate::signature::{compute_b, verify_signature_pairing};
-use crate::types::{PublicKey, SecretKey, Signature};
+use crate::types::{Proof, Pseudonym, PublicKey, SecretKey, Signature};
 
 /// The api_id for the pseudonym blind (committed-message) generators:
 /// `"BLIND_" || pseudonym_api_id`.
@@ -185,6 +187,191 @@ pub fn blind_verify_with_nym(
     let b = compute_b(q1, &domain, h_generators, &msg_scalars);
 
     Ok(verify_signature_pairing(pk, signature, &b))
+}
+
+/// Generate a selective-disclosure proof over a nym blind signature, bound to a
+/// per-verifier [`Pseudonym`] derived from `context_id`.
+///
+/// `nym_secret` is the holder secret (never disclosed). `messages` /
+/// `committed_messages` are the full signer / committed sets;
+/// `disclosed_indexes` / `disclosed_committed_indexes` select what to reveal.
+/// Returns the proof and the pseudonym.
+#[allow(clippy::too_many_arguments)]
+pub fn proof_gen_with_nym(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    nym_secret: Scalar,
+    context_id: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    committed_messages: &[&[u8]],
+    disclosed_committed_indexes: &[usize],
+    secret_prover_blind: Scalar,
+    cs: Ciphersuite,
+) -> Result<(Proof, Pseudonym)> {
+    proof_gen_with_nym_impl(
+        pk,
+        signature,
+        header,
+        presentation_header,
+        nym_secret,
+        context_id,
+        messages,
+        disclosed_indexes,
+        committed_messages,
+        disclosed_committed_indexes,
+        secret_prover_blind,
+        None,
+        cs,
+    )
+}
+
+/// [`proof_gen_with_nym`] with injectable proof random scalars (for KATs).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn proof_gen_with_nym_impl(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    nym_secret: Scalar,
+    context_id: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    committed_messages: &[&[u8]],
+    disclosed_committed_indexes: &[usize],
+    secret_prover_blind: Scalar,
+    random_scalars: Option<ProofRandomScalars>,
+    cs: Ciphersuite,
+) -> Result<(Proof, Pseudonym)> {
+    let api_id = cs.pseudonym_api_id();
+    let l = messages.len();
+    let m = committed_messages.len();
+    if disclosed_indexes.iter().any(|&i| i >= l) {
+        return Err(BbsError::InvalidIndex(
+            "disclosed signer index out of range".into(),
+        ));
+    }
+    if disclosed_committed_indexes.iter().any(|&j| j >= m) {
+        return Err(BbsError::InvalidIndex(
+            "disclosed committed index out of range".into(),
+        ));
+    }
+
+    // Full message vector: [signer.., secret_prover_blind, committed.., nym_secret]
+    let mut full_scalars = messages_to_scalars_with_api_id(messages, &api_id, cs)?;
+    full_scalars.push(secret_prover_blind);
+    full_scalars.extend(messages_to_scalars_with_api_id(
+        committed_messages,
+        &api_id,
+        cs,
+    )?);
+    full_scalars.push(nym_secret);
+
+    // Combined generators: [Q_1, H_1..H_L, Q_2, J_1..J_{M+1}]
+    let generators = create_generators_with_api_id(l + 1, &api_id, cs)?;
+    let blind_generators =
+        create_generators_with_api_id(m + 2, &pseudonym_blind_generators_api_id(cs), cs)?;
+    let mut all_gens = generators;
+    all_gens.extend_from_slice(&blind_generators);
+
+    // Disclosed indexes: committed j maps to (j + L + 1) (skipping spb at L).
+    let mut indexes = disclosed_indexes.to_vec();
+    for &j in disclosed_committed_indexes {
+        indexes.push(j + l + 1);
+    }
+
+    let op = calculate_pseudonym_generator_with_api_id(context_id, &api_id);
+    let domain =
+        calculate_domain_with_api_id(pk, &all_gens[0], &all_gens[1..], header, &api_id, cs)?;
+
+    let (proof, pseudonym) = proof_gen_core(
+        signature,
+        &all_gens[0],
+        &all_gens[1..],
+        &full_scalars,
+        domain,
+        presentation_header,
+        &indexes,
+        random_scalars,
+        Some(op),
+        &api_id,
+        cs,
+    )?;
+    let pseudonym = pseudonym.ok_or_else(|| BbsError::Crypto("pseudonym not produced".into()))?;
+    Ok((proof, Pseudonym(pseudonym)))
+}
+
+/// Verify a nym pseudonym proof. `l` is the signer message count `L` (the
+/// committed count is recovered from the proof). `pseudonym` and `context_id`
+/// must match generation.
+#[allow(clippy::too_many_arguments)]
+pub fn proof_verify_with_nym(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    pseudonym: &Pseudonym,
+    context_id: &[u8],
+    l: usize,
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    disclosed_committed_messages: &[&[u8]],
+    disclosed_committed_indexes: &[usize],
+    cs: Ciphersuite,
+) -> Result<bool> {
+    let api_id = cs.pseudonym_api_id();
+
+    // Recover M (= committed count + 1) from the proof's undisclosed count.
+    let scalar_len = cs.octet_scalar_length();
+    let point_len = cs.octet_point_length();
+    let min_len = 3 * point_len + 4 * scalar_len;
+    let plen = proof.to_bytes().len();
+    if plen < min_len {
+        return Err(BbsError::InvalidProof("proof too short".into()));
+    }
+    let u = (plen - min_len) / scalar_len;
+    let total_no_messages = disclosed_indexes.len() + disclosed_committed_indexes.len() + u;
+    let m = total_no_messages
+        .checked_sub(l + 1)
+        .ok_or_else(|| BbsError::InvalidProof("inconsistent message counts".into()))?;
+
+    let generators = create_generators_with_api_id(l + 1, &api_id, cs)?;
+    let blind_generators =
+        create_generators_with_api_id(m + 1, &pseudonym_blind_generators_api_id(cs), cs)?;
+    let mut all_gens = generators;
+    all_gens.extend_from_slice(&blind_generators);
+
+    let mut disclosed_scalars = messages_to_scalars_with_api_id(disclosed_messages, &api_id, cs)?;
+    disclosed_scalars.extend(messages_to_scalars_with_api_id(
+        disclosed_committed_messages,
+        &api_id,
+        cs,
+    )?);
+
+    let mut indexes = disclosed_indexes.to_vec();
+    for &j in disclosed_committed_indexes {
+        indexes.push(j + l + 1);
+    }
+
+    let op = calculate_pseudonym_generator_with_api_id(context_id, &api_id);
+    let domain =
+        calculate_domain_with_api_id(pk, &all_gens[0], &all_gens[1..], header, &api_id, cs)?;
+
+    proof_verify_core(
+        pk,
+        proof,
+        &all_gens[0],
+        &all_gens[1..],
+        &indexes,
+        &disclosed_scalars,
+        domain,
+        presentation_header,
+        Some((op, pseudonym.0)),
+        &api_id,
+        cs,
+    )
 }
 
 #[cfg(test)]
@@ -371,5 +558,102 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn proof_gen_verify_with_nym_match_ietf_vectors() {
+        let fx = fixture();
+        let cs = Ciphersuite::Bls12381Sha256;
+        let (_sk, pk) = keys(&fx);
+        let header = hexd(fx["header"].as_str().unwrap());
+        let ph = hexd(fx["ph"].as_str().unwrap());
+        let context_id = hexd(fx["context_id"].as_str().unwrap());
+        let exp_pseudonym = fx["pseudonym"].as_str().unwrap();
+        let nym_secret = scalar(fx["nym_secret"].as_str().unwrap());
+        let spb = scalar(fx["proof_secret_prover_blind"].as_str().unwrap());
+        let sig = Signature::from_bytes(&hexd(fx["proof_signature"].as_str().unwrap())).unwrap();
+        let seed = hexd(fx["proof_mocked_random_scalars"]["seed"].as_str().unwrap());
+        let dst = fx["proof_mocked_random_scalars"]["dst"]
+            .as_str()
+            .unwrap()
+            .as_bytes();
+
+        let messages = list_all(&fx, "messages");
+        let committed = list_all(&fx, "committed_messages");
+        let msg_refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let com_refs: Vec<&[u8]> = committed.iter().map(|m| m.as_slice()).collect();
+        let l = msg_refs.len();
+        let total = l + com_refs.len() + 2; // signer + spb + committed + nym
+
+        for case in fx["proof_cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let di: Vec<usize> = case["disclosed_indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect();
+            let dci: Vec<usize> = case["disclosed_committed_indexes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_u64().unwrap() as usize)
+                .collect();
+
+            let r = di.len() + dci.len();
+            let u = total - r;
+            let randoms = mocked_calculate_random_scalars(5 + u, &seed, dst, cs).unwrap();
+            let rs = ProofRandomScalars::from_slice(&randoms);
+
+            let (proof, pseudonym) = proof_gen_with_nym_impl(
+                &pk,
+                &sig,
+                &header,
+                &ph,
+                nym_secret,
+                &context_id,
+                &msg_refs,
+                &di,
+                &com_refs,
+                &dci,
+                spb,
+                Some(rs),
+                cs,
+            )
+            .unwrap();
+
+            assert_eq!(
+                hex::encode(proof.to_bytes()),
+                case["proof"].as_str().unwrap(),
+                "nym proof mismatch ({name})"
+            );
+            assert_eq!(
+                hex::encode(pseudonym.to_bytes()),
+                exp_pseudonym,
+                "pseudonym mismatch ({name})"
+            );
+
+            // Verify with only the disclosed messages.
+            let disc_msgs: Vec<&[u8]> = di.iter().map(|&i| msg_refs[i]).collect();
+            let disc_com: Vec<&[u8]> = dci.iter().map(|&j| com_refs[j]).collect();
+            assert!(
+                proof_verify_with_nym(
+                    &pk,
+                    &proof,
+                    &header,
+                    &ph,
+                    &pseudonym,
+                    &context_id,
+                    l,
+                    &disc_msgs,
+                    &di,
+                    &disc_com,
+                    &dci,
+                    cs,
+                )
+                .unwrap(),
+                "nym proof verify failed ({name})"
+            );
+        }
     }
 }
