@@ -23,8 +23,9 @@ use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
 use crate::generators::{calculate_domain, create_generators, p1_generator, point_to_bytes};
 use crate::hash::{hash_to_scalar, messages_to_scalars, scalar_to_bytes};
+use crate::pseudonym::calculate_pseudonym_generator;
 use crate::signature::compute_b;
-use crate::types::{Proof, PublicKey, Signature};
+use crate::types::{Proof, Pseudonym, PublicKey, Signature};
 
 /// Generate a zero-knowledge proof of selective disclosure.
 ///
@@ -51,7 +52,7 @@ pub fn core_proof_gen(
     disclosed_indexes: &[usize],
     cs: Ciphersuite,
 ) -> Result<Proof> {
-    core_proof_gen_impl(
+    Ok(core_proof_gen_impl(
         pk,
         signature,
         header,
@@ -59,6 +60,69 @@ pub fn core_proof_gen(
         messages,
         disclosed_indexes,
         None,
+        None,
+        cs,
+    )?
+    .0)
+}
+
+/// Generate a selective-disclosure proof bound to a per-verifier pseudonym
+/// (draft-irtf-cfrg-bbs-per-verifier-linkability `ProofGenWithPseudonym`).
+///
+/// The **last** message in `messages` is the holder's `nym_secret` and MUST be
+/// undisclosed. `verifier_context` is the per-verifier context id (the
+/// pseudonym entropy). Returns the proof and the [`Pseudonym`].
+#[allow(clippy::too_many_arguments)]
+pub fn core_proof_gen_with_pseudonym(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+    cs: Ciphersuite,
+) -> Result<(Proof, Pseudonym)> {
+    let op = calculate_pseudonym_generator(verifier_context, cs);
+    let (proof, pseudonym) = core_proof_gen_impl(
+        pk,
+        signature,
+        header,
+        presentation_header,
+        messages,
+        disclosed_indexes,
+        None,
+        Some(op),
+        cs,
+    )?;
+    let pseudonym = pseudonym.ok_or_else(|| BbsError::Crypto("pseudonym not produced".into()))?;
+    Ok((proof, Pseudonym(pseudonym)))
+}
+
+/// Verify a selective-disclosure proof bound to a per-verifier pseudonym
+/// (`ProofVerifyWithPseudonym`). `verifier_context` must match generation, and
+/// `pseudonym` is the value the holder presented.
+#[allow(clippy::too_many_arguments)]
+pub fn core_proof_verify_with_pseudonym(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+    pseudonym: &Pseudonym,
+    cs: Ciphersuite,
+) -> Result<bool> {
+    let op = calculate_pseudonym_generator(verifier_context, cs);
+    core_proof_verify_impl(
+        pk,
+        proof,
+        header,
+        presentation_header,
+        disclosed_messages,
+        disclosed_indexes,
+        Some((op, pseudonym.0)),
         cs,
     )
 }
@@ -97,8 +161,9 @@ fn core_proof_gen_impl(
     messages: &[&[u8]],
     disclosed_indexes: &[usize],
     random_scalars: Option<ProofRandomScalars>,
+    nym_op: Option<G1Projective>,
     cs: Ciphersuite,
-) -> Result<Proof> {
+) -> Result<(Proof, Option<G1Projective>)> {
     let l = messages.len();
 
     // Validate disclosed indexes: bounds check and no duplicates
@@ -167,6 +232,31 @@ fn core_proof_gen_impl(
         t2 += h_generators[j] * m_tildes[k];
     }
 
+    // 8b. Per-verifier pseudonym binding (optional). Per
+    // draft-irtf-cfrg-bbs-per-verifier-linkability, the `nym_secret` is the
+    // LAST signed message (always undisclosed); the pseudonym reuses that
+    // message's blinding `m~`. PseudonymProofInit: Pseudonym = OP·nym_secret,
+    // Ut = OP·m~_nym.
+    let nym_terms: Option<(G1Projective, G1Projective, G1Projective)> = match nym_op {
+        Some(op) => {
+            let nym_index = l - 1;
+            if disclosed_indexes.contains(&nym_index) {
+                return Err(BbsError::InvalidIndex(
+                    "nym_secret (last message) must not be disclosed".into(),
+                ));
+            }
+            // L-1 is the largest index, hence the last entry of the sorted
+            // undisclosed list, so its m~ is m_tildes[u-1].
+            let pseudonym = op * msg_scalars[nym_index];
+            let ut = op * m_tildes[u - 1];
+            if bool::from(pseudonym.is_identity()) || bool::from(ut.is_identity()) {
+                return Err(BbsError::Crypto("pseudonym or Ut is identity".into()));
+            }
+            Some((pseudonym, op, ut))
+        }
+        None => None,
+    };
+
     // 9. Fiat-Shamir challenge (uses only disclosed message scalars)
     let disclosed_msg_scalars: Vec<Scalar> =
         disclosed_indexes.iter().map(|&i| msg_scalars[i]).collect();
@@ -181,6 +271,7 @@ fn core_proof_gen_impl(
         &disclosed_msg_scalars,
         &domain,
         presentation_header,
+        nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
         cs,
     )?;
 
@@ -208,7 +299,8 @@ fn core_proof_gen_impl(
     }
     proof_bytes.extend_from_slice(&scalar_to_bytes(&challenge));
 
-    Ok(Proof::from_bytes(&proof_bytes))
+    let pseudonym = nym_terms.map(|(pseudonym, _, _)| pseudonym);
+    Ok((Proof::from_bytes(&proof_bytes), pseudonym))
 }
 
 /// Verify a BBS zero-knowledge proof.
@@ -229,6 +321,31 @@ pub fn core_proof_verify(
     presentation_header: &[u8],
     disclosed_messages: &[&[u8]],
     disclosed_indexes: &[usize],
+    cs: Ciphersuite,
+) -> Result<bool> {
+    core_proof_verify_impl(
+        pk,
+        proof,
+        header,
+        presentation_header,
+        disclosed_messages,
+        disclosed_indexes,
+        None,
+        cs,
+    )
+}
+
+/// Shared verify implementation. `nym = Some((OP, Pseudonym))` checks the
+/// per-verifier pseudonym binding (`Uv = OP·m̂_nym − Pseudonym·c`).
+#[allow(clippy::too_many_arguments)]
+fn core_proof_verify_impl(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    nym: Option<(G1Projective, G1Projective)>,
     cs: Ciphersuite,
 ) -> Result<bool> {
     // Validate public key
@@ -323,6 +440,29 @@ pub fn core_proof_verify(
         t2 += h_generators[j] * m_hats[k];
     }
 
+    // 7b. Per-verifier pseudonym binding (optional). nym_secret is the last
+    // message (index L-1), always undisclosed; its response is m_hats[u-1].
+    // PseudonymProofVerify: Uv = OP·m̂_nym − Pseudonym·c.
+    let nym_terms: Option<(G1Projective, G1Projective, G1Projective)> = match nym {
+        Some((op, pseudonym)) => {
+            let nym_index = l - 1;
+            if disclosed_indexes.contains(&nym_index) {
+                return Err(BbsError::InvalidIndex(
+                    "nym_secret (last message) must not be disclosed".into(),
+                ));
+            }
+            if bool::from(op.is_identity()) || bool::from(pseudonym.is_identity()) {
+                return Ok(false);
+            }
+            let uv = op * m_hats[u - 1] - pseudonym * challenge;
+            if bool::from(uv.is_identity()) {
+                return Ok(false);
+            }
+            Some((pseudonym, op, uv))
+        }
+        None => None,
+    };
+
     // 8. Recompute challenge
     let recomputed_challenge = compute_challenge(
         &abar,
@@ -334,6 +474,7 @@ pub fn core_proof_verify(
         &disclosed_scalars,
         &domain,
         presentation_header,
+        nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
         cs,
     )?;
 
@@ -361,6 +502,12 @@ pub fn core_proof_verify(
 }
 
 /// Compute the Fiat-Shamir challenge.
+///
+/// When `nym_terms` is `Some((Pseudonym, OP, Ut))`, the per-verifier pseudonym
+/// points are inserted between `T2` and `domain`, per
+/// draft-irtf-cfrg-bbs-per-verifier-linkability ProofWithPseudonymChallengeCalculate:
+///   `c_arr = (R, i,msg.., Abar, Bbar, D, T1, T2, pseudonym, OP, Ut, domain)`.
+/// With `None` the transcript is byte-identical to the plain BBS proof.
 #[allow(clippy::too_many_arguments)]
 fn compute_challenge(
     abar: &G1Projective,
@@ -372,6 +519,7 @@ fn compute_challenge(
     disclosed_scalars: &[Scalar],
     domain: &Scalar,
     presentation_header: &[u8],
+    nym_terms: Option<(&G1Projective, &G1Projective, &G1Projective)>,
     cs: Ciphersuite,
 ) -> Result<Scalar> {
     let challenge_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
@@ -392,12 +540,18 @@ fn compute_challenge(
         data.extend_from_slice(&scalar_to_bytes(scalar));
     }
 
-    // Proof points, then domain.
+    // Proof points; the pseudonym binding (Pseudonym, OP, Ut) goes between T2
+    // and domain when present; then domain.
     data.extend_from_slice(&point_to_bytes(abar));
     data.extend_from_slice(&point_to_bytes(bbar));
     data.extend_from_slice(&point_to_bytes(d));
     data.extend_from_slice(&point_to_bytes(t1));
     data.extend_from_slice(&point_to_bytes(t2));
+    if let Some((pseudonym, op, ut)) = nym_terms {
+        data.extend_from_slice(&point_to_bytes(pseudonym));
+        data.extend_from_slice(&point_to_bytes(op));
+        data.extend_from_slice(&point_to_bytes(ut));
+    }
     data.extend_from_slice(&scalar_to_bytes(domain));
 
     // Length-prefixed presentation header.
@@ -508,7 +662,7 @@ mod tests {
                 .collect(),
         };
 
-        let proof = core_proof_gen_impl(
+        let (proof, _) = core_proof_gen_impl(
             &pk,
             &sig,
             &header,
@@ -516,6 +670,7 @@ mod tests {
             &refs,
             &disclosed,
             Some(scalars),
+            None,
             Ciphersuite::Bls12381Sha256,
         )
         .unwrap();

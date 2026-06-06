@@ -53,13 +53,15 @@ pub mod generators;
 pub mod hash;
 pub mod keys;
 pub mod proof;
+pub mod pseudonym;
 pub mod signature;
 pub mod types;
 
 pub use ciphersuite::Ciphersuite;
 pub use error::BbsError;
 pub use keys::{keygen as keygen_with_cs, sk_to_pk};
-pub use types::{Proof, PublicKey, SecretKey, Signature};
+pub use pseudonym::calculate_pseudonym_generator;
+pub use types::{Proof, Pseudonym, PublicKey, SecretKey, Signature};
 
 /// Generate a BBS secret key from key material using the default ciphersuite (SHA-256).
 ///
@@ -125,6 +127,57 @@ pub fn proof_verify(
         presentation_header,
         disclosed_messages,
         disclosed_indexes,
+        Ciphersuite::default(),
+    )
+}
+
+/// Generate a selective-disclosure proof bound to a per-verifier pseudonym
+/// (default ciphersuite). The **last** message is the holder's `nym_secret` and
+/// must be undisclosed; `verifier_context` is the per-verifier context id.
+/// Returns the proof and the [`Pseudonym`].
+pub fn proof_gen_with_pseudonym(
+    pk: &PublicKey,
+    sig: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+) -> error::Result<(Proof, Pseudonym)> {
+    proof::core_proof_gen_with_pseudonym(
+        pk,
+        sig,
+        header,
+        presentation_header,
+        messages,
+        disclosed_indexes,
+        verifier_context,
+        Ciphersuite::default(),
+    )
+}
+
+/// Verify a per-verifier pseudonym proof (default ciphersuite). `pseudonym` and
+/// `verifier_context` must match those used at generation.
+#[allow(clippy::too_many_arguments)]
+pub fn proof_verify_with_pseudonym(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+    pseudonym: &Pseudonym,
+) -> error::Result<bool> {
+    proof::core_proof_verify_with_pseudonym(
+        pk,
+        proof,
+        header,
+        presentation_header,
+        disclosed_messages,
+        disclosed_indexes,
+        verifier_context,
+        pseudonym,
         Ciphersuite::default(),
     )
 }
@@ -206,5 +259,134 @@ mod tests {
 
         // Proofs are unlinkable
         assert_ne!(proof1.to_bytes(), proof2.to_bytes());
+    }
+
+    // --- per-verifier pseudonym (holder binding) --------------------------
+
+    /// A signed credential whose LAST message is the holder's nym_secret.
+    fn pseudonym_fixture() -> (PublicKey, Signature, Vec<Vec<u8>>) {
+        let sk = keygen(b"pseudonym-key-material-32-bytes!!", b"").unwrap();
+        let pk = sk_to_pk(&sk);
+        let messages: Vec<Vec<u8>> = vec![
+            b"name:Alice".to_vec(),
+            b"age_over_18:true".to_vec(),
+            b"nationality:DE".to_vec(),
+            b"nym_secret:\x07\x07\x07\x07".to_vec(), // last = nym_secret
+        ];
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let sig = sign(&sk, &pk, b"hdr", &refs).unwrap();
+        (pk, sig, messages)
+    }
+
+    #[test]
+    fn pseudonym_round_trip() {
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        // Disclose age_over_18 (index 1); nym_secret (index 3) stays hidden.
+        let (proof, pseudonym) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"sess", &refs, &[1], b"verifier-acme")
+                .unwrap();
+        assert!(
+            proof_verify_with_pseudonym(
+                &pk,
+                &proof,
+                b"hdr",
+                b"sess",
+                &[b"age_over_18:true".as_ref()],
+                &[1],
+                b"verifier-acme",
+                &pseudonym,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn pseudonym_stable_per_verifier_unlinkable_across() {
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let (p1, nym_a1) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s1", &refs, &[], b"verifier-a").unwrap();
+        let (p2, nym_a2) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s2", &refs, &[], b"verifier-a").unwrap();
+        assert_eq!(nym_a1, nym_a2, "stable per verifier");
+        assert_ne!(p1.to_bytes(), p2.to_bytes(), "proofs unlinkable");
+        let (_p3, nym_b) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s1", &refs, &[], b"verifier-b").unwrap();
+        assert_ne!(nym_a1, nym_b, "unlinkable across verifiers");
+    }
+
+    #[test]
+    fn pseudonym_wrong_context_fails() {
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let (proof, pseudonym) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s", &refs, &[], b"verifier-a").unwrap();
+        assert!(
+            !proof_verify_with_pseudonym(
+                &pk,
+                &proof,
+                b"hdr",
+                b"s",
+                &[],
+                &[],
+                b"verifier-WRONG",
+                &pseudonym,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn pseudonym_wrong_value_fails() {
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let (proof, _good) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s", &refs, &[], b"verifier-a").unwrap();
+        let (_p, other) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s", &refs, &[], b"verifier-b").unwrap();
+        assert!(
+            !proof_verify_with_pseudonym(
+                &pk,
+                &proof,
+                b"hdr",
+                b"s",
+                &[],
+                &[],
+                b"verifier-a",
+                &other
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn pseudonym_disclosing_nym_secret_rejected() {
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        // Disclosing the last index (nym_secret) must be rejected.
+        let r = proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s", &refs, &[3], b"verifier-a");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn pseudonym_proof_fails_plain_verify() {
+        // A pseudonym-bound proof must not verify as a plain proof — the binding
+        // terms are part of the challenge transcript.
+        let (pk, sig, messages) = pseudonym_fixture();
+        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+        let (proof, _nym) =
+            proof_gen_with_pseudonym(&pk, &sig, b"hdr", b"s", &refs, &[1], b"verifier-a").unwrap();
+        assert!(
+            !proof_verify(
+                &pk,
+                &proof,
+                b"hdr",
+                b"s",
+                &[b"age_over_18:true".as_ref()],
+                &[1]
+            )
+            .unwrap()
+        );
     }
 }
