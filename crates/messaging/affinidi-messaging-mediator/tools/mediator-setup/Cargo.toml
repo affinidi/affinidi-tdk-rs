@@ -76,7 +76,7 @@ affinidi-messaging-mediator-common = { path = "../../affinidi-messaging-mediator
 ] }
 
 # ── DID:webvh ────────────────────────────────────────────────────────────
-didwebvh-rs = "0.5"
+didwebvh-rs = "0.5.4"
 
 # ── VTA Integration ──────────────────────────────────────────────────────
 ## provision-client: orchestration layer that drives setup-key minting,
@@ -87,7 +87,7 @@ didwebvh-rs = "0.5"
 ##                   `sealed-transfer`), so this single feature covers the
 ##                   wizard's online VTA flow plus the sealed-handoff bundle
 ##                   handling in `sealed_handoff.rs`.
-vta-sdk = { version = "0.9", features = ["provision-client"] }
+vta-sdk = { version = "0.9.11", features = ["provision-client"] }
 
 # ── DID Resolution ───────────────────────────────────────────────────────
 ## Used to resolve the VTA's DID document and extract VTARest /
@@ -146,7 +146,7 @@ tracing = "0.1"
 ## Additive — `cargo test` unions [dependencies] + [dev-dependencies]
 ## features, so this lands the `test-support` flag without affecting
 ## release builds.
-vta-sdk = { version = "0.9", features = ["test-support"] }
+vta-sdk = { version = "0.9.11", features = ["test-support"] }
 ## Used by setup_key persistence tests to create scoped temporary paths.
 tempfile = "3"
 ## Required by `bootstrap_headless` tests that mutate CWD via

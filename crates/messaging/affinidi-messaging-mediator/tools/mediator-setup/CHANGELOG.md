@@ -7,10 +7,10 @@
 ### 0.1.8 — affinidi-crypto 0.2
 
 - Bump `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
-  `#[non_exhaustive]` key-agreement enums, #357). **Note:** this tool also
-  depends on `vta-sdk`, which pins `affinidi-crypto 0.1`; it will not build
-  until a `vta-sdk` release against `affinidi-crypto 0.2` is published and
-  the `vta-sdk` pin here is bumped.
+  `#[non_exhaustive]` key-agreement enums, #357). Updated `vta-sdk` to
+  `0.9.11` and `didwebvh-rs` to `0.5.4` (both now on `affinidi-crypto 0.2` /
+  `affinidi-data-integrity 0.7`), so the tool resolves to a single
+  `affinidi-crypto 0.2.0`.
 
 ### 0.1.7 — stop clobbering the unified secret backend
 
