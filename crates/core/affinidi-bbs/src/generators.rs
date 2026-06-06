@@ -10,9 +10,10 @@
  * They MUST be independently derived (not scalar multiples of each other).
  */
 
+use std::sync::LazyLock;
+
 use bls12_381_plus::{G1Affine, G1Projective, Scalar};
 use elliptic_curve::hash2curve::ExpandMsgXmd;
-use group::Group;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
@@ -20,9 +21,28 @@ use crate::error::Result;
 use crate::hash::hash_to_scalar;
 use crate::types::PublicKey;
 
-/// The P1 generator point — a fixed, publicly known G1 point.
+/// The BBS ciphersuite constant `P1` for **BLS12-381-SHA-256**, as fixed by
+/// `draft-irtf-cfrg-bbs-signatures`.
+///
+/// This is a specific hash-to-curve-derived point baked into the ciphersuite —
+/// **not** the standard BLS12-381 G1 generator. Using the wrong P1 produces
+/// signatures and proofs that no conforming implementation can verify.
+const P1_SHA256_COMPRESSED: &str = "a8ce256102840821a3e94ea9025e4662b205762f9776b3a766c872b948f1fd225e7c59698588e70d11406d161b4e28c9";
+
+static P1: LazyLock<G1Projective> = LazyLock::new(|| {
+    let bytes = hex::decode(P1_SHA256_COMPRESSED).expect("valid P1 hex");
+    let arr: [u8; 48] = bytes.try_into().expect("P1 is 48 bytes");
+    let affine = G1Affine::from_compressed(&arr);
+    assert!(
+        bool::from(affine.is_some()),
+        "P1 is a valid compressed G1 point"
+    );
+    G1Projective::from(affine.unwrap())
+});
+
+/// The BBS `P1` ciphersuite constant (BLS12-381-SHA-256).
 pub fn p1_generator() -> G1Projective {
-    G1Projective::generator()
+    *P1
 }
 
 /// Create `count` deterministic generators (Q1, H1, H2, ..., H_{count-1}).
@@ -76,10 +96,10 @@ fn expand_msg_xmd(msg: &[u8], dst: &[u8], len: usize) -> Vec<u8> {
 
 /// Calculate the domain value that binds PK, generators, and header.
 ///
-/// Per IETF draft §4.1.2:
+/// Per IETF draft calculate_domain:
 /// ```text
 /// domain = hash_to_scalar(
-///     serialize(PK, len(generators), Q1, H1..HL, ciphersuite_id, header),
+///     serialize(PK, len(generators), Q1, H1..HL, api_id, header),
 ///     api_id || "H2S_"
 /// )
 /// ```
@@ -96,6 +116,11 @@ pub fn calculate_domain(
     let count = (generators.len() as u64).to_be_bytes();
     let q1_bytes = point_to_bytes(q1);
 
+    // Per draft-irtf-cfrg-bbs-signatures calculate_domain:
+    //   dom_octs  = serialize(L, Q_1, H_1..H_L) || api_id
+    //   dom_input = PK || dom_octs || I2OSP(length(header), 8) || header
+    // Interop-critical: the trailing id is `api_id`
+    // (ciphersuite_id || "H2G_HM2S_"), NOT the bare ciphersuite_id.
     let mut data = Vec::new();
     data.extend_from_slice(&pk_bytes);
     data.extend_from_slice(&count);
@@ -103,7 +128,7 @@ pub fn calculate_domain(
     for g in generators {
         data.extend_from_slice(&point_to_bytes(g));
     }
-    data.extend_from_slice(cs.id().as_bytes());
+    data.extend_from_slice(&cs.api_id());
     data.extend_from_slice(&(header.len() as u64).to_be_bytes());
     data.extend_from_slice(header);
 
@@ -127,6 +152,8 @@ pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
 
 #[cfg(test)]
 mod tests {
+    use group::Group; // for G1Projective::generator() in tests
+
     use super::*;
 
     #[test]

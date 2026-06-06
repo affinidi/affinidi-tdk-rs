@@ -51,6 +51,54 @@ pub fn core_proof_gen(
     disclosed_indexes: &[usize],
     cs: Ciphersuite,
 ) -> Result<Proof> {
+    core_proof_gen_impl(
+        pk,
+        signature,
+        header,
+        presentation_header,
+        messages,
+        disclosed_indexes,
+        None,
+        cs,
+    )
+}
+
+/// The per-proof random scalars (`r1, r2, ẽ, r̃1, r̃3, m̃_j`). Normally sampled;
+/// injectable so the deterministic IETF proof vectors can be reproduced exactly.
+struct ProofRandomScalars {
+    r1: Scalar,
+    r2: Scalar,
+    e_tilde: Scalar,
+    r1_tilde: Scalar,
+    r3_tilde: Scalar,
+    m_tildes: Vec<Scalar>,
+}
+
+impl ProofRandomScalars {
+    fn random(u: usize) -> Self {
+        let mut rng = rand::rng();
+        ProofRandomScalars {
+            r1: random_nonzero_scalar(&mut rng),
+            r2: random_nonzero_scalar(&mut rng),
+            e_tilde: random_nonzero_scalar(&mut rng),
+            r1_tilde: random_nonzero_scalar(&mut rng),
+            r3_tilde: random_nonzero_scalar(&mut rng),
+            m_tildes: (0..u).map(|_| random_nonzero_scalar(&mut rng)).collect(),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn core_proof_gen_impl(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    random_scalars: Option<ProofRandomScalars>,
+    cs: Ciphersuite,
+) -> Result<Proof> {
     let l = messages.len();
 
     // Validate disclosed indexes: bounds check and no duplicates
@@ -87,18 +135,16 @@ pub fn core_proof_gen(
     undisclosed_indexes.sort();
     let u = undisclosed_indexes.len();
 
-    // 4. Generate random scalars
-    let mut rng = rand::rng();
-    let r1 = random_nonzero_scalar(&mut rng);
-    let r2 = random_nonzero_scalar(&mut rng);
-    let e_tilde = random_nonzero_scalar(&mut rng);
-    let r1_tilde = random_nonzero_scalar(&mut rng);
-    let r3_tilde = random_nonzero_scalar(&mut rng);
-
-    let mut m_tildes: Vec<Scalar> = Vec::with_capacity(u);
-    for _ in 0..u {
-        m_tildes.push(random_nonzero_scalar(&mut rng));
-    }
+    // 4. Random scalars — injected for deterministic KATs, otherwise sampled.
+    let ProofRandomScalars {
+        r1,
+        r2,
+        e_tilde,
+        r1_tilde,
+        r3_tilde,
+        m_tildes,
+    } = random_scalars.unwrap_or_else(|| ProofRandomScalars::random(u));
+    debug_assert_eq!(m_tildes.len(), u, "one m~ per undisclosed message");
 
     // 5. Compute B = P1 + Q1*domain + H1*msg1 + ... + HL*msgL
     let b = compute_b(q1, &domain, h_generators, &msg_scalars);
@@ -330,23 +376,31 @@ fn compute_challenge(
 ) -> Result<Scalar> {
     let challenge_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
 
+    // Per draft-irtf-cfrg-bbs-signatures ProofChallengeCalculate:
+    //   c_arr  = (R, i_1, msg_i1, ..., i_R, msg_iR, Abar, Bbar, D, T1, T2, domain)
+    //   c_octs = serialize(c_arr) || I2OSP(length(ph), 8) || ph
+    // Interop-critical ordering: the disclosed (index, message) PAIRS are
+    // interleaved and come FIRST (after the count R), the proof points come
+    // AFTER the messages, and the presentation header is length-prefixed last.
+    debug_assert_eq!(disclosed_indexes.len(), disclosed_scalars.len());
     let mut data = Vec::new();
+
+    // R, then interleaved (i_j, msg_i_j) pairs.
+    data.extend_from_slice(&(disclosed_indexes.len() as u64).to_be_bytes());
+    for (&idx, scalar) in disclosed_indexes.iter().zip(disclosed_scalars) {
+        data.extend_from_slice(&(idx as u64).to_be_bytes());
+        data.extend_from_slice(&scalar_to_bytes(scalar));
+    }
+
+    // Proof points, then domain.
     data.extend_from_slice(&point_to_bytes(abar));
     data.extend_from_slice(&point_to_bytes(bbar));
     data.extend_from_slice(&point_to_bytes(d));
     data.extend_from_slice(&point_to_bytes(t1));
     data.extend_from_slice(&point_to_bytes(t2));
-
-    // Disclosed indexes and messages
-    data.extend_from_slice(&(disclosed_indexes.len() as u64).to_be_bytes());
-    for &idx in disclosed_indexes {
-        data.extend_from_slice(&(idx as u64).to_be_bytes());
-    }
-    for scalar in disclosed_scalars {
-        data.extend_from_slice(&scalar_to_bytes(scalar));
-    }
-
     data.extend_from_slice(&scalar_to_bytes(domain));
+
+    // Length-prefixed presentation header.
     data.extend_from_slice(&(presentation_header.len() as u64).to_be_bytes());
     data.extend_from_slice(presentation_header);
 
@@ -392,6 +446,95 @@ mod tests {
         let sk = SecretKey(sk_scalar);
         let pk = PublicKey(G2Projective::generator() * sk_scalar);
         (sk, pk)
+    }
+
+    // --- exact proof reproduction against the IETF/DIF vectors ---------------
+    //
+    // Proofs are randomized, so the published vectors fix the random scalars in
+    // their `trace`. Injecting those scalars must reproduce the proof bytes
+    // exactly — the definitive check that OUR prover is spec-compliant (a
+    // conforming verifier will accept our proofs), complementing the
+    // proof-verify KATs in tests/interop_kat.rs (we accept theirs).
+
+    fn scalar_from_hex(s: &str) -> Scalar {
+        let bytes: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
+        Scalar::from_be_bytes(&bytes).unwrap()
+    }
+
+    fn reproduce_proof_fixture(name: &str) {
+        let path = format!(
+            "{}/tests/fixtures/bls12-381-sha-256/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+
+        let pk_bytes: [u8; 96] = hex::decode(v["signerPublicKey"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pk = PublicKey::from_bytes(&pk_bytes).unwrap();
+        let sig =
+            Signature::from_bytes(&hex::decode(v["signature"].as_str().unwrap()).unwrap()).unwrap();
+        let header = hex::decode(v["header"].as_str().unwrap()).unwrap();
+        let ph = hex::decode(v["presentationHeader"].as_str().unwrap()).unwrap();
+        let msgs: Vec<Vec<u8>> = v["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| hex::decode(m.as_str().unwrap()).unwrap())
+            .collect();
+        let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
+        let disclosed: Vec<usize> = v["disclosedIndexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i.as_u64().unwrap() as usize)
+            .collect();
+
+        let rs = &v["trace"]["random_scalars"];
+        let scalars = ProofRandomScalars {
+            r1: scalar_from_hex(rs["r1"].as_str().unwrap()),
+            r2: scalar_from_hex(rs["r2"].as_str().unwrap()),
+            e_tilde: scalar_from_hex(rs["e_tilde"].as_str().unwrap()),
+            r1_tilde: scalar_from_hex(rs["r1_tilde"].as_str().unwrap()),
+            r3_tilde: scalar_from_hex(rs["r3_tilde"].as_str().unwrap()),
+            m_tildes: rs["m_tilde_scalars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| scalar_from_hex(s.as_str().unwrap()))
+                .collect(),
+        };
+
+        let proof = core_proof_gen_impl(
+            &pk,
+            &sig,
+            &header,
+            &ph,
+            &refs,
+            &disclosed,
+            Some(scalars),
+            Ciphersuite::Bls12381Sha256,
+        )
+        .unwrap();
+
+        assert_eq!(
+            hex::encode(proof.to_bytes()),
+            v["proof"].as_str().unwrap(),
+            "reproduced proof bytes diverge from the IETF vector ({name})"
+        );
+    }
+
+    #[test]
+    fn reproduce_proof_single_disclosed_vector() {
+        reproduce_proof_fixture("proof001.json");
+    }
+
+    #[test]
+    fn reproduce_proof_partial_disclosure_vector() {
+        reproduce_proof_fixture("proof003.json");
     }
 
     #[test]
