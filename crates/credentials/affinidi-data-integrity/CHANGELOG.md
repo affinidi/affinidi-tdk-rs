@@ -1,5 +1,16 @@
 # Affinidi Data Integrity Changelog
 
+## 7th June 2026 Release 0.7.1
+
+### Fixed
+
+- Republish requiring `affinidi-crypto 0.2`. 0.7.0 shipped (in #358) before
+  `affinidi-crypto 0.2.0` and so pinned `crypto ^0.1`; its requirement was
+  later moved to `0.2` without a version bump, leaving the published 0.7.0
+  stale. Any downstream on `crypto 0.2` (e.g. `affinidi-tdk`) then resolved
+  two `affinidi-crypto` copies (0.1.x + 0.2.0) and failed to build. Patch
+  bump to republish with the correct requirement. No code/API change.
+
 ## 6th June 2026 Release 0.7.0
 
 Standards-interoperable **W3C vc-di-bbs `bbs-2023`** selective disclosure
