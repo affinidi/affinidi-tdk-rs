@@ -52,7 +52,7 @@ use crate::types::{PublicKey, SecretKey, Signature};
 
 /// The api_id used for the blind (committed-message) generators:
 /// `"BLIND_" || blind_api_id`.
-fn blind_generators_api_id(cs: Ciphersuite) -> Vec<u8> {
+pub(crate) fn blind_generators_api_id(cs: Ciphersuite) -> Vec<u8> {
     [b"BLIND_".as_slice(), cs.blind_api_id().as_slice()].concat()
 }
 
@@ -104,7 +104,7 @@ pub(crate) fn commit_with_random_scalars(
 
 /// `CoreCommit`: build the commitment `C` to the committed message scalars and a
 /// zero-knowledge proof of its correct construction.
-fn core_commit(
+pub(crate) fn core_commit(
     committed_scalars: &[Scalar],
     blind_generators: &[G1Projective],
     api_id: &[u8],
@@ -285,7 +285,7 @@ fn core_commit_verify(
 /// Parse and verify a `commitment_with_proof` from the holder, returning the
 /// commitment point `C`. An empty input means "no committed messages" and yields
 /// the identity element. A failed proof or generator-count mismatch is rejected.
-fn deserialize_and_validate_commit(
+pub(crate) fn deserialize_and_validate_commit(
     commitment_with_proof: &[u8],
     blind_generators: &[G1Projective],
     api_id: &[u8],
@@ -315,7 +315,7 @@ fn deserialize_and_validate_commit(
 /// `B_calculate` for blind signing: `B = P1 + sum_i H_i * msg_i + commitment`.
 ///
 /// Note `Q_1 * domain` is folded in later by [`finalize_blind_sign`].
-fn blind_b_calculate(
+pub(crate) fn blind_b_calculate(
     generators: &[G1Projective],
     commitment: G1Projective,
     message_scalars: &[Scalar],
@@ -346,7 +346,7 @@ fn blind_b_calculate(
 /// signer + blind generators. Per the draft fix, `Q_1 * domain` is mixed into
 /// `B` here and `e = hash_to_scalar(serialize(SK, B), api_id || "H2S_")`.
 #[allow(clippy::too_many_arguments)]
-fn finalize_blind_sign(
+pub(crate) fn finalize_blind_sign(
     sk: &SecretKey,
     pk: &PublicKey,
     b: G1Projective,
@@ -485,7 +485,7 @@ pub fn blind_verify(
 
 /// Recover the committed-message count `M` from the length of a
 /// `commitment_with_proof` (length `0` ⇒ no committed messages, `M = 0`).
-fn blind_message_count(cwp_len: usize, cs: Ciphersuite) -> Result<usize> {
+pub(crate) fn blind_message_count(cwp_len: usize, cs: Ciphersuite) -> Result<usize> {
     if cwp_len == 0 {
         return Ok(0);
     }
@@ -501,7 +501,7 @@ fn blind_message_count(cwp_len: usize, cs: Ciphersuite) -> Result<usize> {
 }
 
 /// Sample `count` non-zero random scalars (production path for [`commit`]).
-fn random_scalars(count: usize) -> Vec<Scalar> {
+pub(crate) fn random_scalars(count: usize) -> Vec<Scalar> {
     let mut rng = rand::rng();
     (0..count)
         .map(|_| {

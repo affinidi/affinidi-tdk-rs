@@ -129,7 +129,7 @@ pub fn core_proof_verify_with_pseudonym(
 
 /// The per-proof random scalars (`r1, r2, ẽ, r̃1, r̃3, m̃_j`). Normally sampled;
 /// injectable so the deterministic IETF proof vectors can be reproduced exactly.
-struct ProofRandomScalars {
+pub(crate) struct ProofRandomScalars {
     r1: Scalar,
     r2: Scalar,
     e_tilde: Scalar,
@@ -139,6 +139,21 @@ struct ProofRandomScalars {
 }
 
 impl ProofRandomScalars {
+    /// Build from a `5 + U` scalar slice `(r1, r2, ẽ, r̃1, r̃3, m̃_1…m̃_U)` — the
+    /// `calculate_random_scalars(5 + U)` layout. Used by the blind/pseudonym
+    /// proof to inject mocked scalars for KATs.
+    #[cfg(test)]
+    pub(crate) fn from_slice(s: &[Scalar]) -> Self {
+        ProofRandomScalars {
+            r1: s[0],
+            r2: s[1],
+            e_tilde: s[2],
+            r1_tilde: s[3],
+            r3_tilde: s[4],
+            m_tildes: s[5..].to_vec(),
+        }
+    }
+
     fn random(u: usize) -> Self {
         let mut rng = rand::rng();
         ProofRandomScalars {
@@ -164,7 +179,48 @@ fn core_proof_gen_impl(
     nym_op: Option<G1Projective>,
     cs: Ciphersuite,
 ) -> Result<(Proof, Option<G1Projective>)> {
+    // Convert messages, build generators + domain, then delegate to the
+    // generator-agnostic core (shared with the blind/pseudonym proof).
     let l = messages.len();
+    let msg_scalars = messages_to_scalars(messages, cs)?;
+    let generators = create_generators(l + 1, cs)?;
+    let domain = calculate_domain(pk, &generators[0], &generators[1..], header, cs)?;
+    proof_gen_core(
+        signature,
+        &generators[0],
+        &generators[1..],
+        &msg_scalars,
+        domain,
+        presentation_header,
+        disclosed_indexes,
+        random_scalars,
+        nym_op,
+        &cs.api_id(),
+        cs,
+    )
+}
+
+/// Generator-agnostic proof generation (the steps after the message scalars,
+/// generators, and `domain` are known). Shared by [`core_proof_gen_impl`] (plain
+/// BBS over `create_generators`) and the blind/pseudonym proof, which supplies
+/// the combined blind generators + full message vector under the pseudonym
+/// api_id. `nym_op` is the pseudonym generator `OP`; when present the last
+/// message scalar is the `nym_secret`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn proof_gen_core(
+    signature: &Signature,
+    q1: &G1Projective,
+    h_generators: &[G1Projective],
+    msg_scalars: &[Scalar],
+    domain: Scalar,
+    presentation_header: &[u8],
+    disclosed_indexes: &[usize],
+    random_scalars: Option<ProofRandomScalars>,
+    nym_op: Option<G1Projective>,
+    api_id: &[u8],
+    cs: Ciphersuite,
+) -> Result<(Proof, Option<G1Projective>)> {
+    let l = msg_scalars.len();
 
     // Validate disclosed indexes: bounds check and no duplicates
     {
@@ -182,17 +238,6 @@ fn core_proof_gen_impl(
             }
         }
     }
-
-    // 1. Convert messages to scalars
-    let msg_scalars = messages_to_scalars(messages, cs)?;
-
-    // 2. Create generators
-    let generators = create_generators(l + 1, cs)?;
-    let q1 = &generators[0];
-    let h_generators = &generators[1..];
-
-    // 3. Calculate domain
-    let domain = calculate_domain(pk, q1, h_generators, header, cs)?;
 
     // Partition into disclosed/undisclosed
     let mut undisclosed_indexes: Vec<usize> =
@@ -212,7 +257,7 @@ fn core_proof_gen_impl(
     debug_assert_eq!(m_tildes.len(), u, "one m~ per undisclosed message");
 
     // 5. Compute B = P1 + Q1*domain + H1*msg1 + ... + HL*msgL
-    let b = compute_b(q1, &domain, h_generators, &msg_scalars);
+    let b = compute_b(q1, &domain, h_generators, msg_scalars);
 
     // 6. Blinding: D = B * r2, Abar = A * (r1 * r2), Bbar = D * r1 - Abar * e
     let d = b * r2;
@@ -272,6 +317,7 @@ fn core_proof_gen_impl(
         &domain,
         presentation_header,
         nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
+        api_id,
         cs,
     )?;
 
@@ -351,24 +397,72 @@ fn core_proof_verify_impl(
     // Validate public key
     pk.validate()?;
 
-    let proof_bytes = proof.to_bytes();
-
-    // Determine U (undisclosed count) from proof length
+    // Size the message vector from the proof, build the (plain BBS) generators
+    // + domain, then delegate to the generator-agnostic core.
     let r = disclosed_indexes.len();
     let scalar_len = cs.octet_scalar_length();
     let point_len = cs.octet_point_length();
     let min_len = 3 * point_len + 4 * scalar_len;
-
-    if proof_bytes.len() < min_len {
+    if proof.to_bytes().len() < min_len {
         return Err(BbsError::InvalidProof("proof too short".into()));
     }
-
-    let u = (proof_bytes.len() - min_len) / scalar_len;
-    let l = r + u; // Total message count
-
+    let u = (proof.to_bytes().len() - min_len) / scalar_len;
+    let l = r + u;
     if disclosed_messages.len() != r {
         return Err(BbsError::InvalidProof(
             "disclosed message count mismatch".into(),
+        ));
+    }
+    let disclosed_scalars = messages_to_scalars(disclosed_messages, cs)?;
+    let generators = create_generators(l + 1, cs)?;
+    let domain = calculate_domain(pk, &generators[0], &generators[1..], header, cs)?;
+    proof_verify_core(
+        pk,
+        proof,
+        &generators[0],
+        &generators[1..],
+        disclosed_indexes,
+        &disclosed_scalars,
+        domain,
+        presentation_header,
+        nym,
+        &cs.api_id(),
+        cs,
+    )
+}
+
+/// Generator-agnostic proof verification (shared by [`core_proof_verify_impl`]
+/// for plain BBS and the blind/pseudonym proof). `h_generators.len()` is the
+/// total message count `L`; the proof's `R + U` must equal `L`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn proof_verify_core(
+    pk: &PublicKey,
+    proof: &Proof,
+    q1: &G1Projective,
+    h_generators: &[G1Projective],
+    disclosed_indexes: &[usize],
+    disclosed_scalars: &[Scalar],
+    domain: Scalar,
+    presentation_header: &[u8],
+    nym: Option<(G1Projective, G1Projective)>,
+    api_id: &[u8],
+    cs: Ciphersuite,
+) -> Result<bool> {
+    pk.validate()?;
+
+    let proof_bytes = proof.to_bytes();
+    let r = disclosed_indexes.len();
+    let scalar_len = cs.octet_scalar_length();
+    let point_len = cs.octet_point_length();
+    let min_len = 3 * point_len + 4 * scalar_len;
+    if proof_bytes.len() < min_len {
+        return Err(BbsError::InvalidProof("proof too short".into()));
+    }
+    let u = (proof_bytes.len() - min_len) / scalar_len;
+    let l = r + u;
+    if h_generators.len() != l {
+        return Err(BbsError::InvalidProof(
+            "generator/message count mismatch".into(),
         ));
     }
 
@@ -403,17 +497,6 @@ fn core_proof_verify_impl(
     }
 
     let challenge = read_scalar(proof_bytes, &mut offset)?;
-
-    // 2. Convert disclosed messages to scalars
-    let disclosed_scalars = messages_to_scalars(disclosed_messages, cs)?;
-
-    // 3. Create generators for L+1 messages
-    let generators = create_generators(l + 1, cs)?;
-    let q1 = &generators[0];
-    let h_generators = &generators[1..];
-
-    // 4. Calculate domain
-    let domain = calculate_domain(pk, q1, h_generators, header, cs)?;
 
     // 5. Determine undisclosed indexes
     let undisclosed_indexes: Vec<usize> =
@@ -471,10 +554,11 @@ fn core_proof_verify_impl(
         &t1,
         &t2,
         disclosed_indexes,
-        &disclosed_scalars,
+        disclosed_scalars,
         &domain,
         presentation_header,
         nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
+        api_id,
         cs,
     )?;
 
@@ -520,9 +604,10 @@ fn compute_challenge(
     domain: &Scalar,
     presentation_header: &[u8],
     nym_terms: Option<(&G1Projective, &G1Projective, &G1Projective)>,
+    api_id: &[u8],
     cs: Ciphersuite,
 ) -> Result<Scalar> {
-    let challenge_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
+    let challenge_dst = [api_id, b"H2S_"].concat();
 
     // Per draft-irtf-cfrg-bbs-signatures ProofChallengeCalculate:
     //   c_arr  = (R, i_1, msg_i1, ..., i_R, msg_iR, Abar, Bbar, D, T1, T2, domain)

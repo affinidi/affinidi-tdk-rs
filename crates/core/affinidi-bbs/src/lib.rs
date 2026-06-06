@@ -53,6 +53,7 @@ pub mod error;
 pub mod generators;
 pub mod hash;
 pub mod keys;
+pub mod nym;
 pub mod proof;
 pub mod pseudonym;
 pub mod signature;
@@ -62,6 +63,10 @@ pub use blind::{blind_sign, blind_verify, commit};
 pub use ciphersuite::Ciphersuite;
 pub use error::BbsError;
 pub use keys::{keygen as keygen_with_cs, sk_to_pk};
+pub use nym::{
+    blind_sign_with_nym, blind_verify_with_nym, nym_commit, proof_gen_with_nym,
+    proof_verify_with_nym,
+};
 pub use pseudonym::calculate_pseudonym_generator;
 pub use types::{Proof, Pseudonym, PublicKey, SecretKey, Signature};
 

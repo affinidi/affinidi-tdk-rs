@@ -47,6 +47,19 @@ impl Ciphersuite {
         id
     }
 
+    /// The per-verifier-pseudonym API identifier
+    /// (ciphersuite_id || "H2G_HM2S_PSEUDONYM_").
+    ///
+    /// Per `draft-irtf-cfrg-bbs-per-verifier-linkability`, nym issuance/proof
+    /// namespaces its generators and hashing under this api_id (distinct from
+    /// both [`api_id`](Self::api_id) and [`blind_api_id`](Self::blind_api_id));
+    /// its blind (committed-message) generators prepend `"BLIND_"` to it.
+    pub fn pseudonym_api_id(&self) -> Vec<u8> {
+        let mut id = self.id().as_bytes().to_vec();
+        id.extend_from_slice(b"H2G_HM2S_PSEUDONYM_");
+        id
+    }
+
     /// The octet length of a scalar in the output.
     pub fn octet_scalar_length(&self) -> usize {
         match self {
