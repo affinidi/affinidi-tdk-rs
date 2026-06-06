@@ -98,6 +98,162 @@ pub fn serialize_base_proof_value(
     Ok(multibase::encode(multibase::Base::Base64Url, &buf))
 }
 
+/// CBOR prefix bytes for a `bbs-2023` **derived** proof value.
+const CBOR_PREFIX_DERIVED: [u8; 3] = [0xd9, 0x5d, 0x03];
+
+/// A parsed derived (`0xd95d03`) proof value.
+struct DerivedProofValue {
+    bbs_proof: Vec<u8>,
+    /// `c14nN → bM` label map (decompressed from the integer→integer CBOR map).
+    label_map: BTreeMap<String, String>,
+    mandatory_indexes: Vec<usize>,
+    selective_indexes: Vec<usize>,
+    presentation_header: Vec<u8>,
+}
+
+/// `parseDisclosureProofValue`: decode the multibase CBOR derived proof value.
+fn parse_derived_proof_value(proof_value: &str) -> Result<DerivedProofValue, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    if !proof_value.starts_with('u') {
+        return Err(malformed("proofValue must be multibase base64url ('u')"));
+    }
+    let (_base, bytes) =
+        multibase::decode(proof_value).map_err(|e| malformed(&format!("multibase: {e}")))?;
+    if bytes.len() < 3 || bytes[..3] != CBOR_PREFIX_DERIVED {
+        return Err(malformed("proofValue is not a bbs-2023 derived proof"));
+    }
+    let value: ciborium::Value =
+        ciborium::from_reader(&bytes[3..]).map_err(|e| malformed(&format!("CBOR: {e}")))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| malformed("derived proofValue must be a CBOR array"))?;
+    if arr.len() != 5 {
+        return Err(malformed("derived proofValue must have 5 elements"));
+    }
+
+    let bbs_proof = arr[0]
+        .as_bytes()
+        .ok_or_else(|| malformed("bbsProof must be bytes"))?
+        .clone();
+
+    // compressedLabelMap: CBOR map of integer → integer → c14nN → bM.
+    let mut label_map = BTreeMap::new();
+    for (k, v) in arr[1]
+        .as_map()
+        .ok_or_else(|| malformed("labelMap must be a CBOR map"))?
+    {
+        let n = cbor_int(k).ok_or_else(|| malformed("labelMap key"))?;
+        let m = cbor_int(v).ok_or_else(|| malformed("labelMap value"))?;
+        label_map.insert(format!("c14n{n}"), format!("b{m}"));
+    }
+
+    let mandatory_indexes =
+        cbor_index_array(&arr[2]).ok_or_else(|| malformed("mandatoryIndexes"))?;
+    let selective_indexes =
+        cbor_index_array(&arr[3]).ok_or_else(|| malformed("selectiveIndexes"))?;
+    let presentation_header = arr[4]
+        .as_bytes()
+        .ok_or_else(|| malformed("presentationHeader must be bytes"))?
+        .clone();
+
+    Ok(DerivedProofValue {
+        bbs_proof,
+        label_map,
+        mandatory_indexes,
+        selective_indexes,
+        presentation_header,
+    })
+}
+
+fn cbor_int(v: &ciborium::Value) -> Option<usize> {
+    let i: i128 = v.as_integer()?.into();
+    usize::try_from(i).ok()
+}
+
+fn cbor_index_array(v: &ciborium::Value) -> Option<Vec<usize>> {
+    v.as_array()?.iter().map(cbor_int).collect()
+}
+
+/// Verify a `bbs-2023` **derived proof** (verifier side), per W3C vc-di-bbs.
+///
+/// Reconstructs the verify data from the disclosed `reveal_document` and its
+/// derived `proofValue`, then BBS-`proof_verify`s. `pk` is the issuer's BBS
+/// public key (resolved from the proof's verification method by the caller).
+pub fn verify_derived_proof(
+    reveal_document: &Value,
+    pk: &bbs::PublicKey,
+) -> Result<bool, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    let proof = reveal_document
+        .get("proof")
+        .ok_or_else(|| malformed("reveal document has no proof"))?;
+    let proof_value = proof
+        .get("proofValue")
+        .and_then(Value::as_str)
+        .ok_or_else(|| malformed("proof has no proofValue"))?;
+    let parsed = parse_derived_proof_value(proof_value)?;
+
+    // proofHash = SHA-256(RDFC(proofConfig)); proofConfig = proof - proofValue,
+    // carrying the document's @context.
+    let mut proof_config = proof.clone();
+    let cfg = proof_config
+        .as_object_mut()
+        .ok_or_else(|| malformed("proof must be an object"))?;
+    cfg.remove("proofValue");
+    if let Some(ctx) = reveal_document.get("@context") {
+        cfg.insert("@context".to_string(), ctx.clone());
+    }
+    let proof_hash = proof_hash(&proof_config)?;
+
+    // Canonicalize the reveal document (minus proof), relabel via the label map.
+    let mut doc = reveal_document.clone();
+    doc.as_object_mut()
+        .ok_or_else(|| malformed("document must be an object"))?
+        .remove("proof");
+    let dataset = jsonld::expand_and_to_rdf(&doc).map_err(canon_err)?;
+    let (canonical_c14n, _) = rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
+    let labeled = lines_with_newline(&relabel_and_sort(&canonical_c14n, &parsed.label_map));
+
+    // Split mandatory vs disclosed non-mandatory by index.
+    let mandatory_set: BTreeSet<usize> = parsed.mandatory_indexes.iter().copied().collect();
+    let mut mandatory = Vec::new();
+    let mut non_mandatory = Vec::new();
+    for (i, nq) in labeled.iter().enumerate() {
+        if mandatory_set.contains(&i) {
+            mandatory.push(nq.clone());
+        } else {
+            non_mandatory.push(nq.clone());
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    for m in &mandatory {
+        hasher.update(m.as_bytes());
+    }
+    let mandatory_hash: [u8; 32] = hasher.finalize().into();
+
+    let mut bbs_header = proof_hash.to_vec();
+    bbs_header.extend_from_slice(&mandatory_hash);
+
+    let disclosed: Vec<&[u8]> = non_mandatory.iter().map(|s| s.as_bytes()).collect();
+    let bbs_proof = bbs::Proof::from_bytes(&parsed.bbs_proof);
+    bbs::proof_verify(
+        pk,
+        &bbs_proof,
+        &bbs_header,
+        &parsed.presentation_header,
+        &disclosed,
+        &parsed.selective_indexes,
+    )
+    .map_err(|e| {
+        tracing::debug!("bbs-2023 derived proof verification failed: {e}");
+        DataIntegrityError::InvalidSignature {
+            suite: crate::crypto_suites::CryptoSuite::Bbs2023,
+            reason: crate::error::SignatureFailure::Invalid,
+        }
+    })
+}
+
 /// The result of grouping canonical statements by mandatory pointers.
 #[derive(Debug)]
 pub struct GroupedStatements {
@@ -129,68 +285,91 @@ impl GroupedStatements {
     }
 }
 
-/// `canonicalizeAndGroup` for the base proof: canonicalize `document` with the
-/// HMAC label map, then split its statements into mandatory (selected by
-/// `mandatory_pointers`) and non-mandatory, and compute `mandatoryHash`.
-pub fn canonicalize_and_group(
+/// A document canonicalized with the HMAC label map, plus everything needed to
+/// group its statements by JSON-pointer selection.
+struct CanonicalizedHmac {
+    /// The document with `urn:bnid:` skolem ids on its node objects.
+    skolemized: Value,
+    /// Sorted, `bK`-labeled canonical statements (each with trailing `\n`).
+    canonical: Vec<String>,
+    /// Skolem blank-node id → `bK` label.
+    input_to_b: BTreeMap<String, String>,
+}
+
+/// `labelReplacementCanonicalizeJsonLd` with the HMAC label map factory.
+fn canonicalize_hmac(
     document: &Value,
-    mandatory_pointers: &[&str],
     hmac_key: &[u8],
-) -> Result<GroupedStatements, DataIntegrityError> {
-    // 1. Skolemize, deskolemize to N-Quads, canonicalize with the HMAC label map.
+) -> Result<CanonicalizedHmac, DataIntegrityError> {
     let skolemized = skolemize_compact(document);
     let deskolemized = to_deskolemized_nquads(&skolemized)?;
-
     let joined: String = deskolemized.iter().cloned().collect();
     let dataset = nquads::parse(&joined).map_err(canon_err)?;
     let (canonical_c14n, input_to_c14n) =
         rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
 
-    // c14n -> bK (HMAC shuffle), then compose input -> bK.
     let c14n_to_b = hmac_label_map(&canonical_c14n, hmac_key)?;
     let input_to_b: BTreeMap<String, String> = input_to_c14n
         .iter()
         .filter_map(|(input, c14n)| c14n_to_b.get(c14n).map(|b| (input.clone(), b.clone())))
         .collect();
+    let canonical = lines_with_newline(&relabel_and_sort(&canonical_c14n, &c14n_to_b));
 
-    let canonical: Vec<String> = lines_with_newline(&relabel_and_sort(&canonical_c14n, &c14n_to_b));
+    Ok(CanonicalizedHmac {
+        skolemized,
+        canonical,
+        input_to_b,
+    })
+}
 
-    // 2. Select the mandatory sub-document and find its statements' indices.
-    let mut mandatory_indexes: Vec<usize> = Vec::new();
-    if !mandatory_pointers.is_empty() {
-        let selection = select_json_ld(&skolemized, mandatory_pointers)
-            .ok_or_else(|| canon_err("empty mandatory selection"))?;
-        let sel_nquads = to_deskolemized_nquads(&selection)?;
-        let mut idx = BTreeSet::new();
-        for line in &sel_nquads {
-            let relabeled = relabel_blank_line(line, &input_to_b);
-            match canonical.iter().position(|c| *c == relabeled) {
-                Some(pos) => {
-                    idx.insert(pos);
-                }
-                None => {
-                    return Err(canon_err(format!(
-                        "selected statement not found among canonical statements: {relabeled:?}"
-                    )));
-                }
-            }
-        }
-        mandatory_indexes = idx.into_iter().collect();
+/// Indices (into `c.canonical`) of the statements selected by `pointers`.
+fn select_indices(
+    c: &CanonicalizedHmac,
+    pointers: &[&str],
+) -> Result<Vec<usize>, DataIntegrityError> {
+    if pointers.is_empty() {
+        return Ok(Vec::new());
     }
+    let selection =
+        select_json_ld(&c.skolemized, pointers).ok_or_else(|| canon_err("empty selection"))?;
+    let sel_nquads = to_deskolemized_nquads(&selection)?;
+    let mut idx = BTreeSet::new();
+    for line in &sel_nquads {
+        let relabeled = relabel_blank_line(line, &c.input_to_b);
+        let pos = c
+            .canonical
+            .iter()
+            .position(|x| *x == relabeled)
+            .ok_or_else(|| canon_err(format!("selected statement not found: {relabeled:?}")))?;
+        idx.insert(pos);
+    }
+    Ok(idx.into_iter().collect())
+}
+
+/// `canonicalizeAndGroup` for the base proof: split `document`'s HMAC-canonical
+/// statements into mandatory (selected by `mandatory_pointers`) and
+/// non-mandatory, and compute `mandatoryHash`.
+pub fn canonicalize_and_group(
+    document: &Value,
+    mandatory_pointers: &[&str],
+    hmac_key: &[u8],
+) -> Result<GroupedStatements, DataIntegrityError> {
+    let c = canonicalize_hmac(document, hmac_key)?;
+    let mandatory_indexes = select_indices(&c, mandatory_pointers)?;
 
     let mandatory_set: BTreeSet<usize> = mandatory_indexes.iter().copied().collect();
-    let non_mandatory_indexes: Vec<usize> = (0..canonical.len())
+    let non_mandatory_indexes: Vec<usize> = (0..c.canonical.len())
         .filter(|i| !mandatory_set.contains(i))
         .collect();
 
     let mut hasher = Sha256::new();
     for &i in &mandatory_indexes {
-        hasher.update(canonical[i].as_bytes());
+        hasher.update(c.canonical[i].as_bytes());
     }
     let mandatory_hash: [u8; 32] = hasher.finalize().into();
 
     Ok(GroupedStatements {
-        canonical,
+        canonical: c.canonical,
         mandatory_indexes,
         non_mandatory_indexes,
         mandatory_hash,
@@ -199,6 +378,238 @@ pub fn canonicalize_and_group(
 
 fn canon_err(e: impl std::fmt::Display) -> DataIntegrityError {
     DataIntegrityError::Canonicalization(e.to_string())
+}
+
+/// A parsed base (`0xd95d02`) proof value.
+struct BaseProofValue {
+    bbs_signature: Vec<u8>,
+    bbs_header: Vec<u8>,
+    hmac_key: Vec<u8>,
+    mandatory_pointers: Vec<String>,
+}
+
+/// `parseBaseProofValue`: decode the multibase CBOR base proof value.
+fn parse_base_proof_value(proof_value: &str) -> Result<BaseProofValue, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    if !proof_value.starts_with('u') {
+        return Err(malformed("proofValue must be multibase base64url ('u')"));
+    }
+    let (_base, bytes) =
+        multibase::decode(proof_value).map_err(|e| malformed(&format!("multibase: {e}")))?;
+    if bytes.len() < 3 || bytes[..3] != CBOR_PREFIX_BASE {
+        return Err(malformed("proofValue is not a bbs-2023 base proof"));
+    }
+    let value: ciborium::Value =
+        ciborium::from_reader(&bytes[3..]).map_err(|e| malformed(&format!("CBOR: {e}")))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| malformed("base proofValue must be a CBOR array"))?;
+    if arr.len() != 5 {
+        return Err(malformed("base proofValue must have 5 elements"));
+    }
+    let bytes_at = |i: usize, what: &str| {
+        arr[i]
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed(&format!("{what} must be bytes")))
+    };
+    let mandatory_pointers = arr[4]
+        .as_array()
+        .ok_or_else(|| malformed("mandatoryPointers must be an array"))?
+        .iter()
+        .map(|p| {
+            p.as_text()
+                .map(str::to_string)
+                .ok_or_else(|| malformed("mandatory pointer must be text"))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(BaseProofValue {
+        bbs_signature: bytes_at(0, "bbsSignature")?,
+        bbs_header: bytes_at(1, "bbsHeader")?,
+        hmac_key: bytes_at(3, "hmacKey")?,
+        mandatory_pointers,
+    })
+}
+
+/// Create a `bbs-2023` **derived proof** (holder side), selectively disclosing
+/// the claims under `selective_pointers` (plus the issuer's mandatory ones).
+///
+/// `base_document` is the issuer's base-proof VC; `pk` is the issuer's BBS
+/// public key; `presentation_header` is the verifier's nonce. Returns the
+/// disclosed reveal document with a derived `proof`.
+pub fn create_derived_proof(
+    base_document: &Value,
+    selective_pointers: &[&str],
+    presentation_header: &[u8],
+    pk: &bbs::PublicKey,
+) -> Result<Value, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    let proof = base_document
+        .get("proof")
+        .ok_or_else(|| malformed("base document has no proof"))?;
+    let base = parse_base_proof_value(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .ok_or_else(|| malformed("proof has no proofValue"))?,
+    )?;
+
+    let mut document = base_document.clone();
+    document
+        .as_object_mut()
+        .ok_or_else(|| malformed("document must be an object"))?
+        .remove("proof");
+
+    let mandatory_ptrs: Vec<&str> = base.mandatory_pointers.iter().map(String::as_str).collect();
+    let combined_ptrs: Vec<&str> = mandatory_ptrs
+        .iter()
+        .copied()
+        .chain(selective_pointers.iter().copied())
+        .collect();
+
+    // Group the full document and compute the index sets.
+    let c = canonicalize_hmac(&document, &base.hmac_key)?;
+    let mandatory_indexes = select_indices(&c, &mandatory_ptrs)?;
+    let selective_indexes = select_indices(&c, selective_pointers)?;
+    let combined_indexes = select_indices(&c, &combined_ptrs)?;
+
+    let mandatory_set: BTreeSet<usize> = mandatory_indexes.iter().copied().collect();
+    let selective_set: BTreeSet<usize> = selective_indexes.iter().copied().collect();
+    let non_mandatory_indexes: Vec<usize> = (0..c.canonical.len())
+        .filter(|i| !mandatory_set.contains(i))
+        .collect();
+
+    // Mandatory indices relative to the revealed (combined) statement set.
+    let adj_mandatory: Vec<usize> = mandatory_indexes
+        .iter()
+        .map(|m| {
+            combined_indexes
+                .iter()
+                .position(|x| x == m)
+                .expect("mandatory ⊆ combined")
+        })
+        .collect();
+    // Selectively-disclosed indices relative to the non-mandatory message list
+    // (these are the BBS proof's disclosed indexes).
+    let adj_selective: Vec<usize> = non_mandatory_indexes
+        .iter()
+        .enumerate()
+        .filter(|(_, nm)| selective_set.contains(nm))
+        .map(|(pos, _)| pos)
+        .collect();
+
+    // BBS proof over the non-mandatory messages, disclosing the selective ones.
+    let non_mandatory: Vec<&str> = non_mandatory_indexes
+        .iter()
+        .map(|&i| c.canonical[i].as_str())
+        .collect();
+    let messages: Vec<&[u8]> = non_mandatory.iter().map(|s| s.as_bytes()).collect();
+    let signature = bbs::Signature::from_bytes(&base.bbs_signature)
+        .map_err(|e| malformed(&format!("decode bbsSignature: {e}")))?;
+    let bbs_proof = bbs::proof_gen(
+        pk,
+        &signature,
+        &base.bbs_header,
+        presentation_header,
+        &messages,
+        &adj_selective,
+    )
+    .map_err(DataIntegrityError::signing)?;
+
+    // Derived label map: reveal-document c14n labels → original bK labels.
+    let label_map = build_derived_label_map(&c, &combined_ptrs)?;
+
+    let proof_value = serialize_derived_proof_value(
+        bbs_proof.to_bytes(),
+        &label_map,
+        &adj_mandatory,
+        &adj_selective,
+        presentation_header,
+    )?;
+
+    // Reveal document = the disclosed sub-document + the derived proof.
+    let mut reveal = select_json_ld(&document, &combined_ptrs)
+        .ok_or_else(|| malformed("empty reveal selection"))?;
+    let mut proof_obj = proof.clone();
+    proof_obj
+        .as_object_mut()
+        .ok_or_else(|| malformed("proof must be an object"))?
+        .insert("proofValue".to_string(), Value::String(proof_value));
+    reveal
+        .as_object_mut()
+        .ok_or_else(|| malformed("reveal must be an object"))?
+        .insert("proof".to_string(), proof_obj);
+    Ok(reveal)
+}
+
+/// Build the derived proof's label map (`reveal c14nN → original bM`) by
+/// canonicalizing the skolemized reveal selection and composing through the
+/// full document's `input → bM` map.
+fn build_derived_label_map(
+    c: &CanonicalizedHmac,
+    combined_ptrs: &[&str],
+) -> Result<BTreeMap<String, String>, DataIntegrityError> {
+    let selection =
+        select_json_ld(&c.skolemized, combined_ptrs).ok_or_else(|| canon_err("empty selection"))?;
+    let sel_nquads = to_deskolemized_nquads(&selection)?;
+    let joined: String = sel_nquads.concat();
+    let dataset = nquads::parse(&joined).map_err(canon_err)?;
+    let (_canonical, reveal_input_to_c14n) =
+        rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
+
+    let mut label_map = BTreeMap::new();
+    for (reveal_input, reveal_c14n) in &reveal_input_to_c14n {
+        if let Some(b) = c.input_to_b.get(reveal_input) {
+            label_map.insert(reveal_c14n.clone(), b.clone());
+        }
+    }
+    Ok(label_map)
+}
+
+/// `serializeDisclosureProofValue`: `multibase("u" + 0xd95d03 + CBOR([bbsProof,
+/// compressedLabelMap, mandatoryIndexes, selectiveIndexes, presentationHeader]))`.
+fn serialize_derived_proof_value(
+    bbs_proof: &[u8],
+    label_map: &BTreeMap<String, String>,
+    mandatory_indexes: &[usize],
+    selective_indexes: &[usize],
+    presentation_header: &[u8],
+) -> Result<String, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    // Compress `c14nN → bM` to a CBOR integer→integer map.
+    let mut compressed = Vec::with_capacity(label_map.len());
+    for (k, v) in label_map {
+        let n: i64 = k
+            .strip_prefix("c14n")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| malformed("label map key"))?;
+        let m: i64 = v
+            .strip_prefix('b')
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| malformed("label map value"))?;
+        compressed.push((
+            ciborium::Value::Integer(n.into()),
+            ciborium::Value::Integer(m.into()),
+        ));
+    }
+    let index_array = |idx: &[usize]| {
+        ciborium::Value::Array(
+            idx.iter()
+                .map(|&i| ciborium::Value::Integer((i as i64).into()))
+                .collect(),
+        )
+    };
+    let payload = ciborium::Value::Array(vec![
+        ciborium::Value::Bytes(bbs_proof.to_vec()),
+        ciborium::Value::Map(compressed),
+        index_array(mandatory_indexes),
+        index_array(selective_indexes),
+        ciborium::Value::Bytes(presentation_header.to_vec()),
+    ]);
+    let mut buf = CBOR_PREFIX_DERIVED.to_vec();
+    ciborium::into_writer(&payload, &mut buf)
+        .map_err(|e| malformed(&format!("CBOR encode: {e}")))?;
+    Ok(multibase::encode(multibase::Base::Base64Url, &buf))
 }
 
 /// `proofHash = SHA-256(RDFC-1.0(proofConfig))`.
@@ -689,6 +1100,108 @@ mod tests {
             proof_value, expected,
             "base proofValue diverges from the W3C vc-di-bbs vector"
         );
+    }
+
+    #[test]
+    fn verify_derived_proof_accepts_w3c_reference_proof() {
+        let pk_bytes: [u8; 96] = hex_decode(
+            json("BBSKeyMaterial.json")["publicKeyHex"]
+                .as_str()
+                .unwrap(),
+        )
+        .try_into()
+        .unwrap();
+        let pk = bbs::PublicKey::from_bytes(&pk_bytes).unwrap();
+
+        let reveal = json("derivedRevealDocument.json");
+        let ok = verify_derived_proof(&reveal, &pk).unwrap();
+        assert!(ok, "must verify the reference-generated derived proof");
+    }
+
+    #[test]
+    fn verify_derived_proof_rejects_tampered_claim() {
+        let pk_bytes: [u8; 96] = hex_decode(
+            json("BBSKeyMaterial.json")["publicKeyHex"]
+                .as_str()
+                .unwrap(),
+        )
+        .try_into()
+        .unwrap();
+        let pk = bbs::PublicKey::from_bytes(&pk_bytes).unwrap();
+
+        let mut reveal = json("derivedRevealDocument.json");
+        reveal["credentialSubject"]["sailNumber"] = Value::String("Tampered".into());
+        let r = verify_derived_proof(&reveal, &pk);
+        assert!(
+            !matches!(r, Ok(true)),
+            "tampered claim must not verify: {r:?}"
+        );
+    }
+
+    #[test]
+    fn create_derived_proof_matches_w3c_structure_and_round_trips() {
+        let pk_bytes: [u8; 96] = hex_decode(
+            json("BBSKeyMaterial.json")["publicKeyHex"]
+                .as_str()
+                .unwrap(),
+        )
+        .try_into()
+        .unwrap();
+        let pk = bbs::PublicKey::from_bytes(&pk_bytes).unwrap();
+        let ph = hex_decode(
+            json("BBSDeriveMaterial.json")["presentationHeaderHex"]
+                .as_str()
+                .unwrap(),
+        );
+        let selective: Vec<String> = serde_json::from_value(json("windSelective.json")).unwrap();
+        let refs: Vec<&str> = selective.iter().map(String::as_str).collect();
+
+        // Derive from the reference base-proof document.
+        let reveal = create_derived_proof(&json("addSignedSDBase.json"), &refs, &ph, &pk).unwrap();
+
+        // Round-trip: our own verifier accepts our derived proof.
+        assert!(
+            verify_derived_proof(&reveal, &pk).unwrap(),
+            "round-trip derive→verify must hold"
+        );
+
+        // Structural match against the W3C disclosure-data vector (the BBS proof
+        // bytes themselves are randomized, so we check the deterministic parts).
+        let parsed =
+            parse_derived_proof_value(reveal["proof"]["proofValue"].as_str().unwrap()).unwrap();
+        let dd = json("derivedDisclosureData.json");
+
+        let exp_label: BTreeMap<String, String> = dd["labelMap"]["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e[0].as_str().unwrap().to_string(),
+                    e[1].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(parsed.label_map, exp_label, "derived label map");
+
+        let usizes = |v: &Value| -> Vec<usize> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|x| x.as_u64().unwrap() as usize)
+                .collect()
+        };
+        assert_eq!(
+            parsed.mandatory_indexes,
+            usizes(&dd["mandatoryIndexes"]),
+            "adjusted mandatory indexes"
+        );
+        assert_eq!(
+            parsed.selective_indexes,
+            usizes(&dd["adjSelectiveIndexes"]),
+            "adjusted selective indexes"
+        );
+        assert_eq!(parsed.presentation_header, ph, "presentation header");
     }
 
     fn hex_lower(b: &[u8]) -> String {
