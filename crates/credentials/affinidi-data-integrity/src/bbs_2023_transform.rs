@@ -157,6 +157,104 @@ pub fn serialize_base_proof_value(
     Ok(multibase::encode(multibase::Base::Base64Url, &buf))
 }
 
+/// CBOR prefix bytes for a `bbs-2023` **pseudonym base** proof value
+/// (`featureOption: pseudonym`).
+const CBOR_PREFIX_BASE_PSEUDONYM: [u8; 3] = [0xd9, 0x5d, 0x08];
+
+/// Convert 32 entropy/secret bytes to a BBS scalar.
+fn scalar_from_32(bytes: &[u8], what: &str) -> Result<bbs::Scalar, DataIntegrityError> {
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| DataIntegrityError::Conformance(format!("{what} must be 32 bytes")))?;
+    bbs::hash::scalar_from_bytes(&arr)
+        .ok_or_else(|| DataIntegrityError::Conformance(format!("{what} is not a valid scalar")))
+}
+
+/// Produce a `bbs-2023` **pseudonym base proof** value (issuer side), per
+/// vc-di-bbs `featureOption: pseudonym`.
+///
+/// Identical to [`create_base_proof_value`] except the non-mandatory statements
+/// are **blind-signed** over the holder's `commitment_with_proof` (from
+/// `affinidi_bbs::nym_commit`, committing the holder's `prover_nym`) with the
+/// issuer's `signer_nym_entropy` mixed in, and the serialized `proofValue`
+/// carries `signer_nym_entropy` under the `0xd95d08` prefix.
+#[allow(clippy::too_many_arguments)]
+pub fn create_pseudonym_base_proof_value(
+    document: &Value,
+    proof_config: &Value,
+    mandatory_pointers: &[&str],
+    sk: &bbs::SecretKey,
+    pk: &bbs::PublicKey,
+    hmac_key: &[u8],
+    commitment_with_proof: &[u8],
+    signer_nym_entropy: &[u8],
+) -> Result<String, DataIntegrityError> {
+    let proof_hash = proof_hash(proof_config)?;
+    let grouped = canonicalize_and_group(document, mandatory_pointers, hmac_key)?;
+
+    let mut bbs_header = proof_hash.to_vec();
+    bbs_header.extend_from_slice(&grouped.mandatory_hash);
+
+    let non_mandatory = grouped.non_mandatory();
+    let messages: Vec<&[u8]> = non_mandatory.iter().map(|s| s.as_bytes()).collect();
+
+    let entropy = scalar_from_32(signer_nym_entropy, "signer_nym_entropy")?;
+    let signature = bbs::blind_sign_with_nym(
+        sk,
+        pk,
+        commitment_with_proof,
+        entropy,
+        &bbs_header,
+        &messages,
+        bbs::Ciphersuite::default(),
+    )
+    .map_err(DataIntegrityError::signing)?;
+
+    serialize_pseudonym_base_proof_value(
+        &signature.to_bytes(),
+        &bbs_header,
+        &pk.to_bytes(),
+        hmac_key,
+        mandatory_pointers,
+        signer_nym_entropy,
+    )
+}
+
+/// `serializeBaseProofValue` (pseudonym): `multibase("u" + 0xd95d08 +
+/// CBOR([bbsSignature, bbsHeader, publicKey, hmacKey, mandatoryPointers,
+/// signerNymEntropy]))`. `featureOption` is implied by the prefix.
+pub fn serialize_pseudonym_base_proof_value(
+    bbs_signature: &[u8],
+    bbs_header: &[u8],
+    public_key: &[u8],
+    hmac_key: &[u8],
+    mandatory_pointers: &[&str],
+    signer_nym_entropy: &[u8],
+) -> Result<String, DataIntegrityError> {
+    let components = ciborium::Value::Array(vec![
+        ciborium::Value::Bytes(bbs_signature.to_vec()),
+        ciborium::Value::Bytes(bbs_header.to_vec()),
+        ciborium::Value::Bytes(public_key.to_vec()),
+        ciborium::Value::Bytes(hmac_key.to_vec()),
+        ciborium::Value::Array(
+            mandatory_pointers
+                .iter()
+                .map(|p| ciborium::Value::Text((*p).to_string()))
+                .collect(),
+        ),
+        // signer_nym_entropy is a scalar → CBOR tag 2 (positive bignum).
+        ciborium::Value::Tag(
+            2,
+            Box::new(ciborium::Value::Bytes(signer_nym_entropy.to_vec())),
+        ),
+    ]);
+
+    let mut buf = CBOR_PREFIX_BASE_PSEUDONYM.to_vec();
+    ciborium::into_writer(&components, &mut buf)
+        .map_err(|e| DataIntegrityError::MalformedProof(format!("CBOR encode: {e}")))?;
+    Ok(multibase::encode(multibase::Base::Base64Url, &buf))
+}
+
 /// CBOR prefix bytes for a `bbs-2023` **derived** proof value.
 const CBOR_PREFIX_DERIVED: [u8; 3] = [0xd9, 0x5d, 0x03];
 
@@ -1158,6 +1256,40 @@ mod tests {
         assert_eq!(
             proof_value, expected,
             "base proofValue diverges from the W3C vc-di-bbs vector"
+        );
+    }
+
+    #[test]
+    fn serialize_pseudonym_base_proof_value_matches_w3c_vector() {
+        // Gate the 0xd95d08 framing byte-exact from the published base signature
+        // components (independent of the AAMVA-document canonicalization).
+        let raw = json("pseudonym/addRawBaseSignatureInfo.json");
+        let h = |k: &str| hex_decode(raw[k].as_str().unwrap());
+        let pointers: Vec<String> = raw["mandatoryPointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect();
+        let refs: Vec<&str> = pointers.iter().map(String::as_str).collect();
+
+        let proof_value = serialize_pseudonym_base_proof_value(
+            &h("bbsSignature"),
+            &h("bbsHeader"),
+            &h("publicKey"),
+            &h("hmacKey"),
+            &refs,
+            &h("signerNymEntropyHex"),
+        )
+        .unwrap();
+
+        let expected = json("pseudonym/addSignedSDBase.json")["proof"]["proofValue"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            proof_value, expected,
+            "pseudonym base 0xd95d08 framing diverges from the W3C vc-di-bbs vector"
         );
     }
 
