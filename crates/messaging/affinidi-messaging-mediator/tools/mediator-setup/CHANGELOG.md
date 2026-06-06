@@ -23,6 +23,11 @@
   secret persistence is unaffected — it was always handled by the
   `file://` backend's own write path, not by this wizard block.
 
+- **FIX:** The completion and final-summary banners reported the secrets
+  file as a hard-coded `conf/secrets.json` regardless of the operator's
+  `[secrets].storage` path. They now print the actual configured path, so
+  a `file://` backend at a custom location is reported correctly.
+
 ## 5th June 2026
 
 ### 0.1.6 — well-formed `file://` secret-backend URLs

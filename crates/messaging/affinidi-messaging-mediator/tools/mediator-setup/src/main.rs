@@ -1572,7 +1572,13 @@ fn print_completion_summary(
     }
 
     if config.secret_storage == STORAGE_FILE {
-        println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
+        // Report the operator's actual backend path, not a hard-coded
+        // `conf/secrets.json` — the unified backend writes wherever
+        // `[secrets].storage` points.
+        println!(
+            "  \x1b[32m\u{2714}\x1b[0m Secrets: \x1b[1m{}\x1b[0m",
+            config.secret_file_path
+        );
     }
 
     if config.ssl_mode == SSL_SELF_SIGNED {
@@ -2063,10 +2069,12 @@ fn print_final_summary(config: &app::WizardConfig) {
     );
 
     if config.secret_storage == STORAGE_FILE {
-        let secrets_path = config_dir.join("secrets.json");
+        // The unified backend writes to the operator's configured
+        // `[secrets].storage` path — show that, not a hard-coded
+        // `<config_dir>/secrets.json`.
         println!(
             "    \x1b[36m{}\x1b[0m  — \x1b[33mprivate keys (keep secure!)\x1b[0m",
-            secrets_path.display()
+            config.secret_file_path
         );
     }
 
