@@ -48,6 +48,11 @@ impl IdentifierIssuer {
     pub fn issued_order(&self) -> &[String] {
         &self.order
     }
+
+    /// The full map of existing identifier → issued canonical identifier.
+    pub fn issued_map(&self) -> &HashMap<String, String> {
+        &self.issued
+    }
 }
 
 #[cfg(test)]
