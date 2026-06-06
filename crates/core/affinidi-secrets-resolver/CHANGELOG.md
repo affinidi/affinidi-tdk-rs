@@ -1,5 +1,15 @@
 # Affinidi Secrets Manager
 
+## 6th June 2026 (0.5.7)
+
+- **Full P-521 secret support (#357).** Added `Secret::generate_p521`
+  (load/generate P-521 key-agreement secrets) and wired P-521 into
+  `from_multibase` decoding (`P521_PRIV`) — previously a P-521 private key
+  could be *written* but not *loaded*. Also unblocked P-521 public-key
+  multibase encoding, which had been hard-erroring with "P-521 is not
+  supported". This lets a sender/recipient actually use a P-521
+  key-agreement key end-to-end. New `p521` feature (on by default).
+
 ## 28th May 2026 (0.5.6)
 
 - **SECURITY (HIGH):** Redact private key material in `Debug` output for

@@ -14,9 +14,11 @@
  * This needs to be refactored in the future when the services align on implementation
  */
 
-use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
 use affinidi_did_common::{
-    Document, document::DocumentExt, verification_method::VerificationRelationship,
+    Document,
+    document::DocumentExt,
+    key_negotiation::{DEFAULT_CURVE_PREFERENCE, negotiate_authcrypt},
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_didcomm::message::{Message, pack};
@@ -702,101 +704,67 @@ async fn _pack_encrypted_for_did<S>(
 where
     S: SecretsResolver,
 {
-    // 1. Resolve sender DID and get their key agreement key + curve
+    // 1. Resolve the sender DID and enumerate its *usable* key-agreement
+    //    keys — those we hold a secret for, on a supported curve.
+    //    Bidirectional negotiation needs the whole set (sender curve order
+    //    is irrelevant; selection follows the documented curve preference),
+    //    not just `first()`.
     let sender_doc = did_resolver
         .resolve(sender_did)
         .await
         .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
     let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
-    let sender_kid = sender_ka_kids
-        .first()
-        .ok_or_else(|| DIDAuthError::DIDComm("sender has no key agreement key".into()))?;
 
-    let sender_secret = secrets_resolver
-        .get_secret(sender_kid.as_ref())
-        .await
-        .ok_or_else(|| DIDAuthError::Secrets(format!("no secret found for {sender_kid}")))?;
+    let mut sender_keys: Vec<(&str, PrivateKeyAgreement, Curve)> = Vec::new();
+    for &kid in &sender_ka_kids {
+        let Some(secret) = secrets_resolver.get_secret(kid).await else {
+            continue;
+        };
+        let Ok(curve) = _key_type_to_curve(secret.get_key_type()) else {
+            continue;
+        };
+        match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
+            Ok(private) => sender_keys.push((kid, private, curve)),
+            Err(e) => debug!("skipping unusable sender key {kid}: {e}"),
+        }
+    }
+    if sender_keys.is_empty() {
+        return Err(DIDAuthError::DIDComm(
+            "sender has no usable key agreement key".into(),
+        ));
+    }
+    let sender_curves: Vec<Curve> = sender_keys.iter().map(|(_, _, c)| *c).collect();
 
-    let sender_curve = _key_type_to_curve(sender_secret.get_key_type())?;
-    let sender_private =
-        PrivateKeyAgreement::from_raw_bytes(sender_curve, sender_secret.get_private_bytes())
-            .map_err(|e| DIDAuthError::DIDComm(format!("invalid sender private key: {e}")))?;
-
-    // 2. Resolve recipient DID and find a key agreement key on the same curve
+    // 2. Resolve the recipient DID and negotiate the best shared-curve pair.
     let recipient_doc = did_resolver
         .resolve(recipient_did)
         .await
         .map_err(|e| DIDAuthError::DIDResolver(format!("{e}")))?;
     let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
 
-    let (recipient_kid, recipient_pub) =
-        _find_matching_recipient_key(&recipient_doc.doc, &recipient_ka_kids, sender_curve)?;
+    let pairing = negotiate_authcrypt(
+        &sender_curves,
+        &recipient_doc.doc,
+        &recipient_ka_kids,
+        &DEFAULT_CURVE_PREFERENCE,
+    )
+    .map_err(|e| DIDAuthError::DIDComm(e.to_string()))?;
 
-    // 3. Pack with authcrypt
+    // The negotiated curve was drawn from `sender_curves`, so a matching
+    // sender key is guaranteed present.
+    let (sender_kid, sender_private, _) = sender_keys
+        .iter()
+        .find(|(_, _, c)| *c == pairing.curve)
+        .expect("negotiated curve came from sender_curves");
+
+    // 3. Pack with authcrypt.
     pack::pack_encrypted_authcrypt(
         msg,
         sender_kid,
-        &sender_private,
-        &[(recipient_kid, &recipient_pub)],
+        sender_private,
+        &[(pairing.recipient_kid, &pairing.recipient_pub)],
     )
     .map_err(|e| DIDAuthError::DIDComm(format!("pack failed: {e}")))
-}
-
-/// Find the first recipient key agreement key whose curve matches the sender's.
-fn _find_matching_recipient_key<'a>(
-    doc: &Document,
-    ka_kids: &'a [&'a str],
-    sender_curve: affinidi_crypto::jose::key_agreement::Curve,
-) -> Result<(&'a str, PublicKeyAgreement)> {
-    for kid in ka_kids {
-        if let Ok(pub_key) = _resolve_public_key_agreement(doc, kid)
-            && pub_key.curve() == sender_curve
-        {
-            return Ok((kid, pub_key));
-        }
-    }
-    Err(DIDAuthError::DIDComm(format!(
-        "recipient has no key agreement key on curve {sender_curve:?}"
-    )))
-}
-
-/// Extract a PublicKeyAgreement from a DID Document's verification method.
-fn _resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyAgreement> {
-    // Find the verification method — check embedded in key_agreement first, then top-level
-    let vm = doc
-        .key_agreement
-        .iter()
-        .filter_map(|ka| match ka {
-            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => {
-                Some(vm.as_ref())
-            }
-            _ => None,
-        })
-        .next()
-        .or_else(|| doc.get_verification_method(kid))
-        .ok_or_else(|| DIDAuthError::DIDComm(format!("verification method not found: {kid}")))?;
-
-    // Decode the verification material (publicKeyJwk or
-    // publicKeyMultibase) via the shared `affinidi-did-common` decoder —
-    // one parser for the whole stack — then map the multicodec onto a
-    // key-agreement curve.
-    let (codec, key_bytes) = vm
-        .decode_public_key()
-        .map_err(|e| DIDAuthError::DIDComm(format!("invalid verification material: {e}")))?;
-
-    let curve = match codec {
-        affinidi_encoding::X25519_PUB => Curve::X25519,
-        affinidi_encoding::P256_PUB => Curve::P256,
-        affinidi_encoding::SECP256K1_PUB => Curve::K256,
-        _ => {
-            return Err(DIDAuthError::DIDComm(format!(
-                "unsupported multicodec for key agreement: 0x{codec:x}"
-            )));
-        }
-    };
-
-    PublicKeyAgreement::from_raw_bytes(curve, &key_bytes)
-        .map_err(|e| DIDAuthError::DIDComm(format!("invalid key bytes: {e}")))
 }
 
 /// Map from secrets resolver KeyType to DIDComm Curve.
@@ -805,6 +773,8 @@ fn _key_type_to_curve(key_type: affinidi_secrets_resolver::secrets::KeyType) -> 
         affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
         affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
         affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
+        affinidi_secrets_resolver::secrets::KeyType::P384 => Ok(Curve::P384),
+        affinidi_secrets_resolver::secrets::KeyType::P521 => Ok(Curve::P521),
         other => Err(DIDAuthError::DIDComm(format!(
             "unsupported key type for key agreement: {other:?}"
         ))),
@@ -904,60 +874,57 @@ mod tests {
         assert_eq!(refresh_check(&tokens), RefreshCheck::Expired);
     }
 
+    // Boundary smoke test: this crate now delegates curve negotiation to
+    // `affinidi-did-common::key_negotiation` (exhaustively tested there).
+    // Here we confirm the wiring compiles and behaves for the real
+    // curve-mismatch bug — recipient [Ed25519(undecodable), P-256, X25519],
+    // X25519 sender → skip the first two and pick X25519 — plus the
+    // both-sets-named failure message.
     #[test]
-    fn find_matching_recipient_key_selects_correct_curve() {
-        use affinidi_crypto::jose::key_agreement::Curve;
-        use affinidi_did_common::Document;
+    fn authcrypt_negotiation_at_call_site() {
+        use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
+        use affinidi_did_common::{
+            Document,
+            key_negotiation::{DEFAULT_CURVE_PREFERENCE, negotiate_authcrypt},
+        };
 
-        // 32 random bytes as X25519 public key
-        let x25519_pub_bytes = [7u8; 32];
-        let x25519_multibase =
-            affinidi_encoding::encode_multikey(affinidi_encoding::X25519_PUB, &x25519_pub_bytes);
-
-        // Use Ed25519 multibase for a non-X25519 key (will fail decode as
-        // key-agreement, simulating a curve the function can't use)
-        let ed_pub_bytes = [9u8; 32];
-        let ed_multibase =
-            affinidi_encoding::encode_multikey(affinidi_encoding::ED25519_PUB, &ed_pub_bytes);
-
-        let ed_kid = "did:web:example#key-2";
-        let x25519_kid = "did:web:example#key-5";
-
-        // Build doc: first keyAgreement is Ed25519 (unsupported for KA), second is X25519
-        let doc_json = serde_json::json!({
-            "id": "did:web:example",
-            "verificationMethod": [
-                {
-                    "id": ed_kid,
-                    "type": "Multikey",
-                    "controller": "did:web:example",
-                    "publicKeyMultibase": ed_multibase
-                },
-                {
-                    "id": x25519_kid,
-                    "type": "Multikey",
-                    "controller": "did:web:example",
-                    "publicKeyMultibase": x25519_multibase
-                }
-            ],
-            "keyAgreement": [ed_kid, x25519_kid]
+        let ka_jwk = |kid: &str, curve: Curve| {
+            serde_json::json!({
+                "id": kid,
+                "type": "JsonWebKey2020",
+                "controller": "did:web:example",
+                "publicKeyJwk": PrivateKeyAgreement::generate(curve).public_key().to_jwk(),
+            })
+        };
+        let ed_kid = "did:web:example#ed";
+        let p256_kid = "did:web:example#p256";
+        let x_kid = "did:web:example#x";
+        // Ed25519 signing key wrongly listed under keyAgreement (undecodable
+        // as a KA curve) — exercises the codec-skip path via multibase.
+        let ed_vm = serde_json::json!({
+            "id": ed_kid,
+            "type": "Multikey",
+            "controller": "did:web:example",
+            "publicKeyMultibase":
+                affinidi_encoding::encode_multikey(affinidi_encoding::ED25519_PUB, &[9u8; 32]),
         });
-        let doc: Document = serde_json::from_value(doc_json).unwrap();
+        let doc: Document = serde_json::from_value(serde_json::json!({
+            "id": "did:web:example",
+            "verificationMethod": [ed_vm, ka_jwk(p256_kid, Curve::P256), ka_jwk(x_kid, Curve::X25519)],
+            "keyAgreement": [ed_kid, p256_kid, x_kid],
+        }))
+        .unwrap();
+        let kids = [ed_kid, p256_kid, x_kid];
 
-        let ka_kids: Vec<&str> = vec![ed_kid, x25519_kid];
+        let m =
+            negotiate_authcrypt(&[Curve::X25519], &doc, &kids, &DEFAULT_CURVE_PREFERENCE).unwrap();
+        assert_eq!(m.recipient_kid, x_kid);
+        assert_eq!(m.curve, Curve::X25519);
 
-        // X25519 sender should skip #key-2 (Ed25519, unsupported codec for KA)
-        // and match #key-5
-        let (kid, pub_key) =
-            super::_find_matching_recipient_key(&doc, &ka_kids, Curve::X25519).unwrap();
-        assert_eq!(kid, x25519_kid);
-        assert_eq!(pub_key.curve(), Curve::X25519);
-
-        // P256 sender should fail (no P256 key in doc)
-        let result = super::_find_matching_recipient_key(&doc, &ka_kids, Curve::P256);
-        assert!(result.is_err());
-        assert!(
-            format!("{:?}", result.unwrap_err()).contains("no key agreement key on curve P256")
-        );
+        // No shared curve → error names both offered sets.
+        let err = negotiate_authcrypt(&[Curve::K256], &doc, &kids, &DEFAULT_CURVE_PREFERENCE)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("K256") && msg.contains("X25519"), "{msg}");
     }
 }

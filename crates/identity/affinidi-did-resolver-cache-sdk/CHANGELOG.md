@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 6th June 2026
+
+### 0.8.7 — affinidi-crypto 0.2
+
+- Bump `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
+  `#[non_exhaustive]` key-agreement enums, #357). No API change in this
+  crate.
+
 ## 18th April 2026
 
 ### DID Resolver Cache SDK (0.8.6)

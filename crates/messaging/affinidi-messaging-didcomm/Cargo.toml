@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.15.0"
+version = "0.15.1"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -20,7 +20,7 @@ messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
 # JOSE crypto primitives (#327) — this crate owns only the DIDComm/JOSE
 # envelope layer; all key agreement, KDF, key-wrap, content-encryption,
 # and signing live in affinidi-crypto's `jose` module.
-affinidi-crypto = { version = "0.1", features = ["jose"] }
+affinidi-crypto = { version = "0.2", features = ["jose"] }
 
 # Curve crates — still used directly by the adapter for SEC1 point
 # encoding (`ToEncodedPoint`) on resolved public keys.

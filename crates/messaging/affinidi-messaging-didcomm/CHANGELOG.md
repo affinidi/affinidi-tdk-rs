@@ -4,6 +4,17 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-06-06
+
+### Added
+
+- **P-384 and P-521 authcrypt/anoncrypt (#357).** The JWE encrypt/decrypt
+  paths are curve-agnostic (the ephemeral key is generated on the
+  recipient's curve, and the `alg`/`enc`/KDF/key-wrap are uniform), so the
+  new `affinidi-crypto` P-384/P-521 key-agreement curves work on the wire
+  with no protocol changes. Added full ECDH-1PU and ECDH-ES JWE roundtrip
+  tests for both curves.
+
 ## [0.15.0] - 2026-06-01
 
 Completes #327: this crate now contains **no bespoke crypto** — only the

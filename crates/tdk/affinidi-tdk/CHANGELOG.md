@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.7.4] - 2026-06-06
+
+### Changed
+
+- Bump `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
+  `#[non_exhaustive]` key-agreement enums, #357). No API change in this
+  crate.
+
 ## [0.7.3] - 2026-06-01
 
 ### Changed

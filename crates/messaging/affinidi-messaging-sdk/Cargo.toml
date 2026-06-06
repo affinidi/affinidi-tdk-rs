@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.6"
+version = "0.18.7"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -15,14 +15,14 @@ repository.workspace = true
 [dependencies]
 # Affinidi Crates
 affinidi-tdk-common = "0.6"
-affinidi-crypto = { version = "0.1", features = ["jose"] }
+affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15" }
 ## Source of truth for the mediator protocol vocabulary (ACLs, accounts,
 ## message types, problem reports). The SDK re-exports these so existing
 ## call sites continue to resolve their old paths.
 affinidi-messaging-mediator-common = { path = "../affinidi-messaging-mediator/affinidi-messaging-mediator-common", version = "0.15", default-features = false }
 affinidi-did-authentication = "0.3"
-affinidi-did-common = "0.3"
+affinidi-did-common = { version = "0.3", features = ["key-agreement"] }
 affinidi-encoding = "0.1"
 affinidi-secrets-resolver = "0.5"
 

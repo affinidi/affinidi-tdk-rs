@@ -164,7 +164,13 @@ fn ecdh_1pu_x25519_kek_golden() {
 
 #[test]
 fn ecdh_es_roundtrip_all_curves() {
-    for curve in [Curve::X25519, Curve::P256, Curve::K256] {
+    for curve in [
+        Curve::X25519,
+        Curve::P256,
+        Curve::K256,
+        Curve::P384,
+        Curve::P521,
+    ] {
         let recip = PrivateKeyAgreement::generate(curve);
         let eph = PrivateKeyAgreement::generate(curve);
         let s = derive_key_es(
@@ -191,8 +197,56 @@ fn ecdh_es_roundtrip_all_curves() {
 }
 
 #[test]
+fn ecdh_1pu_roundtrip_all_curves() {
+    // ECDH-1PU (authcrypt) sender/recipient KEK agreement across every
+    // supported key-agreement curve, including the newly-added P-384/P-521.
+    let cc_tag = [0xABu8; 32];
+    for curve in [
+        Curve::X25519,
+        Curve::P256,
+        Curve::K256,
+        Curve::P384,
+        Curve::P521,
+    ] {
+        let sender = PrivateKeyAgreement::generate(curve);
+        let recip = PrivateKeyAgreement::generate(curve);
+        let eph = PrivateKeyAgreement::generate(curve);
+        let s = derive_key_1pu(
+            &eph,
+            &sender,
+            &recip.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"alice",
+            b"bob",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+        let r = derive_key_1pu_recipient(
+            &recip,
+            &sender.public_key(),
+            &eph.public_key(),
+            b"ECDH-1PU+A256KW",
+            b"alice",
+            b"bob",
+            &cc_tag,
+            256,
+        )
+        .unwrap();
+        assert_eq!(s, r, "ECDH-1PU KEK must agree for {curve:?}");
+        assert_eq!(s.len(), 32);
+    }
+}
+
+#[test]
 fn public_key_jwk_roundtrip_all_curves() {
-    for curve in [Curve::X25519, Curve::P256, Curve::K256] {
+    for curve in [
+        Curve::X25519,
+        Curve::P256,
+        Curve::K256,
+        Curve::P384,
+        Curve::P521,
+    ] {
         let pk = PrivateKeyAgreement::generate(curve).public_key();
         let jwk = pk.to_jwk();
         let parsed = PublicKeyAgreement::from_jwk(&jwk).unwrap();

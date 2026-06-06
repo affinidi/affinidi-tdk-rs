@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.15.13"
+version = "0.15.14"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -64,7 +64,7 @@ affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" 
 ## Optional: DIDComm v2.1 protocol implementation (activated by `didcomm` feature)
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", optional = true }
 ## Optional: JOSE key-agreement types for the didcomm compat layer (#327)
-affinidi-crypto = { version = "0.1", features = ["jose"], optional = true }
+affinidi-crypto = { version = "0.2", features = ["jose"], optional = true }
 ## Optional: Trust Spanning Protocol (activated by `tsp` feature)
 affinidi-tsp = { path = "../affinidi-tsp", version = "0.1", optional = true }
 ## Multibase/multicodec encoding helpers (needed by didcomm for key encoding)

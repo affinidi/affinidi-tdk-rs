@@ -219,6 +219,8 @@ impl MetaEnvelope {
                     affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
                     affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
                     affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
+                    affinidi_secrets_resolver::secrets::KeyType::P384 => Curve::P384,
+                    affinidi_secrets_resolver::secrets::KeyType::P521 => Curve::P521,
                     _ => continue,
                 };
                 match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
@@ -345,6 +347,8 @@ fn resolve_public_key(
             affinidi_encoding::X25519_PUB => Curve::X25519,
             affinidi_encoding::P256_PUB => Curve::P256,
             affinidi_encoding::SECP256K1_PUB => Curve::K256,
+            affinidi_encoding::P384_PUB => Curve::P384,
+            affinidi_encoding::P521_PUB => Curve::P521,
             _ => return None,
         };
         return PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).ok();
@@ -395,6 +399,8 @@ pub async fn pack_encrypted<S: SecretsResolver>(
             affinidi_secrets_resolver::secrets::KeyType::X25519 => Curve::X25519,
             affinidi_secrets_resolver::secrets::KeyType::P256 => Curve::P256,
             affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Curve::K256,
+            affinidi_secrets_resolver::secrets::KeyType::P384 => Curve::P384,
+            affinidi_secrets_resolver::secrets::KeyType::P521 => Curve::P521,
             _ => return Err("Unsupported key type for sender".to_string()),
         };
 

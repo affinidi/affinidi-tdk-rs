@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-setup"
-version = "0.1.7"
+version = "0.1.8"
 description = "Interactive TUI setup wizard for Affinidi Messaging Mediator"
 edition.workspace = true
 authors.workspace = true
@@ -62,7 +62,7 @@ affinidi-secrets-resolver = { path = "../../../../core/affinidi-secrets-resolver
 ## did:key helpers used by the sealed-handoff full-setup path to derive
 ## the `client_did` from the ephemeral Ed25519 pubkey when signing a
 ## VP-framed `provision_integration::BootstrapRequest`. Small, no cycles.
-affinidi-crypto = "0.1"
+affinidi-crypto = "0.2"
 
 # ── Mediator unified secret backend ─────────────────────────────────────
 ## Shared secrets module (open_store, MediatorSecrets, well-known keys)

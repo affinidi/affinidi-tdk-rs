@@ -2,6 +2,7 @@ use crate::{
     errors::ATMError, protocols::discover_features::DiscoverFeatures,
     transports::websockets::WebSocketResponses,
 };
+use affinidi_crypto::jose::key_agreement::Curve;
 use rustls::pki_types::CertificateDer;
 use std::{fs::File, io::BufReader, sync::Arc};
 use tokio::sync::{RwLock, broadcast::Sender};
@@ -29,9 +30,22 @@ pub struct ATMConfig {
 
     /// Can configure any protocol discoverable information here
     pub(crate) discover_features: Arc<RwLock<DiscoverFeatures>>,
+
+    /// Optional override for the key-agreement curve preference used when
+    /// packing encrypted messages. `None` uses
+    /// [`affinidi_did_common::key_negotiation::DEFAULT_CURVE_PREFERENCE`]
+    /// (`X25519 > P-256 > P-384 > P-521 > secp256k1`). Set a custom order to
+    /// force a specific policy, e.g. P-256 first for a FIPS deployment.
+    pub(crate) curve_preference: Option<Vec<Curve>>,
 }
 
 impl ATMConfig {
+    /// The configured key-agreement curve preference, if any. `None` means
+    /// the negotiator's built-in default order is used.
+    pub fn get_curve_preference(&self) -> Option<&[Curve]> {
+        self.curve_preference.as_deref()
+    }
+
     /// Returns a builder for `ATMConfig`
     /// Example:
     /// ```
@@ -63,6 +77,7 @@ pub struct ATMConfigBuilder {
     inbound_message_channel: Option<Sender<WebSocketResponses>>,
     unpack_forwards: bool,
     discover_features: DiscoverFeatures,
+    curve_preference: Option<Vec<Curve>>,
 }
 
 impl Default for ATMConfigBuilder {
@@ -74,6 +89,7 @@ impl Default for ATMConfigBuilder {
             inbound_message_channel: None,
             unpack_forwards: true,
             discover_features: DiscoverFeatures::default(),
+            curve_preference: None,
         }
     }
 }
@@ -132,6 +148,25 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Override the key-agreement curve preference used when packing
+    /// encrypted messages. Curves are tried most-preferred first; the first
+    /// curve both sender and recipient offer is chosen. Omit to use the
+    /// default order (`X25519 > P-256 > P-384 > P-521 > secp256k1`).
+    ///
+    /// Example — prefer the NIST P-256 curve first (FIPS-leaning):
+    /// ```no_run
+    /// use affinidi_messaging_sdk::config::ATMConfig;
+    /// use affinidi_crypto::jose::key_agreement::Curve;
+    ///
+    /// let config = ATMConfig::builder()
+    ///     .with_curve_preference(vec![Curve::P256, Curve::P384, Curve::P521, Curve::X25519, Curve::K256])
+    ///     .build();
+    /// ```
+    pub fn with_curve_preference(mut self, preference: Vec<Curve>) -> Self {
+        self.curve_preference = Some(preference);
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -167,6 +202,7 @@ impl ATMConfigBuilder {
             inbound_message_channel: self.inbound_message_channel,
             unpack_forwards: self.unpack_forwards,
             discover_features: Arc::new(RwLock::new(self.discover_features)),
+            curve_preference: self.curve_preference,
         })
     }
 }
