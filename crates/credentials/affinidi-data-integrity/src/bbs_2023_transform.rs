@@ -76,6 +76,59 @@ pub fn create_base_proof_value(
     )
 }
 
+/// Sign a VC document with a `bbs-2023` **base proof** (issuer side, document
+/// API). Builds the proof configuration, signs, and returns the document with a
+/// `proof` (cryptosuite `bbs-2023`). `created` is an ISO-8601 timestamp.
+///
+/// `hmac_key` is a per-credential secret (32 random bytes) that the holder needs
+/// to derive presentations; it is carried inside the base `proofValue`.
+#[allow(clippy::too_many_arguments)]
+pub fn sign_base_document(
+    document: &Value,
+    mandatory_pointers: &[&str],
+    verification_method: &str,
+    created: &str,
+    sk: &bbs::SecretKey,
+    pk: &bbs::PublicKey,
+    hmac_key: &[u8],
+) -> Result<Value, DataIntegrityError> {
+    let conformance = |m: &str| DataIntegrityError::Conformance(m.to_string());
+    let context = document
+        .get("@context")
+        .cloned()
+        .ok_or_else(|| conformance("document must have an @context"))?;
+
+    // The proof config (for hashing) carries the document's @context; the proof
+    // object attached to the document does NOT (it is re-added at verify time).
+    let proof_config = serde_json::json!({
+        "type": "DataIntegrityProof",
+        "cryptosuite": "bbs-2023",
+        "created": created,
+        "verificationMethod": verification_method,
+        "proofPurpose": "assertionMethod",
+        "@context": context,
+    });
+    let proof_value = create_base_proof_value(
+        document,
+        &proof_config,
+        mandatory_pointers,
+        sk,
+        pk,
+        hmac_key,
+    )?;
+
+    let mut proof = proof_config;
+    let obj = proof.as_object_mut().expect("proof config is an object");
+    obj.remove("@context");
+    obj.insert("proofValue".to_string(), Value::String(proof_value));
+
+    let mut base = document.clone();
+    base.as_object_mut()
+        .ok_or_else(|| conformance("document must be an object"))?
+        .insert("proof".to_string(), proof);
+    Ok(base)
+}
+
 /// `serializeBaseProofValue`: `multibase-base64url-no-pad("u" + 0xd95d02 +
 /// CBOR([bbsSignature, bbsHeader, publicKey, hmacKey, mandatoryPointers]))`.
 pub fn serialize_base_proof_value(
@@ -1208,6 +1261,65 @@ mod tests {
             "adjusted selective indexes"
         );
         assert_eq!(parsed.presentation_header, ph, "presentation header");
+    }
+
+    #[test]
+    fn end_to_end_sign_derive_verify_round_trip() {
+        // Full document-level vc-di-bbs round trip with a fresh HMAC key and
+        // arbitrary mandatory/selective pointers (not the vector's), exercising
+        // issuer → holder → verifier entirely through our own code.
+        let km = json("BBSKeyMaterial.json");
+        let sk = bbs::SecretKey::from_bytes(
+            &hex_decode(km["privateKeyHex"].as_str().unwrap())
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let pk = bbs::PublicKey::from_bytes(
+            &hex_decode(km["publicKeyHex"].as_str().unwrap())
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let hmac_key = [0x42u8; 32];
+
+        let doc = json("windDoc.json");
+        let mandatory = ["/issuer", "/credentialSubject/sailNumber"];
+        let base = sign_base_document(
+            &doc,
+            &mandatory,
+            "did:key:zHolder#bbs",
+            "2024-01-01T00:00:00Z",
+            &sk,
+            &pk,
+            &hmac_key,
+        )
+        .unwrap();
+        assert_eq!(base["proof"]["cryptosuite"], "bbs-2023");
+
+        // Holder discloses one board selectively.
+        let reveal =
+            create_derived_proof(&base, &["/credentialSubject/boards/0"], b"nonce-xyz", &pk)
+                .unwrap();
+
+        // Verifier accepts; mandatory + disclosed present, others hidden.
+        assert!(verify_derived_proof(&reveal, &pk).unwrap());
+        let cs = &reveal["credentialSubject"];
+        assert_eq!(cs["sailNumber"], "Earth101"); // mandatory
+        assert!(
+            cs["boards"].as_array().unwrap()[0]
+                .get("boardName")
+                .is_some()
+        ); // disclosed
+        assert!(
+            cs.get("sails").is_none(),
+            "undisclosed sails must be absent"
+        );
+
+        // Tampering with a disclosed claim fails.
+        let mut bad = reveal.clone();
+        bad["credentialSubject"]["sailNumber"] = Value::String("Mallory".into());
+        assert!(!matches!(verify_derived_proof(&bad, &pk), Ok(true)));
     }
 
     fn hex_lower(b: &[u8]) -> String {
