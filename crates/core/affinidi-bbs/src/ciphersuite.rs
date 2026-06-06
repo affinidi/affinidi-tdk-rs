@@ -35,6 +35,18 @@ impl Ciphersuite {
         id
     }
 
+    /// The blind-BBS API identifier (ciphersuite_id || "BLIND_H2G_HM2S_").
+    ///
+    /// Per `draft-irtf-cfrg-bbs-blind-signatures`, blind issuance namespaces its
+    /// generators and hashing under this api_id (distinct from the core
+    /// [`api_id`](Self::api_id)); the blind generators prepend a further
+    /// `"BLIND_"` to it.
+    pub fn blind_api_id(&self) -> Vec<u8> {
+        let mut id = self.id().as_bytes().to_vec();
+        id.extend_from_slice(b"BLIND_H2G_HM2S_");
+        id
+    }
+
     /// The octet length of a scalar in the output.
     pub fn octet_scalar_length(&self) -> usize {
         match self {

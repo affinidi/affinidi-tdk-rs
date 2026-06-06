@@ -33,7 +33,18 @@ pub fn hash_to_scalar(data: &[u8], dst: &[u8], _cs: Ciphersuite) -> Result<Scala
 /// Per IETF draft §4.3.1:
 /// For each message: `hash_to_scalar(message, api_id || "MAP_MSG_TO_SCALAR_AS_HASH_")`
 pub fn messages_to_scalars(messages: &[&[u8]], cs: Ciphersuite) -> Result<Vec<Scalar>> {
-    let dst = [cs.api_id().as_slice(), b"MAP_MSG_TO_SCALAR_AS_HASH_"].concat();
+    messages_to_scalars_with_api_id(messages, &cs.api_id(), cs)
+}
+
+/// Convert messages to scalars under an explicit `api_id` (see
+/// [`messages_to_scalars`]). Blind BBS maps both committed and signer messages
+/// under [`Ciphersuite::blind_api_id`].
+pub fn messages_to_scalars_with_api_id(
+    messages: &[&[u8]],
+    api_id: &[u8],
+    cs: Ciphersuite,
+) -> Result<Vec<Scalar>> {
+    let dst = [api_id, b"MAP_MSG_TO_SCALAR_AS_HASH_"].concat();
 
     messages
         .iter()
@@ -56,6 +67,15 @@ pub fn expand_msg_xmd(msg: &[u8], dst: &[u8], len_in_bytes: usize) -> Result<Vec
         })?
         .fill_bytes(&mut output);
     Ok(output)
+}
+
+/// Convert a wide byte array (up to 48 bytes) to a scalar via OS2IP mod r.
+///
+/// Used by the blind-BBS mocked random-scalar routine to reproduce the IETF
+/// test vectors (the production path samples scalars directly).
+#[cfg(test)]
+pub(crate) fn os2ip_mod_r(bytes: &[u8]) -> Scalar {
+    scalar_from_wide_bytes(bytes)
 }
 
 /// Convert a wide byte array (48 bytes) to a scalar via OS2IP mod r.

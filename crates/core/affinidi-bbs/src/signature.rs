@@ -140,7 +140,20 @@ pub fn core_verify(
     // 4. Compute B
     let b = compute_b(q1, &domain, h_generators, &msg_scalars);
 
-    // 5. Pairing check: e(A, W + BP2*e) * e(-B, BP2) == 1_GT
+    // 5. Pairing check
+    Ok(verify_signature_pairing(pk, signature, &b))
+}
+
+/// The BBS verification pairing check given a precomputed `B`:
+/// `e(A, W + BP2*e) * e(-B, BP2) == 1_GT`.
+///
+/// Shared by [`core_verify`] and blind verification (which builds `B` over the
+/// combined signer + blind generators).
+pub(crate) fn verify_signature_pairing(
+    pk: &PublicKey,
+    signature: &Signature,
+    b: &G1Projective,
+) -> bool {
     let bp2 = G2Projective::generator();
     let w_plus_bp2_e = pk.0 + bp2 * signature.e;
 
@@ -155,7 +168,7 @@ pub fn core_verify(
     ])
     .final_exponentiation();
 
-    Ok(bool::from(result.is_identity()))
+    bool::from(result.is_identity())
 }
 
 #[cfg(test)]
