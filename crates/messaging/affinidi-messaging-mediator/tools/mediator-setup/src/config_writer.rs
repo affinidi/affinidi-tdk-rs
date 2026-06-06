@@ -16,11 +16,6 @@ use crate::consts::*;
 pub struct GeneratedValues {
     /// The mediator's DID string (did:peer:..., did:webvh:..., or vta-minted)
     pub mediator_did: String,
-    /// Secrets for the mediator DID — pushed into the unified backend
-    /// under `mediator/operating/secrets`. Kept on this struct because
-    /// the wizard's banner/finish summary reports the count.
-    #[allow(dead_code)] // surfaced by main.rs, not config_writer
-    pub mediator_secrets: Vec<Secret>,
     /// Raw PKCS8 bytes of the JWT signing key. `None` when the operator
     /// chose `provide` mode — the mediator then loads the key from
     /// `MEDIATOR_JWT_SECRET` / `--jwt-secret-file` at boot. Pushed into
@@ -52,7 +47,16 @@ const DEFAULT_TEMPLATE: &str = include_str!("../../../conf/mediator.toml");
 /// Redis Lua functions required by the mediator at runtime.
 const ATM_FUNCTIONS_LUA: &str = include_str!("../../../conf/atm-functions.lua");
 
-/// Write the mediator configuration file and any associated secret files.
+/// Write the mediator configuration file and its non-secret companions.
+///
+/// Key material is *not* written here — the unified secret backend (opened
+/// in `main.rs::provision_secret_backend`, which runs before this) is the
+/// sole owner of secret persistence. An earlier revision also wrote a
+/// legacy `affinidi_secrets_resolver`-format array to
+/// `<config_dir>/secrets.json`; that clobbered the unified backend file
+/// whenever `[secrets].storage` pointed at the same path — which the
+/// default `conf/secrets.json` always does (#354). The legacy write is
+/// gone; nothing reads that format anymore.
 pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyhow::Result<()> {
     let toml_content = generate_toml(config, generated)?;
 
@@ -72,15 +76,6 @@ pub fn write_config(config: &WizardConfig, generated: &GeneratedValues) -> anyho
     // at default (world-readable) permissions.
     let lua_path = config_dir(config).join("atm-functions.lua");
     fs::write(&lua_path, ATM_FUNCTIONS_LUA)?;
-
-    // Write secrets file if using file:// storage
-    if config.secret_storage == STORAGE_FILE {
-        let secrets_path = config_dir(config).join("secrets.json");
-        crate::generators::secrets::write_secrets_file(
-            &generated.mediator_secrets,
-            &secrets_path.to_string_lossy(),
-        )?;
-    }
 
     Ok(())
 }
@@ -583,7 +578,6 @@ mod tests {
     fn test_generated() -> GeneratedValues {
         GeneratedValues {
             mediator_did: "did:peer:2.Vtest.Etest".into(),
-            mediator_secrets: vec![],
             jwt_secret: Some(b"test_jwt_secret_pkcs8".to_vec()),
             admin_did: Some("did:key:z6MkTest".into()),
             admin_secret: None,
@@ -758,7 +752,6 @@ mod tests {
 
         let generated = GeneratedValues {
             mediator_did: "vta://mediator".into(),
-            mediator_secrets: vec![],
             jwt_secret: Some(b"test_jwt".to_vec()),
             admin_did: Some("did:key:z6MkTest".into()),
             admin_secret: None,

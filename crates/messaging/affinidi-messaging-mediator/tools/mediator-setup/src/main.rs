@@ -1421,7 +1421,6 @@ fn write_config_artefacts(
 
     let generated = config_writer::GeneratedValues {
         mediator_did: artefacts.mediator_did.clone(),
-        mediator_secrets: artefacts.mediator_secrets.clone(),
         jwt_secret: artefacts.jwt_secret.clone(),
         admin_did: artefacts.admin_did.clone(),
         admin_secret: artefacts.admin_secret.clone(),
@@ -1573,7 +1572,13 @@ fn print_completion_summary(
     }
 
     if config.secret_storage == STORAGE_FILE {
-        println!("  \x1b[32m\u{2714}\x1b[0m Secrets: conf/secrets.json");
+        // Report the operator's actual backend path, not a hard-coded
+        // `conf/secrets.json` — the unified backend writes wherever
+        // `[secrets].storage` points.
+        println!(
+            "  \x1b[32m\u{2714}\x1b[0m Secrets: \x1b[1m{}\x1b[0m",
+            config.secret_file_path
+        );
     }
 
     if config.ssl_mode == SSL_SELF_SIGNED {
@@ -2064,10 +2069,12 @@ fn print_final_summary(config: &app::WizardConfig) {
     );
 
     if config.secret_storage == STORAGE_FILE {
-        let secrets_path = config_dir.join("secrets.json");
+        // The unified backend writes to the operator's configured
+        // `[secrets].storage` path — show that, not a hard-coded
+        // `<config_dir>/secrets.json`.
         println!(
             "    \x1b[36m{}\x1b[0m  — \x1b[33mprivate keys (keep secure!)\x1b[0m",
-            secrets_path.display()
+            config.secret_file_path
         );
     }
 
@@ -2367,12 +2374,14 @@ mod generate_and_write_tests {
             );
         }
 
-        // Phase: legacy `<config_dir>/secrets.json` (file-backend
-        // operating-keys export) — separate from the unified store.
+        // No legacy `<config_dir>/secrets.json` array is written anymore:
+        // the unified backend is the sole owner of secret persistence
+        // (#354). The wizard used to emit an `affinidi_secrets_resolver`
+        // array here that clobbered the unified file on the default path.
         let legacy_secrets = dir.join("conf").join("secrets.json");
         assert!(
-            legacy_secrets.exists(),
-            "legacy secrets.json must be written for file:// backend"
+            !legacy_secrets.exists(),
+            "wizard must not write a legacy secrets.json array (#354)"
         );
 
         // Phase: admin-monitor.json — TDKProfile-shaped JSON for
@@ -2467,6 +2476,67 @@ mod generate_and_write_tests {
         // Mediator.toml still lands — the recipe-skip is independent
         // of the main config write.
         assert!(dir.join("conf").join("mediator.toml").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial_test::serial]
+    async fn generate_and_write_file_backend_on_default_path_survives(/* #354 */) {
+        // Regression for #354. The default `[secrets].storage` path is
+        // `<config_dir>/secrets.json` — the very path the now-removed
+        // legacy writer hard-coded. Point the file:// backend there and
+        // assert the unified `{"entries": …}` envelope survives instead
+        // of being clobbered by a legacy `[{…}]` array.
+        let cwd = CwdGuard::new();
+        let dir = cwd.dir().to_path_buf();
+        let conf_dir = dir.join("conf");
+        let secrets_path = conf_dir.join("secrets.json");
+        let config = app::WizardConfig {
+            config_path: conf_dir
+                .join("mediator.toml")
+                .to_string_lossy()
+                .into_owned(),
+            deployment_type: DEPLOYMENT_LOCAL.into(),
+            didcomm_enabled: true,
+            did_method: DID_PEER.into(),
+            secret_storage: crate::consts::STORAGE_FILE.into(),
+            // Collides with the legacy writer's hard-coded target.
+            secret_file_path: secrets_path.to_string_lossy().into_owned(),
+            secret_file_encrypted: false,
+            ssl_mode: SSL_NONE.into(),
+            jwt_mode: JWT_MODE_GENERATE.into(),
+            admin_did_mode: ADMIN_GENERATE.into(),
+            ..app::WizardConfig::default()
+        };
+
+        generate_and_write(&config, None, /*save_recipe=*/ false)
+            .await
+            .expect("generate_and_write must succeed for did:peer file:// backend");
+
+        assert!(
+            secrets_path.exists(),
+            "the unified backend file must exist at the operator's path"
+        );
+        let text = std::fs::read_to_string(&secrets_path).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&text).expect("secrets file must be valid JSON");
+
+        // The unified envelope is a JSON object keyed by `entries`; the
+        // clobbered legacy form was a top-level array. Asserting the
+        // object shape is what would have caught #354.
+        assert!(
+            json.get("entries").and_then(|e| e.as_object()).is_some(),
+            "secrets file must be the unified {{\"entries\": …}} envelope, not a legacy array: {text}"
+        );
+        for well_known in [
+            affinidi_messaging_mediator_common::JWT_SECRET,
+            affinidi_messaging_mediator_common::OPERATING_SECRETS,
+            affinidi_messaging_mediator_common::ADMIN_CREDENTIAL,
+        ] {
+            assert!(
+                text.contains(well_known),
+                "unified backend missing well-known key '{well_known}' after write: {text}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
