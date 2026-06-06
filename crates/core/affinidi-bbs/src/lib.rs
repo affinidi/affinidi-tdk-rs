@@ -47,6 +47,7 @@
 
 #![allow(deprecated)] // G1/G2Projective::generator() deprecated in favor of GENERATOR constant
 
+pub mod blind;
 pub mod ciphersuite;
 pub mod error;
 pub mod generators;
@@ -57,6 +58,7 @@ pub mod pseudonym;
 pub mod signature;
 pub mod types;
 
+pub use blind::{blind_sign, blind_verify, commit};
 pub use ciphersuite::Ciphersuite;
 pub use error::BbsError;
 pub use keys::{keygen as keygen_with_cs, sk_to_pk};

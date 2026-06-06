@@ -58,11 +58,23 @@ pub fn p1_generator() -> G1Projective {
 ///     generator_i = hash_to_curve_g1(v, generator_dst)
 /// ```
 pub fn create_generators(count: usize, cs: Ciphersuite) -> Result<Vec<G1Projective>> {
-    let api_id = cs.api_id();
+    create_generators_with_api_id(count, &cs.api_id(), cs)
+}
 
-    let seed_dst = [api_id.as_slice(), b"SIG_GENERATOR_SEED_"].concat();
-    let generator_dst = [api_id.as_slice(), b"SIG_GENERATOR_DST_"].concat();
-    let generator_seed = [api_id.as_slice(), b"MESSAGE_GENERATOR_SEED"].concat();
+/// Create `count` deterministic generators under an explicit `api_id`.
+///
+/// Identical to [`create_generators`] but lets the caller namespace the
+/// generators (the core suite uses [`Ciphersuite::api_id`]; blind BBS uses
+/// [`Ciphersuite::blind_api_id`] and `"BLIND_" || blind_api_id` for its blind
+/// generators).
+pub fn create_generators_with_api_id(
+    count: usize,
+    api_id: &[u8],
+    cs: Ciphersuite,
+) -> Result<Vec<G1Projective>> {
+    let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
+    let generator_dst = [api_id, b"SIG_GENERATOR_DST_"].concat();
+    let generator_seed = [api_id, b"MESSAGE_GENERATOR_SEED"].concat();
 
     let expand_len = cs.expand_len();
     let mut generators = Vec::with_capacity(count);
@@ -110,7 +122,22 @@ pub fn calculate_domain(
     header: &[u8],
     cs: Ciphersuite,
 ) -> Result<Scalar> {
-    let domain_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
+    calculate_domain_with_api_id(pk, q1, generators, header, &cs.api_id(), cs)
+}
+
+/// Calculate the domain under an explicit `api_id` (see [`calculate_domain`]).
+///
+/// Blind BBS computes the domain over the combined message + blind generators
+/// under [`Ciphersuite::blind_api_id`].
+pub fn calculate_domain_with_api_id(
+    pk: &PublicKey,
+    q1: &G1Projective,
+    generators: &[G1Projective],
+    header: &[u8],
+    api_id: &[u8],
+    cs: Ciphersuite,
+) -> Result<Scalar> {
+    let domain_dst = [api_id, b"H2S_"].concat();
 
     let pk_bytes = pk.to_bytes();
     let count = (generators.len() as u64).to_be_bytes();
@@ -128,7 +155,7 @@ pub fn calculate_domain(
     for g in generators {
         data.extend_from_slice(&point_to_bytes(g));
     }
-    data.extend_from_slice(&cs.api_id());
+    data.extend_from_slice(api_id);
     data.extend_from_slice(&(header.len() as u64).to_be_bytes());
     data.extend_from_slice(header);
 
