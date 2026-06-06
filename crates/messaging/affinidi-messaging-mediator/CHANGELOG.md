@@ -11,11 +11,12 @@
   decoding, and the secret-key-type → curve mapping). Previously these curves
   were silently skipped by a wildcard arm, so a mediator could not pack to or
   unpack from a P-384/P-521 peer.
-- **Build note:** the bump to `affinidi-crypto 0.2` un-unifies `vta-sdk`
-  (which pins `affinidi-crypto 0.1`) from the workspace `[patch.crates-io]`
-  redirect. This crate will not build until a `vta-sdk` release against
-  `affinidi-crypto 0.2` is published and the `vta-sdk` dependency here is
-  bumped to it. Tracked as a cross-repo coordination follow-up.
+- Updated `vta-sdk` to `0.9.11` and `didwebvh-rs` to `0.5.4`, both of which
+  now build on `affinidi-crypto 0.2` / `affinidi-data-integrity 0.7`. This
+  resolves the earlier un-unification where the older `vta-sdk 0.9.x`
+  (`crypto 0.1`) and `didwebvh-rs 0.5.3` (`data-integrity 0.6 → crypto 0.1`)
+  dragged a second `affinidi-crypto` into the tree. The whole crate now
+  resolves to a single `affinidi-crypto 0.2.0`.
 
 ## 5th June 2026
 
