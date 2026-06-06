@@ -2,6 +2,27 @@
 
 ## Changelog history
 
+## 6th June 2026
+
+### 0.1.7 — stop clobbering the unified secret backend
+
+- **FIX (#354):** After provisioning the unified secret backend, the wizard
+  ran a legacy block that wrote an `affinidi_secrets_resolver`-format array
+  to a hard-coded `<config_dir>/secrets.json`. Whenever `[secrets].storage`
+  pointed at that same path — which the default `conf/secrets.json` always
+  does — this clobbered the unified `{"entries": …}` envelope the backend
+  had just written. The mediator then couldn't find its operating secrets
+  or admin credential and refused to start with
+  `Configuration Error: No operating secrets found`, crash-looping while
+  the file backend re-initialised the file to `{"entries": {}}` on each
+  restart — making it look like the wizard never wrote anything.
+
+  The legacy writer is removed entirely. The unified secret backend
+  (opened in `provision_secret_backend`) is now the sole owner of secret
+  persistence; nothing reads the legacy array format anymore. Runtime
+  secret persistence is unaffected — it was always handled by the
+  `file://` backend's own write path, not by this wizard block.
+
 ## 5th June 2026
 
 ### 0.1.6 — well-formed `file://` secret-backend URLs
