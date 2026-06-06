@@ -94,6 +94,12 @@ pub use multi::{MultiVerifyResult, VerifyPolicy, verify_multi};
 #[cfg(feature = "bbs-2023")]
 pub mod bbs_2023;
 
+/// W3C vc-di-bbs `bbs-2023` transformation primitives (RDF-canonical, standards
+/// interoperable). The standards-track replacement for [`bbs_2023`]'s internal
+/// statement encoding; built incrementally and pinned to the official vectors.
+#[cfg(feature = "bbs-2023")]
+pub mod bbs_2023_transform;
+
 pub use error::{DataIntegrityError, SignatureFailure};
 pub use options::{SignOptions, VerifyOptions};
 

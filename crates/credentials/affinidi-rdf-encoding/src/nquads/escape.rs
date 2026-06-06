@@ -6,13 +6,15 @@ pub fn escape_nquads(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
+            '\u{0008}' => out.push_str("\\b"),
             '\t' => out.push_str("\\t"),
             '\n' => out.push_str("\\n"),
+            '\u{000C}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if c < '\u{0020}' => {
-                // Control characters → \uXXXX
+            c if c < '\u{0020}' || c == '\u{007F}' => {
+                // Control characters (incl. DEL) → \uXXXX in canonical form.
                 let cp = c as u32;
                 out.push_str(&format!("\\u{cp:04X}"));
             }
@@ -31,10 +33,13 @@ pub fn unescape_nquads(s: &str) -> Result<String, String> {
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
+                Some('b') => out.push('\u{0008}'),
                 Some('t') => out.push('\t'),
                 Some('n') => out.push('\n'),
+                Some('f') => out.push('\u{000C}'),
                 Some('r') => out.push('\r'),
                 Some('"') => out.push('"'),
+                Some('\'') => out.push('\''),
                 Some('\\') => out.push('\\'),
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();

@@ -161,6 +161,43 @@ impl Signature {
     }
 }
 
+/// A per-verifier pseudonym: `Pseudonym = OP · nym_secret`, where `OP` is a
+/// generator derived from the verifier's context id (see
+/// [`crate::pseudonym::calculate_pseudonym_generator`]).
+///
+/// Stable for a fixed verifier context + holder secret (the verifier can
+/// recognise repeat presentations), and unlinkable across verifier contexts.
+/// 48 bytes (compressed G1); never the identity point.
+#[derive(Clone, Debug)]
+pub struct Pseudonym(pub(crate) G1Projective);
+
+impl Pseudonym {
+    /// Serialize the pseudonym to compressed G1 bytes (48 bytes).
+    pub fn to_bytes(&self) -> [u8; 48] {
+        G1Affine::from(&self.0).to_compressed()
+    }
+
+    /// Deserialize a pseudonym from compressed G1 bytes; rejects identity/invalid.
+    pub fn from_bytes(bytes: &[u8; 48]) -> Result<Self> {
+        let affine = G1Affine::from_compressed(bytes);
+        if affine.is_some().into() {
+            let point = affine.unwrap();
+            if bool::from(point.is_identity()) {
+                return Err(BbsError::InvalidProof("pseudonym is identity".into()));
+            }
+            Ok(Pseudonym(G1Projective::from(point)))
+        } else {
+            Err(BbsError::InvalidProof("invalid pseudonym G1 point".into()))
+        }
+    }
+}
+
+impl PartialEq for Pseudonym {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_bytes() == other.to_bytes()
+    }
+}
+
 /// A BBS zero-knowledge proof of selective disclosure.
 ///
 /// Variable length: 144 + (4 + U) * 32 bytes for SHA-256,

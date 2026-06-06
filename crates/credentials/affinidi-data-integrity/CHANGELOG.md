@@ -1,5 +1,37 @@
 # Affinidi Data Integrity Changelog
 
+## 6th June 2026 Release 0.7.0
+
+Standards-interoperable **W3C vc-di-bbs `bbs-2023`** selective disclosure
+(behind the `bbs-2023` feature). The new `bbs_2023_transform` module
+implements the full cryptosuite — issuer, holder, and verifier — RDF-canonical
+and pinned byte-for-byte to the official `w3c/vc-di-bbs` test vectors. See
+ADR 0002.
+
+### Added
+
+- `bbs_2023_transform`: `sign_base_document` / `create_base_proof_value`
+  (issuer), `create_derived_proof` (holder), `verify_derived_proof` (verifier),
+  plus the building blocks (`proof_hash`, `hmac_canonicalize`,
+  `canonicalize_and_group`). The base `proofValue` matches the W3C vector
+  exactly, and the verifier accepts the reference's derived proof.
+- New optional deps `hmac` + `ciborium` under the `bbs-2023` feature.
+
+### Changed / BREAKING
+
+- **BREAKING:** bumped the `affinidi-bbs` dependency to `0.2` — its
+  signature/proof wire format is now IETF-compliant (`draft-irtf-cfrg-bbs-signatures`)
+  and is **not** compatible with the previous, self-consistent format. No BBS
+  credentials had been issued in production.
+
+### Notes
+
+- The earlier `bbs_2023` module (affinidi-internal statement encoding) is
+  retained for now; new work should use `bbs_2023_transform`.
+- Proof-bearing cryptography over BLS12-381 — pending the BBS security audit
+  before backing real credentials. Per-verifier pseudonym / holder binding is
+  in progress (the BBS pseudonym proof primitive lands in `affinidi-bbs 0.2`).
+
 ## 18th April 2026 Release 0.6.0
 
 Follow-up release to 0.5.4 that removes the deprecated 0.5.x migration

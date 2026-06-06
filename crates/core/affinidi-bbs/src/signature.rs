@@ -77,14 +77,19 @@ pub fn core_sign(
     // 3. Calculate domain
     let domain = calculate_domain(pk, q1, h_generators, header, cs)?;
 
-    // 4. Compute e — hash includes SK bytes (zeroized after use)
+    // 4. Compute e — hash includes SK bytes (zeroized after use).
+    //
+    // Per draft-irtf-cfrg-bbs-signatures CoreSign:
+    //   e = hash_to_scalar(serialize(SK, msg_1, ..., msg_L, domain), H2S_dst)
+    // The messages come BEFORE the domain in the serialization (interop-
+    // critical: a different order produces a non-spec signature).
     let e_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
     let mut e_input = Vec::new();
     e_input.extend_from_slice(&sk.0.to_be_bytes());
-    e_input.extend_from_slice(&domain.to_be_bytes());
     for scalar in &msg_scalars {
         e_input.extend_from_slice(&scalar.to_be_bytes());
     }
+    e_input.extend_from_slice(&domain.to_be_bytes());
     let e = hash_to_scalar(&e_input, &e_dst, cs)?;
     e_input.zeroize(); // Zeroize SK bytes from heap
 

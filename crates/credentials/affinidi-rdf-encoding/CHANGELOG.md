@@ -1,5 +1,29 @@
 # Affinidi RDF Encoding Changelog
 
+## 6th June 2026 Release 0.1.2
+
+W3C-conformance fixes for RDFC-1.0 and JSON-LD, locked with the official
+`w3c/rdf-canon` test suite (59/63 cases; the 4 skipped are documented
+poison/automorphism graphs) and the vc-di-bbs canonicalization vector.
+
+### Fixed
+
+- **JSON-LD number conversion** (root cause): integral doubles (`7.0`) now map
+  to `xsd:integer`; non-integers use the canonical `xsd:double` lexical form
+  (`5.5` → `"5.5E0"`). This was a latent bug affecting every rdfc-based suite
+  on credentials containing numbers.
+- **RDFC-1.0 N-degree** no longer recurses forever on cyclic blank-node graphs
+  (issue the temporary id before recursing).
+- `hash_related` appends the first-degree hash raw (the spurious `_:` prefix had
+  flipped the canonical ordering of symmetric blank nodes).
+- RDF dataset deduplication (set semantics); N-Quads `\b`/`\f`/DEL escaping;
+  N-Quads IRI multi-byte advance + UCHAR (`\uXXXX`) unescaping.
+
+### Added
+
+- `rdfc1::canonicalize_with_label_map` and `IdentifierIssuer::issued_map()` —
+  expose the input→`c14n` label map needed by selective-disclosure schemes.
+
 ## 2nd March 2026 Release 0.1.1
 
 - **PERFORMANCE:** ~40% faster RDFC canonicalization pipeline

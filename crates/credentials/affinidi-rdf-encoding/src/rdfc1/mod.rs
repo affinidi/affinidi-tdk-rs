@@ -18,7 +18,26 @@ use identifier_issuer::IdentifierIssuer;
 ///
 /// Implements the W3C RDF Dataset Canonicalization algorithm (RDFC-1.0).
 pub fn canonicalize(dataset: &Dataset) -> Result<String> {
-    let quads = dataset.quads();
+    Ok(canonicalize_with_label_map(dataset)?.0)
+}
+
+/// Canonicalize and also return the **label map** — `input blank-node id →
+/// canonical c14n label` — needed by selective-disclosure schemes (vc-di-bbs /
+/// vc-di-ecdsa) to correlate selected statements with canonical statements.
+pub fn canonicalize_with_label_map(
+    dataset: &Dataset,
+) -> Result<(String, BTreeMap<String, String>)> {
+    // An RDF dataset is a SET of quads: deduplicate identical quads up front so
+    // a duplicate in the input cannot perturb first-degree hashes or appear
+    // twice in the canonical output. Identity is by serialized N-Quad form.
+    let mut seen = std::collections::HashSet::new();
+    let deduped: Vec<Quad> = dataset
+        .quads()
+        .iter()
+        .filter(|q| seen.insert(nquads::serialize_quad(q)))
+        .cloned()
+        .collect();
+    let quads = deduped.as_slice();
 
     // Step 1: Build blank_node_to_quads map
     let mut blank_node_to_quads: HashMap<String, Vec<&Quad>> = HashMap::new();
@@ -31,9 +50,9 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
         }
     }
 
-    // If no blank nodes, just serialize and sort
+    // If no blank nodes, just serialize and sort (empty label map).
     if blank_node_to_quads.is_empty() {
-        return Ok(serialize_sorted(quads));
+        return Ok((serialize_sorted(quads), BTreeMap::new()));
     }
 
     // Step 2: Compute first-degree hashes
@@ -111,8 +130,13 @@ pub fn canonicalize(dataset: &Dataset) -> Result<String> {
         .map(|q| relabel_quad(q, &canonical_issuer))
         .collect();
 
-    // Step 6: Serialize and sort
-    Ok(serialize_sorted(&relabeled))
+    // Step 6: Serialize and sort; return with the input→c14n label map.
+    let label_map: BTreeMap<String, String> = canonical_issuer
+        .issued_map()
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    Ok((serialize_sorted(&relabeled), label_map))
 }
 
 /// Canonicalize and return the SHA-256 hash of the canonical N-Quads.

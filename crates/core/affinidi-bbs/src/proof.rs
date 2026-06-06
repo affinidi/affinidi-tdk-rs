@@ -23,8 +23,9 @@ use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
 use crate::generators::{calculate_domain, create_generators, p1_generator, point_to_bytes};
 use crate::hash::{hash_to_scalar, messages_to_scalars, scalar_to_bytes};
+use crate::pseudonym::calculate_pseudonym_generator;
 use crate::signature::compute_b;
-use crate::types::{Proof, PublicKey, Signature};
+use crate::types::{Proof, Pseudonym, PublicKey, Signature};
 
 /// Generate a zero-knowledge proof of selective disclosure.
 ///
@@ -51,6 +52,118 @@ pub fn core_proof_gen(
     disclosed_indexes: &[usize],
     cs: Ciphersuite,
 ) -> Result<Proof> {
+    Ok(core_proof_gen_impl(
+        pk,
+        signature,
+        header,
+        presentation_header,
+        messages,
+        disclosed_indexes,
+        None,
+        None,
+        cs,
+    )?
+    .0)
+}
+
+/// Generate a selective-disclosure proof bound to a per-verifier pseudonym
+/// (draft-irtf-cfrg-bbs-per-verifier-linkability `ProofGenWithPseudonym`).
+///
+/// The **last** message in `messages` is the holder's `nym_secret` and MUST be
+/// undisclosed. `verifier_context` is the per-verifier context id (the
+/// pseudonym entropy). Returns the proof and the [`Pseudonym`].
+#[allow(clippy::too_many_arguments)]
+pub fn core_proof_gen_with_pseudonym(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+    cs: Ciphersuite,
+) -> Result<(Proof, Pseudonym)> {
+    let op = calculate_pseudonym_generator(verifier_context, cs);
+    let (proof, pseudonym) = core_proof_gen_impl(
+        pk,
+        signature,
+        header,
+        presentation_header,
+        messages,
+        disclosed_indexes,
+        None,
+        Some(op),
+        cs,
+    )?;
+    let pseudonym = pseudonym.ok_or_else(|| BbsError::Crypto("pseudonym not produced".into()))?;
+    Ok((proof, Pseudonym(pseudonym)))
+}
+
+/// Verify a selective-disclosure proof bound to a per-verifier pseudonym
+/// (`ProofVerifyWithPseudonym`). `verifier_context` must match generation, and
+/// `pseudonym` is the value the holder presented.
+#[allow(clippy::too_many_arguments)]
+pub fn core_proof_verify_with_pseudonym(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    verifier_context: &[u8],
+    pseudonym: &Pseudonym,
+    cs: Ciphersuite,
+) -> Result<bool> {
+    let op = calculate_pseudonym_generator(verifier_context, cs);
+    core_proof_verify_impl(
+        pk,
+        proof,
+        header,
+        presentation_header,
+        disclosed_messages,
+        disclosed_indexes,
+        Some((op, pseudonym.0)),
+        cs,
+    )
+}
+
+/// The per-proof random scalars (`r1, r2, ẽ, r̃1, r̃3, m̃_j`). Normally sampled;
+/// injectable so the deterministic IETF proof vectors can be reproduced exactly.
+struct ProofRandomScalars {
+    r1: Scalar,
+    r2: Scalar,
+    e_tilde: Scalar,
+    r1_tilde: Scalar,
+    r3_tilde: Scalar,
+    m_tildes: Vec<Scalar>,
+}
+
+impl ProofRandomScalars {
+    fn random(u: usize) -> Self {
+        let mut rng = rand::rng();
+        ProofRandomScalars {
+            r1: random_nonzero_scalar(&mut rng),
+            r2: random_nonzero_scalar(&mut rng),
+            e_tilde: random_nonzero_scalar(&mut rng),
+            r1_tilde: random_nonzero_scalar(&mut rng),
+            r3_tilde: random_nonzero_scalar(&mut rng),
+            m_tildes: (0..u).map(|_| random_nonzero_scalar(&mut rng)).collect(),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn core_proof_gen_impl(
+    pk: &PublicKey,
+    signature: &Signature,
+    header: &[u8],
+    presentation_header: &[u8],
+    messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    random_scalars: Option<ProofRandomScalars>,
+    nym_op: Option<G1Projective>,
+    cs: Ciphersuite,
+) -> Result<(Proof, Option<G1Projective>)> {
     let l = messages.len();
 
     // Validate disclosed indexes: bounds check and no duplicates
@@ -87,18 +200,16 @@ pub fn core_proof_gen(
     undisclosed_indexes.sort();
     let u = undisclosed_indexes.len();
 
-    // 4. Generate random scalars
-    let mut rng = rand::rng();
-    let r1 = random_nonzero_scalar(&mut rng);
-    let r2 = random_nonzero_scalar(&mut rng);
-    let e_tilde = random_nonzero_scalar(&mut rng);
-    let r1_tilde = random_nonzero_scalar(&mut rng);
-    let r3_tilde = random_nonzero_scalar(&mut rng);
-
-    let mut m_tildes: Vec<Scalar> = Vec::with_capacity(u);
-    for _ in 0..u {
-        m_tildes.push(random_nonzero_scalar(&mut rng));
-    }
+    // 4. Random scalars — injected for deterministic KATs, otherwise sampled.
+    let ProofRandomScalars {
+        r1,
+        r2,
+        e_tilde,
+        r1_tilde,
+        r3_tilde,
+        m_tildes,
+    } = random_scalars.unwrap_or_else(|| ProofRandomScalars::random(u));
+    debug_assert_eq!(m_tildes.len(), u, "one m~ per undisclosed message");
 
     // 5. Compute B = P1 + Q1*domain + H1*msg1 + ... + HL*msgL
     let b = compute_b(q1, &domain, h_generators, &msg_scalars);
@@ -121,6 +232,31 @@ pub fn core_proof_gen(
         t2 += h_generators[j] * m_tildes[k];
     }
 
+    // 8b. Per-verifier pseudonym binding (optional). Per
+    // draft-irtf-cfrg-bbs-per-verifier-linkability, the `nym_secret` is the
+    // LAST signed message (always undisclosed); the pseudonym reuses that
+    // message's blinding `m~`. PseudonymProofInit: Pseudonym = OP·nym_secret,
+    // Ut = OP·m~_nym.
+    let nym_terms: Option<(G1Projective, G1Projective, G1Projective)> = match nym_op {
+        Some(op) => {
+            let nym_index = l - 1;
+            if disclosed_indexes.contains(&nym_index) {
+                return Err(BbsError::InvalidIndex(
+                    "nym_secret (last message) must not be disclosed".into(),
+                ));
+            }
+            // L-1 is the largest index, hence the last entry of the sorted
+            // undisclosed list, so its m~ is m_tildes[u-1].
+            let pseudonym = op * msg_scalars[nym_index];
+            let ut = op * m_tildes[u - 1];
+            if bool::from(pseudonym.is_identity()) || bool::from(ut.is_identity()) {
+                return Err(BbsError::Crypto("pseudonym or Ut is identity".into()));
+            }
+            Some((pseudonym, op, ut))
+        }
+        None => None,
+    };
+
     // 9. Fiat-Shamir challenge (uses only disclosed message scalars)
     let disclosed_msg_scalars: Vec<Scalar> =
         disclosed_indexes.iter().map(|&i| msg_scalars[i]).collect();
@@ -135,6 +271,7 @@ pub fn core_proof_gen(
         &disclosed_msg_scalars,
         &domain,
         presentation_header,
+        nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
         cs,
     )?;
 
@@ -162,7 +299,8 @@ pub fn core_proof_gen(
     }
     proof_bytes.extend_from_slice(&scalar_to_bytes(&challenge));
 
-    Ok(Proof::from_bytes(&proof_bytes))
+    let pseudonym = nym_terms.map(|(pseudonym, _, _)| pseudonym);
+    Ok((Proof::from_bytes(&proof_bytes), pseudonym))
 }
 
 /// Verify a BBS zero-knowledge proof.
@@ -183,6 +321,31 @@ pub fn core_proof_verify(
     presentation_header: &[u8],
     disclosed_messages: &[&[u8]],
     disclosed_indexes: &[usize],
+    cs: Ciphersuite,
+) -> Result<bool> {
+    core_proof_verify_impl(
+        pk,
+        proof,
+        header,
+        presentation_header,
+        disclosed_messages,
+        disclosed_indexes,
+        None,
+        cs,
+    )
+}
+
+/// Shared verify implementation. `nym = Some((OP, Pseudonym))` checks the
+/// per-verifier pseudonym binding (`Uv = OP·m̂_nym − Pseudonym·c`).
+#[allow(clippy::too_many_arguments)]
+fn core_proof_verify_impl(
+    pk: &PublicKey,
+    proof: &Proof,
+    header: &[u8],
+    presentation_header: &[u8],
+    disclosed_messages: &[&[u8]],
+    disclosed_indexes: &[usize],
+    nym: Option<(G1Projective, G1Projective)>,
     cs: Ciphersuite,
 ) -> Result<bool> {
     // Validate public key
@@ -277,6 +440,29 @@ pub fn core_proof_verify(
         t2 += h_generators[j] * m_hats[k];
     }
 
+    // 7b. Per-verifier pseudonym binding (optional). nym_secret is the last
+    // message (index L-1), always undisclosed; its response is m_hats[u-1].
+    // PseudonymProofVerify: Uv = OP·m̂_nym − Pseudonym·c.
+    let nym_terms: Option<(G1Projective, G1Projective, G1Projective)> = match nym {
+        Some((op, pseudonym)) => {
+            let nym_index = l - 1;
+            if disclosed_indexes.contains(&nym_index) {
+                return Err(BbsError::InvalidIndex(
+                    "nym_secret (last message) must not be disclosed".into(),
+                ));
+            }
+            if bool::from(op.is_identity()) || bool::from(pseudonym.is_identity()) {
+                return Ok(false);
+            }
+            let uv = op * m_hats[u - 1] - pseudonym * challenge;
+            if bool::from(uv.is_identity()) {
+                return Ok(false);
+            }
+            Some((pseudonym, op, uv))
+        }
+        None => None,
+    };
+
     // 8. Recompute challenge
     let recomputed_challenge = compute_challenge(
         &abar,
@@ -288,6 +474,7 @@ pub fn core_proof_verify(
         &disclosed_scalars,
         &domain,
         presentation_header,
+        nym_terms.as_ref().map(|(p, o, u)| (p, o, u)),
         cs,
     )?;
 
@@ -315,6 +502,12 @@ pub fn core_proof_verify(
 }
 
 /// Compute the Fiat-Shamir challenge.
+///
+/// When `nym_terms` is `Some((Pseudonym, OP, Ut))`, the per-verifier pseudonym
+/// points are inserted between `T2` and `domain`, per
+/// draft-irtf-cfrg-bbs-per-verifier-linkability ProofWithPseudonymChallengeCalculate:
+///   `c_arr = (R, i,msg.., Abar, Bbar, D, T1, T2, pseudonym, OP, Ut, domain)`.
+/// With `None` the transcript is byte-identical to the plain BBS proof.
 #[allow(clippy::too_many_arguments)]
 fn compute_challenge(
     abar: &G1Projective,
@@ -326,27 +519,42 @@ fn compute_challenge(
     disclosed_scalars: &[Scalar],
     domain: &Scalar,
     presentation_header: &[u8],
+    nym_terms: Option<(&G1Projective, &G1Projective, &G1Projective)>,
     cs: Ciphersuite,
 ) -> Result<Scalar> {
     let challenge_dst = [cs.api_id().as_slice(), b"H2S_"].concat();
 
+    // Per draft-irtf-cfrg-bbs-signatures ProofChallengeCalculate:
+    //   c_arr  = (R, i_1, msg_i1, ..., i_R, msg_iR, Abar, Bbar, D, T1, T2, domain)
+    //   c_octs = serialize(c_arr) || I2OSP(length(ph), 8) || ph
+    // Interop-critical ordering: the disclosed (index, message) PAIRS are
+    // interleaved and come FIRST (after the count R), the proof points come
+    // AFTER the messages, and the presentation header is length-prefixed last.
+    debug_assert_eq!(disclosed_indexes.len(), disclosed_scalars.len());
     let mut data = Vec::new();
+
+    // R, then interleaved (i_j, msg_i_j) pairs.
+    data.extend_from_slice(&(disclosed_indexes.len() as u64).to_be_bytes());
+    for (&idx, scalar) in disclosed_indexes.iter().zip(disclosed_scalars) {
+        data.extend_from_slice(&(idx as u64).to_be_bytes());
+        data.extend_from_slice(&scalar_to_bytes(scalar));
+    }
+
+    // Proof points; the pseudonym binding (Pseudonym, OP, Ut) goes between T2
+    // and domain when present; then domain.
     data.extend_from_slice(&point_to_bytes(abar));
     data.extend_from_slice(&point_to_bytes(bbar));
     data.extend_from_slice(&point_to_bytes(d));
     data.extend_from_slice(&point_to_bytes(t1));
     data.extend_from_slice(&point_to_bytes(t2));
-
-    // Disclosed indexes and messages
-    data.extend_from_slice(&(disclosed_indexes.len() as u64).to_be_bytes());
-    for &idx in disclosed_indexes {
-        data.extend_from_slice(&(idx as u64).to_be_bytes());
+    if let Some((pseudonym, op, ut)) = nym_terms {
+        data.extend_from_slice(&point_to_bytes(pseudonym));
+        data.extend_from_slice(&point_to_bytes(op));
+        data.extend_from_slice(&point_to_bytes(ut));
     }
-    for scalar in disclosed_scalars {
-        data.extend_from_slice(&scalar_to_bytes(scalar));
-    }
-
     data.extend_from_slice(&scalar_to_bytes(domain));
+
+    // Length-prefixed presentation header.
     data.extend_from_slice(&(presentation_header.len() as u64).to_be_bytes());
     data.extend_from_slice(presentation_header);
 
@@ -392,6 +600,96 @@ mod tests {
         let sk = SecretKey(sk_scalar);
         let pk = PublicKey(G2Projective::generator() * sk_scalar);
         (sk, pk)
+    }
+
+    // --- exact proof reproduction against the IETF/DIF vectors ---------------
+    //
+    // Proofs are randomized, so the published vectors fix the random scalars in
+    // their `trace`. Injecting those scalars must reproduce the proof bytes
+    // exactly — the definitive check that OUR prover is spec-compliant (a
+    // conforming verifier will accept our proofs), complementing the
+    // proof-verify KATs in tests/interop_kat.rs (we accept theirs).
+
+    fn scalar_from_hex(s: &str) -> Scalar {
+        let bytes: [u8; 32] = hex::decode(s).unwrap().try_into().unwrap();
+        Scalar::from_be_bytes(&bytes).unwrap()
+    }
+
+    fn reproduce_proof_fixture(name: &str) {
+        let path = format!(
+            "{}/tests/fixtures/bls12-381-sha-256/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            name
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+
+        let pk_bytes: [u8; 96] = hex::decode(v["signerPublicKey"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let pk = PublicKey::from_bytes(&pk_bytes).unwrap();
+        let sig =
+            Signature::from_bytes(&hex::decode(v["signature"].as_str().unwrap()).unwrap()).unwrap();
+        let header = hex::decode(v["header"].as_str().unwrap()).unwrap();
+        let ph = hex::decode(v["presentationHeader"].as_str().unwrap()).unwrap();
+        let msgs: Vec<Vec<u8>> = v["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| hex::decode(m.as_str().unwrap()).unwrap())
+            .collect();
+        let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
+        let disclosed: Vec<usize> = v["disclosedIndexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i.as_u64().unwrap() as usize)
+            .collect();
+
+        let rs = &v["trace"]["random_scalars"];
+        let scalars = ProofRandomScalars {
+            r1: scalar_from_hex(rs["r1"].as_str().unwrap()),
+            r2: scalar_from_hex(rs["r2"].as_str().unwrap()),
+            e_tilde: scalar_from_hex(rs["e_tilde"].as_str().unwrap()),
+            r1_tilde: scalar_from_hex(rs["r1_tilde"].as_str().unwrap()),
+            r3_tilde: scalar_from_hex(rs["r3_tilde"].as_str().unwrap()),
+            m_tildes: rs["m_tilde_scalars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| scalar_from_hex(s.as_str().unwrap()))
+                .collect(),
+        };
+
+        let (proof, _) = core_proof_gen_impl(
+            &pk,
+            &sig,
+            &header,
+            &ph,
+            &refs,
+            &disclosed,
+            Some(scalars),
+            None,
+            Ciphersuite::Bls12381Sha256,
+        )
+        .unwrap();
+
+        assert_eq!(
+            hex::encode(proof.to_bytes()),
+            v["proof"].as_str().unwrap(),
+            "reproduced proof bytes diverge from the IETF vector ({name})"
+        );
+    }
+
+    #[test]
+    fn reproduce_proof_single_disclosed_vector() {
+        reproduce_proof_fixture("proof001.json");
+    }
+
+    #[test]
+    fn reproduce_proof_partial_disclosure_vector() {
+        reproduce_proof_fixture("proof003.json");
     }
 
     #[test]

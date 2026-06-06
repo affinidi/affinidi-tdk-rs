@@ -21,13 +21,17 @@ pub fn hash_related_blank_node(
     temp_issuer: &IdentifierIssuer,
     blank_node_to_hash: &HashMap<String, String>,
 ) -> String {
-    // Build the identifier to use for the related node
+    // Build the identifier to use for the related node. Per RDFC-1.0, an
+    // *issued* id (canonical or temporary) is used in blank-node form (`_:id`),
+    // but when neither issuer has issued one, the related node's first-degree
+    // HASH is appended raw — with NO `_:` prefix. Prefixing it changes the hash
+    // and silently flips the canonical ordering of symmetric blank nodes.
     let identifier = if let Some(canonical) = canonical_issuer.get(related_id) {
-        canonical.to_string()
+        format!("_:{canonical}")
     } else if let Some(temp) = temp_issuer.get(related_id) {
-        temp.to_string()
+        format!("_:{temp}")
     } else {
-        // Use the first-degree hash via O(1) reverse lookup
+        // First-degree hash via O(1) reverse lookup — appended raw.
         blank_node_to_hash
             .get(related_id)
             .cloned()
@@ -41,7 +45,6 @@ pub fn hash_related_blank_node(
         input.push_str(predicate_iri);
         input.push('>');
     }
-    input.push_str("_:");
     input.push_str(&identifier);
 
     let hash = Sha256::digest(input.as_bytes());

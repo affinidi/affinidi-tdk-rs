@@ -17,7 +17,7 @@ affinidi-did-resolver-cache-sdk = "0.8"
 affinidi-did-authentication = "0.3"
 affinidi-did-common = "0.3"
 affinidi-secrets-resolver = "0.5"
-affinidi-data-integrity = "0.6"
+affinidi-data-integrity = "0.7"
 
 ahash = "0.8"
 base64 = "0.22"
