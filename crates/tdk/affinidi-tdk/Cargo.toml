@@ -29,7 +29,7 @@ affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.1"
 affinidi-meeting-place = { version = "0.4", optional = true }
-affinidi-data-integrity = { version = "0.6",  optional = true }
+affinidi-data-integrity = { version = "0.7",  optional = true }
 
 # External Crates
 clap = { version = "4", features = ["derive"] }
