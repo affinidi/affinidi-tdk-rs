@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.3 — 2026-06-07
+
+### Fixed
+
+- Republish to pick up the `affinidi-data-integrity` `0.6 → 0.7` bump. The
+  dependency requirement was updated to `0.7` in #358 but this crate's
+  version was not bumped, so the published `0.6.2` still required
+  `data-integrity ^0.6`. That left two `data-integrity` versions (0.6.x +
+  0.7.0) in any downstream graph that also used 0.7 — notably blocking
+  `affinidi-tdk` from publishing with `expected DataIntegrityError, found a
+  different DataIntegrityError`. No code or API change in this crate.
+
 ## 0.6.2 — 2026-05-28
 
 ### Security
