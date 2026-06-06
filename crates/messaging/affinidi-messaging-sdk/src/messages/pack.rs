@@ -39,7 +39,7 @@ impl SharedState {
         let _span = span!(Level::DEBUG, "pack_encrypted",);
 
         async move {
-            // 1. Resolve recipient DID and get their key agreement public key
+            // Resolve recipient DID document (needed for both anoncrypt and authcrypt)
             let recipient_doc = self
                 .tdk_common
                 .did_resolver()
@@ -52,16 +52,10 @@ impl SharedState {
                     )
                 })?;
             let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
-            let recipient_kid = recipient_ka_kids.first().ok_or_else(|| {
-                ATMError::DidcommError(
-                    "pack_encrypted".into(),
-                    "recipient has no key agreement key".into(),
-                )
-            })?;
-            let recipient_pub = resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
 
             if let Some(sender_did) = from {
-                // Authcrypt: resolve sender, get private key, encrypt
+                // Authcrypt: resolve sender first to determine curve, then
+                // pick a recipient key on the same curve.
                 let sender_doc = self
                     .tdk_common
                     .did_resolver()
@@ -103,6 +97,13 @@ impl SharedState {
                     )
                 })?;
 
+                // Find a recipient key agreement key on the same curve
+                let (recipient_kid, recipient_pub) = find_matching_recipient_key(
+                    &recipient_doc.doc,
+                    &recipient_ka_kids,
+                    sender_curve,
+                )?;
+
                 let packed = pack::pack_encrypted_authcrypt(
                     message,
                     sender_kid,
@@ -124,7 +125,16 @@ impl SharedState {
 
                 Ok((packed, metadata))
             } else {
-                // Anoncrypt
+                // Anoncrypt: pick the first available key agreement key
+                let recipient_kid = recipient_ka_kids.first().ok_or_else(|| {
+                    ATMError::DidcommError(
+                        "pack_encrypted".into(),
+                        "recipient has no key agreement key".into(),
+                    )
+                })?;
+                let recipient_pub =
+                    resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
+
                 let packed =
                     pack::pack_encrypted_anoncrypt(message, &[(recipient_kid, &recipient_pub)])
                         .map_err(|e| {
@@ -163,6 +173,25 @@ impl SharedState {
         .instrument(_span)
         .await
     }
+}
+
+/// Find the first recipient key agreement key whose curve matches the sender's.
+fn find_matching_recipient_key<'a>(
+    doc: &Document,
+    ka_kids: &'a [&'a str],
+    sender_curve: Curve,
+) -> Result<(&'a str, PublicKeyAgreement), ATMError> {
+    for kid in ka_kids {
+        if let Ok(pub_key) = resolve_public_key_agreement(doc, kid)
+            && pub_key.curve() == sender_curve
+        {
+            return Ok((kid, pub_key));
+        }
+    }
+    Err(ATMError::DidcommError(
+        "pack_encrypted".into(),
+        format!("recipient has no key agreement key on curve {sender_curve:?}"),
+    ))
 }
 
 /// Extract a PublicKeyAgreement from a DID Document's verification method.
