@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 6th June 2026
+
+### 0.15.14 — P-384/P-521 key agreement (#357)
+
+- The DIDComm-compat pack/unpack paths now recognise P-384 and P-521
+  key-agreement keys (sender secret resolution, recipient verification-method
+  decoding, and the secret-key-type → curve mapping). Previously these curves
+  were silently skipped by a wildcard arm, so a mediator could not pack to or
+  unpack from a P-384/P-521 peer.
+- **Build note:** the bump to `affinidi-crypto 0.2` un-unifies `vta-sdk`
+  (which pins `affinidi-crypto 0.1`) from the workspace `[patch.crates-io]`
+  redirect. This crate will not build until a `vta-sdk` release against
+  `affinidi-crypto 0.2` is published and the `vta-sdk` dependency here is
+  bumped to it. Tracked as a cross-repo coordination follow-up.
+
 ## 5th June 2026
 
 ### 0.15.13 — coverage-build fix + redis 1.2

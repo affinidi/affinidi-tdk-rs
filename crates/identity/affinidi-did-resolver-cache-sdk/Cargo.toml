@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.6"
+version = "0.8.7"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -77,7 +77,7 @@ wasm-bindgen-futures = "0.4"
 web-socket = { version = "0.7", optional = true }
 
 [dev-dependencies]
-affinidi-crypto = "0.1"
+affinidi-crypto = "0.2"
 affinidi-secrets-resolver = "0.5"
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }

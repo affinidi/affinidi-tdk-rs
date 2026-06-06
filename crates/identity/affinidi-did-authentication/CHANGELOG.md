@@ -1,5 +1,20 @@
 # Affinidi DID Authentication
 
+## 6th June 2026 (0.3.6)
+
+- Robust sender/recipient key-agreement negotiation (#357). The authcrypt
+  pack path now enumerates *all* of the sender's usable key-agreement keys
+  and negotiates the best shared curve with the recipient by a documented
+  preference order (`X25519 > P-256 > secp256k1`), instead of deriving the
+  curve from the sender's *first* key only. A sender whose first KA curve
+  has no recipient match but whose second does now packs successfully, and a
+  no-common-curve failure names the curve set each side offered. The
+  negotiation + key-resolution logic moved into `affinidi-did-common`'s new
+  `key_negotiation` module (enabled via its `key-agreement` feature),
+  removing the helpers that were duplicated between this crate and the
+  messaging SDK. The sender key-type → curve mapping now also covers the
+  newly-supported P-384 and P-521 key-agreement curves (#357).
+
 ## 1st June 2026 (0.3.5)
 
 - Release on `affinidi-messaging-didcomm` 0.15 (#327). The authcrypt

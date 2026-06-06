@@ -18,11 +18,18 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::error::CryptoError;
 
 /// Supported key-agreement curves (JOSE `crv` identifiers).
+// `#[non_exhaustive]`: adding a new key-agreement curve must be a
+// non-breaking change for downstream crates, so external matches always
+// carry a wildcard arm. The break for this attribute was taken once, in the
+// 0.2.0 release that introduced P-384/P-521.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Curve {
     X25519,
     P256,
     K256,
+    P384,
+    P521,
 }
 
 impl Curve {
@@ -32,16 +39,21 @@ impl Curve {
             Curve::X25519 => "X25519",
             Curve::P256 => "P-256",
             Curve::K256 => "secp256k1",
+            Curve::P384 => "P-384",
+            Curve::P521 => "P-521",
         }
     }
 }
 
 /// A public key for key agreement (any supported curve).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum PublicKeyAgreement {
     X25519([u8; 32]),
     P256(p256::PublicKey),
     K256(k256::PublicKey),
+    P384(p384::PublicKey),
+    P521(p521::PublicKey),
 }
 
 impl PublicKeyAgreement {
@@ -51,6 +63,8 @@ impl PublicKeyAgreement {
             PublicKeyAgreement::X25519(_) => Curve::X25519,
             PublicKeyAgreement::P256(_) => Curve::P256,
             PublicKeyAgreement::K256(_) => Curve::K256,
+            PublicKeyAgreement::P384(_) => Curve::P384,
+            PublicKeyAgreement::P521(_) => Curve::P521,
         }
     }
 
@@ -82,6 +96,52 @@ impl PublicKeyAgreement {
                     "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
                 })
             }
+            PublicKeyAgreement::P384(pk) => {
+                use p384::elliptic_curve::sec1::ToEncodedPoint;
+                let point = pk.to_encoded_point(false);
+                serde_json::json!({
+                    "kty": "EC",
+                    "crv": "P-384",
+                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+                })
+            }
+            PublicKeyAgreement::P521(pk) => {
+                use p521::elliptic_curve::sec1::ToEncodedPoint;
+                let point = pk.to_encoded_point(false);
+                serde_json::json!({
+                    "kty": "EC",
+                    "crv": "P-521",
+                    "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                    "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+                })
+            }
+        }
+    }
+
+    /// Raw public-key bytes for storage/transport: the 32-byte key for
+    /// X25519, or the **compressed** SEC1 point for the EC curves. Curve
+    /// dispatch lives here (alongside every other curve arm) so callers do
+    /// not match on the enum themselves.
+    pub fn to_public_bytes(&self) -> Vec<u8> {
+        match self {
+            PublicKeyAgreement::X25519(bytes) => bytes.to_vec(),
+            PublicKeyAgreement::P256(pk) => {
+                use p256::elliptic_curve::sec1::ToEncodedPoint;
+                pk.to_encoded_point(true).as_bytes().to_vec()
+            }
+            PublicKeyAgreement::K256(pk) => {
+                use k256::elliptic_curve::sec1::ToEncodedPoint;
+                pk.to_encoded_point(true).as_bytes().to_vec()
+            }
+            PublicKeyAgreement::P384(pk) => {
+                use p384::elliptic_curve::sec1::ToEncodedPoint;
+                pk.to_encoded_point(true).as_bytes().to_vec()
+            }
+            PublicKeyAgreement::P521(pk) => {
+                use p521::elliptic_curve::sec1::ToEncodedPoint;
+                pk.to_encoded_point(true).as_bytes().to_vec()
+            }
         }
     }
 
@@ -108,6 +168,18 @@ impl PublicKeyAgreement {
                     CryptoError::KeyAgreement(format!("invalid K-256 public key: {e}"))
                 })?;
                 Ok(PublicKeyAgreement::K256(pk))
+            }
+            Curve::P384 => {
+                let pk = p384::PublicKey::from_sec1_bytes(bytes).map_err(|e| {
+                    CryptoError::KeyAgreement(format!("invalid P-384 public key: {e}"))
+                })?;
+                Ok(PublicKeyAgreement::P384(pk))
+            }
+            Curve::P521 => {
+                let pk = p521::PublicKey::from_sec1_bytes(bytes).map_err(|e| {
+                    CryptoError::KeyAgreement(format!("invalid P-521 public key: {e}"))
+                })?;
+                Ok(PublicKeyAgreement::P521(pk))
             }
         }
     }
@@ -143,6 +215,18 @@ impl PublicKeyAgreement {
                     .map_err(|e| CryptoError::KeyAgreement(format!("invalid K-256 key: {e}")))?;
                 Ok(PublicKeyAgreement::K256(pk))
             }
+            "P-384" => {
+                let point = ec_point_from_jwk(jwk)?;
+                let pk = p384::PublicKey::from_sec1_bytes(&point)
+                    .map_err(|e| CryptoError::KeyAgreement(format!("invalid P-384 key: {e}")))?;
+                Ok(PublicKeyAgreement::P384(pk))
+            }
+            "P-521" => {
+                let point = ec_point_from_jwk(jwk)?;
+                let pk = p521::PublicKey::from_sec1_bytes(&point)
+                    .map_err(|e| CryptoError::KeyAgreement(format!("invalid P-521 key: {e}")))?;
+                Ok(PublicKeyAgreement::P521(pk))
+            }
             other => Err(CryptoError::UnsupportedKeyType(format!(
                 "unsupported key-agreement curve: {other}"
             ))),
@@ -173,10 +257,13 @@ fn ec_point_from_jwk(jwk: &Value) -> Result<Vec<u8>, CryptoError> {
 
 /// A private key for key agreement (any supported curve).
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[non_exhaustive]
 pub enum PrivateKeyAgreement {
     X25519(#[zeroize(skip)] x25519_dalek::StaticSecret),
     P256(#[zeroize(skip)] p256::SecretKey),
     K256(#[zeroize(skip)] k256::SecretKey),
+    P384(#[zeroize(skip)] p384::SecretKey),
+    P521(#[zeroize(skip)] p521::SecretKey),
 }
 
 impl std::fmt::Debug for PrivateKeyAgreement {
@@ -185,6 +272,8 @@ impl std::fmt::Debug for PrivateKeyAgreement {
             PrivateKeyAgreement::X25519(_) => write!(f, "PrivateKeyAgreement::X25519([REDACTED])"),
             PrivateKeyAgreement::P256(_) => write!(f, "PrivateKeyAgreement::P256([REDACTED])"),
             PrivateKeyAgreement::K256(_) => write!(f, "PrivateKeyAgreement::K256([REDACTED])"),
+            PrivateKeyAgreement::P384(_) => write!(f, "PrivateKeyAgreement::P384([REDACTED])"),
+            PrivateKeyAgreement::P521(_) => write!(f, "PrivateKeyAgreement::P521([REDACTED])"),
         }
     }
 }
@@ -216,6 +305,18 @@ impl PrivateKeyAgreement {
                 })?;
                 Ok(PrivateKeyAgreement::K256(sk))
             }
+            Curve::P384 => {
+                let sk = p384::SecretKey::from_slice(bytes).map_err(|e| {
+                    CryptoError::KeyAgreement(format!("invalid P-384 private key: {e}"))
+                })?;
+                Ok(PrivateKeyAgreement::P384(sk))
+            }
+            Curve::P521 => {
+                let sk = p521::SecretKey::from_slice(bytes).map_err(|e| {
+                    CryptoError::KeyAgreement(format!("invalid P-521 private key: {e}"))
+                })?;
+                Ok(PrivateKeyAgreement::P521(sk))
+            }
         }
     }
 
@@ -227,6 +328,8 @@ impl PrivateKeyAgreement {
             }
             Curve::P256 => PrivateKeyAgreement::P256(p256::SecretKey::random(&mut OsRng)),
             Curve::K256 => PrivateKeyAgreement::K256(k256::SecretKey::random(&mut OsRng)),
+            Curve::P384 => PrivateKeyAgreement::P384(p384::SecretKey::random(&mut OsRng)),
+            Curve::P521 => PrivateKeyAgreement::P521(p521::SecretKey::random(&mut OsRng)),
         }
     }
 
@@ -238,6 +341,8 @@ impl PrivateKeyAgreement {
             }
             PrivateKeyAgreement::P256(sk) => PublicKeyAgreement::P256(sk.public_key()),
             PrivateKeyAgreement::K256(sk) => PublicKeyAgreement::K256(sk.public_key()),
+            PrivateKeyAgreement::P384(sk) => PublicKeyAgreement::P384(sk.public_key()),
+            PrivateKeyAgreement::P521(sk) => PublicKeyAgreement::P521(sk.public_key()),
         }
     }
 
@@ -247,6 +352,8 @@ impl PrivateKeyAgreement {
             PrivateKeyAgreement::X25519(_) => Curve::X25519,
             PrivateKeyAgreement::P256(_) => Curve::P256,
             PrivateKeyAgreement::K256(_) => Curve::K256,
+            PrivateKeyAgreement::P384(_) => Curve::P384,
+            PrivateKeyAgreement::P521(_) => Curve::P521,
         }
     }
 
@@ -267,6 +374,16 @@ impl PrivateKeyAgreement {
             }
             (PrivateKeyAgreement::K256(sk), PublicKeyAgreement::K256(pk)) => {
                 use k256::ecdh::diffie_hellman;
+                let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
+                Ok(shared.raw_secret_bytes().to_vec())
+            }
+            (PrivateKeyAgreement::P384(sk), PublicKeyAgreement::P384(pk)) => {
+                use p384::ecdh::diffie_hellman;
+                let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
+                Ok(shared.raw_secret_bytes().to_vec())
+            }
+            (PrivateKeyAgreement::P521(sk), PublicKeyAgreement::P521(pk)) => {
+                use p521::ecdh::diffie_hellman;
                 let shared = diffie_hellman(sk.to_nonzero_scalar(), pk.as_affine());
                 Ok(shared.raw_secret_bytes().to_vec())
             }

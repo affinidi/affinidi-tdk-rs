@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-secrets-resolver"
 description = "Common utilities for Affinidi Trust Development Kit."
-version = "0.5.6"
+version = "0.5.7"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -13,10 +13,11 @@ publish.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["p256", "k256", "p384", "ed25519"]
+default = ["p256", "k256", "p384", "p521", "ed25519"]
 p256 = ["affinidi-crypto/p256"]
 k256 = ["affinidi-crypto/k256"]
 p384 = ["affinidi-crypto/p384"]
+p521 = ["affinidi-crypto/p521"]
 ed25519 = ["affinidi-crypto/ed25519"]
 # Post-quantum cryptography (experimental). Off by default.
 post-quantum = ["ml-dsa", "slh-dsa"]
@@ -24,7 +25,7 @@ ml-dsa = ["affinidi-crypto/ml-dsa"]
 slh-dsa = ["affinidi-crypto/slh-dsa"]
 
 [dependencies]
-affinidi-crypto = "0.1"
+affinidi-crypto = "0.2"
 affinidi-encoding = "0.1"
 ahash = "0.8"
 base58 = "0.2"

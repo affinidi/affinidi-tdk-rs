@@ -14,7 +14,7 @@ use crate::{
     errors::{Result, SecretsResolverError},
     multicodec::{
         ED25519_PRIV, ED25519_PUB, MultiEncoded, MultiEncodedBuf, P256_PRIV, P256_PUB, P384_PRIV,
-        P384_PUB, P521_PRIV, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
+        P384_PUB, P521_PRIV, P521_PUB, SECP256K1_PRIV, SECP256K1_PUB, X25519_PRIV, X25519_PUB,
     },
 };
 pub use affinidi_crypto::KeyType;
@@ -250,6 +250,7 @@ impl Secret {
                 Secret::generate_p256(kid, Some(private_bytes.data()))
             }
             P384_PRIV => Secret::generate_p384(kid, Some(private_bytes.data())),
+            P521_PRIV => Secret::generate_p521(kid, Some(private_bytes.data())),
             SECP256K1_PRIV => Secret::generate_secp256k1(kid, Some(private_bytes.data())),
             #[cfg(feature = "ml-dsa")]
             ML_DSA_44_PRIV_SEED => {
@@ -314,11 +315,7 @@ impl Secret {
             KeyType::X25519 => MultiEncodedBuf::encode_bytes(X25519_PUB, &self.public_bytes),
             KeyType::P256 => compress_ec_point(&self.public_bytes, 33, P256_PUB)?,
             KeyType::P384 => compress_ec_point(&self.public_bytes, 49, P384_PUB)?,
-            KeyType::P521 => {
-                return Err(SecretsResolverError::KeyError(
-                    "P-521 is not supported".to_string(),
-                ));
-            }
+            KeyType::P521 => compress_ec_point(&self.public_bytes, 67, P521_PUB)?,
             KeyType::Secp256k1 => compress_ec_point(&self.public_bytes, 33, SECP256K1_PUB)?,
             #[cfg(feature = "ml-dsa")]
             KeyType::MlDsa44 => MultiEncodedBuf::encode_bytes(ML_DSA_44_PUB, &self.public_bytes),

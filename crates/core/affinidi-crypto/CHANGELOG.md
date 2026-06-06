@@ -1,5 +1,39 @@
 # Affinidi Crypto Changelog
 
+## 6th June 2026 (0.2.0)
+
+**Breaking release.** Adds P-384/P-521 key agreement and makes the
+key-agreement enums `#[non_exhaustive]` — the major-version bump is taken
+once, now, so that every *future* curve or key addition is a non-breaking
+patch.
+
+> **Coordination note (vta-sdk):** the `0.1 → 0.2` bump un-unifies any
+> external crate that pins `affinidi-crypto = "0.1"` from the workspace
+> `[patch.crates-io]` redirect. `vta-sdk` (used by the mediator and
+> mediator-setup) does this, so those two crates will not build until a
+> `vta-sdk` release that depends on `affinidi-crypto 0.2` is published and
+> their `vta-sdk` pin is bumped. All other crates are unaffected.
+
+- **Added P-384 and P-521 key agreement (#357).** `jose::key_agreement`
+  now supports ECDH on the NIST P-384 and P-521 curves alongside X25519,
+  P-256 and secp256k1: new `Curve::P384`/`Curve::P521` variants, matching
+  `PublicKeyAgreement`/`PrivateKeyAgreement` variants, and full
+  `generate`/`from_raw_bytes`/`from_jwk`/`to_jwk`/`diffie_hellman` support.
+  The ConcatKDF/key-wrap/content-encryption stack is curve-agnostic, so
+  ECDH-1PU (authcrypt) and ECDH-ES (anoncrypt) work on the new curves
+  unchanged (uniform `A256KW` + `A256CBC-HS512`); KAT roundtrips added for
+  both. New `p521` key-generation module (`affinidi_crypto::p521`) mirroring
+  `p384`, plus JWK `crv: "P-521"` parsing. New `p521` feature (on by
+  default); the `p384`/`p521` features now also enable the `ecdh`
+  capability, and the `jose` feature now pulls `p384` + `p521`. Added
+  `PublicKeyAgreement::to_public_bytes()` (raw/compressed-SEC1 bytes) so
+  callers no longer match on the curve enum themselves.
+- **BREAKING:** `Curve`, `PublicKeyAgreement` and `PrivateKeyAgreement` are
+  now `#[non_exhaustive]`. External code matching them must add a wildcard
+  arm; in return, future variant additions are non-breaking. (`KeyType` is
+  deliberately left exhaustive so the secrets-resolver encode/decode paths
+  still fail to compile if a new key type is unhandled.)
+
 ## 4th June 2026 (0.1.12)
 
 - **FIX (#348):** Tightened the `affinidi-encoding` dependency from the

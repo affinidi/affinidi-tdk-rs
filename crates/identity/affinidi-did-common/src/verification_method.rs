@@ -117,6 +117,9 @@ impl VerificationMethod {
             (Params::EC(p), KeyType::P384) => {
                 Ok((affinidi_encoding::P384_PUB, sec1(&b64(&p.x)?, &b64(&p.y)?)))
             }
+            (Params::EC(p), KeyType::P521) => {
+                Ok((affinidi_encoding::P521_PUB, sec1(&b64(&p.x)?, &b64(&p.y)?)))
+            }
             (Params::EC(p), KeyType::Secp256k1) => Ok((
                 affinidi_encoding::SECP256K1_PUB,
                 sec1(&b64(&p.x)?, &b64(&p.y)?),

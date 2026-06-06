@@ -233,6 +233,54 @@ mod tests {
     }
 
     #[test]
+    fn authcrypt_roundtrip_p384_p521() {
+        // Full ECDH-1PU JWE roundtrip on the larger NIST curves: the wire
+        // layer is curve-agnostic (ephemeral is generated on the recipient's
+        // curve), so these must pack and unpack like the others.
+        for curve in [Curve::P384, Curve::P521] {
+            let sender = PrivateKeyAgreement::generate(curve);
+            let recipient = PrivateKeyAgreement::generate(curve);
+
+            let jwe_str = encrypt::authcrypt(
+                b"big-curve authcrypt",
+                "did:example:alice#ec",
+                &sender,
+                &[("did:example:bob#ec", &recipient.public_key())],
+            )
+            .unwrap();
+
+            let result = decrypt(
+                &jwe_str,
+                "did:example:bob#ec",
+                &recipient,
+                Some(&sender.public_key()),
+            )
+            .unwrap();
+
+            assert_eq!(result.plaintext, b"big-curve authcrypt", "curve {curve:?}");
+            assert!(result.authenticated, "curve {curve:?}");
+        }
+    }
+
+    #[test]
+    fn anoncrypt_roundtrip_p384_p521() {
+        for curve in [Curve::P384, Curve::P521] {
+            let recipient = PrivateKeyAgreement::generate(curve);
+
+            let jwe_str = encrypt::anoncrypt(
+                b"big-curve anoncrypt",
+                &[("did:example:bob#ec", &recipient.public_key())],
+            )
+            .unwrap();
+
+            let result = decrypt(&jwe_str, "did:example:bob#ec", &recipient, None).unwrap();
+
+            assert_eq!(result.plaintext, b"big-curve anoncrypt", "curve {curve:?}");
+            assert!(!result.authenticated, "curve {curve:?}");
+        }
+    }
+
+    #[test]
     fn authcrypt_roundtrip_p256() {
         let sender = PrivateKeyAgreement::generate(Curve::P256);
         let recipient = PrivateKeyAgreement::generate(Curve::P256);

@@ -1,10 +1,11 @@
-use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement, PublicKeyAgreement};
+use affinidi_crypto::jose::key_agreement::{Curve, PrivateKeyAgreement};
 use affinidi_did_common::{
-    Document, document::DocumentExt, verification_method::VerificationRelationship,
+    document::DocumentExt,
+    key_negotiation::{DEFAULT_CURVE_PREFERENCE, negotiate_authcrypt, select_anoncrypt_key},
 };
 use affinidi_messaging_didcomm::message::{Message, pack};
 use affinidi_secrets_resolver::SecretsResolver;
-use tracing::{Instrument, Level, span};
+use tracing::{Instrument, Level, debug, span};
 
 use crate::{ATM, SharedState, errors::ATMError};
 
@@ -53,9 +54,21 @@ impl SharedState {
                 })?;
             let recipient_ka_kids = recipient_doc.doc.find_key_agreement(None);
 
+            // Curve-preference policy: a runtime override from config, else
+            // the negotiator's documented default order. Shared by both the
+            // authcrypt and anoncrypt paths so they never disagree.
+            let preference = self
+                .config
+                .get_curve_preference()
+                .unwrap_or(&DEFAULT_CURVE_PREFERENCE);
+
             if let Some(sender_did) = from {
-                // Authcrypt: resolve sender first to determine curve, then
-                // pick a recipient key on the same curve.
+                // Authcrypt: enumerate the sender's *usable* key-agreement
+                // keys (a secret we hold, on a supported curve), then
+                // negotiate the best shared curve with the recipient.
+                // Selection follows the documented curve preference, so the
+                // sender's list order is irrelevant — a later sender curve can
+                // still match when the first does not.
                 let sender_doc = self
                     .tdk_common
                     .did_resolver()
@@ -68,47 +81,49 @@ impl SharedState {
                         )
                     })?;
                 let sender_ka_kids = sender_doc.doc.find_key_agreement(None);
-                let sender_kid = sender_ka_kids.first().ok_or_else(|| {
-                    ATMError::DidcommError(
+
+                let mut sender_keys: Vec<(&str, PrivateKeyAgreement, Curve)> = Vec::new();
+                for &kid in &sender_ka_kids {
+                    let Some(secret) = self.tdk_common.secrets_resolver().get_secret(kid).await
+                    else {
+                        continue;
+                    };
+                    let Ok(curve) = key_type_to_curve(secret.get_key_type()) else {
+                        continue;
+                    };
+                    match PrivateKeyAgreement::from_raw_bytes(curve, secret.get_private_bytes()) {
+                        Ok(private) => sender_keys.push((kid, private, curve)),
+                        Err(e) => debug!("skipping unusable sender key {kid}: {e}"),
+                    }
+                }
+                if sender_keys.is_empty() {
+                    return Err(ATMError::DidcommError(
                         "pack_encrypted".into(),
-                        "sender has no key agreement key".into(),
-                    )
-                })?;
+                        "sender has no usable key agreement key".into(),
+                    ));
+                }
+                let sender_curves: Vec<Curve> = sender_keys.iter().map(|(_, _, c)| *c).collect();
 
-                // Get sender's private key from secrets resolver
-                let sender_secret = self
-                    .tdk_common
-                    .secrets_resolver()
-                    .get_secret(sender_kid.as_ref())
-                    .await
-                    .ok_or_else(|| {
-                        ATMError::SecretsError(format!("no secret found for {sender_kid}"))
-                    })?;
-
-                let sender_curve = key_type_to_curve(sender_secret.get_key_type())?;
-                let sender_private = PrivateKeyAgreement::from_raw_bytes(
-                    sender_curve,
-                    sender_secret.get_private_bytes(),
-                )
-                .map_err(|e| {
-                    ATMError::DidcommError(
-                        "pack_encrypted".into(),
-                        format!("invalid sender private key: {e}"),
-                    )
-                })?;
-
-                // Find a recipient key agreement key on the same curve
-                let (recipient_kid, recipient_pub) = find_matching_recipient_key(
+                let pairing = negotiate_authcrypt(
+                    &sender_curves,
                     &recipient_doc.doc,
                     &recipient_ka_kids,
-                    sender_curve,
-                )?;
+                    preference,
+                )
+                .map_err(|e| ATMError::DidcommError("pack_encrypted".into(), e.to_string()))?;
+
+                // The negotiated curve was drawn from `sender_curves`, so a
+                // matching sender key is guaranteed present.
+                let (sender_kid, sender_private, _) = sender_keys
+                    .iter()
+                    .find(|(_, _, c)| *c == pairing.curve)
+                    .expect("negotiated curve came from sender_curves");
 
                 let packed = pack::pack_encrypted_authcrypt(
                     message,
                     sender_kid,
-                    &sender_private,
-                    &[(recipient_kid, &recipient_pub)],
+                    sender_private,
+                    &[(pairing.recipient_kid, &pairing.recipient_pub)],
                 )
                 .map_err(|e| {
                     ATMError::DidcommError(
@@ -120,20 +135,19 @@ impl SharedState {
                 let metadata = PackEncryptedMetadata {
                     from_kid: Some(sender_kid.to_string()),
                     sign_by_kid: None,
-                    to_kids: vec![recipient_kid.to_string()],
+                    to_kids: vec![pairing.recipient_kid.to_string()],
                 };
 
                 Ok((packed, metadata))
             } else {
-                // Anoncrypt: pick the first available key agreement key
-                let recipient_kid = recipient_ka_kids.first().ok_or_else(|| {
-                    ATMError::DidcommError(
-                        "pack_encrypted".into(),
-                        "recipient has no key agreement key".into(),
-                    )
-                })?;
-                let recipient_pub =
-                    resolve_public_key_agreement(&recipient_doc.doc, recipient_kid)?;
+                // Anoncrypt: pick the first advertised key-agreement key that
+                // resolves to a supported curve (skipping undecodable codecs),
+                // rather than blindly taking `first()`.
+                let (recipient_kid, recipient_pub) =
+                    select_anoncrypt_key(&recipient_doc.doc, &recipient_ka_kids, preference)
+                        .map_err(|e| {
+                            ATMError::DidcommError("pack_encrypted".into(), e.to_string())
+                        })?;
 
                 let packed =
                     pack::pack_encrypted_anoncrypt(message, &[(recipient_kid, &recipient_pub)])
@@ -175,85 +189,6 @@ impl SharedState {
     }
 }
 
-/// Find the first recipient key agreement key whose curve matches the sender's.
-fn find_matching_recipient_key<'a>(
-    doc: &Document,
-    ka_kids: &'a [&'a str],
-    sender_curve: Curve,
-) -> Result<(&'a str, PublicKeyAgreement), ATMError> {
-    for kid in ka_kids {
-        if let Ok(pub_key) = resolve_public_key_agreement(doc, kid)
-            && pub_key.curve() == sender_curve
-        {
-            return Ok((kid, pub_key));
-        }
-    }
-    Err(ATMError::DidcommError(
-        "pack_encrypted".into(),
-        format!("recipient has no key agreement key on curve {sender_curve:?}"),
-    ))
-}
-
-/// Extract a PublicKeyAgreement from a DID Document's verification method.
-fn resolve_public_key_agreement(doc: &Document, kid: &str) -> Result<PublicKeyAgreement, ATMError> {
-    // Find the verification method
-    let vm = doc
-        .key_agreement
-        .iter()
-        .filter_map(|ka| match ka {
-            VerificationRelationship::VerificationMethod(vm) if vm.id.as_str() == kid => {
-                Some(vm.as_ref())
-            }
-            _ => None,
-        })
-        .next()
-        .or_else(|| doc.get_verification_method(kid))
-        .ok_or_else(|| {
-            ATMError::DidcommError(
-                "resolve_key".into(),
-                format!("verification method not found: {kid}"),
-            )
-        })?;
-
-    // Try publicKeyJwk first
-    if let Some(jwk_value) = vm.property_set.get("publicKeyJwk") {
-        return PublicKeyAgreement::from_jwk(jwk_value).map_err(|e| {
-            ATMError::DidcommError("resolve_key".into(), format!("invalid JWK: {e}"))
-        });
-    }
-
-    // Try publicKeyMultibase (Multikey format)
-    if let Some(multibase_value) = vm.property_set.get("publicKeyMultibase")
-        && let Some(multibase_str) = multibase_value.as_str()
-    {
-        let (codec, key_bytes) = affinidi_encoding::decode_multikey_with_codec(multibase_str)
-            .map_err(|e| {
-                ATMError::DidcommError("resolve_key".into(), format!("invalid multikey: {e}"))
-            })?;
-
-        let curve = match codec {
-            affinidi_encoding::X25519_PUB => Curve::X25519,
-            affinidi_encoding::P256_PUB => Curve::P256,
-            affinidi_encoding::SECP256K1_PUB => Curve::K256,
-            _ => {
-                return Err(ATMError::DidcommError(
-                    "resolve_key".into(),
-                    format!("unsupported multicodec for key agreement: 0x{codec:x}"),
-                ));
-            }
-        };
-
-        return PublicKeyAgreement::from_raw_bytes(curve, &key_bytes).map_err(|e| {
-            ATMError::DidcommError("resolve_key".into(), format!("invalid key bytes: {e}"))
-        });
-    }
-
-    Err(ATMError::DidcommError(
-        "resolve_key".into(),
-        format!("no supported key material in verification method: {kid}"),
-    ))
-}
-
 /// Map from secrets resolver KeyType to DIDComm Curve.
 fn key_type_to_curve(
     key_type: affinidi_secrets_resolver::secrets::KeyType,
@@ -262,6 +197,8 @@ fn key_type_to_curve(
         affinidi_secrets_resolver::secrets::KeyType::X25519 => Ok(Curve::X25519),
         affinidi_secrets_resolver::secrets::KeyType::P256 => Ok(Curve::P256),
         affinidi_secrets_resolver::secrets::KeyType::Secp256k1 => Ok(Curve::K256),
+        affinidi_secrets_resolver::secrets::KeyType::P384 => Ok(Curve::P384),
+        affinidi_secrets_resolver::secrets::KeyType::P521 => Ok(Curve::P521),
         other => Err(ATMError::DidcommError(
             "key_type_to_curve".into(),
             format!("unsupported key type for key agreement: {other:?}"),

@@ -4,6 +4,14 @@
 
 ## 6th June 2026
 
+### 0.1.8 — affinidi-crypto 0.2
+
+- Bump `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
+  `#[non_exhaustive]` key-agreement enums, #357). **Note:** this tool also
+  depends on `vta-sdk`, which pins `affinidi-crypto 0.1`; it will not build
+  until a `vta-sdk` release against `affinidi-crypto 0.2` is published and
+  the `vta-sdk` pin here is bumped.
+
 ### 0.1.7 — stop clobbering the unified secret backend
 
 - **FIX (#354):** After provisioning the unified secret backend, the wizard

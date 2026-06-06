@@ -4,6 +4,33 @@ All notable changes to `affinidi-did-common` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-06-06
+
+### Added
+
+- `key_negotiation` module (behind the new opt-in `key-agreement` feature)
+  — the single home for sender/recipient key-agreement curve negotiation,
+  shared by the messaging SDK and the DID-authentication layer (#357). It
+  exposes `negotiate_authcrypt` (bidirectional best-curve match over the
+  cross-product of sender×recipient keys, by a documented preference order
+  `X25519 > P-256 > secp256k1`), `select_anoncrypt_key` (first recipient KA
+  key that resolves to a supported curve, skipping undecodable codecs),
+  `resolve_public_key_agreement`, the `DEFAULT_CURVE_PREFERENCE` constant,
+  and a neutral `KeyNegotiationError` (whose `NoCommonCurve` names the curve
+  set each side offered). The curve-preference policy is overridable at
+  runtime: both `negotiate_authcrypt` and `select_anoncrypt_key` take a
+  `preference: &[Curve]` argument (pass `DEFAULT_CURVE_PREFERENCE` for the
+  standard policy, or a custom order to force e.g. P-256 first). The default
+  policy and key resolution now span all five key-agreement curves —
+  `X25519 > P-256 > P-384 > P-521 > secp256k1` (#357) — including JWK
+  decoding of `crv: "P-521"`. Anoncrypt
+  uses the **same** preference-ordered selection as authcrypt — it picks the
+  recipient's most-preferred usable curve rather than the document-first
+  key — so signed and anonymous encryption never diverge. The feature gates
+  an `affinidi-crypto/jose` dependency, so the default build of this crate is
+  unchanged. This replaces the byte-for-byte-duplicated negotiation helpers
+  that previously lived in both call-site crates.
+
 ## [0.3.4] - 2026-05-31
 
 ### Added

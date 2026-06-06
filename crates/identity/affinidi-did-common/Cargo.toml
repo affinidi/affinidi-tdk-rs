@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.3.4"
+version = "0.3.5"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true
@@ -18,9 +18,13 @@ ed25519 = ["affinidi-crypto/ed25519"]
 p256 = ["affinidi-crypto/p256"]
 p384 = ["affinidi-crypto/p384"]
 k256 = ["affinidi-crypto/k256"]
+# Sender/recipient key-agreement negotiation helpers (DIDComm encryption).
+# Pulls in affinidi-crypto's JOSE key-agreement types; opt-in so the default
+# build of this foundational crate stays lean.
+key-agreement = ["affinidi-crypto/jose"]
 
 [dependencies]
-affinidi-crypto = "0.1"
+affinidi-crypto = "0.2"
 affinidi-encoding = "0.1"
 
 # External Crates

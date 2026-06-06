@@ -23,6 +23,9 @@ ADR 0002.
   signature/proof wire format is now IETF-compliant (`draft-irtf-cfrg-bbs-signatures`)
   and is **not** compatible with the previous, self-consistent format. No BBS
   credentials had been issued in production.
+- Bumped `affinidi-crypto` to `0.2` (P-384/P-521 key agreement +
+  `#[non_exhaustive]` key-agreement enums, #357). No API change in this crate
+  from that bump.
 
 ### Notes
 

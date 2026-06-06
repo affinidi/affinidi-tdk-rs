@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.18.7] - 2026-06-06
+
+### Changed
+
+- **Robust key-agreement negotiation in `pack_encrypted` (#357).** The
+  authcrypt path now enumerates *all* of the sender's usable key-agreement
+  keys and negotiates the best shared curve with the recipient by a
+  documented preference order (`X25519 > P-256 > secp256k1`), rather than
+  deriving the curve from the sender's *first* key only — so a sender whose
+  first KA curve has no recipient match but whose second does now packs
+  successfully, and a no-common-curve failure names the curve set each side
+  offered. The anoncrypt path now selects the recipient's most-preferred
+  usable key-agreement curve using the **same** ordering as authcrypt
+  (skipping undecodable/unsupported entries) instead of blindly taking
+  `first()`, so the two paths never disagree on curve choice. The duplicated
+  negotiation/resolution helpers were removed in favour of
+  `affinidi-did-common`'s shared `key_negotiation` module (its new
+  `key-agreement` feature).
+- **P-384/P-521 key agreement + configurable curve preference (#357).**
+  `pack_encrypted` now supports the P-384 and P-521 key-agreement curves
+  (sender key-type → curve mapping), and `ATMConfigBuilder` gains
+  `with_curve_preference(Vec<Curve>)` to override the default curve ordering
+  (`X25519 > P-256 > P-384 > P-521 > secp256k1`) at runtime — e.g. P-256
+  first for a FIPS deployment. The override applies to both authcrypt and
+  anoncrypt.
+
 ## [0.18.6] - 2026-06-01
 
 ### Fixed

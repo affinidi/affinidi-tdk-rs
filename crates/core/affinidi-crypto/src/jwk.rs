@@ -1,6 +1,8 @@
 //! JWK (JSON Web Key) types per RFC 7517
 
-use affinidi_encoding::{ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, SECP256K1_PUB, X25519_PUB};
+use affinidi_encoding::{
+    ED25519_PUB, MultiEncoded, P256_PUB, P384_PUB, P521_PUB, SECP256K1_PUB, X25519_PUB,
+};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -24,6 +26,7 @@ impl JWK {
                 "P-256" => KeyType::P256,
                 "secp256k1" => KeyType::Secp256k1,
                 "P-384" => KeyType::P384,
+                "P-521" => KeyType::P521,
                 _ => KeyType::Unknown,
             },
             Params::OKP(params) => match params.curve.as_str() {
@@ -48,6 +51,8 @@ impl JWK {
             P256_PUB => crate::p256::public_jwk(decoded.data()),
             #[cfg(feature = "p384")]
             P384_PUB => crate::p384::public_jwk(decoded.data()),
+            #[cfg(feature = "p521")]
+            P521_PUB => crate::p521::public_jwk(decoded.data()),
             #[cfg(feature = "k256")]
             SECP256K1_PUB => crate::secp256k1::public_jwk(decoded.data()),
             #[cfg(feature = "ed25519")]
