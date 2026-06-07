@@ -82,14 +82,22 @@ pub fn hash_ndegree_quads(
             // list. Issuing before recursing is what makes cyclic graphs
             // (e.g. a circle of blank nodes) terminate instead of recursing
             // forever.
+            // RDFC-1.0 step 5.4.4: each identifier is appended in blank-node
+            // form (`_:` prefix). The `_:` is not cosmetic — it delimits
+            // consecutive identifiers in the path string, so the lexicographic
+            // "smallest path" tie-break matches the reference byte-for-byte.
+            // Omitting it runs ids together (`c14n1`+`c14n2`) and silently
+            // selects a valid-but-non-canonical permutation on symmetric graphs.
             for &idx in &perm_indices {
                 let related = &blank_node_list[idx];
                 if canonical_issuer.is_issued(related) {
+                    path.push_str("_:");
                     path.push_str(canonical_issuer.get(related).unwrap());
                 } else {
                     if !issuer_copy.is_issued(related) {
                         recursion_list.push(related.clone());
                     }
+                    path.push_str("_:");
                     path.push_str(&issuer_copy.issue(related));
                 }
                 if !chosen_path.is_empty() && path > chosen_path {
@@ -109,6 +117,9 @@ pub fn hash_ndegree_quads(
                         blank_node_to_hash,
                     )?;
                     issuer_copy = result_issuer;
+                    // RDFC-1.0 step 5.4.5.2: `_:` + identifier (same delimiter
+                    // rationale as step 5.4.4 above).
+                    path.push_str("_:");
                     path.push_str(issuer_copy.get(related).unwrap_or(""));
                     path.push('<');
                     path.push_str(&result_hash);
