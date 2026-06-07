@@ -2,6 +2,37 @@
 
 ## Changelog history
 
+## 7th June 2026
+
+### 0.15.15 — Redeliver in-flight messages on duplicate-WebSocket replacement (#374)
+
+- When a second WebSocket connects for a DID that already has a live streaming
+  channel, the streaming task closed the old channel without telling the
+  surviving socket to re-cover what was in flight. A live-stream notification
+  published in that instant was stranded — the message is durably stored in the
+  inbox (the store both live-pushes *and* persists every non-ephemeral message),
+  but a client relying on live delivery never learned of it and the round-trip
+  timed out. This was the transport-layer root cause behind the downstream
+  `get_key_secret(#key-1)` provisioning timeout (OpenVTC
+  `verifiable-trust-infrastructure#302`).
+- On a duplicate replacement, the surviving socket now receives a redelivery of
+  the recipient's undelivered inbox (`fetch_messages` with `DoNotDelete`,
+  paginated, run as a detached task so the shared streaming loop never blocks).
+  Redelivery is at-least-once and idempotent by message id — consistent with the
+  existing message-pickup delete-to-ack contract. The one-socket-per-DID
+  invariant is unchanged: the newest socket still wins.
+- Flip-flop damping: a redelivery already in flight for a DID suppresses a
+  second concurrent drain, so a duel that replaces the socket every few seconds
+  can't amplify into repeated whole-inbox dumps. The drain is bounded
+  (`REDELIVERY_MAX`) and logs if the cap is hit.
+- New Prometheus counters: `websocket_duplicate_replacements_total`,
+  `websocket_redelivered_messages_total`, and `websocket_duplicate_churn_total`
+  (rapid replacement within a 5s window) to make the flip-flop diagnosable in
+  production.
+- Known limitation: ephemeral (`return_route=all`) messages are not stored and
+  therefore cannot be redelivered — but those are synchronous same-socket
+  responses, not the live-streaming duplicate case addressed here.
+
 ## 6th June 2026
 
 ### 0.15.14 — P-384/P-521 key agreement (#357)
