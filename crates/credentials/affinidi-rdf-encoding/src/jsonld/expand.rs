@@ -279,6 +279,12 @@ fn expand_property_value(
     type_mapping: Option<&str>,
     context: &Context,
 ) -> Result<Value> {
+    // `@json`-typed values are kept verbatim as a JSON literal (the whole value,
+    // including arrays/objects, is preserved and serialized canonically later).
+    if type_mapping == Some("@json") {
+        return Ok(json!({"@value": value.clone(), "@type": "@json"}));
+    }
+
     match value {
         Value::Array(arr) => {
             let mut result = Vec::new();
@@ -316,7 +322,13 @@ fn expand_property_value(
                 }
             }
         }
-        Value::Number(n) => Ok(json!({"@value": n})),
+        Value::Number(n) => match type_mapping {
+            Some(dt) if dt != "@id" && dt != "@vocab" => {
+                let resolved_type = context.expand_iri(dt).unwrap_or_else(|| dt.to_string());
+                Ok(json!({"@value": n, "@type": resolved_type}))
+            }
+            _ => Ok(json!({"@value": n})),
+        },
         Value::Bool(b) => Ok(json!({"@value": b})),
         Value::Null => Ok(Value::Null),
     }
