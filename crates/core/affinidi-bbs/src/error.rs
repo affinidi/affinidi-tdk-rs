@@ -5,7 +5,11 @@
 use thiserror::Error;
 
 /// Errors that can occur during BBS operations.
+///
+/// `#[non_exhaustive]`: future variants may be added without a breaking change,
+/// so downstream `match` arms should include a wildcard.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum BbsError {
     /// Key material is invalid or too short.
     /// Check that key_material is >= 32 bytes and key_info <= 65535 bytes.
@@ -36,6 +40,11 @@ pub enum BbsError {
     /// This may indicate invalid parameters or an internal error.
     #[error("Crypto error: {0}")]
     Crypto(String),
+
+    /// A selected ciphersuite or option is defined but not implemented.
+    /// Proceeding would silently emit non-conforming output, so it is rejected.
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
 }
 
 pub type Result<T> = std::result::Result<T, BbsError>;

@@ -4,33 +4,35 @@
 
 use bls12_381_plus::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use ff::Field;
+use zeroize::Zeroize;
 
 use crate::error::{BbsError, Result};
 
 /// A BBS secret key (scalar in the BLS12-381 group).
 ///
 /// 32 bytes, must be nonzero and less than the group order.
-/// The key is zeroized in memory when dropped using volatile writes
-/// to prevent compiler optimization of the zeroing.
+/// The key is zeroized in memory when dropped via the vetted `zeroize` crate
+/// (guaranteed non-elided volatile writes followed by a memory fence).
 #[derive(Clone)]
 pub struct SecretKey(pub(crate) Scalar);
 
 impl Drop for SecretKey {
     fn drop(&mut self) {
-        // Overwrite the scalar's memory with zeros using volatile writes (the
-        // volatile prevents the compiler from optimizing the zeroing away). Sound
-        // because `bls12_381_plus::Scalar` is a plain inline `[u64; 4]` with no
-        // heap indirection; `SecretKey: Clone` means each clone runs this Drop.
-        let ptr = &mut self.0 as *mut Scalar as *mut u8;
-        let size = std::mem::size_of::<Scalar>();
-        unsafe {
-            for i in 0..size {
-                std::ptr::write_volatile(ptr.add(i), 0);
-            }
-        }
-        // Prevent the compiler/CPU from reordering subsequent operations before
-        // the zeroing (defense in depth, matching the `zeroize` crate's fence).
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+        // `bls12_381_plus::Scalar` does not implement `Zeroize` and exposes no
+        // mutable byte view, so we zeroize its backing storage directly. This is
+        // sound because `Scalar` is a plain inline `[u64; 4]` (Montgomery form,
+        // no heap indirection): an all-zero byte pattern is a valid `Scalar`, and
+        // the value is never read after this. Delegating to `zeroize` replaces the
+        // previous hand-rolled volatile loop with the crate's audited primitive
+        // (volatile writes + `atomic::compiler_fence(SeqCst)`); `SecretKey: Clone`
+        // means each clone runs this `Drop`.
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                std::ptr::from_mut(&mut self.0).cast::<u8>(),
+                std::mem::size_of::<Scalar>(),
+            )
+        };
+        bytes.zeroize();
     }
 }
 

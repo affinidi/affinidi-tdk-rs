@@ -22,7 +22,10 @@ use crate::error::{BbsError, Result};
 /// Per IETF draft §4.3.3:
 /// 1. `uniform_bytes = expand_message(msg_octets, dst, expand_len)`
 /// 2. Return `OS2IP(uniform_bytes) mod r`
-pub fn hash_to_scalar(data: &[u8], dst: &[u8], _cs: Ciphersuite) -> Result<Scalar> {
+pub fn hash_to_scalar(data: &[u8], dst: &[u8], cs: Ciphersuite) -> Result<Scalar> {
+    // Reject not-yet-implemented ciphersuites (SHAKE-256) at the universal
+    // scalar-derivation chokepoint rather than silently hashing with SHA-256.
+    cs.ensure_supported()?;
     let expand_len = 48; // ceil((255 + 128) / 8)
     let uniform_bytes = expand_msg_xmd(data, dst, expand_len)?;
     Ok(scalar_from_wide_bytes(&uniform_bytes))
@@ -122,6 +125,13 @@ mod tests {
     fn hash_to_scalar_produces_nonzero() {
         let s = hash_to_scalar(b"test message", b"test-dst", Ciphersuite::Bls12381Sha256).unwrap();
         assert_ne!(s, Scalar::ZERO);
+    }
+
+    #[test]
+    fn hash_to_scalar_rejects_unimplemented_shake256() {
+        // Must error rather than silently hash with SHA-256 under a SHAKE DST.
+        let err = hash_to_scalar(b"msg", b"dst", Ciphersuite::Bls12381Shake256);
+        assert!(matches!(err, Err(BbsError::Unsupported(_))));
     }
 
     #[test]

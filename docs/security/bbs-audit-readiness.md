@@ -82,7 +82,8 @@ out of scope (it is being removed; not interoperable, no production use).
   `point_from_bytes` carries a comment forbidding `from_compressed_unchecked`.
 - **Issuer secret handling.** `SK` bytes hashed into `e` are zeroized; the
   `SK + e` intermediate is zeroized before the invertibility branch; `SecretKey`
-  has a redacting `Debug` and a volatile-write `Drop` (now with a `compiler_fence`).
+  has a redacting `Debug` and a `Drop` that clears its backing bytes via the
+  `zeroize` crate (non-elided volatile writes + memory fence).
 - **CSPRNG.** `rand::rng()` (`ThreadRng`, ChaCha-based, OS-seeded) — not
   seedable/predictable. Deterministic mocked scalars are strictly `#[cfg(test)]`.
 - **Domain separation + transcript binding.** Distinct `api_id`s for
@@ -105,10 +106,10 @@ A focused crypto review was performed over `affinidi-bbs`. Two **High**
 | 2 | High | Pseudonym verifier integer-underflow + OOB on a degenerate `L=0/U=0` proof (`l - 1`, `m_hats[u-1]`). | **Fixed** — `l == 0 / u == 0` guarded in the nym branch. Regression test added. |
 | 5 | Med | Non-canonical proof length accepted (trailing partial-scalar bytes ignored) ⇒ encoding malleability. | **Fixed** — verify rejects lengths not `≡ min_len (mod scalar_len)`. Regression test added. |
 | 7 | Low | Proof parser did not reject a zero `challenge`. | **Fixed** — zero challenge rejected. |
-| 4 | Med | `SecretKey` Drop used a hand-rolled volatile loop without a fence. | **Hardened** — added `compiler_fence(SeqCst)`; invariants documented. (Full migration to the `zeroize` crate deferred — see §5.) |
-| 6 | Low | Subgroup check relies on `from_compressed` with no guard against an accidental `_unchecked` swap. | **Mitigated** — explicit SECURITY comment in `point_from_bytes`. (A non-subgroup-encoding regression vector is still wanted — see §5.) |
+| 4 | Med | `SecretKey` Drop used a hand-rolled volatile loop without a fence. | **Resolved** — migrated to the `zeroize` crate's audited primitive (`<[u8]>::zeroize()`: non-elided volatile writes + `compiler_fence(SeqCst)`); soundness invariants documented. |
+| 6 | Low | Subgroup check relies on `from_compressed` with no guard against an accidental `_unchecked` swap. | **Resolved** — explicit SECURITY comment in `point_from_bytes` **plus** a vendored on-curve, non-prime-order-subgroup G1 regression vector asserting rejection (`point_from_bytes_rejects_on_curve_non_subgroup`). |
+| — | Info | `Ciphersuite::Bls12381Shake256` is selectable but the hash layer is SHA-256-only (silent wrong output if selected). | **Resolved** — selecting SHAKE-256 is now a hard error (`BbsError::Unsupported`) at both hashing chokepoints (`hash_to_scalar`, `create_generators*`); end-to-end + unit regression tests added. |
 | 3 | Med | Holder secrets (`nym_secret`, `prover_nym`, `secret_prover_blind`, `m~`/`m^` blindings) are not zeroized in the nym/blind paths. | **Deferred** — see §5 (needs API design; `Scalar` is `Copy` and re-exported). |
-| — | Info | `Ciphersuite::Bls12381Shake256` is selectable but the hash layer is SHA-256-only (silent wrong output if selected). | **Deferred** — see §5. |
 
 Things the review explicitly found **done well** are in §3.
 
@@ -119,25 +120,22 @@ Things the review explicitly found **done well** are in §3.
    their own copies. Fully zeroizing `nym_secret` / `secret_prover_blind` and the
    per-proof blinding vectors needs a `Zeroizing<Scalar>` newtype and an API
    decision about caller-owned copies. We want the auditor's view on the right
-   boundary before committing to an API change.
-2. **`SecretKey` Drop (Finding 4).** Current approach is volatile-write +
-   `compiler_fence`. Question: prefer migrating to the `zeroize` crate's
-   `Zeroize`/`Zeroizing` for the inner scalar?
-3. **Subgroup regression vector (Finding 6).** We assert validation rejects
-   malformed encodings but do not yet have a known *on-curve, non-subgroup* G1/G2
-   encoding to assert rejection of. A vendored test vector would harden against
-   an accidental `_unchecked` swap.
-4. **SHAKE-256 ciphersuite.** Either implement it properly or make selecting it a
-   hard error rather than silently emitting SHA-256 output with mismatched scalar
-   lengths.
-5. **RNG + `fork()`.** `ThreadRng` does not reseed on `fork()`. Do not fork after
+   boundary before committing to an API change. **This is the one remaining
+   deferred hardening item.**
+2. **RNG + `fork()`.** `ThreadRng` does not reseed on `fork()`. Do not fork after
    first RNG use (or reseed in children) to avoid nonce/blinding reuse across
    forked workers.
-6. **Canonicalization is what gets signed.** The RDFC-1.0 / JSON-LD layer in
+3. **Canonicalization is what gets signed.** The RDFC-1.0 / JSON-LD layer in
    `affinidi-rdf-encoding` determines the exact bytes signed and hashed; a
-   canonicalization bug is a signature-soundness bug. It is W3C-`rdf-canon`-suite
-   conformant (59/63; 4 documented poison/automorphism skips — #361) but is part
-   of the trusted surface and worth auditor attention.
+   canonicalization bug is a signature-soundness bug. It is fully W3C-`rdf-canon`-suite
+   conformant (63/63, no skips — #361) but is part of the trusted surface and
+   worth auditor attention.
+
+> Resolved since the initial readiness draft (were items 2–4 here; see §4 for
+> detail): the `SecretKey` Drop migration to the `zeroize` crate (Finding 4),
+> the on-curve non-subgroup G1 regression vector (Finding 6), and making the
+> unimplemented SHAKE-256 ciphersuite a hard error instead of silent wrong
+> output (Info).
 
 ## 6. Reproducing the evidence
 
