@@ -17,8 +17,10 @@ pub struct SecretKey(pub(crate) Scalar);
 
 impl Drop for SecretKey {
     fn drop(&mut self) {
-        // Overwrite the scalar's memory with zeros using volatile writes.
-        // This prevents the compiler from optimizing away the zeroing.
+        // Overwrite the scalar's memory with zeros using volatile writes (the
+        // volatile prevents the compiler from optimizing the zeroing away). Sound
+        // because `bls12_381_plus::Scalar` is a plain inline `[u64; 4]` with no
+        // heap indirection; `SecretKey: Clone` means each clone runs this Drop.
         let ptr = &mut self.0 as *mut Scalar as *mut u8;
         let size = std::mem::size_of::<Scalar>();
         unsafe {
@@ -26,6 +28,9 @@ impl Drop for SecretKey {
                 std::ptr::write_volatile(ptr.add(i), 0);
             }
         }
+        // Prevent the compiler/CPU from reordering subsequent operations before
+        // the zeroing (defense in depth, matching the `zeroize` crate's fence).
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
 
