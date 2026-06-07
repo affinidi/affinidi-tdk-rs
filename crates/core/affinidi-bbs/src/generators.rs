@@ -168,6 +168,11 @@ pub fn point_to_bytes(p: &G1Projective) -> [u8; 48] {
 }
 
 /// Deserialize a G1 point from compressed bytes.
+///
+/// SECURITY: must use `from_compressed` (full on-curve + prime-order subgroup
+/// `is_torsion_free` check), NOT `from_compressed_unchecked` — skipping the
+/// subgroup check would open small-subgroup / cofactor attacks on every
+/// attacker-supplied proof point (Abar/Bbar/D, pseudonym).
 pub fn point_from_bytes(bytes: &[u8; 48]) -> Option<G1Projective> {
     let affine = G1Affine::from_compressed(bytes);
     if affine.is_some().into() {

@@ -458,12 +458,44 @@ pub(crate) fn proof_verify_core(
     if proof_bytes.len() < min_len {
         return Err(BbsError::InvalidProof("proof too short".into()));
     }
+    // Reject non-canonical proof lengths (trailing partial-scalar bytes) so a
+    // proof has exactly one byte encoding.
+    if !(proof_bytes.len() - min_len).is_multiple_of(scalar_len) {
+        return Err(BbsError::InvalidProof(
+            "proof length is not canonical".into(),
+        ));
+    }
     let u = (proof_bytes.len() - min_len) / scalar_len;
     let l = r + u;
     if h_generators.len() != l {
         return Err(BbsError::InvalidProof(
             "generator/message count mismatch".into(),
         ));
+    }
+
+    // Validate the verifier-supplied disclosed indexes BEFORE they index into
+    // `h_generators` / `disclosed_scalars`. `proof_gen_core` validates the
+    // generation side; mirroring it here prevents a malformed presentation from
+    // panicking the verifier (remotely-triggerable DoS).
+    if disclosed_scalars.len() != r {
+        return Err(BbsError::InvalidProof(
+            "disclosed scalar/index count mismatch".into(),
+        ));
+    }
+    {
+        let mut seen = HashSet::with_capacity(r);
+        for &idx in disclosed_indexes {
+            if idx >= l {
+                return Err(BbsError::InvalidIndex(format!(
+                    "disclosed index {idx} >= message count {l}"
+                )));
+            }
+            if !seen.insert(idx) {
+                return Err(BbsError::InvalidIndex(format!(
+                    "duplicate disclosed index: {idx}"
+                )));
+            }
+        }
     }
 
     // 1. Deserialize proof components
@@ -497,6 +529,9 @@ pub(crate) fn proof_verify_core(
     }
 
     let challenge = read_scalar(proof_bytes, &mut offset)?;
+    if bool::from(challenge.is_zero()) {
+        return Err(BbsError::InvalidProof("zero challenge".into()));
+    }
 
     // 5. Determine undisclosed indexes
     let undisclosed_indexes: Vec<usize> =
@@ -528,6 +563,15 @@ pub(crate) fn proof_verify_core(
     // PseudonymProofVerify: Uv = OP·m̂_nym − Pseudonym·c.
     let nym_terms: Option<(G1Projective, G1Projective, G1Projective)> = match nym {
         Some((op, pseudonym)) => {
+            // A pseudonym proof structurally requires the `nym_secret` as a
+            // present, undisclosed last message, so `l >= 1` and `u >= 1`.
+            // Enforce it rather than assuming it (else `l - 1` / `m_hats[u - 1]`
+            // underflow/panic on a crafted proof — verifier DoS).
+            if l == 0 || u == 0 {
+                return Err(BbsError::InvalidProof(
+                    "pseudonym proof requires an undisclosed nym_secret".into(),
+                ));
+            }
             let nym_index = l - 1;
             if disclosed_indexes.contains(&nym_index) {
                 return Err(BbsError::InvalidIndex(

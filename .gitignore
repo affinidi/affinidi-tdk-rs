@@ -8,6 +8,8 @@ Cargo.lock
 docs/*
 # Architecture Decision Records are first-class, tracked docs.
 !docs/adr/
+# Security audit-readiness / threat-model docs are tracked.
+!docs/security/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json

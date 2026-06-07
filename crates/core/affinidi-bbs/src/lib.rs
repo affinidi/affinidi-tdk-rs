@@ -403,4 +403,80 @@ mod tests {
             .unwrap()
         );
     }
+
+    // --- Verifier robustness against malformed presentations (must return Err,
+    // never panic). Regression tests for the audit hardening (#363). ---
+
+    fn three_msg_proof() -> (PublicKey, Proof) {
+        let sk = keygen(b"robustness-key-material-32-bytes", b"").unwrap();
+        let pk = sk_to_pk(&sk);
+        let messages = [b"a".as_ref(), b"b", b"c"];
+        let sig = sign(&sk, &pk, b"app", &messages).unwrap();
+        let proof = proof_gen(&pk, &sig, b"app", b"s", &messages, &[0]).unwrap();
+        (pk, proof)
+    }
+
+    #[test]
+    fn verify_rejects_out_of_bounds_disclosed_index() {
+        let (pk, proof) = three_msg_proof();
+        let r = proof_verify(&pk, &proof, b"app", b"s", &[b"a".as_ref()], &[999]);
+        assert!(
+            r.is_err(),
+            "out-of-bounds disclosed index must error, not panic"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_duplicate_disclosed_index() {
+        let (pk, proof) = three_msg_proof();
+        let r = proof_verify(&pk, &proof, b"app", b"s", &[b"a".as_ref(), b"a"], &[0, 0]);
+        assert!(
+            r.is_err(),
+            "duplicate disclosed index must error, not panic"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_non_canonical_proof_length() {
+        let (pk, proof) = three_msg_proof();
+        let mut bytes = proof.to_bytes().to_vec();
+        bytes.push(0); // trailing partial-scalar byte
+        let bad = Proof::from_bytes(&bytes);
+        let r = proof_verify(&pk, &bad, b"app", b"s", &[b"a".as_ref()], &[0]);
+        assert!(r.is_err(), "non-canonical proof length must error");
+    }
+
+    #[test]
+    fn pseudonym_verify_rejects_degenerate_proof() {
+        // A minimal valid-structure proof (3 points + 4 scalars, U=0) with an
+        // empty disclosure forces L=0 in the pseudonym branch — must Err, not
+        // underflow/panic.
+        use bls12_381_plus::{G1Affine, Scalar};
+        let g1 = G1Affine::generator().to_compressed();
+        let one = Scalar::ONE.to_be_bytes();
+        let mut bytes = Vec::new();
+        for _ in 0..3 {
+            bytes.extend_from_slice(&g1);
+        }
+        for _ in 0..4 {
+            bytes.extend_from_slice(&one);
+        }
+        let proof = Proof::from_bytes(&bytes);
+        let pseudonym = Pseudonym::from_bytes(&g1).unwrap();
+        let (pk, _sig, _msgs) = pseudonym_fixture();
+        let r = proof_verify_with_pseudonym(
+            &pk,
+            &proof,
+            b"hdr",
+            b"s",
+            &[],
+            &[],
+            b"verifier-a",
+            &pseudonym,
+        );
+        assert!(
+            r.is_err(),
+            "degenerate pseudonym proof must error, not panic"
+        );
+    }
 }
