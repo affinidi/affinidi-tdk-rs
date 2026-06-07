@@ -33,9 +33,11 @@ pub struct InboundMessage {
 
 /// Handles inbound messages to the mediator.
 ///
-/// Accepts both authenticated (JWT Bearer) and anonymous requests.
-/// Anonymous requests are used by remote mediator ForwardingProcessors for
-/// inter-mediator message relay; they are assigned the global default ACL.
+/// Authenticated (JWT Bearer) requests are always accepted. Anonymous requests
+/// — used by remote mediator ForwardingProcessors for inter-mediator relay —
+/// are accepted only when the mediator is configured as a relay (global default
+/// ACL grants `SEND_FORWARDED`); otherwise they are rejected like any other
+/// unauthenticated request. See `MaybeSession`.
 /// ACL_MODE: Requires SEND_MESSAGES in the session (or global default) ACL.
 pub async fn message_inbound_handler(
     MaybeSession(session): MaybeSession,

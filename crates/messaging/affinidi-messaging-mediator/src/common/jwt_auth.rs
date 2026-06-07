@@ -3,6 +3,7 @@ use crate::{
     common::session::{Session, SessionClaims},
 };
 use affinidi_messaging_mediator_common::errors::ErrorResponse;
+use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use axum::{
     Json, RequestPartsExt,
     extract::{FromRef, FromRequestParts},
@@ -213,13 +214,29 @@ where
     }
 }
 
-/// Extractor that wraps `Session` and never rejects.
+/// Whether an unauthenticated (no-Bearer) inbound request may be accepted as an
+/// anonymous session.
+///
+/// Anonymous inbound exists solely for inter-mediator relay: a remote
+/// `ForwardingProcessor` POSTs a forward whose inner authcrypt *is* the
+/// authentication. We only honour that when the operator has opted into acting
+/// as a relay, signalled by the global default ACL granting `SEND_FORWARDED`
+/// (the capability the relay path consumes, gated again per-message in
+/// `routing.rs`). On a mediator with the shipped secure default this returns
+/// `false`, so anonymous requests are rejected exactly like before.
+fn anonymous_inbound_allowed(global_acl_default: &MediatorACLSet) -> bool {
+    global_acl_default.get_send_forwarded().0
+}
+
+/// Extractor that wraps `Session`, optionally allowing anonymous relay requests.
 ///
 /// When a valid `Authorization: Bearer` token is present the inner `Session`
 /// is fully populated (i.e. `session.authenticated == true`). When the header
-/// is absent or invalid an anonymous session is synthesised using the
-/// mediator's global default ACL — this is intentional for inter-mediator
-/// relay requests sent by a remote `ForwardingProcessor`.
+/// is absent or invalid the request is only accepted — as an anonymous session
+/// carrying the global default ACL — if [`anonymous_inbound_allowed`] permits it
+/// (the mediator is configured as an inter-mediator relay). Otherwise the
+/// original authentication rejection is propagated, so a mediator with the
+/// shipped secure default keeps rejecting unauthenticated `/inbound` requests.
 pub struct MaybeSession(pub Session);
 
 impl<S> FromRequestParts<S> for MaybeSession
@@ -227,19 +244,45 @@ where
     SharedData: FromRef<S>,
     S: Send + Sync + Debug,
 {
-    type Rejection = std::convert::Infallible;
+    type Rejection = AuthError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         match Session::from_request_parts(parts, state).await {
             Ok(session) => Ok(MaybeSession(session)),
-            Err(_) => {
+            Err(e) => {
                 let shared = SharedData::from_ref(state);
-                Ok(MaybeSession(Session {
-                    session_id: "ANON-INBOUND".to_string(),
-                    acls: shared.config.security.global_acl_default.clone(),
-                    ..Default::default()
-                }))
+                if anonymous_inbound_allowed(&shared.config.security.global_acl_default) {
+                    Ok(MaybeSession(Session {
+                        session_id: "ANON-INBOUND".to_string(),
+                        acls: shared.config.security.global_acl_default.clone(),
+                        ..Default::default()
+                    }))
+                } else {
+                    Err(e)
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anon_inbound_allowed_when_global_default_grants_send_forwarded() {
+        let acls = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        assert!(anonymous_inbound_allowed(&acls));
+    }
+
+    #[test]
+    fn anon_inbound_denied_for_shipped_secure_default() {
+        // The shipped default global_acl_default: fine for direct messaging but
+        // NOT a relay (no SEND_FORWARDED), so anonymous inbound must be refused.
+        let acls = MediatorACLSet::from_string_ruleset(
+            "DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES",
+        )
+        .unwrap();
+        assert!(!anonymous_inbound_allowed(&acls));
     }
 }
