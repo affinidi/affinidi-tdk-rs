@@ -1,5 +1,26 @@
 # Affinidi Data Integrity Changelog
 
+## 7th June 2026 Release 0.7.2
+
+W3C vc-di-bbs **per-verifier pseudonym / holder binding** (`featureOption:
+pseudonym`) — the document layer on top of the blind-BBS + pseudonym crypto in
+`affinidi-bbs`. Closes the holder-binding work (#353).
+
+### Added (under the `bbs-2023` feature)
+
+- `create_pseudonym_base_proof_value` (issuer) — blind-signs the credential over
+  the holder's commitment with `signer_nym_entropy`; serializes the `0xd95d08`
+  base `proofValue`. Byte-exact to the W3C `Pseudonym/addSignedSDBase` vector.
+- `create_pseudonym_derived_proof` (holder) — a selective-disclosure
+  presentation bound to a per-verifier pseudonym derived from the verifier id;
+  serializes the `0xd95d09` derived `proofValue`.
+- `verify_pseudonym_derived_proof` (verifier) — accepts the W3C reference
+  pseudonym derived proof **byte-for-byte**, and rejects a mismatched verifier.
+
+Pseudonyms are stable per verifier (recognise repeat presentations) and
+unlinkable across verifiers. Proof-bearing crypto over BLS12-381 — pending the
+BBS security audit (#363) before backing real credentials.
+
 ## 7th June 2026 Release 0.7.1
 
 ### Fixed

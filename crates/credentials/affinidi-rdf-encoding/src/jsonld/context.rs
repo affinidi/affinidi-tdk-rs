@@ -99,19 +99,25 @@ impl Context {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Process term definitions — collect first, then insert to avoid borrow conflict
-        let new_terms: Vec<(String, TermDefinition)> = obj
+        // Process term definitions in two passes so that compact-IRI `@id`
+        // values (e.g. `"issuer": {"@id": "cred:issuer"}`) can resolve against a
+        // prefix (`"cred": "https://…"`) defined in the same context, regardless
+        // of key order. Pass 1 defines simple string mappings (prefixes / IRIs);
+        // pass 2 defines the expanded (object) term definitions, inserting each
+        // immediately so later terms can reference earlier ones.
+        let entries: Vec<(String, Value)> = obj
             .iter()
             .filter(|(key, _)| !key.starts_with('@'))
-            .map(|(key, value)| {
-                let term_def = create_term_definition(key, value, is_protected, self)?;
-                Ok((key.clone(), term_def))
-            })
-            .collect::<Result<Vec<_>>>()?;
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
-        let terms = Rc::make_mut(&mut self.terms);
-        for (key, term_def) in new_terms {
-            terms.insert(key, term_def);
+        for (key, value) in entries.iter().filter(|(_, v)| v.is_string()) {
+            let term_def = create_term_definition(key, value, is_protected, self)?;
+            Rc::make_mut(&mut self.terms).insert(key.clone(), term_def);
+        }
+        for (key, value) in entries.iter().filter(|(_, v)| !v.is_string()) {
+            let term_def = create_term_definition(key, value, is_protected, self)?;
+            Rc::make_mut(&mut self.terms).insert(key.clone(), term_def);
         }
 
         Ok(())

@@ -131,8 +131,20 @@ fn value_to_object(
     }
 }
 
+/// The `rdf:JSON` datatype IRI for `@json`-typed literals.
+const RDF_JSON: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON";
+
 /// Convert a @value object to an RDF Literal.
 fn value_object_to_literal(val: &Value, obj: &serde_json::Map<String, Value>) -> Result<Literal> {
+    // `@json` literals: the value is serialized with the JSON Canonicalization
+    // Scheme (sorted keys, no whitespace) and typed as `rdf:JSON`.
+    if obj.get("@type").and_then(|t| t.as_str()) == Some("@json") {
+        return Ok(Literal::typed(
+            canonical_json(val),
+            NamedNode::new(RDF_JSON),
+        ));
+    }
+
     let string_value = match val {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
@@ -159,6 +171,35 @@ fn value_object_to_literal(val: &Value, obj: &serde_json::Map<String, Value>) ->
         Value::Bool(_) => Ok(Literal::typed(string_value, NamedNode::new(xsd::BOOLEAN))),
         Value::Number(n) => Ok(number_to_literal(n)),
         _ => Ok(Literal::new(string_value)),
+    }
+}
+
+/// Serialize a JSON value with the JSON Canonicalization Scheme (RFC 8785):
+/// object keys sorted lexicographically, no insignificant whitespace. Used for
+/// `@json`-typed (`rdf:JSON`) literals. (Object keys in the vc-di-bbs vectors are
+/// ASCII, so byte-order sorting matches JCS's UTF-16 code-unit ordering.)
+fn canonical_json(v: &Value) -> String {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .iter()
+                .map(|k| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_default(),
+                        canonical_json(&map[*k])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        Value::Array(arr) => {
+            let parts: Vec<String> = arr.iter().map(canonical_json).collect();
+            format!("[{}]", parts.join(","))
+        }
+        other => serde_json::to_string(other).unwrap_or_default(),
     }
 }
 

@@ -67,8 +67,15 @@ pub use nym::{
     blind_sign_with_nym, blind_verify_with_nym, nym_commit, proof_gen_with_nym,
     proof_verify_with_nym,
 };
-pub use pseudonym::calculate_pseudonym_generator;
+pub use pseudonym::{calculate_pseudonym_generator, calculate_pseudonym_generator_with_api_id};
 pub use types::{Proof, Pseudonym, PublicKey, SecretKey, Signature};
+
+/// The BLS12-381 scalar field element used for nym secrets / entropy
+/// (`signer_nym_entropy`, `prover_nym`, `nym_secret`). Re-exported so callers of
+/// the nym API can construct and combine these without depending on
+/// `bls12_381_plus` directly. Use [`hash::scalar_from_bytes`] to build one from
+/// 32 big-endian bytes.
+pub use bls12_381_plus::Scalar;
 
 /// Generate a BBS secret key from key material using the default ciphersuite (SHA-256).
 ///
