@@ -28,6 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use affinidi_bbs as bbs;
+use affinidi_rdf_encoding::jsonld::context::Context as JsonLdContext;
 use affinidi_rdf_encoding::{jsonld, nquads, rdfc1};
 use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
@@ -894,23 +895,75 @@ fn lines_with_newline(joined: &str) -> Vec<String> {
 fn skolemize_compact(document: &Value) -> Value {
     let mut counter = 0u64;
     let mut out = document.clone();
-    skolemize_value(&mut out, &mut counter);
+    // Build the JSON-LD context so `@json`-typed values — which are opaque
+    // literals, not nodes — are not skolemized. Adding skolem `@id`s inside a
+    // `@json` value would pollute its canonical-JSON serialization (the reference
+    // skolemizes the *expanded* form, where `@json` is an opaque `@value` object).
+    let mut ctx = JsonLdContext::default();
+    if let Some(c) = document.get("@context") {
+        let _ = ctx.process(c);
+    }
+    skolemize_value(&mut out, &mut counter, &ctx);
     out
 }
 
-fn skolemize_value(v: &mut Value, counter: &mut u64) {
+/// Apply the type-scoped contexts of a node's `@type` to `ctx`, so terms defined
+/// under a type (e.g. `drivingPrivileges` typed `@json` under the driver's
+/// licence type) become visible.
+fn apply_type_scoped(ctx: &mut JsonLdContext, map: &Map<String, Value>) {
+    let type_val = map.get("@type").or_else(|| {
+        map.get("type")
+            .filter(|_| ctx.get_term("type").is_some_and(|t| t.iri == "@type"))
+    });
+    let types: Vec<String> = match type_val {
+        Some(Value::String(s)) => vec![s.clone()],
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let scoped: Vec<Value> = types
+        .iter()
+        .filter_map(|t| ctx.get_term(t).and_then(|td| td.context.clone()))
+        .collect();
+    for sc in scoped {
+        let _ = ctx.process(&sc);
+    }
+}
+
+fn skolemize_value(v: &mut Value, counter: &mut u64, ctx: &JsonLdContext) {
     match v {
         Value::Object(map) => {
             // Value objects are literals, not nodes.
             if map.contains_key("@value") {
                 return;
             }
+            // Active context for this node: parent + local @context + type scopes.
+            let mut node_ctx = ctx.clone();
+            if let Some(c) = map.get("@context") {
+                let _ = node_ctx.process(c);
+            }
+            apply_type_scoped(&mut node_ctx, map);
+
             for (k, val) in map.iter_mut() {
                 // Skip JSON-LD keywords except @list, whose members are nodes.
                 if k.starts_with('@') && k != "@list" {
                     continue;
                 }
-                skolemize_value(val, counter);
+                // Do not descend into `@json`-typed values (opaque literals).
+                if node_ctx
+                    .get_term(k)
+                    .is_some_and(|td| td.type_mapping.as_deref() == Some("@json"))
+                {
+                    continue;
+                }
+                // Apply the property's scoped context, if any, while descending.
+                let mut prop_ctx = node_ctx.clone();
+                if let Some(sc) = node_ctx.get_term(k).and_then(|td| td.context.clone()) {
+                    let _ = prop_ctx.process(&sc);
+                }
+                skolemize_value(val, counter, &prop_ctx);
             }
             if !map.contains_key("@id") && !map.contains_key("id") {
                 let id = format!("{URN_BNID}_skolem_{counter}");
@@ -920,7 +973,7 @@ fn skolemize_value(v: &mut Value, counter: &mut u64) {
         }
         Value::Array(arr) => {
             for item in arr.iter_mut() {
-                skolemize_value(item, counter);
+                skolemize_value(item, counter, ctx);
             }
         }
         _ => {}
@@ -1294,8 +1347,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs JSON-LD type-scoped context support (credentials/v1 defines \
-                issuer/credentialSubject under the VerifiableCredential type scope)"]
     fn create_pseudonym_base_proof_value_matches_w3c_vector() {
         let km = json("BBSKeyMaterial.json");
         let sk_bytes: [u8; 32] = hex_decode(km["privateKeyHex"].as_str().unwrap())
