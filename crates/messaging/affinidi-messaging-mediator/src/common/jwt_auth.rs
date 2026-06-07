@@ -212,3 +212,34 @@ where
         authenticate_token(&state, bearer.token()).await
     }
 }
+
+/// Extractor that wraps `Session` and never rejects.
+///
+/// When a valid `Authorization: Bearer` token is present the inner `Session`
+/// is fully populated (i.e. `session.authenticated == true`). When the header
+/// is absent or invalid an anonymous session is synthesised using the
+/// mediator's global default ACL — this is intentional for inter-mediator
+/// relay requests sent by a remote `ForwardingProcessor`.
+pub struct MaybeSession(pub Session);
+
+impl<S> FromRequestParts<S> for MaybeSession
+where
+    SharedData: FromRef<S>,
+    S: Send + Sync + Debug,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match Session::from_request_parts(parts, state).await {
+            Ok(session) => Ok(MaybeSession(session)),
+            Err(_) => {
+                let shared = SharedData::from_ref(state);
+                Ok(MaybeSession(Session {
+                    session_id: "ANON-INBOUND".to_string(),
+                    acls: shared.config.security.global_acl_default.clone(),
+                    ..Default::default()
+                }))
+            }
+        }
+    }
+}

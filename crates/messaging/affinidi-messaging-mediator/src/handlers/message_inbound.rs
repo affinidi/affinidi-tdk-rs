@@ -1,4 +1,4 @@
-use crate::{SharedData, common::session::Session, messages::inbound::handle_inbound};
+use crate::{SharedData, common::jwt_auth::MaybeSession, messages::inbound::handle_inbound};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -31,11 +31,14 @@ pub struct InboundMessage {
     pub tag: String,
 }
 
-/// Handles inbound messages to the mediator
-/// ACL_MODE: Requires LOCAL access
+/// Handles inbound messages to the mediator.
 ///
+/// Accepts both authenticated (JWT Bearer) and anonymous requests.
+/// Anonymous requests are used by remote mediator ForwardingProcessors for
+/// inter-mediator message relay; they are assigned the global default ACL.
+/// ACL_MODE: Requires SEND_MESSAGES in the session (or global default) ACL.
 pub async fn message_inbound_handler(
-    session: Session,
+    MaybeSession(session): MaybeSession,
     State(state): State<SharedData>,
     Json(body): Json<InboundMessage>,
 ) -> Result<(StatusCode, Json<SuccessResponse<InboundMessageResponse>>), AppError> {
