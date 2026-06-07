@@ -20,6 +20,27 @@ pub enum Ciphersuite {
 }
 
 impl Ciphersuite {
+    /// Reject ciphersuites that are *defined* by this enum but **not implemented**
+    /// by the hash layer.
+    ///
+    /// `Bls12381Shake256` carries the SHAKE-256 id strings and a 64-byte scalar
+    /// length, but every hashing path (`hash::hash_to_scalar`,
+    /// `generators::create_generators*`, `hash::expand_msg_xmd`) is
+    /// SHA-256/XMD-only. Running it would silently emit SHA-256 output under a
+    /// SHAKE domain-separation tag, truncated to 32-byte scalars — a result that
+    /// is neither correct nor interoperable. Fail loudly instead of producing
+    /// wrong cryptographic output. See `docs/security/bbs-audit-readiness.md` §5(4).
+    pub fn ensure_supported(&self) -> crate::error::Result<()> {
+        match self {
+            Self::Bls12381Sha256 => Ok(()),
+            Self::Bls12381Shake256 => Err(crate::error::BbsError::Unsupported(
+                "BLS12-381-SHAKE-256 ciphersuite is not implemented (the hash \
+                 layer is SHA-256/XMD only); use Ciphersuite::Bls12381Sha256"
+                    .into(),
+            )),
+        }
+    }
+
     /// The ciphersuite identifier string.
     pub fn id(&self) -> &'static str {
         match self {
@@ -111,5 +132,16 @@ mod tests {
         let cs = Ciphersuite::Bls12381Sha256;
         let api_id = cs.api_id();
         assert!(api_id.ends_with(b"H2G_HM2S_"));
+    }
+
+    #[test]
+    fn sha256_is_supported_shake256_is_not() {
+        assert!(Ciphersuite::Bls12381Sha256.ensure_supported().is_ok());
+        // SHAKE-256 is defined but unimplemented — must fail loudly rather than
+        // silently emit SHA-256 output (audit Finding §5(4)).
+        assert!(matches!(
+            Ciphersuite::Bls12381Shake256.ensure_supported(),
+            Err(crate::error::BbsError::Unsupported(_))
+        ));
     }
 }

@@ -113,6 +113,18 @@ mod tests {
     }
 
     #[test]
+    fn keygen_rejects_unimplemented_shake256() {
+        // End-to-end: selecting the unimplemented SHAKE-256 suite must fail at
+        // the public API rather than derive a key with the wrong hash.
+        let result = keygen(
+            b"this-is-at-least-32-bytes-of-key-material!",
+            b"",
+            Ciphersuite::Bls12381Shake256,
+        );
+        assert!(matches!(result, Err(BbsError::Unsupported(_))));
+    }
+
+    #[test]
     fn sk_to_pk_deterministic() {
         let sk = keygen(
             b"test-key-material-at-least-32-by",

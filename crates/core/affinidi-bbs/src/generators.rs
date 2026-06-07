@@ -72,6 +72,9 @@ pub fn create_generators_with_api_id(
     api_id: &[u8],
     cs: Ciphersuite,
 ) -> Result<Vec<G1Projective>> {
+    // Reject not-yet-implemented ciphersuites (SHAKE-256) at the generator
+    // chokepoint: the hash-to-curve below is hard-wired to ExpandMsgXmd<Sha256>.
+    cs.ensure_supported()?;
     let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
     let generator_dst = [api_id, b"SIG_GENERATOR_DST_"].concat();
     let generator_seed = [api_id, b"MESSAGE_GENERATOR_SEED"].concat();
@@ -227,6 +230,48 @@ mod tests {
         let bytes = point_to_bytes(&p);
         let recovered = point_from_bytes(&bytes).unwrap();
         assert_eq!(point_to_bytes(&recovered), bytes);
+    }
+
+    /// Regression vector for the subgroup check (audit Finding 6).
+    ///
+    /// A compressed G1 encoding (x-coordinate = 4) that decodes to a point which
+    /// is **on the curve** but **not in the prime-order subgroup** (cofactor
+    /// torsion). `point_from_bytes` MUST reject it: accepting torsion points —
+    /// e.g. via an accidental `from_compressed_unchecked` swap — would open
+    /// small-subgroup / cofactor attacks on every attacker-supplied proof point
+    /// (Abar/Bbar/D, pseudonym). The `_unchecked` assertions below prove the
+    /// vector is a genuine subgroup-evasion case rather than mere garbage.
+    #[test]
+    fn point_from_bytes_rejects_on_curve_non_subgroup() {
+        let vector: [u8; 48] = hex::decode(
+            "800000000000000000000000000000000000000000000000\
+             000000000000000000000000000000000000000000000004",
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+
+        // The hardened path rejects it.
+        assert!(
+            point_from_bytes(&vector).is_none(),
+            "subgroup check must reject an on-curve torsion point"
+        );
+        assert!(bool::from(G1Affine::from_compressed(&vector).is_none()));
+
+        // Prove the vector really is on-curve-but-not-subgroup (so the test is
+        // meaningful): the unchecked decode succeeds, the point is on the curve,
+        // but it fails the prime-order subgroup membership test.
+        let unchecked = G1Affine::from_compressed_unchecked(&vector);
+        assert!(
+            bool::from(unchecked.is_some()),
+            "vector must decode unchecked"
+        );
+        let p = unchecked.unwrap();
+        assert!(bool::from(p.is_on_curve()), "vector must be on the curve");
+        assert!(
+            !bool::from(p.is_torsion_free()),
+            "vector must be outside the prime-order subgroup"
+        );
     }
 
     #[test]

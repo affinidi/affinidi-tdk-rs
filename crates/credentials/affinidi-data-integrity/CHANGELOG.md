@@ -1,5 +1,14 @@
 # Affinidi Data Integrity Changelog
 
+## 7th June 2026 Release 0.7.4
+
+### Changed
+
+- Bump `affinidi-bbs` to `0.3` (BBS audit hardening: `SecretKey` zeroize-crate
+  migration, on-curve non-subgroup G1 regression vector, and a hard error when
+  the unimplemented SHAKE-256 ciphersuite is selected). No API change here; the
+  `bbs-2023` cryptosuite output is unchanged (all KAT vectors still pass).
+
 ## 7th June 2026 Release 0.7.3
 
 ### Deprecated
