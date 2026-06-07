@@ -770,6 +770,407 @@ fn serialize_derived_proof_value(
     Ok(multibase::encode(multibase::Base::Base64Url, &buf))
 }
 
+/// CBOR prefix bytes for a `bbs-2023` **pseudonym derived** proof value.
+const CBOR_PREFIX_DERIVED_PSEUDONYM: [u8; 3] = [0xd9, 0x5d, 0x09];
+
+/// Parse a pseudonym base (`0xd95d08`) proof value: returns the common base
+/// fields plus the issuer's `signer_nym_entropy` scalar.
+fn parse_pseudonym_base_proof_value(
+    proof_value: &str,
+) -> Result<(BaseProofValue, bbs::Scalar), DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    if !proof_value.starts_with('u') {
+        return Err(malformed("proofValue must be multibase base64url ('u')"));
+    }
+    let (_b, bytes) =
+        multibase::decode(proof_value).map_err(|e| malformed(&format!("multibase: {e}")))?;
+    if bytes.len() < 3 || bytes[..3] != CBOR_PREFIX_BASE_PSEUDONYM {
+        return Err(malformed(
+            "proofValue is not a bbs-2023 pseudonym base proof",
+        ));
+    }
+    let value: ciborium::Value =
+        ciborium::from_reader(&bytes[3..]).map_err(|e| malformed(&format!("CBOR: {e}")))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| malformed("pseudonym base proofValue must be a CBOR array"))?;
+    if arr.len() != 6 {
+        return Err(malformed("pseudonym base proofValue must have 6 elements"));
+    }
+    let bytes_at = |i: usize, what: &str| {
+        arr[i]
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed(&format!("{what} must be bytes")))
+    };
+    let mandatory_pointers = arr[4]
+        .as_array()
+        .ok_or_else(|| malformed("mandatoryPointers must be an array"))?
+        .iter()
+        .map(|p| {
+            p.as_text()
+                .map(str::to_string)
+                .ok_or_else(|| malformed("mandatory pointer must be text"))
+        })
+        .collect::<Result<_, _>>()?;
+    // signer_nym_entropy is a CBOR bignum (tag 2) wrapping the 32-byte scalar.
+    let entropy_bytes = match &arr[5] {
+        ciborium::Value::Tag(2, inner) => inner
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed("signerNymEntropy bignum must wrap bytes"))?,
+        ciborium::Value::Bytes(b) => b.clone(),
+        _ => return Err(malformed("signerNymEntropy must be a bignum")),
+    };
+    let signer_nym_entropy = scalar_from_32(&entropy_bytes, "signerNymEntropy")?;
+
+    Ok((
+        BaseProofValue {
+            bbs_signature: bytes_at(0, "bbsSignature")?,
+            bbs_header: bytes_at(1, "bbsHeader")?,
+            hmac_key: bytes_at(3, "hmacKey")?,
+            mandatory_pointers,
+        },
+        signer_nym_entropy,
+    ))
+}
+
+/// Create a `bbs-2023` **pseudonym derived proof** (holder side): a
+/// selective-disclosure presentation bound to a per-verifier pseudonym derived
+/// from `verifier_id`.
+///
+/// `prover_nym` / `secret_prover_blind` are the holder's secrets from
+/// [`crate::bbs_2023_transform::create_pseudonym_base_proof_value`]'s issuance
+/// (the `nym_commit` the holder made); `verifier_id` is the verifier's identity
+/// (the pseudonym context). Returns the reveal document with a `0xd95d09` proof.
+#[allow(clippy::too_many_arguments)]
+pub fn create_pseudonym_derived_proof(
+    base_document: &Value,
+    selective_pointers: &[&str],
+    presentation_header: &[u8],
+    pk: &bbs::PublicKey,
+    prover_nym: &[u8],
+    secret_prover_blind: &[u8],
+    verifier_id: &str,
+) -> Result<Value, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    let proof = base_document
+        .get("proof")
+        .ok_or_else(|| malformed("base document has no proof"))?;
+    let (base, signer_nym_entropy) = parse_pseudonym_base_proof_value(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .ok_or_else(|| malformed("proof has no proofValue"))?,
+    )?;
+
+    let mut document = base_document.clone();
+    document
+        .as_object_mut()
+        .ok_or_else(|| malformed("document must be an object"))?
+        .remove("proof");
+
+    let mandatory_ptrs: Vec<&str> = base.mandatory_pointers.iter().map(String::as_str).collect();
+    let combined_ptrs: Vec<&str> = mandatory_ptrs
+        .iter()
+        .copied()
+        .chain(selective_pointers.iter().copied())
+        .collect();
+
+    let c = canonicalize_hmac(&document, &base.hmac_key)?;
+    let mandatory_indexes = select_indices(&c, &mandatory_ptrs)?;
+    let selective_indexes = select_indices(&c, selective_pointers)?;
+    let combined_indexes = select_indices(&c, &combined_ptrs)?;
+
+    let mandatory_set: BTreeSet<usize> = mandatory_indexes.iter().copied().collect();
+    let selective_set: BTreeSet<usize> = selective_indexes.iter().copied().collect();
+    let non_mandatory_indexes: Vec<usize> = (0..c.canonical.len())
+        .filter(|i| !mandatory_set.contains(i))
+        .collect();
+
+    let adj_mandatory: Vec<usize> = mandatory_indexes
+        .iter()
+        .map(|m| {
+            combined_indexes
+                .iter()
+                .position(|x| x == m)
+                .expect("mandatory ⊆ combined")
+        })
+        .collect();
+    let adj_selective: Vec<usize> = non_mandatory_indexes
+        .iter()
+        .enumerate()
+        .filter(|(_, nm)| selective_set.contains(nm))
+        .map(|(pos, _)| pos)
+        .collect();
+
+    let non_mandatory: Vec<&str> = non_mandatory_indexes
+        .iter()
+        .map(|&i| c.canonical[i].as_str())
+        .collect();
+    let messages: Vec<&[u8]> = non_mandatory.iter().map(|s| s.as_bytes()).collect();
+    let length_bbs_messages = messages.len();
+
+    let signature = bbs::Signature::from_bytes(&base.bbs_signature)
+        .map_err(|e| malformed(&format!("decode bbsSignature: {e}")))?;
+    let nym_secret = scalar_from_32(prover_nym, "prover_nym")? + signer_nym_entropy;
+    let spb = scalar_from_32(secret_prover_blind, "secret_prover_blind")?;
+
+    let (bbs_proof, pseudonym) = bbs::proof_gen_with_nym(
+        pk,
+        &signature,
+        &base.bbs_header,
+        presentation_header,
+        nym_secret,
+        verifier_id.as_bytes(),
+        &messages,
+        &adj_selective,
+        &[],
+        &[],
+        spb,
+        bbs::Ciphersuite::default(),
+    )
+    .map_err(DataIntegrityError::signing)?;
+
+    let label_map = build_derived_label_map(&c, &combined_ptrs)?;
+
+    let proof_value = serialize_pseudonym_derived_proof_value(
+        bbs_proof.to_bytes(),
+        &label_map,
+        &adj_mandatory,
+        &adj_selective,
+        presentation_header,
+        &pseudonym.to_bytes(),
+        length_bbs_messages,
+    )?;
+
+    let mut reveal = select_json_ld(&document, &combined_ptrs)
+        .ok_or_else(|| malformed("empty reveal selection"))?;
+    let mut proof_obj = proof.clone();
+    proof_obj
+        .as_object_mut()
+        .ok_or_else(|| malformed("proof must be an object"))?
+        .insert("proofValue".to_string(), Value::String(proof_value));
+    reveal
+        .as_object_mut()
+        .ok_or_else(|| malformed("reveal must be an object"))?
+        .insert("proof".to_string(), proof_obj);
+    Ok(reveal)
+}
+
+/// `serializeDisclosureProofValue` (pseudonym): `0xd95d09 + CBOR([bbsProof,
+/// compressedLabelMap, mandatoryIndexes, selectiveIndexes, presentationHeader,
+/// pseudonym, lengthBBSMessages])`.
+#[allow(clippy::too_many_arguments)]
+fn serialize_pseudonym_derived_proof_value(
+    bbs_proof: &[u8],
+    label_map: &BTreeMap<String, String>,
+    mandatory_indexes: &[usize],
+    selective_indexes: &[usize],
+    presentation_header: &[u8],
+    pseudonym: &[u8],
+    length_bbs_messages: usize,
+) -> Result<String, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    let mut compressed = Vec::with_capacity(label_map.len());
+    for (k, v) in label_map {
+        let n: i64 = k
+            .strip_prefix("c14n")
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| malformed("label map key"))?;
+        let m: i64 = v
+            .strip_prefix('b')
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| malformed("label map value"))?;
+        compressed.push((
+            ciborium::Value::Integer(n.into()),
+            ciborium::Value::Integer(m.into()),
+        ));
+    }
+    let index_array = |idx: &[usize]| {
+        ciborium::Value::Array(
+            idx.iter()
+                .map(|&i| ciborium::Value::Integer((i as i64).into()))
+                .collect(),
+        )
+    };
+    let payload = ciborium::Value::Array(vec![
+        ciborium::Value::Bytes(bbs_proof.to_vec()),
+        ciborium::Value::Map(compressed),
+        index_array(mandatory_indexes),
+        index_array(selective_indexes),
+        ciborium::Value::Bytes(presentation_header.to_vec()),
+        ciborium::Value::Bytes(pseudonym.to_vec()),
+        ciborium::Value::Integer((length_bbs_messages as i64).into()),
+    ]);
+    let mut buf = CBOR_PREFIX_DERIVED_PSEUDONYM.to_vec();
+    ciborium::into_writer(&payload, &mut buf)
+        .map_err(|e| malformed(&format!("CBOR encode: {e}")))?;
+    Ok(multibase::encode(multibase::Base::Base64Url, &buf))
+}
+
+/// A parsed pseudonym derived (`0xd95d09`) proof value.
+struct PseudonymDerivedProofValue {
+    bbs_proof: Vec<u8>,
+    label_map: BTreeMap<String, String>,
+    mandatory_indexes: Vec<usize>,
+    selective_indexes: Vec<usize>,
+    presentation_header: Vec<u8>,
+    pseudonym: Vec<u8>,
+    /// Total non-mandatory signer message count `L` (the verifier needs it to
+    /// rebuild the BBS generators; the reveal document only carries the disclosed
+    /// subset).
+    length_bbs_messages: usize,
+}
+
+fn parse_pseudonym_derived_proof_value(
+    proof_value: &str,
+) -> Result<PseudonymDerivedProofValue, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    if !proof_value.starts_with('u') {
+        return Err(malformed("proofValue must be multibase base64url ('u')"));
+    }
+    let (_b, bytes) =
+        multibase::decode(proof_value).map_err(|e| malformed(&format!("multibase: {e}")))?;
+    if bytes.len() < 3 || bytes[..3] != CBOR_PREFIX_DERIVED_PSEUDONYM {
+        return Err(malformed(
+            "proofValue is not a bbs-2023 pseudonym derived proof",
+        ));
+    }
+    let value: ciborium::Value =
+        ciborium::from_reader(&bytes[3..]).map_err(|e| malformed(&format!("CBOR: {e}")))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| malformed("derived proofValue must be a CBOR array"))?;
+    if arr.len() != 7 {
+        return Err(malformed(
+            "pseudonym derived proofValue must have 7 elements",
+        ));
+    }
+    let mut label_map = BTreeMap::new();
+    for (k, v) in arr[1]
+        .as_map()
+        .ok_or_else(|| malformed("labelMap must be a CBOR map"))?
+    {
+        let n = cbor_int(k).ok_or_else(|| malformed("labelMap key"))?;
+        let m = cbor_int(v).ok_or_else(|| malformed("labelMap value"))?;
+        label_map.insert(format!("c14n{n}"), format!("b{m}"));
+    }
+    Ok(PseudonymDerivedProofValue {
+        bbs_proof: arr[0]
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed("bbsProof must be bytes"))?,
+        label_map,
+        mandatory_indexes: cbor_index_array(&arr[2])
+            .ok_or_else(|| malformed("mandatoryIndexes"))?,
+        selective_indexes: cbor_index_array(&arr[3])
+            .ok_or_else(|| malformed("selectiveIndexes"))?,
+        presentation_header: arr[4]
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed("presentationHeader must be bytes"))?,
+        pseudonym: arr[5]
+            .as_bytes()
+            .cloned()
+            .ok_or_else(|| malformed("pseudonym must be bytes"))?,
+        length_bbs_messages: cbor_int(&arr[6])
+            .ok_or_else(|| malformed("lengthBBSMessages must be an integer"))?,
+    })
+}
+
+/// Verify a `bbs-2023` **pseudonym derived proof**: checks the selective
+/// disclosure and the per-verifier pseudonym binding. `verifier_id` must match
+/// the one used at derivation (the pseudonym context).
+pub fn verify_pseudonym_derived_proof(
+    reveal_document: &Value,
+    pk: &bbs::PublicKey,
+    verifier_id: &str,
+) -> Result<bool, DataIntegrityError> {
+    let malformed = |m: &str| DataIntegrityError::MalformedProof(m.to_string());
+    let proof = reveal_document
+        .get("proof")
+        .ok_or_else(|| malformed("reveal document has no proof"))?;
+    let parsed = parse_pseudonym_derived_proof_value(
+        proof
+            .get("proofValue")
+            .and_then(Value::as_str)
+            .ok_or_else(|| malformed("proof has no proofValue"))?,
+    )?;
+
+    let mut proof_config = proof.clone();
+    let cfg = proof_config
+        .as_object_mut()
+        .ok_or_else(|| malformed("proof must be an object"))?;
+    cfg.remove("proofValue");
+    if let Some(ctx) = reveal_document.get("@context") {
+        cfg.insert("@context".to_string(), ctx.clone());
+    }
+    let proof_hash = proof_hash(&proof_config)?;
+
+    let mut doc = reveal_document.clone();
+    doc.as_object_mut()
+        .ok_or_else(|| malformed("document must be an object"))?
+        .remove("proof");
+    let dataset = jsonld::expand_and_to_rdf(&doc).map_err(canon_err)?;
+    let (canonical_c14n, _) = rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
+    let labeled = lines_with_newline(&relabel_and_sort(&canonical_c14n, &parsed.label_map));
+
+    let mandatory_set: BTreeSet<usize> = parsed.mandatory_indexes.iter().copied().collect();
+    let mut mandatory = Vec::new();
+    let mut non_mandatory = Vec::new();
+    for (i, nq) in labeled.iter().enumerate() {
+        if mandatory_set.contains(&i) {
+            mandatory.push(nq.clone());
+        } else {
+            non_mandatory.push(nq.clone());
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    for m in &mandatory {
+        hasher.update(m.as_bytes());
+    }
+    let mandatory_hash: [u8; 32] = hasher.finalize().into();
+    let mut bbs_header = proof_hash.to_vec();
+    bbs_header.extend_from_slice(&mandatory_hash);
+
+    let pseudonym_bytes: [u8; 48] = parsed
+        .pseudonym
+        .as_slice()
+        .try_into()
+        .map_err(|_| malformed("pseudonym must be 48 bytes"))?;
+    let pseudonym = bbs::Pseudonym::from_bytes(&pseudonym_bytes)
+        .map_err(|e| malformed(&format!("invalid pseudonym: {e}")))?;
+
+    // `l` is the total signer message count at signing time (lengthBBSMessages);
+    // the reveal document only carries the disclosed non-mandatory subset.
+    let l = parsed.length_bbs_messages;
+    let disclosed: Vec<&[u8]> = non_mandatory.iter().map(|s| s.as_bytes()).collect();
+    let bbs_proof = bbs::Proof::from_bytes(&parsed.bbs_proof);
+    bbs::proof_verify_with_nym(
+        pk,
+        &bbs_proof,
+        &bbs_header,
+        &parsed.presentation_header,
+        &pseudonym,
+        verifier_id.as_bytes(),
+        l,
+        &disclosed,
+        &parsed.selective_indexes,
+        &[],
+        &[],
+        bbs::Ciphersuite::default(),
+    )
+    .map_err(|e| {
+        tracing::debug!("bbs-2023 pseudonym derived proof verification failed: {e}");
+        DataIntegrityError::InvalidSignature {
+            suite: crate::crypto_suites::CryptoSuite::Bbs2023,
+            reason: crate::error::SignatureFailure::Invalid,
+        }
+    })
+}
+
 /// `proofHash = SHA-256(RDFC-1.0(proofConfig))`.
 ///
 /// `proof_config` is the proof options as a JSON-LD object (its `@context` must
@@ -1398,6 +1799,107 @@ mod tests {
         assert_eq!(
             proof_value, expected,
             "end-to-end pseudonym base proof diverges from the W3C vc-di-bbs vector"
+        );
+    }
+
+    fn pseudonym_pk() -> bbs::PublicKey {
+        let pk_bytes: [u8; 96] = hex_decode(
+            json("BBSKeyMaterial.json")["publicKeyHex"]
+                .as_str()
+                .unwrap(),
+        )
+        .try_into()
+        .unwrap();
+        bbs::PublicKey::from_bytes(&pk_bytes).unwrap()
+    }
+
+    const VERIFIER_ID: &str = "https://car.rental.verifier.example/";
+
+    #[test]
+    fn verify_pseudonym_derived_proof_accepts_w3c_reference() {
+        // The strongest interop gate: our verifier accepts the W3C reference
+        // pseudonym derived proof (0xd95d09) byte-for-byte.
+        let reveal = json("pseudonym/derivedRevealDocument.json");
+        assert!(
+            verify_pseudonym_derived_proof(&reveal, &pseudonym_pk(), VERIFIER_ID).unwrap(),
+            "failed to verify the W3C reference pseudonym derived proof"
+        );
+    }
+
+    #[test]
+    fn verify_pseudonym_derived_proof_rejects_wrong_verifier() {
+        let reveal = json("pseudonym/derivedRevealDocument.json");
+        // A different verifier id ⇒ different OP ⇒ pseudonym binding fails to
+        // verify (returns false, or errors).
+        assert!(
+            !verify_pseudonym_derived_proof(&reveal, &pseudonym_pk(), "https://other.example/")
+                .unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn pseudonym_derive_verify_round_trip() {
+        let base_doc = json("pseudonym/addSignedSDBase.json");
+        let pk = pseudonym_pk();
+        let prover_nym = hex_decode(
+            json("pseudonym/proverNym.json")["proverNymHex"]
+                .as_str()
+                .unwrap(),
+        );
+        let spb = hex_decode(
+            json("pseudonym/commitmentInfo.json")["secretProverBlind"]
+                .as_str()
+                .unwrap(),
+        );
+
+        // Holder derives a presentation (disclosing only the issuer-mandatory
+        // claims) bound to the verifier's pseudonym.
+        let reveal = create_pseudonym_derived_proof(
+            &base_doc,
+            &[],
+            b"test-ph",
+            &pk,
+            &prover_nym,
+            &spb,
+            VERIFIER_ID,
+        )
+        .unwrap();
+
+        assert!(
+            verify_pseudonym_derived_proof(&reveal, &pk, VERIFIER_ID).unwrap(),
+            "round-trip pseudonym derived proof failed to verify"
+        );
+
+        // The pseudonym is deterministic (OP·nym_secret) and must match the W3C
+        // vector regardless of the randomized BBS proof.
+        let parsed =
+            parse_pseudonym_derived_proof_value(reveal["proof"]["proofValue"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(
+            hex_lower(&parsed.pseudonym),
+            json("pseudonym/derivedDisclosureData.json")["pseudonym"]
+                .as_str()
+                .unwrap(),
+            "pseudonym diverges from the W3C vc-di-bbs vector"
+        );
+
+        // A presentation for a different verifier yields a different pseudonym.
+        let reveal2 = create_pseudonym_derived_proof(
+            &base_doc,
+            &[],
+            b"test-ph",
+            &pk,
+            &prover_nym,
+            &spb,
+            "https://other.example/",
+        )
+        .unwrap();
+        let parsed2 =
+            parse_pseudonym_derived_proof_value(reveal2["proof"]["proofValue"].as_str().unwrap())
+                .unwrap();
+        assert_ne!(
+            parsed.pseudonym, parsed2.pseudonym,
+            "pseudonyms must be per-verifier"
         );
     }
 
