@@ -23,7 +23,25 @@
  *
  * Addresses ARF ZKP requirements ZKP_01 through ZKP_06 for unlinkable
  * selective disclosure of PID and QEAA attributes.
+ *
+ * # ⚠️ Deprecated — not interoperable
+ *
+ * This module's statement encoding (an affinidi-internal `pointer`/JCS scheme)
+ * is **not** interoperable with other vc-di-bbs implementations: it does not use
+ * RDF Dataset Canonicalization, so its `proofValue`s do not match the W3C
+ * vectors and cannot be verified by a conforming verifier (or vice versa).
+ *
+ * Use [`crate::bbs_2023_transform`] instead — the standards-track,
+ * RDF-canonical `bbs-2023` implementation, pinned byte-for-byte to the official
+ * `w3c/vc-di-bbs` test vectors (issuer / holder / verifier, plus per-verifier
+ * pseudonym / holder binding). No BBS credentials using this legacy encoding
+ * were issued in production.
  */
+
+// This module is itself deprecated; allow its internal cross-calls and tests to
+// use the deprecated functions without warnings. External callers still get the
+// per-function deprecation warnings.
+#![allow(deprecated)]
 
 use affinidi_bbs::{self as bbs, PublicKey, SecretKey, Signature};
 use serde::{Deserialize, Serialize};
@@ -48,6 +66,10 @@ use crate::DataIntegrityError;
 /// # Returns
 ///
 /// A tuple of (BBS signature, message bytes used for signing).
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn sign_base(
     claims: &[(&str, &[u8])],
     header: &[u8],
@@ -86,6 +108,10 @@ pub fn sign_base(
 /// # Returns
 ///
 /// The BBS zero-knowledge proof bytes.
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn derive_proof(
     pk: &PublicKey,
     signature: &Signature,
@@ -121,6 +147,10 @@ pub fn derive_proof(
 /// # Returns
 ///
 /// `true` if the proof is valid.
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn verify_proof(
     pk: &PublicKey,
     proof: &bbs::Proof,
@@ -152,6 +182,10 @@ pub fn verify_proof(
 ///
 /// Each mandatory statement is length-prefixed (8-byte big-endian) before hashing
 /// to prevent ambiguity (e.g., `["ab","cd"]` vs `["abc","d"]`).
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn compute_bbs_header(proof_options: &[u8], mandatory_statements: &[&[u8]]) -> Vec<u8> {
     let mut header = Vec::with_capacity(64);
 
@@ -227,6 +261,10 @@ struct DerivedProofValue {
 /// disclosed (typically `/@context`, `/type`, `/issuer`,
 /// `/credentialSubject/id`, validity dates). The returned document carries a
 /// `proof` with `cryptosuite: bbs-2023`.
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn sign_vc_base(
     document: &Value,
     mandatory_pointers: &[&str],
@@ -279,6 +317,10 @@ pub fn sign_vc_base(
 /// disclosing only the claims under `selective_pointers` (plus the mandatory
 /// ones). `presentation_header` is the verifier's nonce/challenge. `pk` is the
 /// issuer's BBS public key.
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn derive_vc(
     base_document: &Value,
     selective_pointers: &[&str],
@@ -355,6 +397,10 @@ pub fn derive_vc(
 /// Verify a **derived proof** document (verifier side). `presentation_header`
 /// must match the one the holder derived with; `pk` is the issuer's BBS public
 /// key. Returns `Ok(true)` iff the proof is valid for the disclosed claims.
+#[deprecated(
+    since = "0.7.3",
+    note = "the affinidi-internal bbs_2023 statement encoding is NOT interoperable with other vc-di-bbs implementations; use the standards-track `bbs_2023_transform` (W3C vc-di-bbs, RDF-canonical) instead"
+)]
 pub fn verify_vc_derived(
     derived_document: &Value,
     presentation_header: &[u8],
