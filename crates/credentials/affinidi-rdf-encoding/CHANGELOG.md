@@ -1,5 +1,28 @@
 # Affinidi RDF Encoding Changelog
 
+## 7th June 2026 Release 0.1.3
+
+JSON-LD 1.1 expansion conformance for the W3C VC Data Model 1.0
+(`credentials/v1`) credential family (needed by the vc-di-bbs pseudonym AAMVA
+driver's-license test credential).
+
+### Added
+
+- Bundled contexts: `https://www.w3.org/2018/credentials/v1`,
+  `https://w3id.org/vdl/v1`, `https://w3id.org/vdl/aamva/v1`.
+
+### Fixed
+
+- **Type-scoped contexts**: term definitions with compact-IRI `@id`s
+  (`"issuer": {"@id": "cred:issuer"}`) now resolve against a prefix defined in
+  the same context (two-pass term processing) — so `credentials/v1`'s
+  `issuer`/`credentialSubject`/`expirationDate` (defined under the
+  `VerifiableCredential` type scope) expand correctly.
+- **`@json` literals**: kept verbatim and serialized with the JSON
+  Canonicalization Scheme (sorted keys, no whitespace) typed `rdf:JSON`.
+- **Numeric type coercion**: numbers honour their term's `@type` (e.g.
+  `xsd:unsignedInt`) instead of always defaulting to `xsd:integer`.
+
 ## 6th June 2026 Release 0.1.2
 
 W3C-conformance fixes for RDFC-1.0 and JSON-LD, locked with the official
