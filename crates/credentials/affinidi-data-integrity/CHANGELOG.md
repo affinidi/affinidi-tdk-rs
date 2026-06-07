@@ -1,5 +1,19 @@
 # Affinidi Data Integrity Changelog
 
+## 7th June 2026 Release 0.7.3
+
+### Deprecated
+
+- The legacy `bbs_2023` module (an affinidi-internal `pointer`/JCS statement
+  encoding) is **deprecated** — it is **not** interoperable with other vc-di-bbs
+  implementations (no RDF Dataset Canonicalization). Its public functions now
+  carry `#[deprecated]` attributes. Use `bbs_2023_transform` — the
+  standards-track, RDF-canonical `bbs-2023` cryptosuite pinned byte-for-byte to
+  the official `w3c/vc-di-bbs` vectors (issuer / holder / verifier + per-verifier
+  pseudonym). No BBS credentials using the legacy encoding were issued in
+  production. The module is retained this release for migration and will be
+  removed in a future release.
+
 ## 7th June 2026 Release 0.7.2
 
 W3C vc-di-bbs **per-verifier pseudonym / holder binding** (`featureOption:

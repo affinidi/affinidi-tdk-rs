@@ -147,7 +147,8 @@ impl CryptoSuiteOps for Bbs2023 {
     }
     fn verify(&self, _key: &[u8], _data: &[u8], _sig: &[u8]) -> Result<(), DataIntegrityError> {
         Err(DataIntegrityError::UnsupportedCryptoSuite {
-            name: "bbs-2023 verification uses bbs_2023::verify_proof, not CryptoSuiteOps::verify"
+            name: "bbs-2023 verification uses \
+                   bbs_2023_transform::verify_derived_proof, not CryptoSuiteOps::verify"
                 .to_string(),
         })
     }

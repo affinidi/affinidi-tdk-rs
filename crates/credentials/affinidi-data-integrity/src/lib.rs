@@ -88,15 +88,18 @@ pub use conformance::verify_conformance;
 pub use did_vm::{DidKeyResolver, ResolvedKey, VerificationMethodResolver};
 pub use multi::{MultiVerifyResult, VerifyPolicy, verify_multi};
 
-/// BBS-2023 Data Integrity Cryptosuite for zero-knowledge selective disclosure.
-///
-/// Enabled via the `bbs-2023` feature flag.
+/// **Deprecated** — the legacy affinidi-internal `bbs-2023` encoding (not
+/// interoperable with other vc-di-bbs implementations). Use
+/// [`bbs_2023_transform`] instead. Enabled via the `bbs-2023` feature flag.
 #[cfg(feature = "bbs-2023")]
 pub mod bbs_2023;
 
-/// W3C vc-di-bbs `bbs-2023` transformation primitives (RDF-canonical, standards
-/// interoperable). The standards-track replacement for [`bbs_2023`]'s internal
-/// statement encoding; built incrementally and pinned to the official vectors.
+/// W3C vc-di-bbs `bbs-2023` cryptosuite (RDF-canonical, standards-interoperable)
+/// — **the** `bbs-2023` implementation. Pinned byte-for-byte to the official
+/// `w3c/vc-di-bbs` vectors: issuer ([`bbs_2023_transform::sign_base_document`]),
+/// holder ([`bbs_2023_transform::create_derived_proof`]), verifier
+/// ([`bbs_2023_transform::verify_derived_proof`]), plus per-verifier pseudonym /
+/// holder binding. Supersedes the legacy [`bbs_2023`] module.
 #[cfg(feature = "bbs-2023")]
 pub mod bbs_2023_transform;
 
@@ -425,7 +428,10 @@ where
         #[cfg(feature = "bbs-2023")]
         if matches!(proof_config.cryptosuite, CryptoSuite::Bbs2023) {
             return Err(DataIntegrityError::UnsupportedCryptoSuite {
-                name: "bbs-2023 proofs must be verified via bbs_2023::verify_proof".to_string(),
+                name: "bbs-2023 derived proofs are verified via \
+                       bbs_2023_transform::verify_derived_proof (or \
+                       verify_pseudonym_derived_proof), not the generic verify path"
+                    .to_string(),
             });
         }
         let jcs_doc = to_string(&signed_doc)
