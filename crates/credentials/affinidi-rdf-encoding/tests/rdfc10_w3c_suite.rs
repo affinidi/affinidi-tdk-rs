@@ -9,14 +9,11 @@
 
 use affinidi_rdf_encoding::{nquads, rdfc1};
 
-/// Known-failing cases: highly-symmetric graphs where a remaining RDFC-1.0
-/// N-degree tie-break subtlety picks a valid-but-non-canonical labeling.
-/// `test044`-`046` are the suite's "poison – evil" graphs (complexity 39);
-/// `test054` is a deep asymmetric tree. None of these structures occur in real
-/// Verifiable Credentials (the vc-di-bbs vectors canonicalize byte-exact), so
-/// they are tracked as a follow-up rather than blocking. **Skips are logged, not
-/// silent** — see the eprintln summary below.
-const KNOWN_FAILING: &[&str] = &["test044", "test045", "test046", "test054"];
+/// Known-failing cases. Empty — the full 63-case `rdfc10` suite passes
+/// byte-for-byte, including the "poison – evil" symmetric graphs
+/// (`test044`-`046`) and the deep `t-graph` (`test054`). Kept as a hook so a
+/// future regression can be quarantined explicitly rather than silently.
+const KNOWN_FAILING: &[&str] = &[];
 
 #[test]
 fn rdfc10_official_w3c_suite() {

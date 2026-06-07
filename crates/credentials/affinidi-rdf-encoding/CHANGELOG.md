@@ -1,5 +1,24 @@
 # Affinidi RDF Encoding Changelog
 
+## 7th June 2026 Release 0.1.4
+
+Full **63/63** W3C `rdf-canon` (RDFC-1.0) conformance — the last 4 skipped
+cases now pass byte-for-byte, so the suite has no quarantined cases.
+
+### Fixed
+
+- **RDFC-1.0 Hash N-Degree Quads — missing `_:` path delimiter** (root cause):
+  steps 5.4.4.1, 5.4.4.2.2, and 5.4.5.2 require each identifier to be appended
+  to the hash path in blank-node form (`_:` prefix). The `_:` is not cosmetic —
+  it delimits consecutive identifiers, so the lexicographic "smallest path"
+  tie-break matches the reference. Omitting it ran ids together
+  (`c14n1`+`c14n2` → `c14n1c14n2`) and selected a *valid-but-non-canonical*
+  labeling on highly-symmetric graphs. This unblocks the previously skipped
+  `test044`–`046` ("poison – evil" automorphism graphs) and `test054`
+  (deep `t-graph`). Real Verifiable Credentials were unaffected (their graphs
+  are not symmetric), and all vc-di-bbs / data-integrity KAT vectors are
+  unchanged.
+
 ## 7th June 2026 Release 0.1.3
 
 JSON-LD 1.1 expansion conformance for the W3C VC Data Model 1.0

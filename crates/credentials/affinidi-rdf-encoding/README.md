@@ -14,6 +14,7 @@ Verifiable Credentials. A minimal-dependency implementation.
 - **RDF data model** — `NamedNode`, `BlankNode`, `Literal`, `Quad`, `Dataset`
 - **N-Quads parser/serializer** — W3C spec-compliant with proper escaping
 - **RDFC-1.0 canonicalization** — Full W3C RDF Dataset Canonicalization algorithm
+  (passes all 63 cases of the official `w3c/rdf-canon` `rdfc10` test suite)
 - **JSON-LD expansion + to-RDF** — Focused on VC/DID contexts with bundled W3C context documents
 
 ## Installation
