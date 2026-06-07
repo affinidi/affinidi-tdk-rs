@@ -87,6 +87,13 @@ pub mod names {
     pub const ACTIVE_WEBSOCKET_CONNECTIONS: &str = "active_websocket_connections";
     /// counter: Messages delivered via WebSocket live streaming
     pub const WEBSOCKET_MESSAGES_TOTAL: &str = "websocket_messages_total";
+    /// counter: Old WebSocket sessions displaced by a newer duplicate for the same DID
+    pub const WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL: &str =
+        "websocket_duplicate_replacements_total";
+    /// counter: Inbox messages re-pushed to a surviving socket after a duplicate replacement
+    pub const WEBSOCKET_REDELIVERED_MESSAGES_TOTAL: &str = "websocket_redelivered_messages_total";
+    /// counter: Duplicate replacements occurring within the churn window (flip-flop signal)
+    pub const WEBSOCKET_DUPLICATE_CHURN_TOTAL: &str = "websocket_duplicate_churn_total";
 
     // ── Rate limiting ───────────────────────────────────────────────────────
 

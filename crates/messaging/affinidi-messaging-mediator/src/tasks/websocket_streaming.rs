@@ -6,16 +6,35 @@
  WebSocket is opened for the same DID the older session is forcibly
  closed so only the most recent one receives messages.
 
+ When a duplicate replaces an existing session, the surviving socket is
+ sent a redelivery of the recipient's undelivered inbox (see
+ [`spawn_inbox_redelivery`]). A live-stream notification published in the
+ instant the old socket is torn down would otherwise be stranded: the
+ message is durably stored in the inbox (the store both live-pushes *and*
+ persists every non-ephemeral message) but the surviving socket is never
+ told to re-cover it, so a client that relies on live delivery hangs until
+ timeout. Redelivery closes that gap — at-least-once, consistent with the
+ message-pickup delete-to-ack contract. See issue #374.
+
  The notification stream comes from `MediatorStore::streaming_subscribe`,
  so the task runs unchanged whether the backend is Redis pub/sub,
  Fjall's in-process broadcast, or the test MemoryStore.
 */
+use crate::common::metrics::names::{
+    WEBSOCKET_DUPLICATE_CHURN_TOTAL, WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL,
+    WEBSOCKET_REDELIVERED_MESSAGES_TOTAL,
+};
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{MediatorStore, types::PubSubRecord},
+    types::messages::FetchOptions,
 };
 use ahash::AHashMap as HashMap;
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tokio::{
     select,
     sync::{broadcast, mpsc},
@@ -23,6 +42,31 @@ use tokio::{
     time::sleep,
 };
 use tracing::{Instrument, Level, debug, error, info, span, warn};
+
+/// A duplicate replacement arriving within this window of the previous
+/// registration for the same DID is counted as socket *churn* (the
+/// flip-flop signal in issue #374).
+const CHURN_WINDOW: Duration = Duration::from_secs(5);
+
+/// Page size for the inbox-redelivery drain.
+const REDELIVERY_PAGE: usize = 50;
+
+/// Safety bound on how many messages a single redelivery will re-push,
+/// so a pathologically large inbox can't pin the drain task. If hit, the
+/// remainder is left for the client to pick up via normal message-pickup.
+const REDELIVERY_MAX: usize = 1000;
+
+/// One registered streaming client for a DID.
+struct ClientEntry {
+    /// Channel to the per-connection websocket handler.
+    tx: mpsc::Sender<WebSocketCommands>,
+    /// Session id of the owning websocket (used for churn/diagnostic logs).
+    session_id: String,
+    /// Whether live delivery is currently active for this client.
+    active: bool,
+    /// When this client registered — used to detect rapid replacement churn.
+    registered_at: Instant,
+}
 
 /// Used when updating the streaming state.
 /// Register: Creates the hash map entry for the DID hash and TX Channel
@@ -111,10 +155,16 @@ impl StreamingTask {
             // Clean up any existing sessions left over from previous runs
             database.streaming_clean_start(&self.uuid).await?;
 
-            // Create a hashmap to store the clients and if they are active (true = yes)
-            // Key: did_hash, Value: (channel, session_id, live_delivery_active)
-            let mut clients: HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)> =
-                HashMap::new();
+            // Create a hashmap to store the clients keyed by did_hash.
+            let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+
+            // DIDs with an inbox-redelivery drain currently in flight. Used to
+            // damp duplicate-socket flip-flop: a duel that replaces the socket
+            // every couple of seconds must not re-dump the whole inbox on each
+            // replacement. A replay already running for a DID covers the current
+            // inbox state, so concurrent replacements skip spawning another.
+            let replay_in_progress: Arc<Mutex<HashSet<String>>> =
+                Arc::new(Mutex::new(HashSet::new()));
 
             // Subscribe to delivery notifications via the trait. Backends
             // are responsible for the wire-level transport (Redis pub/sub,
@@ -157,13 +207,13 @@ impl StreamingTask {
                     value = channel.recv() => { // mpsc command channel
                         if let Some(value) = &value {
                             match &value.state {
-                                StreamingUpdateState::Register { channel: client_tx, session_id, did } => {
-                                    self._handle_registration(database.as_ref(), &mut clients, value, client_tx, session_id, did).await;
+                                StreamingUpdateState::Register { .. } => {
+                                    self._handle_registration(&database, &mut clients, &replay_in_progress, value).await;
                                 },
                                 StreamingUpdateState::Start => {
-                                    if let Some((_, _, active)) = clients.get_mut(&value.did_hash) {
+                                    if let Some(entry) = clients.get_mut(&value.did_hash) {
                                         info!("Starting streaming for DID: ({})", value.did_hash);
-                                        *active = true;
+                                        entry.active = true;
                                     };
 
                                     if let Err(err) = database.streaming_start_live(&value.did_hash, &self.uuid).await {
@@ -172,9 +222,9 @@ impl StreamingTask {
                                 },
                                 StreamingUpdateState::Stop => {
                                     // Set active to false
-                                    if let Some((_, _, active)) = clients.get_mut(&value.did_hash) {
+                                    if let Some(entry) = clients.get_mut(&value.did_hash) {
                                         info!("Stopping streaming for DID: ({})", value.did_hash);
-                                        *active = false;
+                                        entry.active = false;
                                     };
 
                                     if let Err(err) = database.streaming_stop_live(&value.did_hash, &self.uuid).await {
@@ -209,13 +259,14 @@ impl StreamingTask {
     async fn dispatch_payload(
         &self,
         database: &dyn MediatorStore,
-        clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)>,
+        clients: &mut HashMap<String, ClientEntry>,
         payload: PubSubRecord,
     ) {
         match clients.get(&payload.did_hash) {
-            Some((tx, _, active)) => {
-                if payload.force_delivery || *active {
-                    if let Err(err) = tx
+            Some(entry) => {
+                if payload.force_delivery || entry.active {
+                    if let Err(err) = entry
+                        .tx
                         .send(WebSocketCommands::Message(payload.message.clone()))
                         .await
                     {
@@ -265,13 +316,23 @@ impl StreamingTask {
     /// Handles if this is a duplicate channel for a DID
     async fn _handle_registration(
         &self,
-        database: &dyn MediatorStore,
-        clients: &mut HashMap<String, (mpsc::Sender<WebSocketCommands>, String, bool)>,
+        database: &Arc<dyn MediatorStore>,
+        clients: &mut HashMap<String, ClientEntry>,
+        replay_in_progress: &Arc<Mutex<HashSet<String>>>,
         value: &StreamingUpdate,
-        client_tx: &mpsc::Sender<WebSocketCommands>,
-        new_session_id: &str,
-        did: &str,
     ) {
+        let StreamingUpdateState::Register {
+            channel: client_tx,
+            session_id: new_session_id,
+            did,
+        } = &value.state
+        else {
+            // Only `Register` updates reach this helper.
+            return;
+        };
+        let new_session_id = new_session_id.as_str();
+        let did = did.as_str();
+
         // Defensive guard: an empty `did` means the upstream session
         // arrived without an authenticated DID populated. Registering
         // it would index this client under
@@ -290,16 +351,31 @@ impl StreamingTask {
             return;
         }
 
-        if let Some((channel, old_session_id, _)) = clients.get(&value.did_hash) {
+        // Is this replacing an existing session for the same DID?
+        let replacing = if let Some(old) = clients.get(&value.did_hash) {
+            let since_last = old.registered_at.elapsed();
+            let churn = since_last < CHURN_WINDOW;
             warn!(
                 did = did,
-                old_session = old_session_id,
+                old_session = old.session_id,
                 new_session = new_session_id,
+                since_last_ms = since_last.as_millis() as u64,
+                churn,
                 "Duplicate WebSocket connection: closing old session in favour of new one",
             );
-            // Channel already exists, close the old one
-            let _ = channel.send(WebSocketCommands::Close).await;
-        }
+            metrics::counter!(WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL).increment(1);
+            if churn {
+                // Rapid replacement for the same DID — surface the flip-flop
+                // via a metric. The newest socket still wins (the one-socket
+                // invariant is unchanged); only the redelivery is damped below.
+                metrics::counter!(WEBSOCKET_DUPLICATE_CHURN_TOTAL).increment(1);
+            }
+            // Channel already exists, close the old one.
+            let _ = old.tx.send(WebSocketCommands::Close).await;
+            true
+        } else {
+            false
+        };
 
         info!(
             did = did,
@@ -310,7 +386,12 @@ impl StreamingTask {
         );
         clients.insert(
             value.did_hash.clone(),
-            (client_tx.clone(), new_session_id.to_string(), false),
+            ClientEntry {
+                tx: client_tx.clone(),
+                session_id: new_session_id.to_string(),
+                active: false,
+                registered_at: Instant::now(),
+            },
         );
 
         if let Err(err) = database
@@ -322,5 +403,256 @@ impl StreamingTask {
                 value.did_hash, err
             );
         }
+
+        // On a replacement, re-cover any inbox message that was in flight to
+        // the now-closed socket by redelivering the recipient's undelivered
+        // inbox to the new socket (issue #374). Skip if a redelivery for this
+        // DID is already running, so a flip-flop duel can't amplify into a
+        // repeated whole-inbox dump.
+        if replacing {
+            let spawn = {
+                let mut guard = replay_in_progress.lock().unwrap();
+                guard.insert(value.did_hash.clone())
+            };
+            if spawn {
+                spawn_inbox_redelivery(
+                    Arc::clone(database),
+                    client_tx.clone(),
+                    value.did_hash.clone(),
+                    new_session_id.to_string(),
+                    Arc::clone(replay_in_progress),
+                );
+            } else {
+                debug!(
+                    did_hash = %value.did_hash,
+                    "Inbox redelivery already in progress for DID; skipping duplicate drain"
+                );
+            }
+        }
+    }
+}
+
+/// Drain the recipient's undelivered inbox to a freshly-registered socket
+/// after it displaced a duplicate, re-pushing each stored (but not yet
+/// deleted) message as a live-stream frame. Runs as a detached task so the
+/// streaming `select!` loop — which services every DID — never blocks on a
+/// multi-page database drain.
+///
+/// Messages are fetched with `DoNotDelete`: redelivery is a notification
+/// re-cover, not an ack. The client deletes what it has processed via the
+/// normal message-pickup path, so this is at-least-once and idempotent by
+/// message id.
+fn spawn_inbox_redelivery(
+    database: Arc<dyn MediatorStore>,
+    client_tx: mpsc::Sender<WebSocketCommands>,
+    did_hash: String,
+    session_id: String,
+    replay_in_progress: Arc<Mutex<HashSet<String>>>,
+) {
+    tokio::spawn(async move {
+        let mut start_id: Option<String> = None;
+        let mut total: usize = 0;
+
+        'drain: loop {
+            let options = FetchOptions {
+                limit: REDELIVERY_PAGE,
+                start_id: start_id.clone(),
+                ..Default::default() // delete_policy defaults to DoNotDelete
+            };
+            let page = match database
+                .fetch_messages(&session_id, &did_hash, &options)
+                .await
+            {
+                Ok(page) => page,
+                Err(err) => {
+                    warn!(
+                        did_hash = %did_hash,
+                        "Inbox redelivery fetch failed, aborting drain: {err}"
+                    );
+                    break 'drain;
+                }
+            };
+            if page.success.is_empty() {
+                break 'drain;
+            }
+            let page_len = page.success.len();
+
+            for element in page.success {
+                // Advance the cursor regardless of body presence so a missing
+                // body can't pin the drain on the same page forever.
+                if let Some(receive_id) = &element.receive_id {
+                    start_id = Some(receive_id.clone());
+                }
+                let Some(msg) = element.msg else { continue };
+
+                if client_tx
+                    .send(WebSocketCommands::Message(msg))
+                    .await
+                    .is_err()
+                {
+                    // The surviving socket is already gone; nothing to do — the
+                    // messages remain in the inbox for the next connection.
+                    debug!(
+                        did_hash = %did_hash,
+                        "Surviving socket closed mid-redelivery; stopping drain"
+                    );
+                    break 'drain;
+                }
+                metrics::counter!(WEBSOCKET_REDELIVERED_MESSAGES_TOTAL).increment(1);
+                total += 1;
+
+                if total >= REDELIVERY_MAX {
+                    warn!(
+                        did_hash = %did_hash,
+                        max = REDELIVERY_MAX,
+                        "Inbox redelivery hit its safety cap; remaining messages \
+                         left for normal message-pickup"
+                    );
+                    break 'drain;
+                }
+            }
+
+            // A short page means the stream is exhausted.
+            if page_len < REDELIVERY_PAGE {
+                break 'drain;
+            }
+        }
+
+        if total > 0 {
+            debug!(did_hash = %did_hash, total, "Inbox redelivery complete");
+        }
+        replay_in_progress.lock().unwrap().remove(&did_hash);
+    });
+}
+
+// MemoryStore (the in-process backend used here) is only compiled under the
+// `memory-backend` feature, so gate these tests on it.
+#[cfg(all(test, feature = "memory-backend"))]
+mod tests {
+    use super::*;
+    use crate::store::memory_store::MemoryStore;
+    use sha256::digest;
+    use std::time::Duration as StdDuration;
+    use tokio::time::timeout;
+
+    fn streaming_task() -> StreamingTask {
+        // The command channel is unused by `_handle_registration` directly; a
+        // throwaway sender keeps the struct well-formed.
+        let (tx, _rx) = mpsc::channel(1);
+        StreamingTask {
+            uuid: "test-mediator".to_string(),
+            channel: tx,
+        }
+    }
+
+    /// Issue #374: a duplicate connect for a DID with an in-flight (stored but
+    /// not yet delivered) message must close the old socket *and* redeliver the
+    /// stored message to the surviving socket.
+    #[tokio::test]
+    async fn duplicate_replacement_redelivers_inbox_to_new_socket() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did = "did:example:alice";
+        let did_hash = digest(did);
+        let stored = "packed-in-flight-message";
+
+        // A message is sitting in the inbox (the store persists every
+        // non-ephemeral message, even when live-streamed).
+        database
+            .store_message("sess-store", stored, &did_hash, None, 0, 1000)
+            .await
+            .expect("store message");
+
+        let task = streaming_task();
+        let replay_in_progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+
+        // Client A is the existing live session.
+        let (a_tx, mut a_rx) = mpsc::channel(5);
+        clients.insert(
+            did_hash.clone(),
+            ClientEntry {
+                tx: a_tx,
+                session_id: "A".to_string(),
+                active: true,
+                registered_at: Instant::now(),
+            },
+        );
+
+        // Client B connects for the same DID (the duplicate).
+        let (b_tx, mut b_rx) = mpsc::channel(5);
+        let update = StreamingUpdate {
+            did_hash: did_hash.clone(),
+            state: StreamingUpdateState::Register {
+                channel: b_tx.clone(),
+                session_id: "B".to_string(),
+                did: did.to_string(),
+            },
+        };
+
+        task._handle_registration(&database, &mut clients, &replay_in_progress, &update)
+            .await;
+
+        // The old socket is told to close.
+        match timeout(StdDuration::from_secs(1), a_rx.recv())
+            .await
+            .expect("A receives a command")
+        {
+            Some(WebSocketCommands::Close) => {}
+            other => panic!("expected Close on old socket, got {:?}", other.is_some()),
+        }
+
+        // The surviving socket receives the stranded message via redelivery.
+        match timeout(StdDuration::from_secs(2), b_rx.recv())
+            .await
+            .expect("B receives the redelivered message")
+        {
+            Some(WebSocketCommands::Message(msg)) => assert_eq!(msg, stored),
+            _ => panic!("expected redelivered Message on the surviving socket"),
+        }
+
+        // And the new client is now the registered entry.
+        assert_eq!(
+            clients.get(&did_hash).map(|e| e.session_id.as_str()),
+            Some("B")
+        );
+    }
+
+    /// A fresh (non-duplicate) registration must NOT trigger an inbox
+    /// redelivery — only replacements re-cover in-flight messages.
+    #[tokio::test]
+    async fn fresh_registration_does_not_redeliver() {
+        let database: Arc<dyn MediatorStore> = Arc::new(MemoryStore::new());
+        let did = "did:example:bob";
+        let did_hash = digest(did);
+
+        database
+            .store_message("sess-store", "some-message", &did_hash, None, 0, 1000)
+            .await
+            .expect("store message");
+
+        let task = streaming_task();
+        let replay_in_progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let mut clients: HashMap<String, ClientEntry> = HashMap::new();
+
+        let (b_tx, mut b_rx) = mpsc::channel(5);
+        let update = StreamingUpdate {
+            did_hash: did_hash.clone(),
+            state: StreamingUpdateState::Register {
+                channel: b_tx.clone(),
+                session_id: "B".to_string(),
+                did: did.to_string(),
+            },
+        };
+
+        task._handle_registration(&database, &mut clients, &replay_in_progress, &update)
+            .await;
+
+        // No replacement ⇒ no redelivery push within the window.
+        assert!(
+            timeout(StdDuration::from_millis(300), b_rx.recv())
+                .await
+                .is_err(),
+            "fresh registration must not redeliver the inbox"
+        );
     }
 }
