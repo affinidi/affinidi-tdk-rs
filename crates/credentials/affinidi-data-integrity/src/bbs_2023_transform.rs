@@ -1294,6 +1294,63 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs JSON-LD type-scoped context support (credentials/v1 defines \
+                issuer/credentialSubject under the VerifiableCredential type scope)"]
+    fn create_pseudonym_base_proof_value_matches_w3c_vector() {
+        let km = json("BBSKeyMaterial.json");
+        let sk_bytes: [u8; 32] = hex_decode(km["privateKeyHex"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let pk_bytes: [u8; 96] = hex_decode(km["publicKeyHex"].as_str().unwrap())
+            .try_into()
+            .unwrap();
+        let sk = bbs::SecretKey::from_bytes(&sk_bytes).unwrap();
+        let pk = bbs::PublicKey::from_bytes(&pk_bytes).unwrap();
+        let hmac_key = hex_decode(km["hmacKeyString"].as_str().unwrap());
+
+        let raw = json("pseudonym/addRawBaseSignatureInfo.json");
+        let pointers: Vec<String> = raw["mandatoryPointers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap().to_string())
+            .collect();
+        let refs: Vec<&str> = pointers.iter().map(String::as_str).collect();
+
+        let commitment_with_proof = hex_decode(
+            json("pseudonym/commitmentInfo.json")["commitmentWithProof"]
+                .as_str()
+                .unwrap(),
+        );
+        let signer_nym_entropy = hex_decode(
+            json("pseudonym/signerNymEntropy.json")["signerNymEntropyHex"]
+                .as_str()
+                .unwrap(),
+        );
+
+        let proof_value = create_pseudonym_base_proof_value(
+            &json("pseudonym/license.json"),
+            &json("pseudonym/addProofConfig.json"),
+            &refs,
+            &sk,
+            &pk,
+            &hmac_key,
+            &commitment_with_proof,
+            &signer_nym_entropy,
+        )
+        .unwrap();
+
+        let expected = json("pseudonym/addSignedSDBase.json")["proof"]["proofValue"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            proof_value, expected,
+            "end-to-end pseudonym base proof diverges from the W3C vc-di-bbs vector"
+        );
+    }
+
+    #[test]
     fn verify_derived_proof_accepts_w3c_reference_proof() {
         let pk_bytes: [u8; 96] = hex_decode(
             json("BBSKeyMaterial.json")["publicKeyHex"]
