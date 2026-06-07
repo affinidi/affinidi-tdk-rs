@@ -152,6 +152,7 @@ async fn main() -> Result<(), ATMError> {
     let msg_id = send_message(
         &alice_atm,
         &atm_alice,
+        &alice_mediator_did,
         &atm_bob,
         &bob_mediator_did,
         msg_text,
@@ -196,6 +197,7 @@ async fn main() -> Result<(), ATMError> {
     let response_id = send_message(
         &bob_atm,
         &atm_bob,
+        &bob_mediator_did,
         &atm_alice,
         &alice_mediator_did,
         response_text,
@@ -261,6 +263,7 @@ async fn main() -> Result<(), ATMError> {
             let ping_id = send_message(
                 &alice_atm,
                 &atm_alice,
+                &alice_mediator_did,
                 &atm_bob,
                 &bob_mediator_did,
                 &ping_msg,
@@ -284,6 +287,7 @@ async fn main() -> Result<(), ATMError> {
             let pong_id = send_message(
                 &bob_atm,
                 &atm_bob,
+                &bob_mediator_did,
                 &atm_alice,
                 &alice_mediator_did,
                 &pong_msg,
@@ -338,10 +342,16 @@ async fn main() -> Result<(), ATMError> {
     Ok(())
 }
 
-/// Send a message from sender to recipient through the recipient's mediator
+/// Send a message from sender to recipient, routing through both mediators when they differ.
+///
+/// When sender and recipient use different mediators, two forward layers are required:
+///   outer (encrypted for sender_mediator, next=recipient_mediator) wraps
+///   inner (encrypted for recipient_mediator, next=recipient).
+/// This ensures each mediator only decrypts its own layer.
 async fn send_message(
     sender_atm: &affinidi_messaging_sdk::ATM,
     sender_profile: &std::sync::Arc<ATMProfile>,
+    sender_mediator_did: &str,
     recipient_profile: &std::sync::Arc<ATMProfile>,
     recipient_mediator_did: &str,
     body_text: &str,
@@ -374,8 +384,8 @@ async fn send_message(
         )
         .await?;
 
-    // Wrap in forward envelope for the recipient's mediator
-    let (_forward_id, forward_msg) = sender_atm
+    // Inner forward: encrypted for recipient's mediator, next=recipient
+    let (_inner_id, inner_fwd) = sender_atm
         .routing()
         .forward_message(
             sender_profile,
@@ -387,6 +397,26 @@ async fn send_message(
             None,
         )
         .await?;
+
+    // Outer forward (cross-mediator only): encrypted for sender's mediator,
+    // next=recipient_mediator so the sender's mediator relays inner_fwd onward.
+    let forward_msg = if sender_mediator_did != recipient_mediator_did {
+        let (_outer_id, outer_fwd) = sender_atm
+            .routing()
+            .forward_message(
+                sender_profile,
+                false,
+                &inner_fwd,
+                sender_mediator_did,
+                recipient_mediator_did,
+                None,
+                None,
+            )
+            .await?;
+        outer_fwd
+    } else {
+        inner_fwd
+    };
 
     // Send via sender's mediator
     sender_atm
