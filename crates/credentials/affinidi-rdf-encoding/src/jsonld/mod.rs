@@ -22,3 +22,16 @@ pub fn expand_and_to_rdf(document: &Value) -> Result<Dataset> {
     tracing::debug!(expanded = %expanded, "JSON-LD expanded form");
     to_rdf::to_rdf(&expanded)
 }
+
+/// Expand a JSON-LD document in **safe mode** and convert it to an RDF Dataset.
+///
+/// Identical to [`expand_and_to_rdf`] except that any term not defined by the
+/// active `@context` — which lenient expansion would silently drop — raises an
+/// error. Use this for Data Integrity canonicalization so that undefined claims
+/// cannot ride along in the JSON envelope without being part of the signed RDF
+/// dataset (issue #381).
+pub fn expand_and_to_rdf_safe(document: &Value) -> Result<Dataset> {
+    let expanded = expand::expand_document_safe(document)?;
+    tracing::debug!(expanded = %expanded, "JSON-LD expanded form (safe mode)");
+    to_rdf::to_rdf(&expanded)
+}

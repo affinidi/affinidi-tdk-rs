@@ -364,11 +364,14 @@ pub fn verify_derived_proof(
     let proof_hash = proof_hash(&proof_config)?;
 
     // Canonicalize the reveal document (minus proof), relabel via the label map.
+    // Safe mode: reject a reveal document carrying any term not defined by its
+    // @context — such a term would be dropped from the RDF and thus escape the
+    // BBS check while still appearing in the JSON (issue #381).
     let mut doc = reveal_document.clone();
     doc.as_object_mut()
         .ok_or_else(|| malformed("document must be an object"))?
         .remove("proof");
-    let dataset = jsonld::expand_and_to_rdf(&doc).map_err(canon_err)?;
+    let dataset = jsonld::expand_and_to_rdf_safe(&doc).map_err(canon_err)?;
     let (canonical_c14n, _) = rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
     let labeled = lines_with_newline(&relabel_and_sort(&canonical_c14n, &parsed.label_map));
 
@@ -1108,11 +1111,13 @@ pub fn verify_pseudonym_derived_proof(
     }
     let proof_hash = proof_hash(&proof_config)?;
 
+    // Safe mode (issue #381): see verify_derived_proof — an unmapped term in the
+    // reveal document must not slip past the BBS check.
     let mut doc = reveal_document.clone();
     doc.as_object_mut()
         .ok_or_else(|| malformed("document must be an object"))?
         .remove("proof");
-    let dataset = jsonld::expand_and_to_rdf(&doc).map_err(canon_err)?;
+    let dataset = jsonld::expand_and_to_rdf_safe(&doc).map_err(canon_err)?;
     let (canonical_c14n, _) = rdfc1::canonicalize_with_label_map(&dataset).map_err(canon_err)?;
     let labeled = lines_with_newline(&relabel_and_sort(&canonical_c14n, &parsed.label_map));
 
@@ -1192,7 +1197,8 @@ pub fn proof_hash(proof_config: &Value) -> Result<[u8; 32], DataIntegrityError> 
 ///    (`u…`), then assign `b0, b1, …` in that order.
 /// 4. Relabel the canonical N-Quads and re-sort the lines.
 pub fn hmac_canonicalize(document: &Value, hmac_key: &[u8]) -> Result<String, DataIntegrityError> {
-    let dataset = jsonld::expand_and_to_rdf(document).map_err(canon_err)?;
+    // Safe mode (issue #381): undefined terms must not be silently dropped.
+    let dataset = jsonld::expand_and_to_rdf_safe(document).map_err(canon_err)?;
     let canonical = rdfc1::canonicalize(&dataset).map_err(canon_err)?;
     let label_map = hmac_label_map(&canonical, hmac_key)?;
     Ok(relabel_and_sort(&canonical, &label_map))
@@ -1385,7 +1391,10 @@ fn skolemize_value(v: &mut Value, counter: &mut u64, ctx: &JsonLdContext) {
 /// RDF → serialize, then map `<urn:bnid:X>` back to blank nodes `_:X`. Each
 /// returned line is newline-terminated.
 fn to_deskolemized_nquads(document: &Value) -> Result<Vec<String>, DataIntegrityError> {
-    let dataset = jsonld::expand_and_to_rdf(document).map_err(canon_err)?;
+    // Safe mode (issue #381): this is the canonicalization used for both signing
+    // (issuer) and deriving (holder); reject documents whose claims are not all
+    // defined by the active @context, so no claim is signed/disclosed out-of-band.
+    let dataset = jsonld::expand_and_to_rdf_safe(document).map_err(canon_err)?;
     let mut lines: Vec<String> = dataset
         .quads()
         .iter()
@@ -2062,6 +2071,145 @@ mod tests {
         let mut bad = reveal.clone();
         bad["credentialSubject"]["sailNumber"] = Value::String("Mallory".into());
         assert!(!matches!(verify_derived_proof(&bad, &pk), Ok(true)));
+    }
+
+    // --- issue #381 soundness regression tests --------------------------------
+    //
+    // #381: a holder could change a credential attribute that was NOT defined by
+    // the document's @context, re-derive a fresh proof, and have it verify — the
+    // undefined term is dropped from the signed RDF yet remains readable in the
+    // JSON. The fix enforces JSON-LD safe-mode expansion on every sign/derive/
+    // verify path. These tests encode the threat model directly.
+
+    fn bbs_keys() -> (bbs::SecretKey, bbs::PublicKey) {
+        let km = json("BBSKeyMaterial.json");
+        let sk = bbs::SecretKey::from_bytes(
+            &hex_decode(km["privateKeyHex"].as_str().unwrap())
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        let pk = bbs::PublicKey::from_bytes(
+            &hex_decode(km["publicKeyHex"].as_str().unwrap())
+                .try_into()
+                .unwrap(),
+        )
+        .unwrap();
+        (sk, pk)
+    }
+
+    /// (B) Coverage/completeness: the issuer must REFUSE to sign a credential
+    /// carrying a claim (`memberLevel`) that the bare `credentials/v2` context
+    /// does not define — otherwise the claim is signed by nobody yet travels in
+    /// the JSON. This is the exact document from issue #381.
+    #[test]
+    fn issue_381_unmapped_claim_rejected_at_issuance() {
+        let sk = bbs::keygen(b"key-material-at-least-32-bytes!!", b"").unwrap();
+        let pk = bbs::sk_to_pk(&sk);
+        let did = affinidi_crypto::bls12381::g2_pub_to_did_key(&pk.to_bytes());
+        let vc = serde_json::json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "issuer": did,
+            "credentialSubject": { "id": "did:key:zMember", "memberLevel": "gold" }
+        });
+        let mandatory = ["/@context", "/type", "/issuer", "/credentialSubject/id"];
+        let r = sign_base_document(
+            &vc,
+            &mandatory,
+            &format!("{did}#bbs-key-0"),
+            "2020-01-01T00:00:00Z",
+            &sk,
+            &pk,
+            b"32-byte-hmac-key-padding-xxxxxxx",
+        );
+        assert!(
+            r.is_err(),
+            "issuer must refuse to sign a VC with an undefined claim (memberLevel); got {r:?}"
+        );
+    }
+
+    /// (B) Verifier-side defense in depth: a reveal document carrying a term not
+    /// defined by its `@context` must be rejected, even before the BBS check —
+    /// the term would be dropped from the verified RDF while remaining in the
+    /// JSON. (The reference proof bytes are retained; safe-mode expansion trips
+    /// first, so this exercises the verifier's safe-mode guard specifically.)
+    #[test]
+    fn issue_381_verifier_rejects_unmapped_term_in_reveal() {
+        let (_sk, pk) = bbs_keys();
+        let mut reveal = json("derivedRevealDocument.json");
+        // A context with no catch-all @vocab — so the injected term is undefined.
+        reveal["@context"] = serde_json::json!(["https://www.w3.org/ns/credentials/v2"]);
+        reveal["credentialSubject"]["forgedAttribute"] = Value::String("anything".into());
+        let r = verify_derived_proof(&reveal, &pk);
+        assert!(
+            r.is_err(),
+            "verifier must reject a reveal document carrying an undefined term; got {r:?}"
+        );
+    }
+
+    /// (A) Adversarial re-derivation harness — encodes the actual threat model:
+    /// the holder owns the base credential and re-derives at will. For every leaf
+    /// claim, tampering it in the base and deriving a FRESH proof must never
+    /// verify. Uses `windDoc` (a `@vocab`-mapped document, so the claims ARE
+    /// signed) to exercise the BBS message↔statement binding under re-derivation,
+    /// not just the safe-mode guard.
+    #[test]
+    fn issue_381_adversarial_rederivation_rejects_single_field_tampers() {
+        let (sk, pk) = bbs_keys();
+        let hmac_key = [0x42u8; 32];
+        let doc = json("windDoc.json");
+        let mandatory = ["/issuer", "/credentialSubject/sailNumber"];
+        let base = sign_base_document(
+            &doc,
+            &mandatory,
+            "did:key:zHolder#bbs",
+            "2024-01-01T00:00:00Z",
+            &sk,
+            &pk,
+            &hmac_key,
+        )
+        .unwrap();
+
+        // Control: an HONEST re-derivation of an untampered claim must verify, so
+        // the harness is not vacuously passing because derivation always fails.
+        let honest =
+            create_derived_proof(&base, &["/credentialSubject/boards/0"], b"nonce", &pk).unwrap();
+        assert!(
+            verify_derived_proof(&honest, &pk).unwrap(),
+            "control: honest re-derivation must verify"
+        );
+
+        // (pointer to tamper and disclose, forged value). Covers a mandatory
+        // claim, non-mandatory strings, and a non-mandatory number.
+        let cases: [(&str, Value); 4] = [
+            ("/credentialSubject/sailNumber", serde_json::json!("FORGED")), // mandatory
+            (
+                "/credentialSubject/boards/0/boardName",
+                serde_json::json!("FORGED"),
+            ),
+            ("/credentialSubject/boards/0/year", serde_json::json!(1999)),
+            (
+                "/credentialSubject/sails/0/sailName",
+                serde_json::json!("FORGED"),
+            ),
+        ];
+        for (ptr, forged) in cases {
+            let mut tampered = base.clone();
+            *tampered
+                .pointer_mut(ptr)
+                .unwrap_or_else(|| panic!("pointer {ptr} not present in base")) = forged.clone();
+
+            // The holder re-derives a fresh proof disclosing the tampered claim.
+            // Derivation itself refusing the tamper is also a safe outcome; only
+            // a successful derive that then verifies is a soundness break.
+            if let Ok(reveal) = create_derived_proof(&tampered, &[ptr], b"nonce", &pk) {
+                assert!(
+                    !matches!(verify_derived_proof(&reveal, &pk), Ok(true)),
+                    "SOUNDNESS: forged {ptr} = {forged} re-derived and verified"
+                );
+            }
+        }
     }
 
     fn hex_lower(b: &[u8]) -> String {
