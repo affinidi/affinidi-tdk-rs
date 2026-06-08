@@ -1,5 +1,35 @@
 # Affinidi Data Integrity Changelog
 
+## 8th June 2026 Release 0.7.5
+
+### Fixed
+
+- **`bbs-2023` soundness — forged undisclosed/undefined attribute values
+  (issue #381).** A credential holder could change the value of an attribute
+  that the credential's `@context` does **not** define (e.g. `memberLevel`
+  under the bare `credentials/v2` context), re-derive a fresh disclosure proof,
+  and have `verify_derived_proof` accept it. Root cause: JSON-LD expansion
+  **silently dropped** unmapped terms, so such an attribute was never part of
+  the signed RDF dataset — neither covered by the issuer's signature nor checked
+  by the verifier — yet it remained in the JSON envelope that applications read.
+  The underlying `affinidi-bbs` primitive was sound; the defect was in the
+  document/cryptosuite layer. Fix: every sign / derive / verify path now
+  canonicalizes via JSON-LD **safe-mode** expansion
+  (`affinidi-rdf-encoding::jsonld::expand_and_to_rdf_safe`), which errors on any
+  term not defined by the active `@context`. Consequences:
+  - Issuers (`sign_base_document`) **refuse** to sign a credential with an
+    undefined claim instead of emitting one with an unprotected attribute.
+  - Verifiers (`verify_derived_proof` / `verify_pseudonym_derived_proof`)
+    **reject** a reveal document carrying an undefined term.
+
+  Applies to both the basic and pseudonym (`0xd95d08` / `0xd95d09`) suites.
+  Credentials whose claims are all defined by their context (e.g. via `@vocab`)
+  are unaffected — all W3C `vc-di-bbs` KAT vectors still pass byte-for-byte.
+
+### Changed
+
+- Bump `affinidi-rdf-encoding` to `0.1.5` (adds safe-mode expansion).
+
 ## 7th June 2026 Release 0.7.4
 
 ### Changed
