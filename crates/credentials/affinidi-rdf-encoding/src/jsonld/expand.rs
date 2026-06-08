@@ -65,8 +65,16 @@ fn expand_element(element: &Value, context: &Context, safe: bool) -> Result<Valu
             Ok(Value::Array(result))
         }
         Value::Object(_) => expand_object(element, context, safe),
+        Value::Null => Ok(Value::Null),
         _ => {
-            // Scalars at the top level are dropped per JSON-LD spec
+            // A free-standing scalar where a node is expected is dropped per the
+            // JSON-LD spec. In safe mode, refuse it rather than discard data
+            // (issue #381).
+            if safe {
+                return Err(RdfError::expansion(format!(
+                    "safe mode: scalar {element} cannot be expanded as a node and would be dropped"
+                )));
+            }
             Ok(Value::Null)
         }
     }
@@ -119,12 +127,12 @@ fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Va
         if key == "@type" || key == "type" {
             if let Some(type_def) = context.get_term(key) {
                 if type_def.iri == "@type" {
-                    let expanded_types = expand_type_value(value, &context)?;
+                    let expanded_types = expand_type_value(value, &context, safe)?;
                     result.insert("@type".to_string(), expanded_types);
                     continue;
                 }
             } else if key == "@type" {
-                let expanded_types = expand_type_value(value, &context)?;
+                let expanded_types = expand_type_value(value, &context, safe)?;
                 result.insert("@type".to_string(), expanded_types);
                 continue;
             }
@@ -244,18 +252,25 @@ fn build_type_scoped_context(
 }
 
 /// Expand @type values to full IRIs.
-fn expand_type_value(value: &Value, context: &Context) -> Result<Value> {
+fn expand_type_value(value: &Value, context: &Context, safe: bool) -> Result<Value> {
     match value {
         Value::String(s) => {
-            let expanded = expand_type_iri(s, context);
+            let expanded = expand_type_iri(s, context, safe)?;
             Ok(json!([expanded]))
         }
         Value::Array(arr) => {
-            let expanded: Vec<Value> = arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(|s| json!(expand_type_iri(s, context)))
-                .collect();
+            let mut expanded = Vec::with_capacity(arr.len());
+            for v in arr {
+                match v.as_str() {
+                    Some(s) => expanded.push(json!(expand_type_iri(s, context, safe)?)),
+                    None if safe => {
+                        return Err(RdfError::expansion(format!(
+                            "safe mode: non-string @type entry {v} would be dropped"
+                        )));
+                    }
+                    None => {} // lenient: skip non-string entries
+                }
+            }
             Ok(Value::Array(expanded))
         }
         _ => Err(RdfError::expansion(format!("invalid @type value: {value}"))),
@@ -263,25 +278,37 @@ fn expand_type_value(value: &Value, context: &Context) -> Result<Value> {
 }
 
 /// Expand a type name to a full IRI.
-fn expand_type_iri(type_name: &str, context: &Context) -> String {
+///
+/// In safe mode a type that does not resolve to an absolute IRI (via a term
+/// definition or `@vocab`) is an error rather than being passed through as a
+/// relative IRI — a relative type would otherwise enter the signed dataset
+/// ambiguously / be dropped by stricter processors (issue #381).
+fn expand_type_iri(type_name: &str, context: &Context, safe: bool) -> Result<String> {
     // If already an absolute IRI, return as-is
     if type_name.contains("://") || type_name.starts_with("urn:") {
-        return type_name.to_string();
+        return Ok(type_name.to_string());
     }
 
     // Look up in context — for types, we want the @id value
     if let Some(def) = context.get_term(type_name)
         && (def.iri.contains("://") || def.iri.starts_with("urn:"))
     {
-        return def.iri.clone();
+        return Ok(def.iri.clone());
     }
 
     // Try vocab expansion
     if let Some(ref vocab) = context.vocab {
-        return format!("{vocab}{type_name}");
+        return Ok(format!("{vocab}{type_name}"));
     }
 
-    type_name.to_string()
+    if safe {
+        return Err(RdfError::expansion(format!(
+            "safe mode: type '{type_name}' is not defined by the active @context \
+             and would not expand to an absolute IRI"
+        )));
+    }
+
+    Ok(type_name.to_string())
 }
 
 /// Expand a value object ({ "@value": ... }).
@@ -476,6 +503,65 @@ mod tests {
             "credentialSubject": { "id": "did:example:123" }
         });
         assert!(expand_document_safe(&doc).is_ok());
+    }
+
+    /// Safe mode must reject a node `@type` that does not resolve to an absolute
+    /// IRI (no term definition, no `@vocab`) — it would otherwise be passed
+    /// through as a relative IRI into the signed dataset.
+    #[test]
+    fn safe_mode_rejects_unmapped_type() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "credentialSubject": { "id": "did:example:1" }
+        });
+        let err = expand_document_safe(&doc).unwrap_err();
+        assert!(
+            err.to_string().contains("MembershipCredential"),
+            "error should name the unresolved type: {err}"
+        );
+    }
+
+    /// A custom type that DOES resolve (here via `@vocab`) is accepted.
+    #[test]
+    fn safe_mode_accepts_custom_type_via_vocab() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "@vocab": "https://example.com/vocab#" }
+            ],
+            "type": ["VerifiableCredential", "MembershipCredential"],
+            "credentialSubject": { "id": "did:example:1" }
+        });
+        assert!(expand_document_safe(&doc).is_ok());
+    }
+
+    /// Safe mode must reject a free-standing scalar at the document root, which
+    /// lenient expansion would silently drop.
+    #[test]
+    fn safe_mode_rejects_top_level_scalar() {
+        let err = expand_document_safe(&json!("not-a-node")).unwrap_err();
+        assert!(
+            err.to_string().contains("scalar"),
+            "error should flag the dropped scalar: {err}"
+        );
+    }
+
+    /// Safe mode must reject a stray scalar mixed into a top-level node array.
+    #[test]
+    fn safe_mode_rejects_scalar_in_node_array() {
+        let doc = json!([
+            {
+                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                "type": ["VerifiableCredential"]
+            },
+            "stray-scalar"
+        ]);
+        let err = expand_document_safe(&doc).unwrap_err();
+        assert!(
+            err.to_string().contains("scalar"),
+            "error should flag the dropped scalar: {err}"
+        );
     }
 
     #[test]
