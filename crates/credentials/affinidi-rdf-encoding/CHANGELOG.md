@@ -1,5 +1,19 @@
 # Affinidi RDF Encoding Changelog
 
+## 8th June 2026 Release 0.1.5
+
+### Added
+
+- **JSON-LD safe-mode expansion** — `expand_document_safe` and
+  `expand_and_to_rdf_safe`. These behave like the existing lenient functions
+  except that a property whose key is **not defined by the active `@context`**
+  (a term lenient expansion silently drops) now raises an error naming the
+  offending term. Required by the W3C Verifiable Credential Data Integrity
+  algorithms so that canonicalization cannot discard unmapped claims. The
+  default `expand_document` / `expand_and_to_rdf` behaviour is **unchanged**
+  (still lenient), so this release is backward-compatible. Supports the
+  soundness fix in `affinidi-data-integrity` 0.7.5 (issue #381).
+
 ## 7th June 2026 Release 0.1.4
 
 Full **63/63** W3C `rdf-canon` (RDFC-1.0) conformance — the last 4 skipped

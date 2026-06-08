@@ -3,11 +3,35 @@ use serde_json::{Map, Value, json};
 use super::context::Context;
 use crate::error::{RdfError, Result};
 
-/// Expand a JSON-LD document to its expanded form.
+/// Expand a JSON-LD document to its expanded form (lenient mode).
 ///
 /// The expanded form has all terms replaced with full IRIs, all context
 /// processing resolved, and all values in a normalized array/object structure.
+///
+/// Terms not defined by the active `@context` are **silently dropped**. For
+/// security-sensitive canonicalization (e.g. Data Integrity proofs) use
+/// [`expand_document_safe`] instead, so undefined claims cannot ride along
+/// unsigned.
 pub fn expand_document(document: &Value) -> Result<Value> {
+    expand_document_inner(document, false)
+}
+
+/// Expand a JSON-LD document in **safe mode**.
+///
+/// Identical to [`expand_document`] except that a property whose key does not
+/// map to an absolute IRI or a JSON-LD keyword — i.e. a term that lenient
+/// expansion would silently drop — raises an error instead.
+///
+/// This is required by the W3C Verifiable Credential Data Integrity algorithms:
+/// canonicalization must not discard unmapped terms, otherwise a credential can
+/// carry attributes that are present in the JSON envelope yet absent from the
+/// signed RDF dataset (issue #381 — a holder could set an undefined attribute to
+/// any value and still pass verification).
+pub fn expand_document_safe(document: &Value) -> Result<Value> {
+    expand_document_inner(document, true)
+}
+
+fn expand_document_inner(document: &Value, safe: bool) -> Result<Value> {
     let mut context = Context::default();
 
     // Process top-level @context
@@ -15,7 +39,7 @@ pub fn expand_document(document: &Value) -> Result<Value> {
         context.process(ctx_val)?;
     }
 
-    let result = expand_element(document, &context)?;
+    let result = expand_element(document, &context, safe)?;
 
     // Wrap in array if not already
     match result {
@@ -26,12 +50,12 @@ pub fn expand_document(document: &Value) -> Result<Value> {
 }
 
 /// Expand a single JSON-LD element (object, array, or value).
-fn expand_element(element: &Value, context: &Context) -> Result<Value> {
+fn expand_element(element: &Value, context: &Context, safe: bool) -> Result<Value> {
     match element {
         Value::Array(arr) => {
             let mut result = Vec::new();
             for item in arr {
-                let expanded = expand_element(item, context)?;
+                let expanded = expand_element(item, context, safe)?;
                 match expanded {
                     Value::Array(inner) => result.extend(inner),
                     Value::Null => {} // skip nulls
@@ -40,7 +64,7 @@ fn expand_element(element: &Value, context: &Context) -> Result<Value> {
             }
             Ok(Value::Array(result))
         }
-        Value::Object(_) => expand_object(element, context),
+        Value::Object(_) => expand_object(element, context, safe),
         _ => {
             // Scalars at the top level are dropped per JSON-LD spec
             Ok(Value::Null)
@@ -49,7 +73,7 @@ fn expand_element(element: &Value, context: &Context) -> Result<Value> {
 }
 
 /// Expand a JSON-LD object node.
-fn expand_object(obj: &Value, parent_context: &Context) -> Result<Value> {
+fn expand_object(obj: &Value, parent_context: &Context, safe: bool) -> Result<Value> {
     let map = obj
         .as_object()
         .ok_or_else(|| RdfError::expansion("expected object"))?;
@@ -112,7 +136,18 @@ fn expand_object(obj: &Value, parent_context: &Context) -> Result<Value> {
                 continue; // Skip keyword aliases
             }
             Some(iri) if iri.contains("://") || iri.starts_with("urn:") => iri,
-            _ => continue, // Drop unmapped terms
+            _ => {
+                if safe {
+                    // Safe mode: an unmapped term would be dropped from the RDF
+                    // dataset while remaining in the JSON envelope. Refuse it so
+                    // it cannot be signed/verified out-of-band (issue #381).
+                    return Err(RdfError::expansion(format!(
+                        "safe mode: term '{key}' is not defined by the active @context \
+                         and would be dropped from the signed dataset"
+                    )));
+                }
+                continue; // Drop unmapped terms (lenient mode)
+            }
         };
 
         // Get term definition for type coercion and scoped context
@@ -131,7 +166,7 @@ fn expand_object(obj: &Value, parent_context: &Context) -> Result<Value> {
         };
 
         // Expand the value
-        let expanded_value = expand_property_value(value, type_mapping, &prop_context)?;
+        let expanded_value = expand_property_value(value, type_mapping, &prop_context, safe)?;
 
         if expanded_value != Value::Null {
             // Merge into result
@@ -278,6 +313,7 @@ fn expand_property_value(
     value: &Value,
     type_mapping: Option<&str>,
     context: &Context,
+    safe: bool,
 ) -> Result<Value> {
     // `@json`-typed values are kept verbatim as a JSON literal (the whole value,
     // including arrays/objects, is preserved and serialized canonically later).
@@ -289,7 +325,7 @@ fn expand_property_value(
         Value::Array(arr) => {
             let mut result = Vec::new();
             for item in arr {
-                let expanded = expand_property_value(item, type_mapping, context)?;
+                let expanded = expand_property_value(item, type_mapping, context, safe)?;
                 match expanded {
                     Value::Null => {}
                     Value::Array(items) => result.extend(items),
@@ -300,7 +336,7 @@ fn expand_property_value(
         }
         Value::Object(_) => {
             // Recursively expand nested objects
-            expand_object(value, context)
+            expand_object(value, context, safe)
         }
         Value::String(s) => {
             // Apply type coercion
@@ -359,6 +395,87 @@ mod tests {
         let node = &arr[0];
         assert_eq!(node.get("@id").unwrap(), "urn:uuid:test");
         assert!(node.get("@type").is_some());
+    }
+
+    // --- safe-mode expansion (issue #381) ------------------------------------
+
+    /// Lenient expansion silently drops a term the context does not define — the
+    /// behaviour that made the #381 soundness break possible. Pinned as a guard.
+    #[test]
+    fn lenient_mode_drops_unmapped_term() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": "did:example:1", "memberLevel": "gold" }
+        });
+        let expanded = expand_document(&doc).unwrap();
+        let s = expanded.to_string();
+        assert!(
+            !s.contains("memberLevel") && !s.contains("gold"),
+            "lenient mode is expected to drop the undefined term"
+        );
+    }
+
+    /// Safe mode must REJECT a top-level property the active context does not map.
+    #[test]
+    fn safe_mode_rejects_unmapped_property() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "forgedProperty": "x"
+        });
+        let err = expand_document_safe(&doc).unwrap_err();
+        assert!(
+            err.to_string().contains("forgedProperty"),
+            "error should name the offending term: {err}"
+        );
+    }
+
+    /// Safe mode must reject an undefined term NESTED under a mapped parent
+    /// (`credentialSubject.memberLevel`) — the exact shape from issue #381.
+    #[test]
+    fn safe_mode_rejects_nested_unmapped_term() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": "did:example:1", "memberLevel": "gold" }
+        });
+        let err = expand_document_safe(&doc).unwrap_err();
+        assert!(
+            err.to_string().contains("memberLevel"),
+            "error should name the nested undefined term: {err}"
+        );
+    }
+
+    /// Safe mode must ACCEPT a document whose terms are all defined — here via a
+    /// catch-all `@vocab`. The same custom term that fails above now maps.
+    #[test]
+    fn safe_mode_accepts_fully_mapped_document() {
+        let doc = json!({
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                { "@vocab": "https://example.com/vocab#" }
+            ],
+            "type": ["VerifiableCredential"],
+            "credentialSubject": { "id": "did:example:1", "memberLevel": "gold" }
+        });
+        let expanded =
+            expand_document_safe(&doc).expect("fully-mapped document must expand in safe mode");
+        assert!(expanded.to_string().contains("memberLevel"));
+    }
+
+    /// Safe mode must not trip on the standard, fully-defined VC keywords/terms.
+    #[test]
+    fn safe_mode_accepts_standard_vc_terms() {
+        let doc = json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "id": "urn:uuid:test",
+            "type": ["VerifiableCredential"],
+            "issuer": "https://example.com/issuer",
+            "validFrom": "2023-01-01T00:00:00Z",
+            "credentialSubject": { "id": "did:example:123" }
+        });
+        assert!(expand_document_safe(&doc).is_ok());
     }
 
     #[test]
