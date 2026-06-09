@@ -473,7 +473,7 @@ pub async fn serve_internal(
         (None, None)
     };
 
-    let did_resolver = DIDCacheClient::new(config.did_resolver_config.clone())
+    let mut did_resolver = DIDCacheClient::new(config.did_resolver_config.clone())
         .await
         .map_err(|e| {
             error!("Failed to create DID resolver: {e}");
@@ -483,6 +483,21 @@ pub async fn serve_internal(
                 format!("Failed to create DID resolver: {e}"),
             )
         })?;
+
+    // Preload the mediator's own DID document so it can pack/unpack DIDComm
+    // messages without hitting the network (the did:web resolver requires HTTPS
+    // which may not be reachable from the mediator's own network).
+    if let Some(ref did_doc_json) = config.mediator_did_doc {
+        if let Ok(doc) = serde_json::from_str::<affinidi_did_common::Document>(did_doc_json) {
+            did_resolver
+                .add_did_document(&config.mediator_did, doc)
+                .await;
+            info!(
+                "Preloaded mediator DID into resolver cache: {}",
+                config.mediator_did
+            );
+        }
+    }
 
     #[cfg(feature = "didcomm")]
     let discover_features = Arc::new(DiscoverFeatures {
