@@ -137,7 +137,9 @@ async fn handle_inbound_didcomm(
                     // Does the sender identity match the session DID?
                     // The sender can be identified by JWS signing (sign_from) or
                     // authcrypt encryption (encrypted_from_kid).
-                    if state.config.security.force_session_did_match {
+                    // Skip for unauthenticated sessions (e.g. inter-mediator relay):
+                    // there is no session DID to match against.
+                    if state.config.security.force_session_did_match && session.authenticated {
                         let sender_kid =
                             metadata.sign_from.as_ref().or(metadata.encrypted_from_kid.as_ref());
                         check_session_sender_match(session, &msg.id, &sender_kid)?;

@@ -196,11 +196,42 @@ pub(crate) async fn process(
         let from_account = if let Some(from) = &msg.from {
             let from_account = match state.database.account_get(&digest(from.as_str())).await {
                 Ok(Some(from_account)) => from_account,
-                Ok(None) => Account {
-                    did_hash: digest(from.as_str()),
-                    acls: state.config.security.global_acl_default.to_u64(),
-                    ..Default::default()
-                },
+                Ok(None) => {
+                    // First time we've seen this forwarding sender. Persist it
+                    // as a registered account seeded from `global_acl_default`
+                    // (mirrors the `next_account` branch above). Without this,
+                    // `store_message` later creates a bare `DID:<hash>` record
+                    // holding only queue counters (no `ACLS` field). On every
+                    // subsequent forward `account_get` then returns that phantom
+                    // record with `acls = 0` (DENY_ALL), so the `send_forwarded`
+                    // gate below rejects the relay with 403 — even though the
+                    // global default is `ALLOW_ALL`. Registering here keeps the
+                    // stored sender default from being stricter than the global
+                    // default and makes cross-mediator forwarding reproducible.
+                    debug!("Forwarding sender account not found, creating a new one");
+                    state
+                        .database
+                        .account_add(
+                            &digest(from.as_str()),
+                            &state.config.security.global_acl_default,
+                            None,
+                        )
+                        .await
+                        .map_err(|e| {
+                            MediatorError::problem_with_log(
+                                14,
+                                &session.session_id,
+                                Some(msg.id.to_string()),
+                                ProblemReportSorter::Error,
+                                ProblemReportScope::Protocol,
+                                "me.res.storage.error",
+                                "Database transaction error: {1}",
+                                vec![e.to_string()],
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                format!("Database transaction error: {e}"),
+                            )
+                        })?
+                }
                 Err(e) => {
                     return Err(MediatorError::problem_with_log(
                         14,
