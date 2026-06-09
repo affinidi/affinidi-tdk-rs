@@ -27,7 +27,7 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
-use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN};
+use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN, header::SEC_WEBSOCKET_PROTOCOL};
 use serde_json::json;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -71,11 +71,15 @@ where
     I: IntoIterator<Item = &'a HeaderValue>,
 {
     protocols.into_iter().find_map(|p| {
-        p.to_str()
-            .ok()
-            .and_then(|s| s.strip_prefix(WS_BEARER_SUBPROTOCOL_PREFIX))
-            .filter(|token| !token.is_empty())
-            .map(str::to_string)
+        p.to_str().ok().and_then(|header_val| {
+            // RFC 6455: subprotocols may be comma-separated in a single header value
+            header_val.split(',').find_map(|s| {
+                s.trim()
+                    .strip_prefix(WS_BEARER_SUBPROTOCOL_PREFIX)
+                    .filter(|token| !token.is_empty())
+                    .map(str::to_string)
+            })
+        })
     })
 }
 
@@ -89,10 +93,13 @@ fn app_subprotocols<'a, I>(protocols: I) -> Vec<String>
 where
     I: IntoIterator<Item = &'a HeaderValue>,
 {
+    // RFC 6455: subprotocols may be comma-separated in a single header value
     protocols
         .into_iter()
         .filter_map(|p| p.to_str().ok())
-        .filter(|s| !s.starts_with(WS_BEARER_SUBPROTOCOL_PREFIX))
+        .flat_map(|header_val| header_val.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.starts_with(WS_BEARER_SUBPROTOCOL_PREFIX))
         .map(str::to_string)
         .collect()
 }
@@ -165,7 +172,7 @@ pub async fn websocket_handler(
     let token = if let Some(TypedHeader(Authorization(bearer))) = &auth_header {
         Some(bearer.token().to_string())
     } else {
-        extract_bearer_subprotocol(ws.requested_protocols())
+        extract_bearer_subprotocol(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter())
     };
 
     let Some(token) = token else {
@@ -211,7 +218,7 @@ pub async fn websocket_handler(
     //    bearer entry, no subprotocol is selected and the response
     //    carries no `Sec-WebSocket-Protocol` header (RFC 6455 permits
     //    this; browsers accept it).
-    let app_protocols = app_subprotocols(ws.requested_protocols());
+    let app_protocols = app_subprotocols(headers.get_all(SEC_WEBSOCKET_PROTOCOL).iter());
     let ws = if app_protocols.is_empty() {
         ws
     } else {
@@ -566,6 +573,24 @@ mod tests {
         // selected in the 101 response.
         let protos = [hv("bearer.secret.jwt.here")];
         assert!(app_subprotocols(protos.iter()).is_empty());
+    }
+
+    #[test]
+    fn extract_bearer_from_comma_separated_header() {
+        // RFC 6455: clients MAY send subprotocols as comma-separated in
+        // a single Sec-WebSocket-Protocol header value.
+        let protos = [hv("didcomm/v2, bearer.tok.en.value")];
+        assert_eq!(
+            extract_bearer_subprotocol(protos.iter()),
+            Some("tok.en.value".to_string())
+        );
+    }
+
+    #[test]
+    fn app_subprotocols_from_comma_separated_header() {
+        // Comma-separated bearer entry must be excluded, app protocols kept.
+        let protos = [hv("didcomm/v2, bearer.secret.jwt.here")];
+        assert_eq!(app_subprotocols(protos.iter()), vec!["didcomm/v2"]);
     }
 
     #[test]
