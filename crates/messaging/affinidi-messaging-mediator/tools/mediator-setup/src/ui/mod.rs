@@ -840,6 +840,9 @@ fn render_step_content(frame: &mut Frame, area: Rect, app: &WizardApp) {
                     DidPhase::SelectWebvhHost => {
                         unreachable!("SelectWebvhHost runs in Selecting mode, not TextInput")
                     }
+                    DidPhase::SaveDidWebChoice => {
+                        unreachable!("SaveDidWebChoice runs in Selecting mode, not TextInput")
+                    }
                 };
                 prompt::render_prompt(
                     frame,

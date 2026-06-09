@@ -4,6 +4,33 @@
 
 ## 9th June 2026
 
+### 0.1.10 — optional did:web export for self-hosted webvh DIDs
+
+- New option to also export a `did:web` copy of the mediator's DID
+  document when generating a `did:webvh`. `did:webvh` and `did:web` are
+  wire-compatible — the same document resolves under either method once
+  the SCID is dropped — so the wizard rewrites the resolved DID document's
+  identifier from `did:webvh:<scid>:<domain>` to `did:web:<domain>` (and
+  every self-reference: `id`, `controller`, verification-method and
+  service ids) and writes it to `did-web.json` next to `did.jsonl`. The
+  operator can host that file at a plain web server's
+  `/.well-known/did.json`.
+  - Interactive: a Yes/No prompt after the mediator public-URL step. It
+    defaults to "No (recommended)" and is framed as advanced — most
+    deployments only need the did:webvh log; pick "Yes" only if you know
+    you need a did:web identifier (e.g. a counterparty that resolves
+    did:web but not did:webvh).
+  - Non-interactive / recipe: `--save-did-web` CLI flag and
+    `[identity] save_did_web = true` recipe key.
+  - Covers both the local generator and VTA-managed webvh logs (the
+    export triggers whenever the minted DID is a `did:webvh:` and the
+    option is set); non-webvh DIDs are skipped with a note.
+  - The file is a standalone operator artefact — the mediator runtime
+    still serves its own document from the webvh log
+    (`did_web_self_hosted` → `did.jsonl`) and never reads `did-web.json`,
+    so the distinct filename avoids colliding with the runtime-served
+    `/.well-known/did.json`.
+
 ### 0.1.9 — vta-sdk 0.11 (fix online provisioning against current VTAs)
 
 - Bump `vta-sdk` `0.9.11` → `0.11`. Online VTA setup failed at the

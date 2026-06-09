@@ -141,6 +141,17 @@ pub fn render_summary(
             value_style,
         );
     }
+    // did:web export — only surfaced when the operator opted in. The file
+    // (`did-web.json`) is written only if the minted DID is a did:webvh.
+    if config.save_did_web {
+        add_field(
+            &mut lines,
+            "  did:web export",
+            "Yes (did-web.json)",
+            label_style,
+            value_style,
+        );
+    }
     let key_storage_display = build_backend_url(config);
     add_field(
         &mut lines,
