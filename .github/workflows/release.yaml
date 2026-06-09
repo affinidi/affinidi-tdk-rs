@@ -7,12 +7,7 @@ on:
 
 jobs:
   rust-pipeline:
-    # TEMPORARY: pinned to the per-crate isolated-publish fix branch
-    # (affinidi/pipeline-rust#77) so the affinidi-crypto 0.2.0 release can
-    # publish each crate independently instead of failing on the full-workspace
-    # build (vta-sdk un-unification). Revert to `@main` once #77 merges.
-    # Tracking: affinidi/affinidi-tdk-rs#367
-    uses: affinidi/pipeline-rust/.github/workflows/release.yaml@fix/per-crate-isolated-publish
+    uses: affinidi/pipeline-rust/.github/workflows/release.yaml@main
     secrets: inherit
     with:
       toolchain: "1.95.0"
