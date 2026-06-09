@@ -117,6 +117,11 @@ pub struct IdentitySection {
     pub did_method: String,
     /// Required when `did_method = "did:webvh"`
     pub public_url: Option<String>,
+    /// Also write a did:web copy of the generated DID document to
+    /// `did-web.json`. Only meaningful for did:webvh / VTA-managed webvh
+    /// DIDs; ignored otherwise.
+    #[serde(default)]
+    pub save_did_web: bool,
 }
 
 fn default_did_method() -> String {
@@ -128,6 +133,7 @@ impl Default for IdentitySection {
         Self {
             did_method: default_did_method(),
             public_url: None,
+            save_did_web: false,
         }
     }
 }
@@ -483,6 +489,7 @@ pub fn to_wizard_config(recipe: &BuildRecipe) -> anyhow::Result<WizardConfig> {
     } else if let Some(ref url) = recipe.identity.public_url {
         config.public_url = url.clone();
     }
+    config.save_did_web = recipe.identity.save_did_web;
 
     // Secrets — accept either the bare scheme (backward compat with
     // pre-cloud-config recipes) or a fully-formed URL. A full URL gets

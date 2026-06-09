@@ -254,6 +254,9 @@ pub enum DidPhase {
     SelectWebvhHost,
     /// Text input for a different self-host base URL.
     EnterCustomUrl,
+    /// Yes/No selection: after a local did:webvh is configured, offer to
+    /// also export a did:web (`did-web.json`) copy of the DID document.
+    SaveDidWebChoice,
 }
 
 /// Sub-phases of the `Security` step. The SSL portion (selection list +
@@ -354,6 +357,10 @@ pub struct WizardConfig {
     pub tsp_enabled: bool,
     pub did_method: String,
     pub public_url: String,
+    /// When `did_method` produces a did:webvh, also export a did:web copy
+    /// of the DID document to `did-web.json`. Collected via the
+    /// `DidPhase::SaveDidWebChoice` prompt or the `--save-did-web` flag.
+    pub save_did_web: bool,
     pub secret_storage: String,
     // Per-backend config fields. Only the set relevant to `secret_storage`
     // is meaningful; others stay at defaults. Storing them as flat strings
@@ -519,6 +526,7 @@ impl Default for WizardConfig {
             tsp_enabled: false,
             did_method: String::new(),
             public_url: String::new(),
+            save_did_web: false,
             secret_storage: String::new(),
             secret_file_path: DEFAULT_SECRET_FILE_PATH.into(),
             secret_keyring_service: DEFAULT_KEYRING_SERVICE.into(),
@@ -2257,6 +2265,20 @@ impl WizardApp {
                 ]
             }
             WizardStep::Did => {
+                // After a local did:webvh URL is captured, offer the
+                // did:web export as a Yes/No pick (index 0 = Yes).
+                if self.did_phase == Some(DidPhase::SaveDidWebChoice) {
+                    return vec![
+                        SelectionOption::new(
+                            "No (recommended)",
+                            "Generate the did:webvh log only. This is all most deployments need.",
+                        ),
+                        SelectionOption::new(
+                            "Yes — also export a did:web copy",
+                            "Advanced: only if you specifically need a did:web identifier. Writes did-web.json (id rewritten to did:web:<domain>) for you to host at a web server's /.well-known/did.json.",
+                        ),
+                    ];
+                }
                 // When the webvh-host sub-flow is active, render its
                 // options (self-host / each server / self-host
                 // elsewhere) instead of the DID-method picker.
@@ -2564,6 +2586,18 @@ impl WizardApp {
                 _ => String::new(),
             },
             WizardStep::Did => {
+                if self.did_phase == Some(DidPhase::SaveDidWebChoice) {
+                    return "Most deployments should pick \"No\" — the did:webvh log is \
+                            always written and is all you need. Only choose \"Yes\" if you \
+                            specifically know you need a did:web identifier as well (e.g. \
+                            a verifier or counterparty that resolves did:web but not \
+                            did:webvh). did:webvh and did:web are wire-compatible — the \
+                            same document resolves under either method once the SCID is \
+                            dropped — so \"Yes\" writes an extra did-web.json (id rewritten \
+                            to did:web:<domain>) you host at a plain web server's \
+                            /.well-known/did.json."
+                        .into();
+                }
                 if self.did_phase == Some(DidPhase::SelectWebvhHost) {
                     return "Pick where the VTA should publish this DID's did.jsonl log. \
                             Self-host = the mediator (or another server you operate) serves \
@@ -2841,6 +2875,15 @@ impl WizardApp {
                 self.advance();
             }
             WizardStep::Did => {
+                // The did:web export Yes/No pick rides on the same
+                // selection-list UI. Record the choice and advance.
+                if self.did_phase == Some(DidPhase::SaveDidWebChoice) {
+                    // Index 0 = "No (recommended)", index 1 = "Yes".
+                    self.config.save_did_web = self.selection_index == 1;
+                    self.did_phase = None;
+                    self.advance();
+                    return;
+                }
                 // The webvh-host selection rides on top of the Did
                 // step's selection list UI. Route Enter to the
                 // sub-flow handler when that phase is active.
@@ -3597,6 +3640,16 @@ impl WizardApp {
         self.current_step == WizardStep::Did && self.did_phase.is_some()
     }
 
+    /// Enter the did:web export Yes/No prompt (a sub-phase of the Did
+    /// step). Index 0 = "No (recommended)", index 1 = "Yes" — pre-selects
+    /// the operator's current choice, defaulting to the recommended "No"
+    /// so the export stays opt-in.
+    fn enter_save_did_web_choice(&mut self) {
+        self.did_phase = Some(DidPhase::SaveDidWebChoice);
+        self.mode = InputMode::Selecting;
+        self.selection_index = usize::from(self.config.save_did_web);
+    }
+
     /// Confirm the SelectWebvhHost selection. `selection_index` maps
     /// to 0 = self-host at mediator URL, 1..=servers.len() = VTA-hosted
     /// server, servers.len()+1 = self-host elsewhere.
@@ -3682,6 +3735,14 @@ impl WizardApp {
                 if self.config.did_method == DID_VTA && self.vta_session.is_some() {
                     self.mode = InputMode::Selecting;
                     self.advance();
+                    return;
+                }
+                // Locally-generated did:webvh: offer the did:web export
+                // before advancing. (VTA-managed webvh DIDs are minted in
+                // the Vta sub-flow above and never reach this prompt; pass
+                // --save-did-web for those.)
+                if self.config.did_method == DID_WEBVH {
+                    self.enter_save_did_web_choice();
                     return;
                 }
                 self.mode = InputMode::Selecting;
@@ -4060,6 +4121,12 @@ impl WizardApp {
                     self.selection_index = 0;
                 }
                 Some(DidPhase::SelectWebvhHost) => {
+                    self.did_phase = None;
+                    self.mode = InputMode::TextInput;
+                    self.text_input = Input::new(self.config.public_url.clone());
+                }
+                Some(DidPhase::SaveDidWebChoice) => {
+                    // Back from the did:web pick → re-edit the mediator URL.
                     self.did_phase = None;
                     self.mode = InputMode::TextInput;
                     self.text_input = Input::new(self.config.public_url.clone());
@@ -4812,6 +4879,86 @@ mod tests {
         assert_eq!(app.current_step, WizardStep::Protocol);
         app.go_back();
         assert_eq!(app.current_step, WizardStep::Vta);
+    }
+
+    #[test]
+    fn local_webvh_url_confirm_enters_did_web_choice() {
+        // Non-VTA did:webvh path: after the public URL is confirmed the
+        // wizard offers the did:web export as a Yes/No sub-phase instead
+        // of advancing straight on.
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = false;
+        app.current_step = WizardStep::Did;
+        app.mode = InputMode::Selecting;
+        app.selection_index = 0; // "Generate did:webvh"
+        app.select_current();
+        assert_eq!(app.config.did_method, DID_WEBVH);
+        assert_eq!(app.mode, InputMode::TextInput);
+
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+
+        assert_eq!(app.did_phase, Some(DidPhase::SaveDidWebChoice));
+        assert_eq!(app.mode, InputMode::Selecting);
+        assert_eq!(app.current_options().len(), 2);
+        // Opt-in: the prompt defaults to the recommended "No" (index 0).
+        assert_eq!(app.selection_index, 0);
+        assert_eq!(app.config.public_url, "https://mediator.example.com");
+    }
+
+    #[test]
+    fn did_web_choice_yes_sets_flag_and_advances_past_did() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = false;
+        app.current_step = WizardStep::Did;
+        app.mode = InputMode::Selecting;
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+
+        // Pick "Yes" (index 1; index 0 is the recommended "No").
+        app.selection_index = 1;
+        app.select_current();
+        assert!(app.config.save_did_web);
+        assert!(app.did_phase.is_none());
+        assert_ne!(app.current_step, WizardStep::Did);
+    }
+
+    #[test]
+    fn did_web_choice_no_leaves_flag_unset() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = false;
+        app.current_step = WizardStep::Did;
+        app.mode = InputMode::Selecting;
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+
+        // Pick "No" (the default highlight).
+        app.select_current();
+        assert!(!app.config.save_did_web);
+        assert!(app.did_phase.is_none());
+    }
+
+    #[test]
+    fn did_web_choice_back_nav_returns_to_url_input() {
+        let mut app = WizardApp::new("test.toml".into());
+        app.config.use_vta = false;
+        app.current_step = WizardStep::Did;
+        app.mode = InputMode::Selecting;
+        app.selection_index = 0;
+        app.select_current();
+        app.text_input = tui_input::Input::new("https://mediator.example.com".into());
+        app.confirm_text_input();
+        assert_eq!(app.did_phase, Some(DidPhase::SaveDidWebChoice));
+
+        app.go_back();
+        assert!(app.did_phase.is_none());
+        assert_eq!(app.mode, InputMode::TextInput);
+        assert_eq!(app.current_step, WizardStep::Did);
+        assert_eq!(app.text_input.value(), "https://mediator.example.com");
     }
 
     #[test]

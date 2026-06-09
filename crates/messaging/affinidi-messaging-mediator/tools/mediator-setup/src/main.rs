@@ -234,6 +234,9 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
     if let Some(ref public_url) = args.public_url {
         config.public_url = public_url.clone();
     }
+    if args.save_did_web {
+        config.save_did_web = true;
+    }
     if let Some(ref secret_storage) = args.secret_storage {
         config.secret_storage = secret_storage.to_string();
     }
@@ -941,6 +944,42 @@ fn write_did_jsonl(config_path: &str, log_content: &str) {
     }
 }
 
+/// Convert the mediator's did:webvh log entry to a did:web DID document
+/// and write it next to the config as `did-web.json`. Purely an operator
+/// artefact for hosting the DID under did:web — the mediator runtime
+/// serves its own document from the webvh log, never this file, so the
+/// filename deliberately differs from the runtime-served `did.json`.
+/// Failures are surfaced but non-fatal: a bad conversion shouldn't roll
+/// back an otherwise-good setup.
+fn write_did_web_json(config_path: &str, log_content: &str, webvh_did: &str) {
+    let (web_did, doc) = match generators::did_webvh::webvh_log_to_did_web(log_content, webvh_did) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("  \x1b[33mWarning:\x1b[0m could not derive did:web document: {e}");
+            return;
+        }
+    };
+    let did_web_path = std::path::Path::new(config_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("did-web.json");
+    // did:web documents are public by definition (the operator hosts
+    // them at `/.well-known/did.json`), but mirror the owner-only posture
+    // of did.jsonl for defence in depth until the operator copies it out.
+    let body = format!("{}\n", doc.trim_end_matches('\n'));
+    match crate::secure_fs::write_sensitive(&did_web_path, body) {
+        Ok(()) => println!(
+            "  \x1b[32m\u{2714}\x1b[0m Saved did:web document (\x1b[36m{web_did}\x1b[0m): \
+             \x1b[36m{}\x1b[0m",
+            did_web_path.display()
+        ),
+        Err(e) => eprintln!(
+            "  \x1b[33mWarning:\x1b[0m could not write {}: {e}",
+            did_web_path.display()
+        ),
+    }
+}
+
 /// Drop any HTTP path from a URL, returning `<scheme>://<host>[:<port>]`.
 /// Used to derive the did:webvh DID identifier from the operator's full
 /// public URL (the trailing `/mediator/v1` would otherwise get baked into
@@ -1542,6 +1581,25 @@ fn write_config_artefacts(
     // `write_did_jsonl` adds the trailing newline strict JSONL requires.
     if let Some(ref doc) = artefacts.did_doc {
         write_did_jsonl(&config.config_path, doc);
+
+        // Optional did:web export. When the operator asked for it and the
+        // minted DID is a did:webvh (local generator or VTA-managed webvh
+        // log), rewrite the resolved DID document to its did:web form and
+        // drop it next to the config as `did-web.json` for hosting under
+        // did:web. Non-webvh DIDs (did:peer, VTA-managed did:web/did:key)
+        // have no scid to drop, so we skip with a note rather than emit a
+        // misleading file.
+        if config.save_did_web {
+            if artefacts.mediator_did.starts_with("did:webvh:") {
+                write_did_web_json(&config.config_path, doc, &artefacts.mediator_did);
+            } else {
+                eprintln!(
+                    "  \x1b[33mNote:\x1b[0m --save-did-web requested but the mediator DID \
+                     is not a did:webvh ({}); skipping did:web export.",
+                    artefacts.mediator_did
+                );
+            }
+        }
     }
 
     // Authorization VC archive (DID_VTA Full path only). Pre-serialised

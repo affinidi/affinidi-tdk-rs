@@ -28,6 +28,14 @@ pub struct Args {
     #[arg(long)]
     pub public_url: Option<String>,
 
+    /// Also write a did:web copy of the generated DID document to
+    /// `did-web.json` (next to `did.jsonl`), rewriting the identifier
+    /// from `did:webvh:<scid>:<domain>` to `did:web:<domain>`. Only
+    /// applies when the mediator DID is a did:webvh (local generator or
+    /// VTA-managed webvh log).
+    #[arg(long)]
+    pub save_did_web: bool,
+
     /// Secret storage backend
     #[arg(long, value_enum)]
     pub secret_storage: Option<SecretStorage>,
