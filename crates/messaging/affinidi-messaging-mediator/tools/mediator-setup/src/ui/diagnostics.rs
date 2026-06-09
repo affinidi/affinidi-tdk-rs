@@ -169,7 +169,11 @@ fn build_status_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
     }
 }
 
-fn diag_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
+/// The per-check checklist lines. Shared with the recovery screen
+/// (`ui::recovery`) so a failed connection shows the *same* diagnostics that
+/// were on the Testing screen — instead of letting them flash past on the way
+/// to the recovery prompt.
+pub(crate) fn diag_lines(state: &VtaConnectState) -> Vec<Line<'_>> {
     if state.diagnostics.is_empty() {
         return vec![Line::from(Span::styled(
             "  Waiting for diagnostics…",
