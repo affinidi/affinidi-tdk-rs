@@ -44,8 +44,8 @@ use vta_sdk::integration::{
 };
 
 use helpers::{
-    get_hostname, load_forwarding_protection_blocks, read_config_file, read_did_config,
-    read_document,
+    get_hostname, load_forwarding_protection_blocks, preload_self_did, read_config_file,
+    read_did_config, read_document,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -169,6 +169,15 @@ pub struct Config {
     /// loader extracts `state` from the latter so both routes serve
     /// canonical-shape content.
     pub mediator_did_doc: Option<String>,
+    /// Typed copy of the mediator's own DID document, parsed once during
+    /// config load (`from_raw`). Carried so the request-time server
+    /// resolver can preload it via [`preload_self_did`] without
+    /// re-deserialising `mediator_did_doc`. `Some` whenever this mediator
+    /// self-hosts a document; `None` for builder-constructed configs,
+    /// which set only the string form (the server then parses that as a
+    /// fallback).
+    #[serde(skip)]
+    pub mediator_did_document: Option<Document>,
     /// Raw webvh log entry stream served at `/.well-known/did.jsonl`.
     /// `Some` only when the on-disk source parsed as a `LogEntry`
     /// (did:webvh self-host); `None` for the did:web shape, where the
@@ -277,6 +286,7 @@ impl Config {
             mediator_did: "".into(),
             mediator_did_hash: "".into(),
             mediator_did_doc: None,
+            mediator_did_document: None,
             mediator_did_log: None,
             admin_did: "".into(),
             local_endpoints: Vec::new(),
@@ -931,11 +941,14 @@ impl TryFrom<ConfigRaw> for Config {
                 )
             })?;
 
-        // Load the Local DID Document if self hosted
+        // Load the Local DID Document if self hosted. Preload it into this
+        // (config-validation) resolver so forwarding-loop detection can
+        // resolve our own DID, and stash the typed document on the config so
+        // the request-time server resolver can preload the same document
+        // without parsing it a second time.
         if let Some(mediator_doc) = did_document {
-            did_resolver
-                .add_did_document(&config.mediator_did, mediator_doc)
-                .await;
+            preload_self_did(&mut did_resolver, &config.mediator_did, &mediator_doc).await;
+            config.mediator_did_document = Some(mediator_doc);
         }
 
         load_forwarding_protection_blocks(
