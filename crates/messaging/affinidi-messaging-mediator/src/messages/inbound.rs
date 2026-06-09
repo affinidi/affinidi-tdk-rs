@@ -4,8 +4,12 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
+#[cfg(feature = "didcomm")]
+use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
 use crate::{SharedData, common::session::Session, messages::store::store_message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
+#[cfg(feature = "didcomm")]
+use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::{
@@ -60,6 +64,19 @@ async fn handle_inbound_didcomm(
     );
 
     async move {
+        // Re-wrap relay (RelayMode::Rewrap): a peer mediator may have wrapped the
+        // message in one or more `forward`-to-us layers (see `rewrap_for_relay`).
+        // Authenticate the relaying peer and strip those layers before the normal
+        // path runs on the innermost envelope. In the default `Blind` mode this is
+        // skipped entirely, so existing behaviour is unchanged.
+        let peeled;
+        let message: &str = if state.config.processors.forwarding.relay_mode == RelayMode::Rewrap {
+            peeled = peel_relay_rewrap_layers(state, session, message.to_string()).await?;
+            &peeled
+        } else {
+            message
+        };
+
         let envelope = match MetaEnvelope::new(message, &state.did_resolver).await {
             Ok(envelope) => envelope,
             Err(e) => {
@@ -291,6 +308,90 @@ async fn handle_inbound_didcomm(
     }
     .instrument(_span)
     .await
+}
+
+/// Strip peer-mediator re-wrap layers from an inbound message (RelayMode::Rewrap).
+///
+/// A re-wrap layer is a `forward` addressed to this mediator whose `next` hop is
+/// *also* this mediator — the envelope a peer produces in [`rewrap_for_relay`].
+/// For each such layer this authenticates the relaying peer (the authcrypt
+/// `from`) against the trusted-peer allowlist, then replaces the message with
+/// the inner attachment and repeats, returning the innermost envelope once it is
+/// no longer a re-wrap layer. Bounded by `max_hops` to stop relay loops.
+///
+/// Any decrypt/unpack failure here is *not* fatal: the message is handed back
+/// unchanged so the normal inbound path produces the canonical error. The cost
+/// is one extra unpack of the outer layer on a rewrap-mode mediator; acceptable
+/// for an opt-in relay posture.
+#[cfg(feature = "didcomm")]
+async fn peel_relay_rewrap_layers(
+    state: &SharedData,
+    session: &Session,
+    message: String,
+) -> Result<String, MediatorError> {
+    let mut current = message;
+    let mut depth: u32 = 0;
+    loop {
+        let envelope = match MetaEnvelope::new(&current, &state.did_resolver).await {
+            Ok(e) => e,
+            Err(_) => return Ok(current),
+        };
+        if envelope.to_did.as_deref() != Some(state.config.mediator_did.as_str()) {
+            return Ok(current);
+        }
+        let (msg, _meta) = match envelope
+            .unpack(
+                &state.did_resolver,
+                &*state.config.security.mediator_secrets,
+            )
+            .await
+        {
+            Ok(ok) => ok,
+            Err(_) => return Ok(current),
+        };
+        let Some(inner) = rewrap_inner_attachment(&state.config.mediator_did, &msg) else {
+            return Ok(current);
+        };
+
+        // Authenticate the relaying peer mediator before peeling its layer.
+        if !relay_peer_trusted(
+            &state.config.processors.forwarding.relay_trusted_mediators,
+            msg.from.as_deref(),
+        ) {
+            return Err(MediatorError::problem(
+                60,
+                &session.session_id,
+                Some(msg.id.clone()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.relay.untrusted_peer",
+                "Relaying mediator is not in the trusted relay allowlist",
+                vec![],
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
+        depth += 1;
+        if depth > state.config.processors.forwarding.max_hops {
+            return Err(MediatorError::problem(
+                94,
+                &session.session_id,
+                Some(msg.id.clone()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "protocol.forwarding.loop_detected",
+                "Re-wrap relay exceeded maximum hop count, possible loop",
+                vec![],
+                StatusCode::LOOP_DETECTED,
+            ));
+        }
+
+        debug!(
+            peer = msg.from.as_deref().unwrap_or("anon"),
+            depth, "Peeled inter-mediator relay re-wrap layer"
+        );
+        current = inner;
+    }
 }
 
 /// Ensure the Session DID and the message sender DID match.
