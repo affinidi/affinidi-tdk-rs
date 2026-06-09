@@ -1183,7 +1183,7 @@ async fn mint_did_material(
     Option<String>,
     Option<String>,
 )> {
-    Ok(match config.did_method.as_str() {
+    let (did, secrets, did_log, authorization_vc) = match config.did_method.as_str() {
         DID_PEER => {
             let service_uri = did_peer_service_url(&config.public_url, &config.api_prefix);
             let (did, secrets) = generators::did_peer::generate_did_peer(service_uri)?;
@@ -1286,7 +1286,57 @@ async fn mint_did_material(
             );
             ("PLACEHOLDER_DID".into(), vec![], None, None)
         }
-    })
+    };
+
+    // Provision-time guard — reject any keyset that the mediator could not use
+    // to decrypt its own inbound traffic before it ever reaches disk / the VTA.
+    let admin_did = vta_session.map(|s| s.admin_did().to_string());
+    validate_operating_secrets(&did, &secrets, admin_did.as_deref())?;
+
+    Ok((did, secrets, did_log, authorization_vc))
+}
+
+/// Provision-time invariant: every operating secret must be a verification
+/// method of the mediator's own DID (`{did}#…`), and the admin credential key
+/// must never be provisioned as an operating secret.
+///
+/// The runtime registers each operating secret under its id, and a peer
+/// encrypts inbound DIDComm to the keyAgreement verification-method id
+/// published in the mediator's DID document. If the ids diverge the mediator
+/// boots cleanly but fails to decrypt *every* inbound message ("No local secret
+/// matches any JWE recipient"). The classic cause is a VTA context whose key
+/// *labels* are `did:key:…`/free-text instead of the DID document's `#key-N`
+/// ids — `fetch_did_secrets_bundle` uses the label as the kid — so catch it
+/// here rather than as a silent per-request runtime outage.
+fn validate_operating_secrets(
+    did: &str,
+    secrets: &[affinidi_secrets_resolver::secrets::Secret],
+    admin_did: Option<&str>,
+) -> anyhow::Result<()> {
+    let vm_prefix = format!("{did}#");
+    for secret in secrets {
+        if let Some(admin) = admin_did
+            && secret.id.starts_with(admin)
+        {
+            anyhow::bail!(
+                "The admin DID key `{admin}` was returned as an operating secret. The admin \
+                 credential must not double as a mediator operating key — re-provision the VTA \
+                 context so operating secrets contain only the mediator DID's keys."
+            );
+        }
+        if !secret.id.starts_with(&vm_prefix) {
+            anyhow::bail!(
+                "Operating secret id `{}` is not a verification method of the mediator DID \
+                 `{did}` (expected `{did}#…`). The mediator would publish its keyAgreement key \
+                 under `{did}#…` but hold the secret under a different id, so every inbound \
+                 message would fail to decrypt. If this DID is VTA-managed, set the VTA \
+                 context's key labels to the DID document verification-method ids and \
+                 re-provision.",
+                secret.id
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Phase 2 — open the unified secret backend, probe it, push every
@@ -2161,6 +2211,61 @@ fn print_final_summary(config: &app::WizardConfig) {
     );
 
     println!();
+}
+
+#[cfg(test)]
+mod operating_secrets_guard_tests {
+    use super::validate_operating_secrets;
+    use affinidi_secrets_resolver::secrets::Secret;
+
+    const MED: &str =
+        "did:webvh:QmQjq4GHRH9fwSXCg4884kxpCMT5EUqHB9XY2U7aXisP8R:webvh.storm.ws:mediator-2";
+
+    fn secret_with_id(id: &str) -> Secret {
+        let mut s = Secret::generate_ed25519(None, None);
+        s.id = id.to_string();
+        s
+    }
+
+    #[test]
+    fn accepts_secrets_keyed_by_mediator_vm_ids() {
+        let secrets = vec![
+            secret_with_id(&format!("{MED}#key-0")),
+            secret_with_id(&format!("{MED}#key-1")),
+        ];
+        assert!(validate_operating_secrets(MED, &secrets, None).is_ok());
+    }
+
+    #[test]
+    fn empty_secrets_is_ok() {
+        assert!(validate_operating_secrets(MED, &[], None).is_ok());
+    }
+
+    #[test]
+    fn rejects_did_key_labelled_secret() {
+        // The exact shape that broke a live mediator: a VTA context whose key
+        // labels are `did:key:` + free text instead of the DID document's
+        // `#key-N` verification-method ids.
+        let secrets = vec![secret_with_id(
+            "did:key:z6Mkr4JCdsEVcQvYKxcyjf39tPmVriDfg3gALvqv4GQHc5BH key-agreement key",
+        )];
+        let err = validate_operating_secrets(MED, &secrets, None).unwrap_err();
+        assert!(
+            err.to_string().contains("not a verification method"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_admin_key_as_operating_secret() {
+        let admin = "did:key:z6Mkt6eNM38RhFfjSdmXBtT1SRL7sPgPZD1MkXZbwjYBhTLf";
+        let secrets = vec![secret_with_id(&format!(
+            "{admin}#{}",
+            &admin["did:key:".len()..]
+        ))];
+        let err = validate_operating_secrets(MED, &secrets, Some(admin)).unwrap_err();
+        assert!(err.to_string().contains("admin"), "unexpected error: {err}");
+    }
 }
 
 #[cfg(test)]
