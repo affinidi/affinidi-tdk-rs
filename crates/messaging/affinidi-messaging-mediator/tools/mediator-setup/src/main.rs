@@ -973,6 +973,59 @@ fn combine_url_prefix(base: &str, prefix: &str) -> String {
     }
 }
 
+/// Build the DIDComm base URL advertised inside a generated did:peer.
+///
+/// `public_url` may be either the host root (`https://m.example.com`) or
+/// an already-prefixed URL (`https://m.example.com/mediator/v1`). To stay
+/// backward compatible with existing operator habits, append `api_prefix`
+/// only when the URL path does not already end with it.
+fn did_peer_service_url(public_url: &str, api_prefix: &str) -> Option<String> {
+    let public_url = public_url.trim().trim_end_matches('/');
+    if public_url.is_empty() {
+        return None;
+    }
+
+    let prefix = api_prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return Some(public_url.to_string());
+    }
+
+    let already_prefixed = url::Url::parse(public_url)
+        .ok()
+        .map(|url| {
+            let path = url.path().trim_matches('/');
+            path == prefix || path.ends_with(&format!("/{prefix}"))
+        })
+        .unwrap_or(false);
+
+    Some(if already_prefixed {
+        public_url.to_string()
+    } else {
+        combine_url_prefix(public_url, api_prefix)
+    })
+}
+
+#[cfg(test)]
+mod did_peer_service_url_tests {
+    use super::did_peer_service_url;
+
+    #[test]
+    fn appends_default_api_prefix_for_host_root_public_url() {
+        assert_eq!(
+            did_peer_service_url("https://mediator.example.com", "/mediator/v1/"),
+            Some("https://mediator.example.com/mediator/v1".into())
+        );
+    }
+
+    #[test]
+    fn does_not_double_append_existing_api_prefix() {
+        assert_eq!(
+            did_peer_service_url("https://mediator.example.com/mediator/v1/", "/mediator/v1/"),
+            Some("https://mediator.example.com/mediator/v1".into())
+        );
+    }
+}
+
 /// Bag of artefacts the mint phase produces and the later phases
 /// consume. Keeps the four `generate_and_write` phases coupled by an
 /// explicit value type rather than the prior soup of mutable locals.
@@ -1132,11 +1185,7 @@ async fn mint_did_material(
 )> {
     Ok(match config.did_method.as_str() {
         DID_PEER => {
-            let service_uri = if config.public_url.is_empty() {
-                None
-            } else {
-                Some(config.public_url.clone())
-            };
+            let service_uri = did_peer_service_url(&config.public_url, &config.api_prefix);
             let (did, secrets) = generators::did_peer::generate_did_peer(service_uri)?;
             (did, secrets, None, None)
         }
@@ -2232,6 +2281,17 @@ mod cache_bundle_tests {
 #[cfg(test)]
 mod generate_and_write_tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    fn decode_service_segments(did: &str) -> Vec<serde_json::Value> {
+        did.split('.')
+            .filter_map(|segment| segment.strip_prefix('S'))
+            .map(|segment| {
+                let bytes = URL_SAFE_NO_PAD.decode(segment).unwrap();
+                serde_json::from_slice(&bytes).unwrap()
+            })
+            .collect()
+    }
 
     /// Tempdir + CWD swap, restored on drop. Mirrors the
     /// `bootstrap_headless::tests::CwdGuard` pattern (kept private to
@@ -2290,6 +2350,7 @@ mod generate_and_write_tests {
             ssl_mode: SSL_NONE.into(),
             jwt_mode: JWT_MODE_GENERATE.into(),
             admin_did_mode: ADMIN_GENERATE.into(),
+            public_url: "http://localhost:7037".into(),
             ..app::WizardConfig::default()
         }
     }
@@ -2328,6 +2389,27 @@ mod generate_and_write_tests {
         assert!(
             mediator_did.starts_with("did://did:peer:"),
             "mediator_did must be a did:peer (got: {mediator_did})"
+        );
+        let mediator_did = mediator_did.trim_start_matches("did://");
+        assert_eq!(
+            mediator_did.matches(".S").count(),
+            2,
+            "did:peer should advertise DIDComm + #auth services"
+        );
+        let services = decode_service_segments(mediator_did);
+        assert_eq!(services.len(), 2);
+        assert_eq!(
+            services[0]["s"][0]["uri"],
+            "http://localhost:7037/mediator/v1"
+        );
+        assert_eq!(
+            services[0]["s"][1]["uri"],
+            "ws://localhost:7037/mediator/v1/ws"
+        );
+        assert!(services[1]["id"].as_str().unwrap().ends_with("#auth"));
+        assert_eq!(
+            services[1]["s"],
+            "http://localhost:7037/mediator/v1/authenticate"
         );
         let server = parsed.get("server").expect("[server] section");
         let admin_did = server
