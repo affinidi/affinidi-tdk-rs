@@ -228,15 +228,62 @@ fn anonymous_inbound_allowed(global_acl_default: &MediatorACLSet) -> bool {
     global_acl_default.get_send_forwarded().0
 }
 
+/// The minimal ACL set granted to an anonymous inter-mediator relay session.
+///
+/// Anonymous `/inbound` exists only to relay forwards between mediators, so the
+/// synthesised session is given the *least privilege* required to traverse the
+/// inbound path rather than the full `global_acl_default` (which is `ALLOW_ALL`
+/// in practice and would also grant `LOCAL`, `RECEIVE_MESSAGES`, invite
+/// creation, and the `self_manage_*` capabilities to an unauthenticated caller).
+///
+/// Two capabilities are required and sufficient:
+/// - `SEND_MESSAGES` — the handler-level gate in `message_inbound_handler`
+///   rejects any session without it before the message is processed.
+/// - `SEND_FORWARDED` — consumed by the anonymous-forward branch in
+///   `routing.rs` when the inner forward carries no `from` field.
+///
+/// Per-message authorisation downstream (the forward's `from_account` ACL and
+/// the recipient's `receive_forwarded` ACL) is unaffected — it is keyed off the
+/// envelope/account identities, not this session.
+fn relay_anonymous_acls() -> MediatorACLSet {
+    // `from_string_ruleset` cannot fail for this static, audited input; fall
+    // back to the all-deny default rather than panicking if it ever does.
+    MediatorACLSet::from_string_ruleset("DENY_ALL,SEND_MESSAGES,SEND_FORWARDED").unwrap_or_default()
+}
+
+/// Decide whether an authentication failure should be downgraded to an anonymous
+/// relay session, and if so build that session.
+///
+/// Only a genuinely *absent* credential ([`AuthError::MissingCredentials`]) is
+/// eligible — and only when the mediator is configured as a relay. Every other
+/// failure (`InvalidToken`, `ExpiredToken`, `Blocked`, `InternalServerError`,
+/// `WrongCredentials`) is propagated unchanged: a caller that *presents* a bad,
+/// expired, or blocked token must be rejected, never silently demoted to
+/// anonymous, and a backend error must surface as `500` rather than proceed as
+/// an unauthenticated relay.
+fn anonymous_session_for(err: &AuthError, global_acl_default: &MediatorACLSet) -> Option<Session> {
+    if matches!(err, AuthError::MissingCredentials) && anonymous_inbound_allowed(global_acl_default)
+    {
+        Some(Session {
+            session_id: "ANON-INBOUND".to_string(),
+            acls: relay_anonymous_acls(),
+            ..Default::default()
+        })
+    } else {
+        None
+    }
+}
+
 /// Extractor that wraps `Session`, optionally allowing anonymous relay requests.
 ///
 /// When a valid `Authorization: Bearer` token is present the inner `Session`
 /// is fully populated (i.e. `session.authenticated == true`). When the header
-/// is absent or invalid the request is only accepted — as an anonymous session
-/// carrying the global default ACL — if [`anonymous_inbound_allowed`] permits it
-/// (the mediator is configured as an inter-mediator relay). Otherwise the
-/// original authentication rejection is propagated, so a mediator with the
-/// shipped secure default keeps rejecting unauthenticated `/inbound` requests.
+/// is *absent* the request is accepted — as an anonymous session carrying a
+/// minimal relay-scoped ACL (see [`relay_anonymous_acls`]) — only if the
+/// mediator is configured as an inter-mediator relay (see
+/// [`anonymous_session_for`]). A *present but invalid/expired/blocked* token,
+/// or a backend error, is propagated unchanged, so a mediator with the shipped
+/// secure default keeps rejecting unauthenticated `/inbound` requests.
 pub struct MaybeSession(pub Session);
 
 impl<S> FromRequestParts<S> for MaybeSession
@@ -251,14 +298,9 @@ where
             Ok(session) => Ok(MaybeSession(session)),
             Err(e) => {
                 let shared = SharedData::from_ref(state);
-                if anonymous_inbound_allowed(&shared.config.security.global_acl_default) {
-                    Ok(MaybeSession(Session {
-                        session_id: "ANON-INBOUND".to_string(),
-                        acls: shared.config.security.global_acl_default.clone(),
-                        ..Default::default()
-                    }))
-                } else {
-                    Err(e)
+                match anonymous_session_for(&e, &shared.config.security.global_acl_default) {
+                    Some(session) => Ok(MaybeSession(session)),
+                    None => Err(e),
                 }
             }
         }
@@ -283,5 +325,71 @@ mod tests {
             MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
                 .unwrap();
         assert!(!anonymous_inbound_allowed(&acls));
+    }
+
+    #[test]
+    fn relay_anonymous_acls_grant_only_send_and_forward() {
+        // The synthesised relay session must carry exactly the two capabilities
+        // the inbound path needs — and none of the ALLOW_ALL extras that would
+        // hand an unauthenticated caller broad mediator access.
+        let acls = relay_anonymous_acls();
+        assert!(
+            acls.get_send_messages().0,
+            "needs SEND_MESSAGES for the handler gate"
+        );
+        assert!(
+            acls.get_send_forwarded().0,
+            "needs SEND_FORWARDED for the relay branch"
+        );
+
+        // Everything else must remain denied.
+        assert!(!acls.get_local());
+        assert!(!acls.get_receive_messages().0);
+        assert!(!acls.get_receive_forwarded().0);
+        assert!(!acls.get_create_invites().0);
+        assert!(!acls.get_anon_receive().0);
+        assert!(!acls.get_self_manage_list());
+        assert!(!acls.get_self_manage_send_queue_limit());
+        assert!(!acls.get_self_manage_receive_queue_limit());
+        assert!(!acls.get_blocked());
+    }
+
+    #[test]
+    fn missing_credentials_downgrades_to_relay_session_only_when_relay_enabled() {
+        let relay = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        let session = anonymous_session_for(&AuthError::MissingCredentials, &relay)
+            .expect("relay-enabled mediator accepts anonymous inbound");
+        // Not authenticated, no DID, and scoped to the minimal relay ACL — never
+        // the full global default.
+        assert!(!session.authenticated);
+        assert!(session.did.is_empty());
+        assert!(session.acls.get_send_forwarded().0);
+        assert!(!session.acls.get_local());
+
+        // Same request on a non-relay mediator is rejected, not downgraded.
+        let secure =
+            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
+                .unwrap();
+        assert!(anonymous_session_for(&AuthError::MissingCredentials, &secure).is_none());
+    }
+
+    #[test]
+    fn presented_but_invalid_credentials_are_never_downgraded() {
+        // Even on a relay-enabled mediator, a caller that *presents* a bad,
+        // expired, or blocked token — or trips a backend error — must be
+        // rejected outright, never silently demoted to an anonymous session.
+        let relay = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        for err in [
+            AuthError::InvalidToken,
+            AuthError::ExpiredToken,
+            AuthError::Blocked,
+            AuthError::WrongCredentials,
+            AuthError::InternalServerError("backend down".into()),
+        ] {
+            assert!(
+                anonymous_session_for(&err, &relay).is_none(),
+                "{err:?} must not be downgraded to an anonymous session"
+            );
+        }
     }
 }

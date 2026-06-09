@@ -37,8 +37,13 @@ pub struct InboundMessage {
 /// — used by remote mediator ForwardingProcessors for inter-mediator relay —
 /// are accepted only when the mediator is configured as a relay (global default
 /// ACL grants `SEND_FORWARDED`); otherwise they are rejected like any other
-/// unauthenticated request. See `MaybeSession`.
-/// ACL_MODE: Requires SEND_MESSAGES in the session (or global default) ACL.
+/// unauthenticated request. Such anonymous sessions carry only a minimal
+/// relay-scoped ACL (`SEND_MESSAGES` + `SEND_FORWARDED`), not the full global
+/// default. See `MaybeSession`.
+///
+/// ACL_MODE: Requires SEND_MESSAGES in the session ACL (checked below).
+/// Forwarded relay and direct delivery additionally enforce per-sender /
+/// per-recipient ACLs downstream in `routing.rs` and `inbound.rs`.
 pub async fn message_inbound_handler(
     MaybeSession(session): MaybeSession,
     State(state): State<SharedData>,
