@@ -32,6 +32,27 @@ struct ForwardRequest {
     next: Option<String>, // Defaults to true
 }
 
+/// Build the minimal ACL used to auto-register a previously-unseen forwarding
+/// sender (the `from_account` below) on first contact.
+///
+/// PR #383 registered such senders with the full `global_acl_default` —
+/// `ALLOW_ALL` in a relay deployment — persisting `LOCAL`, `RECEIVE_MESSAGES`,
+/// invite creation, and the `self_manage_*` capabilities for a DID that has only
+/// ever *relayed a forward* through us. Least privilege: grant `SEND_FORWARDED`
+/// (the single capability the forward gate below consumes) and nothing else —
+/// and only when `global_acl_default` itself grants it, so a non-relay mediator
+/// still refuses the forward exactly as before rather than silently gaining
+/// relay capability.
+fn relay_sender_acls(global_acl_default: &MediatorACLSet) -> MediatorACLSet {
+    let mut acls = MediatorACLSet::from_string_ruleset("DENY_ALL").unwrap_or_default();
+    if global_acl_default.get_send_forwarded().0 {
+        // admin = true so the bit can be set on a fresh deny-all set; the
+        // self-change flag stays false (an operator/admin governs it later).
+        let _ = acls.set_send_forwarded(true, false, true);
+    }
+    acls
+}
+
 /// Process a forward message, run checks and then if accepted place into FORWARD_TASKS stream
 pub(crate) async fn process(
     msg: &Message,
@@ -198,24 +219,26 @@ pub(crate) async fn process(
                 Ok(Some(from_account)) => from_account,
                 Ok(None) => {
                     // First time we've seen this forwarding sender. Persist it
-                    // as a registered account seeded from `global_acl_default`
-                    // (mirrors the `next_account` branch above). Without this,
-                    // `store_message` later creates a bare `DID:<hash>` record
-                    // holding only queue counters (no `ACLS` field). On every
-                    // subsequent forward `account_get` then returns that phantom
-                    // record with `acls = 0` (DENY_ALL), so the `send_forwarded`
-                    // gate below rejects the relay with 403 — even though the
-                    // global default is `ALLOW_ALL`. Registering here keeps the
-                    // stored sender default from being stricter than the global
-                    // default and makes cross-mediator forwarding reproducible.
+                    // as a registered account (mirrors the `next_account` branch
+                    // above). Without this, `store_message` later creates a bare
+                    // `DID:<hash>` record holding only queue counters (no `ACLS`
+                    // field). On every subsequent forward `account_get` then
+                    // returns that phantom record with `acls = 0` (DENY_ALL), so
+                    // the `send_forwarded` gate below rejects the relay with 403;
+                    // registering here keeps cross-mediator forwarding
+                    // reproducible.
+                    //
+                    // Seed with a minimal relay ACL (`SEND_FORWARDED` only, and
+                    // only if `global_acl_default` grants it) rather than the
+                    // full default — see `relay_sender_acls`. A DID that merely
+                    // relays a forward should not also be persisted with LOCAL /
+                    // RECEIVE / invite / self-manage capabilities.
                     debug!("Forwarding sender account not found, creating a new one");
+                    let from_acl_seed =
+                        relay_sender_acls(&state.config.security.global_acl_default);
                     state
                         .database
-                        .account_add(
-                            &digest(from.as_str()),
-                            &state.config.security.global_acl_default,
-                            None,
-                        )
+                        .account_add(&digest(from.as_str()), &from_acl_seed, None)
                         .await
                         .map_err(|e| {
                             MediatorError::problem_with_log(
@@ -843,9 +866,53 @@ fn uri_points_at_self(
 
 #[cfg(test)]
 mod tests {
-    use super::uri_points_at_self;
+    use super::{relay_sender_acls, uri_points_at_self};
     use crate::server::{compute_self_authorities_from, normalize_host};
+    use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
     use std::collections::HashSet;
+
+    #[test]
+    fn relay_sender_acls_grant_only_send_forwarded_on_a_relay() {
+        // Relay deployment (global default grants SEND_FORWARDED, e.g. ALLOW_ALL):
+        // the auto-registered sender gets SEND_FORWARDED and nothing else — not
+        // the LOCAL / RECEIVE / invite / self-manage bits ALLOW_ALL would carry.
+        let global = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        let acls = relay_sender_acls(&global);
+        assert!(
+            acls.get_send_forwarded().0,
+            "relay sender needs SEND_FORWARDED"
+        );
+        assert!(!acls.get_local());
+        assert!(!acls.get_send_messages().0);
+        assert!(!acls.get_receive_messages().0);
+        assert!(!acls.get_receive_forwarded().0);
+        assert!(!acls.get_create_invites().0);
+        assert!(!acls.get_self_manage_list());
+        assert!(!acls.get_blocked());
+    }
+
+    #[test]
+    fn relay_sender_acls_deny_send_forwarded_on_a_non_relay() {
+        // Non-relay mediator (shipped secure default lacks SEND_FORWARDED): the
+        // auto-registered sender must NOT gain relay capability, so the forward
+        // gate keeps rejecting it exactly as before this change.
+        let global =
+            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
+                .unwrap();
+        let acls = relay_sender_acls(&global);
+        assert!(
+            !acls.get_send_forwarded().0,
+            "non-relay must not grant SEND_FORWARDED"
+        );
+        assert!(
+            !acls.get_local(),
+            "must not inherit LOCAL from the global default"
+        );
+        assert!(
+            !acls.get_send_messages().0,
+            "must not inherit SEND_MESSAGES"
+        );
+    }
 
     /// Build an authorities set the same way `compute_self_authorities`
     /// does — normalizing each host — so tests stay consistent with the
