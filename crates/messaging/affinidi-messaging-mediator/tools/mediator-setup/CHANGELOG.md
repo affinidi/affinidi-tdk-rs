@@ -2,6 +2,23 @@
 
 ## Changelog history
 
+## 9th June 2026
+
+### 0.1.9 — vta-sdk 0.11 (fix online provisioning against current VTAs)
+
+- Bump `vta-sdk` `0.9.11` → `0.11`. Online VTA setup failed at the
+  `provision-integration` step against current VTAs with
+  `validation error: unsupported message type:
+  https://firstperson.network/protocols/provision-integration/1.0/provision-integration`
+  — that legacy FirstPerson-Network URI was retired upstream. `0.11`'s
+  provision-client emits the canonical Trust Task URI
+  (`https://trusttasks.org/spec/provision/integration/0.1`) the VTA accepts.
+  No source changes in the tool; it builds and tests clean against `0.11`.
+- Bump `toml_edit` `0.22` → `0.25` (the only other direct dependency behind a
+  newer release the caret couldn't reach; `config_writer` uses the stable
+  `DocumentMut` / `value` / `Table` API, unchanged across the bump). All other
+  direct dependencies were already at their latest compatible release.
+
 ## 6th June 2026
 
 ### 0.1.8 — affinidi-crypto 0.2
