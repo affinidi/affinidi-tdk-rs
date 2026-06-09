@@ -2,7 +2,11 @@ use crate::{
     SharedData,
     builder::{MediatorHandle, StartOpts, TlsMode, TracingMode},
     common::{
-        config::{Config, helpers::join_api_path, init},
+        config::{
+            Config,
+            helpers::{join_api_path, preload_self_did},
+            init,
+        },
         did_rate_limiter::DidRateLimiter,
         error_codes,
         metrics::{self, metrics_handler},
@@ -485,17 +489,20 @@ pub async fn serve_internal(
         })?;
 
     // Preload the mediator's own DID document so it can pack/unpack DIDComm
-    // messages without hitting the network (the did:web resolver requires HTTPS
-    // which may not be reachable from the mediator's own network).
-    if let Some(ref did_doc_json) = config.mediator_did_doc {
-        if let Ok(doc) = serde_json::from_str::<affinidi_did_common::Document>(did_doc_json) {
-            did_resolver
-                .add_did_document(&config.mediator_did, doc)
-                .await;
-            info!(
-                "Preloaded mediator DID into resolver cache: {}",
-                config.mediator_did
-            );
+    // messages without hitting the network (did:web/did:webvh self-resolution
+    // needs HTTPS, which may be unreachable from the mediator's own network).
+    // `from_raw` already parsed the document and handed us the typed form;
+    // builder-constructed configs set only the served JSON, so fall back to
+    // parsing that — logging, rather than silently dropping, a parse failure.
+    if let Some(ref doc) = config.mediator_did_document {
+        preload_self_did(&mut did_resolver, &config.mediator_did, doc).await;
+    } else if let Some(ref did_doc_json) = config.mediator_did_doc {
+        match serde_json::from_str::<affinidi_did_common::Document>(did_doc_json) {
+            Ok(doc) => preload_self_did(&mut did_resolver, &config.mediator_did, &doc).await,
+            Err(e) => warn!(
+                "Mediator DID document failed to parse for resolver preload; \
+                 self-resolution will fall back to the network: {e}"
+            ),
         }
     }
 

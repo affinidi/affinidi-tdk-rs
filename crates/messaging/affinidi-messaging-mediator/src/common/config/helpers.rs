@@ -11,7 +11,7 @@
 //!   `aws_parameter_store://`.
 //! - Hostname resolution and forwarding-loop protection.
 
-use affinidi_did_common::service::Endpoint;
+use affinidi_did_common::{Document, service::Endpoint};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "aws")]
@@ -552,6 +552,29 @@ pub fn join_api_path(prefix: &str, suffix: &str) -> String {
     }
 }
 
+/// Preload the mediator's own DID document into `resolver` so it can pack
+/// and unpack DIDComm messages addressed to or from itself without
+/// resolving its own DID over the network.
+///
+/// `did:web`/`did:webvh` self-resolution issues an HTTPS request to the
+/// mediator's own `/.well-known/did.json{,l}`, which is frequently not
+/// reachable from inside the mediator's own container or network. Seeding
+/// the cache with the document the mediator already holds sidesteps that.
+/// `did:peer` resolves locally and never reaches this path, so preloading
+/// it is a harmless no-op from the caller's perspective.
+///
+/// This is the single seam both the config-validation resolver and the
+/// request-time server resolver use, so the invariant "the resolver knows
+/// its own DID" is established in exactly one place.
+pub(crate) async fn preload_self_did(
+    resolver: &mut DIDCacheClient,
+    mediator_did: &str,
+    doc: &Document,
+) {
+    resolver.add_did_document(mediator_did, doc.clone()).await;
+    info!("Preloaded mediator DID into resolver cache: {mediator_did}");
+}
+
 /// Creates a set of URI's that can be used to detect if forwarding loopbacks to the mediator could occur
 pub(crate) async fn load_forwarding_protection_blocks(
     did_resolver: &DIDCacheClient,
@@ -692,5 +715,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `preload_self_did` must leave the mediator's own DID resolvable
+    /// straight from the cache — the whole point is that the request-time
+    /// resolver answers self-resolution without a network round-trip.
+    #[tokio::test]
+    async fn preload_self_did_makes_doc_resolvable_from_cache() {
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+
+        const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
+
+        let mut resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+
+        // Obtain a real Document, then evict it so the cache is cold.
+        let doc = resolver.resolve(DID_KEY).await.unwrap().doc;
+        resolver.remove(DID_KEY).await;
+
+        super::preload_self_did(&mut resolver, DID_KEY, &doc).await;
+
+        // The next resolve must be served from cache (no network), proving
+        // the preload seeded the document the server resolver will use.
+        let cached = resolver.resolve(DID_KEY).await.unwrap();
+        assert!(cached.cache_hit, "preloaded DID was not served from cache");
+        assert_eq!(cached.doc, doc);
     }
 }

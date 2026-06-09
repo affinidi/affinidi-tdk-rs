@@ -4,6 +4,25 @@
 
 ## 9th June 2026
 
+### 0.15.17 — Consolidate mediator self-DID resolver preload (#395)
+
+- Follow-up to #392, which preloaded the mediator's own DID document into the
+  request-time server resolver so `did:web`/`did:webvh` mediators can pack
+  DIDComm responses without resolving their own DID over HTTPS. That fix
+  re-deserialised `mediator_did_doc` at server startup and silently swallowed a
+  parse failure. This change:
+  - carries the typed `Document` parsed during config load on the new
+    `Config::mediator_did_document` field, so the server resolver preloads it
+    without a second deserialisation (the file-config path now parses the
+    document once, not twice);
+  - routes both the config-validation resolver and the request-time server
+    resolver through a single `preload_self_did` helper, establishing the
+    "the resolver knows its own DID" invariant in one place;
+  - logs a `warn!` instead of silently dropping a parse failure on the
+    builder-constructed fallback path (which only sets the JSON string form).
+  - Adds a regression test that `preload_self_did` leaves the DID resolvable
+    straight from cache. No behavioural change for did:peer mediators.
+
 ### 0.15.16 — vta-sdk 0.11 (canonical provision-integration Trust Task URI)
 
 - Bump `vta-sdk` `0.9.11` → `0.11`. The legacy
