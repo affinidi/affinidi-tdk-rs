@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 9th June 2026
+
+### 0.15.16 — vta-sdk 0.11 (canonical provision-integration Trust Task URI)
+
+- Bump `vta-sdk` `0.9.11` → `0.11`. The legacy
+  `https://firstperson.network/protocols/provision-integration/1.0` message
+  type that `0.9.11` sent was retired upstream and is rejected by current VTAs
+  with `validation error: unsupported message type`. `0.11` emits the canonical
+  Trust Task URI (`https://trusttasks.org/spec/provision/integration/0.1`) the
+  VTA now expects. No mediator source changes; the `affinidi-messaging-didcomm`
+  `[patch.crates-io]` still unifies (a single `affinidi-messaging-didcomm` in
+  the lockfile), and the `integration` API surface is unchanged.
+
 ## 7th June 2026
 
 ### 0.15.15 — Redeliver in-flight messages on duplicate-WebSocket replacement (#374)
