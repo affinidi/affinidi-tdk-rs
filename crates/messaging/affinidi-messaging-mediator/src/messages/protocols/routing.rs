@@ -1,3 +1,4 @@
+use crate::common::authz::{self, Capability};
 use crate::common::storage_timeout::with_storage_timeout;
 use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 
@@ -48,7 +49,7 @@ struct ForwardRequest {
 /// relay capability.
 fn relay_sender_acls(global_acl_default: &MediatorACLSet) -> MediatorACLSet {
     let mut acls = MediatorACLSet::from_string_ruleset("DENY_ALL").unwrap_or_default();
-    if global_acl_default.get_send_forwarded().0 {
+    if authz::grants(global_acl_default, Capability::SendForwarded) {
         // admin = true so the bit can be set on a fresh deny-all set; the
         // self-change flag stays false (an operator/admin governs it later).
         let _ = acls.set_send_forwarded(true, false, true);
@@ -262,7 +263,7 @@ pub(crate) async fn process(
         // ****************************************************
         // Check if the next hop is allowed to receive forwarded messages
         let next_acls = MediatorACLSet::from_u64(next_account.acls);
-        if !next_acls.get_receive_forwarded().0 {
+        if authz::require_capability(&next_acls, Capability::ReceiveForwarded).is_err() {
             return Err(MediatorError::problem(
                 58,
                 &session.session_id,
@@ -363,7 +364,7 @@ pub(crate) async fn process(
             };
             let from_acls = MediatorACLSet::from_u64(from_account.acls);
 
-            if !from_acls.get_send_forwarded().0 {
+            if authz::require_capability(&from_acls, Capability::SendForwarded).is_err() {
                 return Err(MediatorError::problem(
                     60,
                     &session.session_id,
@@ -378,7 +379,7 @@ pub(crate) async fn process(
             }
 
             from_account
-        } else if !session.acls.get_send_forwarded().0 {
+        } else if authz::require_capability(&session.acls, Capability::SendForwarded).is_err() {
             return Err(MediatorError::problem(
                 60,
                 &session.session_id,
@@ -401,10 +402,13 @@ pub(crate) async fn process(
 
         // ****************************************************
         // Is the sending DID allowed by the next DID access_list and ACL?
-        if state
-            .database
-            .access_list_allowed(&next_did_hash, Some(&from_account.did_hash))
-            .await
+        if authz::check_access_list(
+            state.database.as_ref(),
+            &next_did_hash,
+            Some(&from_account.did_hash),
+        )
+        .await
+        .is_ok()
         {
             debug!(
                 "Sender DID ({}) is allowed to send to next DID ({})",

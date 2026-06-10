@@ -226,7 +226,7 @@ where
 /// `routing.rs`). On a mediator with the shipped secure default this returns
 /// `false`, so anonymous requests are rejected exactly like before.
 fn anonymous_inbound_allowed(global_acl_default: &MediatorACLSet) -> bool {
-    global_acl_default.get_send_forwarded().0
+    authz::grants(global_acl_default, Capability::SendForwarded)
 }
 
 /// The minimal ACL set granted to an anonymous inter-mediator relay session.
