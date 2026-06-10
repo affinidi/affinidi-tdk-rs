@@ -85,6 +85,9 @@ pub use environment::{TestEnvironment, TestEnvironmentError, TestUser};
 pub use affinidi_messaging_mediator_common::types::acls::{
     ACLError, AccessListModeType, MediatorACLSet,
 };
+// Re-exported so cross-mediator-forwarding tests can select the relay
+// posture (`relay_mode(...)`) without a direct dep on mediator-common.
+pub use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
 
 use std::{
     net::{SocketAddr, TcpListener},
@@ -276,6 +279,14 @@ pub struct TestMediatorBuilder {
     listen_addr: Option<SocketAddr>,
     enable_forwarding: bool,
     enable_external_forwarding: bool,
+    /// Relay posture for forwards to a remote next-hop mediator. Defaults
+    /// to [`RelayMode::Blind`] (verbatim relay). Set to [`RelayMode::Rewrap`]
+    /// to exercise per-hop re-encryption (both mediators in a relaying pair
+    /// must agree on the mode).
+    relay_mode: RelayMode,
+    /// Trusted peer-mediator DID allowlist for [`RelayMode::Rewrap`]. Empty
+    /// accepts any relaying peer; non-empty admits only listed DIDs.
+    relay_trusted_mediators: Vec<String>,
     enable_message_expiry: bool,
     enable_streaming: bool,
     /// Additional DIDs to register as LOCAL accounts at startup. Tests
@@ -326,6 +337,8 @@ impl Default for TestMediatorBuilder {
             listen_addr: None,
             enable_forwarding: false,
             enable_external_forwarding: true,
+            relay_mode: RelayMode::Blind,
+            relay_trusted_mediators: Vec::new(),
             enable_message_expiry: false,
             enable_streaming: true,
             local_dids: Vec::new(),
@@ -390,6 +403,39 @@ impl TestMediatorBuilder {
     /// [`enable_forwarding`]: Self::enable_forwarding
     pub fn enable_external_forwarding(mut self, enabled: bool) -> Self {
         self.enable_external_forwarding = enabled;
+        self
+    }
+
+    /// Select the relay posture for forwards to a *remote* next-hop
+    /// mediator. Defaults to [`RelayMode::Blind`] (relay the inner
+    /// envelope verbatim). [`RelayMode::Rewrap`] re-encrypts each hop
+    /// from this mediator to the next, hiding the original sender on the
+    /// wire and exposing an authenticated peer identity the receiver can
+    /// allowlist (see [`relay_trusted_mediators`]).
+    ///
+    /// Both mediators in a relaying pair must use the same mode — a
+    /// `Rewrap` sender produces envelopes only a `Rewrap` receiver peels.
+    /// Has no effect unless [`enable_forwarding`] is `true`.
+    ///
+    /// [`relay_trusted_mediators`]: Self::relay_trusted_mediators
+    /// [`enable_forwarding`]: Self::enable_forwarding
+    pub fn relay_mode(mut self, mode: RelayMode) -> Self {
+        self.relay_mode = mode;
+        self
+    }
+
+    /// Restrict which peer mediators this mediator accepts re-wrapped
+    /// relays from (only meaningful in [`RelayMode::Rewrap`]). Empty (the
+    /// default) accepts any peer; a non-empty list admits only the listed
+    /// DIDs and rejects an anonymous or unlisted relaying peer with
+    /// `authorization.relay.untrusted_peer`. Repeated calls accumulate.
+    pub fn relay_trusted_mediators<I, S>(mut self, dids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.relay_trusted_mediators
+            .extend(dids.into_iter().map(Into::into));
         self
     }
 
@@ -635,6 +681,9 @@ impl TestMediatorBuilder {
             affinidi_messaging_mediator::common::config::ProcessorsConfig::default();
         processors.forwarding.enabled = self.enable_forwarding;
         processors.forwarding.external_forwarding = self.enable_external_forwarding;
+        processors.forwarding.relay_mode = self.relay_mode;
+        processors.forwarding.relay_trusted_mediators =
+            self.relay_trusted_mediators.into_iter().collect();
         processors.message_expiry_cleanup.enabled = self.enable_message_expiry;
 
         // Default to a fresh in-memory store. Tests that want a
