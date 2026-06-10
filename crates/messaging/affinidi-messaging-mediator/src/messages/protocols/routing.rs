@@ -1,3 +1,4 @@
+use crate::common::storage_timeout::with_storage_timeout;
 use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 
 use crate::didcomm_compat::MetaEnvelope;
@@ -504,7 +505,13 @@ pub(crate) async fn process(
         }
 
         if !ephemeral
-            && state.database.get_forward_tasks_len().await?
+            && with_storage_timeout(
+                state.storage_timeout(),
+                "get_forward_tasks_len",
+                &session.session_id,
+                state.database.get_forward_tasks_len(),
+            )
+            .await?
                 >= state.config.limits.forward_task_queue
         {
             warn!(
