@@ -2,7 +2,7 @@ use super::helpers::create_random_string;
 use super::{AuthenticationChallenge, ChallengeBody};
 use crate::{
     SharedData,
-    common::acl_checks::ACLCheck,
+    common::authz,
     common::session::{Session, SessionState},
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
@@ -69,8 +69,7 @@ pub async fn authentication_challenge(
         // 3. If yes, then add the account and continue
 
         // Check if DID is allowed to connect
-        let (allowed, known) =
-            MediatorACLSet::authentication_check(&state, &session.did_hash, None).await?;
+        let (allowed, known) = authz::authentication_check(&state, &session.did_hash, None).await?;
 
         if !allowed {
             info!("DID({}) is blocked from connecting", session.did);

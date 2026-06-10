@@ -4,6 +4,23 @@
 
 ## 10th June 2026
 
+### 0.15.26 — Central authz module: auth-time checks (simplification T7)
+
+- Introduces `common/authz.rs` as the single home for permission semantics:
+  a `Capability` vocabulary with `require_capability` / `grants` (the one
+  definition of what each ACL bit means), plus the relocated
+  `authentication_check` (the pre-auth "can this DID connect?" check). Unit
+  tested across every capability.
+- Migrates the first auth-time call sites onto it and **deletes the old
+  inline/duplicated logic**: the blocked-DID gate in `jwt_auth.rs` now calls
+  `require_capability(NotBlocked)`, and the `authenticate` challenge/response
+  handlers call `authz::authentication_check`. The former
+  `common/acl_checks.rs` (`ACLCheck` trait) is removed.
+- Structure only — behaviour is byte-identical (same blocked → `Blocked` /
+  problem-report responses). First task of Phase 2 (authz centralization);
+  the remaining handler/routing ACL sites and the access-list check migrate
+  in the following tasks.
+
 ### 0.15.25 — Boot-time config invariant validation (simplification T6)
 
 - Adds a single `validate_config` pass at config load (`common/config/validate.rs`)

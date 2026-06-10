@@ -5,17 +5,14 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
-    common::acl_checks::ACLCheck,
+    common::authz,
     common::session::{Session, SessionState},
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
-use affinidi_messaging_sdk::{
-    messages::{
-        AuthorizationResponse,
-        known::MessageType,
-        problem_report::{ProblemReportScope, ProblemReportSorter},
-    },
-    protocols::mediator::acls::MediatorACLSet,
+use affinidi_messaging_sdk::messages::{
+    AuthorizationResponse,
+    known::MessageType,
+    problem_report::{ProblemReportScope, ProblemReportSorter},
 };
 use axum::{Json, extract::State};
 use http::StatusCode;
@@ -96,7 +93,7 @@ pub async fn authentication_response(
         let from_did = match &envelope.from_did {
             Some(from_did) => {
                 // Check if DID is allowed to connect
-                match MediatorACLSet::authentication_check(&state, &digest(from_did), None).await {
+                match authz::authentication_check(&state, &digest(from_did), None).await {
                     Ok((allowed, _)) => {
                         if allowed {
                             from_did.to_string()
