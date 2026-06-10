@@ -2,6 +2,33 @@
 
 ## Changelog history
 
+## 10th June 2026
+
+### 0.2.5 — cross-mediator forwarding test + production-shaped mediator DID
+
+- **FIX:** the fixture's generated mediator `did:peer` advertised its
+  DIDComm (`dm`) HTTP service endpoint *with* a trailing slash
+  (`http://<host>/mediator/v1/`). The production mediator DID advertises
+  the bare base with no trailing slash (see mediator-setup's `did_peer`
+  generator), and the SDK builds request URLs by concatenation
+  (`{endpoint}/inbound`) — so the trailing slash produced `…/v1//inbound`,
+  which the mediator router 404s. Any SDK HTTP send against the fixture
+  hit this; it was masked until now because existing tests retrieve over
+  WebSocket. The `dm` endpoint is now trimmed to match production; the
+  `#auth` endpoint string is unchanged, so authentication/WS tests are
+  unaffected.
+- **TEST:** new `cross_mediator_forwarding` suite — two in-process
+  mediators (Alice on A, Bob on B), with Alice's message routed
+  A → mediator-A → mediator-B → Bob via the routing-2.0 double forward and
+  picked up on Bob's live stream. Covers both one-way delivery and a
+  round trip, exercising the relay-sender auto-registration on each
+  mediator. This is the end-to-end regression for
+  `affinidi-messaging-mediator` #399 (forwarding processor running on the
+  memory backend) and the first multi-mediator scenario built purely on
+  the published `TestMediator` / `TestEnvironment` fixtures — no Redis.
+- Adds an `affinidi-messaging-didcomm` dev-dependency for the `Message`
+  builder the test uses to hand-roll the double forward.
+
 ## 1st June 2026
 
 ### 0.2.4 — rebuilt against the didcomm 0.15 mediator
