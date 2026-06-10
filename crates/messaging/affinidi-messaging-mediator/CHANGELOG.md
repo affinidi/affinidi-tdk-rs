@@ -4,6 +4,37 @@
 
 ## 10th June 2026
 
+### 0.15.22 — Supervised background tasks + `/livez` health split (simplification T2)
+
+- **Background tasks are now supervised.** Every long-lived background task
+  (statistics, forwarding processor, message- and session-expiry sweeps,
+  VTA secrets refresh) is spawned through a new `TaskSupervisor` instead of
+  a bare `tokio::spawn`. A task that returns an error or **panics** is
+  restarted with capped exponential backoff (1s → 60s); the supervisor
+  never gives up. Previously any of these tasks could die silently — e.g. a
+  panic in the forwarding processor would stop all forwarding with no
+  signal. This is the deliberate "restart-and-degrade, never fail-fast"
+  posture: the mediator keeps serving while the fault is logged at ERROR
+  with its restart history and corrective hint, and surfaced via `/readyz`.
+- **Health-probe contract.**
+  - New `GET …/livez` — process-liveness only, always 200 while the server
+    answers. An orchestrator should use this for liveness so it does not
+    kill a mediator that is still serving traffic while a background
+    component is degraded.
+  - `GET …/readyz` now folds in supervised-task health under a new
+    `components` array (name / state / load_bearing / restarts /
+    last_error). A **load-bearing** component that isn't running fails
+    readiness (503 `not_ready`); a non-load-bearing one only marks the
+    instance `degraded` (still 200, stays in rotation). Load-bearing:
+    `forwarding_processor`, `vta_refresh`. Non-load-bearing: `statistics`,
+    `message_expiry_sweep`, `session_expiry_sweep`.
+- The WebSocket streaming task (which owns its own task lifecycle via
+  `StreamingTask`) is not yet routed through the supervisor — a focused
+  follow-up.
+- Internal: `SharedData` gains a `component_health` registry (a
+  `dashmap::DashMap`); the supervisor owns task cancellation, so the
+  supervised loop bodies no longer carry their own shutdown `select!`.
+
 ### 0.15.21 — Streaming task: remove lock-poison hazard (simplification T1)
 
 - The WebSocket streaming task guarded its in-flight inbox-redelivery set

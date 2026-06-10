@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.15.21"
+version = "0.15.22"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -178,6 +178,9 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 lazy_static = "1"
 ## `FjallStore` smoke tests open a temp directory.
 tempfile = "3"
+## `test-util` enables `tokio::time::pause/advance` so the task-supervisor
+## backoff tests run deterministically without real sleeps.
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
