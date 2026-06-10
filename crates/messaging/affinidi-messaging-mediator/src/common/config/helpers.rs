@@ -11,9 +11,10 @@
 //!   `aws_parameter_store://`.
 //! - Hostname resolution and forwarding-loop protection.
 
-use affinidi_did_common::{Document, service::Endpoint};
+use affinidi_did_common::{Document, DocumentExt, service::Endpoint};
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_secrets_resolver::SecretsResolver;
 #[cfg(feature = "aws")]
 use aws_config::SdkConfig;
 #[cfg(feature = "aws")]
@@ -575,6 +576,59 @@ pub(crate) async fn preload_self_did(
     info!("Preloaded mediator DID into resolver cache: {mediator_did}");
 }
 
+/// Boot guard: the loaded operating secrets must be able to decrypt this
+/// mediator's own inbound DIDComm.
+///
+/// A peer encrypts inbound DIDComm to the `keyAgreement` verification-method
+/// id(s) published in *our* DID document, and the unpack path
+/// ([`crate::didcomm_compat`]) does an exact-match lookup of that kid against
+/// the loaded operating secrets. If no loaded secret carries a matching id,
+/// every inbound message — including the `/authenticate` handshake — fails at
+/// runtime with `No local secret matches any JWE recipient`: the mediator boots
+/// clean but can never read a single message.
+///
+/// A common cause is a VTA context whose key *labels* don't equal the DID-doc VM
+/// ids — `vta-sdk` < 0.11.1 used a key's free-text/`did:key` label as its kid,
+/// so the bundle was keyed by the wrong ids instead of `…#key-N`. Catch that at
+/// boot with an actionable error rather than as a silent per-request outage.
+///
+/// Vacuously OK when the document publishes no `keyAgreement` key (nothing to
+/// match against).
+pub(crate) async fn assert_operating_secrets_cover_key_agreement(
+    mediator_doc: &Document,
+    mediator_secrets: &impl SecretsResolver,
+) -> Result<(), MediatorError> {
+    let ka_kids: Vec<String> = mediator_doc
+        .find_key_agreement(None)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if ka_kids.is_empty() {
+        return Ok(());
+    }
+    if !mediator_secrets.find_secrets(&ka_kids).await.is_empty() {
+        return Ok(());
+    }
+    let loaded = mediator_secrets.len().await;
+    error!(
+        "Operating secrets do not cover any published keyAgreement key. \
+         Loaded {loaded} secret(s); DID document keyAgreement id(s): {ka_kids:?}"
+    );
+    Err(MediatorError::ConfigError(
+        12,
+        "NA".into(),
+        format!(
+            "Mediator cannot decrypt inbound DIDComm: {loaded} operating secret(s) loaded, but \
+             none match this mediator's published keyAgreement key(s) {ka_kids:?}. Every inbound \
+             message (including /authenticate) would fail with \"No local secret matches any JWE \
+             recipient\". If this mediator is VTA-managed, ensure the VTA context's key labels \
+             equal the DID document verification-method ids and re-provision (vta-sdk >= 0.11.1 \
+             fixes the label-as-kid bug); for self-hosted setups re-run mediator-setup so the \
+             operating secrets match the published DID document."
+        ),
+    ))
+}
+
 /// Creates a set of URI's that can be used to detect if forwarding loopbacks to the mediator could occur
 pub(crate) async fn load_forwarding_protection_blocks(
     did_resolver: &DIDCacheClient,
@@ -741,5 +795,107 @@ mod tests {
         let cached = resolver.resolve(DID_KEY).await.unwrap();
         assert!(cached.cache_hit, "preloaded DID was not served from cache");
         assert_eq!(cached.doc, doc);
+    }
+
+    /// The boot guard passes when a loaded operating secret matches a published
+    /// `keyAgreement` verification-method id — the mediator can decrypt inbound
+    /// DIDComm.
+    #[tokio::test]
+    async fn coverage_guard_passes_when_secret_matches_key_agreement() {
+        use affinidi_did_common::DocumentExt;
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        use affinidi_secrets_resolver::{
+            SecretsResolver, ThreadedSecretsResolver, secrets::Secret,
+        };
+
+        const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let doc = resolver.resolve(DID_KEY).await.unwrap().doc;
+        let ka_kid = doc
+            .find_key_agreement(None)
+            .first()
+            .copied()
+            .expect("did:key publishes a keyAgreement key")
+            .to_string();
+
+        // A secret keyed under the *correct* published kid. `find_secrets`
+        // matches on id, which is exactly what the unpack path looks up.
+        let (secrets, _h) = ThreadedSecretsResolver::new(None).await;
+        secrets
+            .insert_vec(&[Secret::generate_ed25519(Some(&ka_kid), Some(&[7u8; 32]))])
+            .await;
+
+        super::assert_operating_secrets_cover_key_agreement(&doc, &secrets)
+            .await
+            .expect("guard must pass when a secret covers the keyAgreement kid");
+    }
+
+    /// Regression for the storm.ws label-as-kid outage: the document publishes a
+    /// `keyAgreement` kid, but the loaded secret is keyed under the *wrong* id (a
+    /// decorative `did:key` label, as `vta-sdk` < 0.11.1 produced). The guard
+    /// must abort boot rather than let the mediator fail every `/authenticate` at
+    /// runtime with "No local secret matches any JWE recipient".
+    #[tokio::test]
+    async fn coverage_guard_fails_when_no_secret_matches_key_agreement() {
+        use affinidi_did_common::DocumentExt;
+        use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
+        use affinidi_secrets_resolver::{
+            SecretsResolver, ThreadedSecretsResolver, secrets::Secret,
+        };
+
+        const DID_KEY: &str = "did:key:z6MkiToqovww7vYtxm1xNM15u9JzqzUFZ1k7s7MazYJUyAxv";
+        let resolver = DIDCacheClient::new(DIDCacheConfigBuilder::default().build())
+            .await
+            .unwrap();
+        let doc = resolver.resolve(DID_KEY).await.unwrap().doc;
+        let ka_kid = doc
+            .find_key_agreement(None)
+            .first()
+            .copied()
+            .expect("did:key publishes a keyAgreement key")
+            .to_string();
+
+        // Loaded under a decorative free-text label, NOT the published VM id.
+        let (secrets, _h) = ThreadedSecretsResolver::new(None).await;
+        secrets
+            .insert_vec(&[Secret::generate_ed25519(
+                Some("did:key:z6MkDecorative key-agreement key"),
+                Some(&[9u8; 32]),
+            )])
+            .await;
+
+        let err = super::assert_operating_secrets_cover_key_agreement(&doc, &secrets)
+            .await
+            .expect_err("guard must fail when no secret covers the keyAgreement kid");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("No local secret matches any JWE recipient"),
+            "error must name the runtime failure mode, got: {msg}"
+        );
+        assert!(
+            msg.contains(&ka_kid),
+            "error must name the uncovered kid, got: {msg}"
+        );
+    }
+
+    /// A document publishing no `keyAgreement` key has nothing to match, so the
+    /// guard is vacuously satisfied even with an empty secret set.
+    #[tokio::test]
+    async fn coverage_guard_vacuous_when_no_key_agreement() {
+        use affinidi_did_common::Document;
+        use affinidi_secrets_resolver::ThreadedSecretsResolver;
+
+        let doc: Document = serde_json::from_value(serde_json::json!({
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "id": "did:example:no-key-agreement",
+        }))
+        .expect("minimal DID document parses");
+
+        let (secrets, _h) = ThreadedSecretsResolver::new(None).await;
+        super::assert_operating_secrets_cover_key_agreement(&doc, &secrets)
+            .await
+            .expect("guard is vacuous when the doc publishes no keyAgreement key");
     }
 }

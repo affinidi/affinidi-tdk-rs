@@ -9,7 +9,7 @@ pub use limits::*;
 pub use processors::*;
 pub use security::*;
 
-use affinidi_did_common::{Document, DocumentExt};
+use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient,
     config::{DIDCacheConfig, DIDCacheConfigBuilder},
@@ -20,7 +20,7 @@ use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     secrets::open_store,
 };
-use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver};
+use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use async_convert::{TryFrom, async_trait};
 #[cfg(feature = "aws")]
 use aws_config::{self, BehaviorVersion, Region};
@@ -44,8 +44,8 @@ use vta_sdk::integration::{
 };
 
 use helpers::{
-    get_hostname, load_forwarding_protection_blocks, preload_self_did, read_config_file,
-    read_did_config, read_document,
+    assert_operating_secrets_cover_key_agreement, get_hostname, load_forwarding_protection_blocks,
+    preload_self_did, read_config_file, read_did_config, read_document,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -877,57 +877,6 @@ impl TryFrom<ConfigRaw> for Config {
             config.streaming_uuid = get_hostname(&raw.streaming.uuid)?;
         }
 
-        // ── Guard: operating secrets must be able to decrypt our own traffic ──
-        //
-        // A peer encrypts inbound DIDComm to the keyAgreement verification-method
-        // id(s) published in *our* DID document, and the unpack path does an
-        // exact-match lookup of that kid against the loaded operating secrets
-        // (`didcomm_compat::unpack_jwe`). If no loaded secret carries a matching
-        // id, every inbound message fails at runtime with "No local secret
-        // matches any JWE recipient" — including the /authenticate handshake — so
-        // the mediator boots cleanly but can never read a single message.
-        //
-        // A common cause is a VTA context whose key *labels* don't equal the
-        // DID-document VM ids: `fetch_did_secrets_bundle` uses each key's label as
-        // its kid, so a context labelled `did:key:…`/free-text yields a bundle
-        // keyed by the wrong ids instead of `…#key-N`. Surface that at boot with
-        // an actionable error rather than as a silent per-request outage.
-        if let Some(mediator_doc) = did_document.as_ref() {
-            let ka_kids: Vec<String> = mediator_doc
-                .find_key_agreement(None)
-                .into_iter()
-                .map(str::to_string)
-                .collect();
-            if !ka_kids.is_empty() {
-                let matched = config
-                    .security
-                    .mediator_secrets
-                    .find_secrets(&ka_kids)
-                    .await;
-                if matched.is_empty() {
-                    let loaded = config.security.mediator_secrets.len().await;
-                    error!(
-                        "Operating secrets do not cover any published keyAgreement key. \
-                         Loaded {loaded} secret(s); DID document keyAgreement id(s): {ka_kids:?}"
-                    );
-                    return Err(MediatorError::ConfigError(
-                        12,
-                        "NA".into(),
-                        format!(
-                            "Mediator cannot decrypt inbound DIDComm: {loaded} operating secret(s) \
-                             loaded, but none match this mediator's published keyAgreement key(s) \
-                             {ka_kids:?}. Every inbound message (including /authenticate) would fail \
-                             with \"No local secret matches any JWE recipient\". If this mediator is \
-                             VTA-managed, ensure the VTA context's key labels exactly equal the DID \
-                             document verification-method ids and re-provision; for self-hosted setups \
-                             re-run mediator-setup so the operating secrets match the published DID \
-                             document."
-                        ),
-                    ));
-                }
-            }
-        }
-
         // Fill out the forwarding protection for DIDs and associated service endpoints
         // This protects against the mediator forwarding messages to itself.
         let mut did_resolver = DIDCacheClient::new(config.did_resolver_config.clone())
@@ -949,6 +898,45 @@ impl TryFrom<ConfigRaw> for Config {
         if let Some(mediator_doc) = did_document {
             preload_self_did(&mut did_resolver, &config.mediator_did, &mediator_doc).await;
             config.mediator_did_document = Some(mediator_doc);
+        }
+
+        // ── Guard: operating secrets must be able to decrypt our own traffic ──
+        //
+        // See `assert_operating_secrets_cover_key_agreement`. For a self-hosted
+        // DID we check against the local document we just loaded. For a
+        // VTA-managed / network-published DID (no `did_web_self_hosted`) we
+        // resolve our *own* published DID and check against that — that path was
+        // previously unguarded, so a VTA key-label/kid mismatch booted clean and
+        // failed every request at runtime. A resolver failure is logged and
+        // skipped (a transient DID-host blip must not block boot); only a
+        // *confirmed* coverage gap aborts startup.
+        match &config.mediator_did_document {
+            Some(doc) => {
+                assert_operating_secrets_cover_key_agreement(
+                    doc,
+                    config.security.mediator_secrets.as_ref(),
+                )
+                .await?;
+            }
+            None => match did_resolver.resolve(&config.mediator_did).await {
+                Ok(resolved) => {
+                    assert_operating_secrets_cover_key_agreement(
+                        &resolved.doc,
+                        config.security.mediator_secrets.as_ref(),
+                    )
+                    .await?;
+                }
+                Err(err) => {
+                    warn!(
+                        mediator_did = %config.mediator_did,
+                        error = %err,
+                        "Could not resolve our own published DID document at boot; skipping the \
+                         operating-secret coverage guard. Inbound DIDComm decryption is unverified \
+                         — a key/kid mismatch would surface at runtime as \"No local secret matches \
+                         any JWE recipient\"."
+                    );
+                }
+            },
         }
 
         load_forwarding_protection_blocks(
