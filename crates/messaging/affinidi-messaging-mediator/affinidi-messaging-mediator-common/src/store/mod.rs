@@ -67,6 +67,36 @@ pub use types::{
     StatCounter, StoreHealth, StreamingClientState,
 };
 
+/// Fail-closed session rename used by the default
+/// [`MediatorStore::update_session_authenticated`]: delete the old session
+/// *before* writing the new one.
+///
+/// Why ordering matters for a backend without an atomic rename: if the new
+/// session were written first, a crash (or a failed delete) between the two
+/// steps would leave the old session id valid alongside the new. Deleting
+/// first means an interruption can only *lose* the new session — the client
+/// re-authenticates — and the two never coexist. When `old == new` the
+/// delete is skipped (an in-place overwrite, so there is no gap).
+///
+/// Backends with an atomic rename (Redis `RENAME`+`HSET`, Fjall `Batch`)
+/// override the trait method and don't use this.
+pub(crate) async fn rename_session_fail_closed<DF, PF>(
+    old_session_id: &str,
+    new_session_id: &str,
+    delete_old: impl FnOnce() -> DF,
+    put_new: impl FnOnce() -> PF,
+) -> Result<(), MediatorError>
+where
+    DF: std::future::Future<Output = Result<(), MediatorError>>,
+    PF: std::future::Future<Output = Result<(), MediatorError>>,
+{
+    if old_session_id != new_session_id {
+        delete_old().await?;
+    }
+    put_new().await?;
+    Ok(())
+}
+
 // ─── Trait ───────────────────────────────────────────────────────────────────
 
 /// Semantic storage interface for the Affinidi Messaging Mediator.
@@ -224,9 +254,11 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// `session_id`), and refresh-token rotation (write back the same
     /// session with a new `refresh_token_hash`).
     ///
-    /// The post-auth rename pattern is `put_session(new); delete_session(old)`
-    /// at the call site. Session IDs are unguessable, so the brief window
-    /// where both keys exist is acceptable.
+    /// The post-auth rename is fail-closed: the default
+    /// [`update_session_authenticated`](Self::update_session_authenticated)
+    /// does `delete_session(old)` *then* `put_session(new)`, so an
+    /// interruption can only lose the new session, never leave both. Redis
+    /// and Fjall override it with a single atomic operation.
     async fn put_session(&self, session: &Session, ttl: Duration) -> Result<(), MediatorError>;
 
     /// Retrieve a session by ID and join with the corresponding `DID:`
@@ -235,8 +267,8 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// downstream requests without a separate account lookup.
     async fn get_session(&self, session_id: &str, did: &str) -> Result<Session, MediatorError>;
 
-    /// Delete a session record. Used for logout and as the second step
-    /// of the post-auth rename pattern.
+    /// Delete a session record. Used for logout and as the *first* step
+    /// of the fail-closed post-auth rename (delete old, then write new).
     async fn delete_session(&self, session_id: &str) -> Result<(), MediatorError>;
 
     // ─── Accounts ────────────────────────────────────────────────────────────
@@ -777,9 +809,21 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         session.authenticated = true;
         session.refresh_token_hash = Some(refresh_token_hash.to_string());
 
-        self.put_session(&session, std::time::Duration::from_secs(86_400))
-            .await?;
-        let _ = self.delete_session(old_session_id).await;
+        // Fail-closed rename: delete the old (challenge) session BEFORE
+        // writing the new authenticated one. An interruption (crash, or a
+        // failed write) can then only *lose* the new session — forcing the
+        // client to re-authenticate — and can never leave the old session id
+        // valid alongside the new. Redis (`RENAME`+`HSET`) and Fjall (a
+        // single `Batch`) override this with one atomic operation; this
+        // ordering is what protects any backend (incl. MemoryStore) that
+        // falls back to the default.
+        rename_session_fail_closed(
+            old_session_id,
+            new_session_id,
+            || self.delete_session(old_session_id),
+            || self.put_session(&session, std::time::Duration::from_secs(86_400)),
+        )
+        .await?;
         self.stats_increment(StatCounter::SessionsSuccess, 1).await
     }
 
@@ -815,5 +859,149 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
             Ok(s) => Ok(s.refresh_token_hash),
             Err(_) => Ok(None),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rename_session_fail_closed;
+    use crate::errors::MediatorError;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    /// Records the order in which delete/put run by stamping a shared
+    /// counter, so a test can assert delete happened strictly before put.
+    fn step_recorder() -> (Arc<AtomicU8>, Arc<AtomicU8>, Arc<AtomicU8>) {
+        // (next-step-counter, delete-step, put-step)
+        (
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(0)),
+            Arc::new(AtomicU8::new(0)),
+        )
+    }
+
+    #[tokio::test]
+    async fn deletes_old_before_writing_new() {
+        let (counter, delete_step, put_step) = step_recorder();
+        let (c1, c2) = (counter.clone(), counter.clone());
+        let (ds, ps) = (delete_step.clone(), put_step.clone());
+
+        rename_session_fail_closed(
+            "old",
+            "new",
+            || async move {
+                ds.store(c1.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                Ok(())
+            },
+            || async move {
+                ps.store(c2.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .expect("rename succeeds");
+
+        assert_eq!(delete_step.load(Ordering::SeqCst), 1, "delete ran first");
+        assert_eq!(put_step.load(Ordering::SeqCst), 2, "put ran second");
+    }
+
+    #[tokio::test]
+    async fn a_failed_put_after_delete_is_fail_closed() {
+        // Simulates a crash/failure at the write step: the old session was
+        // already removed, the new one fails to land. The operation returns
+        // Err (so the caller does NOT mark the session authenticated) and
+        // the old session is gone — never left valid alongside a new one.
+        let deleted = Arc::new(AtomicU8::new(0));
+        let d = deleted.clone();
+
+        let result = rename_session_fail_closed(
+            "old",
+            "new",
+            || async move {
+                d.store(1, Ordering::SeqCst);
+                Ok(())
+            },
+            || async move {
+                Err(MediatorError::DatabaseError(
+                    14,
+                    "sess".into(),
+                    "simulated write failure".into(),
+                ))
+            },
+        )
+        .await;
+
+        assert_eq!(deleted.load(Ordering::SeqCst), 1, "old session was deleted");
+        assert!(
+            matches!(result, Err(MediatorError::DatabaseError(..))),
+            "a failed write must surface as an error (fail-closed), got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_delete_does_not_write_the_new_session() {
+        // If the delete itself fails, the new session must not be written —
+        // otherwise both could coexist. The put closure must never run.
+        let put_ran = Arc::new(AtomicU8::new(0));
+        let p = put_ran.clone();
+
+        let result = rename_session_fail_closed(
+            "old",
+            "new",
+            || async {
+                Err::<(), _>(MediatorError::DatabaseError(
+                    14,
+                    "sess".into(),
+                    "simulated delete failure".into(),
+                ))
+            },
+            || async move {
+                p.store(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_err(), "a failed delete aborts the rename");
+        assert_eq!(
+            put_ran.load(Ordering::SeqCst),
+            0,
+            "new session was NOT written"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_old_and_new_id_skips_delete_and_overwrites_in_place() {
+        // An in-place overwrite (old == new) must not delete the key it is
+        // about to (re)write, which would open a gap.
+        let deleted = Arc::new(AtomicU8::new(0));
+        let put_ran = Arc::new(AtomicU8::new(0));
+        let (d, p) = (deleted.clone(), put_ran.clone());
+
+        rename_session_fail_closed(
+            "same",
+            "same",
+            || async move {
+                d.store(1, Ordering::SeqCst);
+                Ok(())
+            },
+            || async move {
+                p.store(1, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await
+        .expect("in-place rename succeeds");
+
+        assert_eq!(
+            deleted.load(Ordering::SeqCst),
+            0,
+            "delete skipped for old == new"
+        );
+        assert_eq!(
+            put_ran.load(Ordering::SeqCst),
+            1,
+            "new session written in place"
+        );
     }
 }

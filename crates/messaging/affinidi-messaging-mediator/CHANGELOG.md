@@ -4,6 +4,15 @@
 
 ## 10th June 2026
 
+### 0.15.24 — Fail-closed session rename for the in-memory backend (simplification T4)
+
+- Picks up the fail-closed `update_session_authenticated` default from
+  `affinidi-messaging-mediator-common` 0.15.6: `MemoryStore` (which uses the
+  trait default) now deletes the old challenge session before writing the
+  new authenticated one, so an interruption can never leave both. `RedisStore`
+  and `FjallStore` were already atomic here (no behaviour change). No
+  mediator-crate source change.
+
 ### 0.15.23 — Explicit timeout on request-validation storage calls (simplification T3)
 
 - Adds an explicit, configurable, backend-agnostic timeout

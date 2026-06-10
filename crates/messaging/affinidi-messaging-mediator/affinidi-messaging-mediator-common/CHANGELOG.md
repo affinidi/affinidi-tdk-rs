@@ -4,6 +4,22 @@
 
 ## 10th June 2026
 
+### 0.15.6 — Fail-closed session rename in the trait default (simplification T4)
+
+- `MediatorStore::update_session_authenticated`'s **default** implementation
+  previously did `put_session(new)` then `delete_session(old)` — a crash (or
+  a failed delete) between the two could leave the old (challenge) session id
+  valid alongside the new authenticated one. It now **deletes the old session
+  before writing the new one** (via a new `rename_session_fail_closed`
+  helper), so an interruption can only *lose* the new session — forcing
+  re-authentication — and the two never coexist. An in-place overwrite
+  (`old == new`) skips the delete.
+- No change to `RedisStore` (`RENAME`+`HSET`) or `FjallStore` (`Batch`),
+  which already override the method with a single atomic operation; this
+  hardens any backend (e.g. `MemoryStore`, external impls) that falls back
+  to the default. Unit-tested (ordering, fail-closed on a failed write, no
+  write on a failed delete, in-place overwrite).
+
 ### 0.15.5 — `RelayMode` config for inter-mediator relay (#385 item 3)
 
 - Adds the `RelayMode` enum (`Blind` | `Rewrap`, default `Blind`) and two
