@@ -13,8 +13,13 @@ use crate::{
         rate_limiter::{RateLimitLayer, RateLimiterState},
         request_id::RequestIdLayer,
     },
-    handlers::{admin_status, application_routes, health_checker_handler, readiness_handler},
-    tasks::{statistics::statistics, websocket_streaming::StreamingTask},
+    handlers::{
+        admin_status, application_routes, health_checker_handler, liveness_handler,
+        readiness_handler,
+    },
+    tasks::{
+        statistics::statistics, supervisor::TaskSupervisor, websocket_streaming::StreamingTask,
+    },
 };
 use affinidi_did_resolver_cache_sdk::DIDCacheClient;
 #[cfg(feature = "redis-backend")]
@@ -311,153 +316,142 @@ pub async fn serve_internal(
 
     let metrics_handle = metrics::init_metrics();
 
-    // Statistics task — runs against any backend via the trait.
-    let stats_store = store.clone();
-    let tags = config.tags.clone();
-    let stats_token = shutdown_token.clone();
-    tokio::spawn(async move {
-        tokio::select! {
-            result = statistics(stats_store, tags) => {
-                if let Err(e) = result {
-                    error!("Statistics thread error: {}", e);
-                }
-            }
-            _ = stats_token.cancelled() => {
-                info!("Statistics thread shutting down");
-            }
-        }
-    });
+    // All long-lived background tasks run under a supervisor: a task that
+    // errors or panics is restarted with capped backoff (never fail-fast —
+    // the mediator keeps serving and the fault is logged + surfaced via
+    // /readyz), and each task's health is published for the readiness probe.
+    // The supervisor owns cancellation, so the task bodies below are plain
+    // loops with no shutdown `select!` — it aborts them on shutdown.
+    let supervisor = TaskSupervisor::new(shutdown_token.clone());
 
-    // Forwarding processor — runs against any backend via the
-    // `forward_queue_*` trait methods (Redis: Streams consumer
-    // groups; Fjall/Memory: in-process pending-claim emulation).
-    // Note the durability difference: Fjall queues survive a restart
-    // (pending claims are recovered via autoclaim), Memory queues are
-    // lost with the process. Multi-process forwarding (the standalone
+    // Statistics task — non-load-bearing (metrics only). Runs against any
+    // backend via the trait.
+    {
+        let store = store.clone();
+        let tags = config.tags.clone();
+        supervisor.spawn("statistics", false, move || {
+            let store = store.clone();
+            let tags = tags.clone();
+            async move { statistics(store, tags).await.map_err(|e| e.to_string()) }
+        });
+    }
+
+    // Forwarding processor — load-bearing (the cross-mediator delivery
+    // path). Runs against any backend via the `forward_queue_*` trait
+    // methods (Redis: Streams consumer groups; Fjall/Memory: in-process
+    // pending-claim emulation). Fjall queues survive a restart (pending
+    // claims recovered via autoclaim), Memory queues are lost with the
+    // process. Multi-process forwarding (the standalone
     // `forwarding_processor` binary) remains Redis-only.
     if config.processors.forwarding.enabled && config.processors.forwarding.external_forwarding {
-        let _database = store.clone();
-        let _config = config.processors.forwarding.clone();
-        let fwd_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            let processor = match ForwardingProcessor::new(_config, _database) {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Failed to create forwarding processor: {}", e);
-                    return;
-                }
-            };
-            tokio::select! {
-                result = processor.start() => {
-                    if let Err(e) = result {
-                        error!("Forwarding processor error: {}", e);
-                    }
-                }
-                _ = fwd_token.cancelled() => {
-                    info!("Forwarding processor shutting down");
-                }
+        let store = store.clone();
+        let fwd_config = config.processors.forwarding.clone();
+        supervisor.spawn("forwarding_processor", true, move || {
+            let store = store.clone();
+            let fwd_config = fwd_config.clone();
+            async move {
+                let processor =
+                    ForwardingProcessor::new(fwd_config, store).map_err(|e| e.to_string())?;
+                processor.start().await.map_err(|e| e.to_string())
             }
         });
     }
 
-    // Message expiry sweep — runs against any backend via
-    // `MediatorStore::sweep_expired_messages`. The standalone
-    // `message_expiry_cleanup` binary in mediator-processors keeps
-    // its own direct-Redis loop for distributed deployments.
+    // Message expiry sweep — non-load-bearing housekeeping. Runs against
+    // any backend via `MediatorStore::sweep_expired_messages`. The
+    // standalone `message_expiry_cleanup` binary in mediator-processors
+    // keeps its own direct-Redis loop for distributed deployments. Sweep
+    // errors are logged and the next tick retries; the supervisor restarts
+    // the loop only if it panics.
     if config.processors.message_expiry_cleanup.enabled {
-        let expiry_store = store.clone();
+        let store = store.clone();
         let admin_did_hash = config.mediator_did_hash.clone();
-        let cleanup_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(1));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = cleanup_token.cancelled() => {
-                        info!("Message expiry cleanup shutting down");
-                        return;
-                    }
-                    _ = tick.tick() => {}
-                }
-
-                let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
-                match expiry_store
-                    .sweep_expired_messages(now_secs, &admin_did_hash)
-                    .await
-                {
-                    Ok(report) if report.expired > 0 || report.timeslots_swept > 0 => {
-                        info!(
-                            event_type = "ExpirySweep",
-                            timeslots_swept = report.timeslots_swept,
-                            expired = report.expired,
-                            already_deleted = report.already_deleted,
-                            "expiry sweep drained {} messages across {} timeslots",
-                            report.expired,
-                            report.timeslots_swept,
-                        );
-                    }
-                    Ok(_) => {} // nothing to sweep
-                    Err(err) => {
-                        warn!("Message expiry sweep error: {err}");
+        // `E` is pinned explicitly: the loop never returns `Err`, so the
+        // error type is otherwise unconstrained.
+        supervisor.spawn::<_, _, String>("message_expiry_sweep", false, move || {
+            let store = store.clone();
+            let admin_did_hash = admin_did_hash.clone();
+            async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(1));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+                    match store
+                        .sweep_expired_messages(now_secs, &admin_did_hash)
+                        .await
+                    {
+                        Ok(report) if report.expired > 0 || report.timeslots_swept > 0 => {
+                            info!(
+                                event_type = "ExpirySweep",
+                                timeslots_swept = report.timeslots_swept,
+                                expired = report.expired,
+                                already_deleted = report.already_deleted,
+                                "expiry sweep drained {} messages across {} timeslots",
+                                report.expired,
+                                report.timeslots_swept,
+                            );
+                        }
+                        Ok(_) => {} // nothing to sweep
+                        Err(err) => {
+                            warn!("Message expiry sweep error: {err}");
+                        }
                     }
                 }
             }
         });
     }
 
-    // Session expiry sweep — reclaims expired session records on
-    // backends without native TTL (Fjall, memory). On Redis the trait
-    // default is a no-op, so this loop just ticks and finds nothing.
-    // Sessions expire over 15-minute / 24-hour horizons, so a full
-    // partition scan every second (as the message sweep does) would be
-    // wasteful — a coarser cadence is plenty.
+    // Session expiry sweep — non-load-bearing housekeeping. Reclaims
+    // expired session records on backends without native TTL (Fjall,
+    // memory). On Redis the trait default is a no-op, so this loop just
+    // ticks and finds nothing. Sessions expire over 15-minute / 24-hour
+    // horizons, so a coarse cadence is plenty.
     if config.processors.session_expiry_cleanup.enabled {
-        let session_store = store.clone();
-        let cleanup_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
-            let mut tick = tokio::time::interval(SESSION_SWEEP_INTERVAL);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = cleanup_token.cancelled() => {
-                        info!("Session expiry cleanup shutting down");
-                        return;
-                    }
-                    _ = tick.tick() => {}
-                }
-
-                let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
-                match session_store.sweep_expired_sessions(now_secs).await {
-                    Ok(report) if report.expired > 0 => {
-                        info!(
-                            event_type = "SessionExpirySweep",
-                            scanned = report.scanned,
-                            expired = report.expired,
-                            "session expiry sweep reclaimed {} of {} sessions",
-                            report.expired,
-                            report.scanned,
-                        );
-                    }
-                    Ok(_) => {} // nothing expired
-                    Err(err) => {
-                        warn!("Session expiry sweep error: {err}");
+        let store = store.clone();
+        supervisor.spawn::<_, _, String>("session_expiry_sweep", false, move || {
+            let store = store.clone();
+            async move {
+                const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(300);
+                let mut tick = tokio::time::interval(SESSION_SWEEP_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+                    match store.sweep_expired_sessions(now_secs).await {
+                        Ok(report) if report.expired > 0 => {
+                            info!(
+                                event_type = "SessionExpirySweep",
+                                scanned = report.scanned,
+                                expired = report.expired,
+                                "session expiry sweep reclaimed {} of {} sessions",
+                                report.expired,
+                                report.scanned,
+                            );
+                        }
+                        Ok(_) => {} // nothing expired
+                        Err(err) => {
+                            warn!("Session expiry sweep error: {err}");
+                        }
                     }
                 }
             }
         });
     }
 
-    // VTA secrets refresh — only present when this is a VTA-linked
-    // deployment. Spawns a fire-and-forget loop that refreshes the
-    // cached bundle and runtime resolver on a cadence derived from
-    // the configured `[secrets].cache_ttl`. Also the path that
-    // converges a circular-bootstrapped mediator to a fresh cache
-    // once the listener is live.
+    // VTA secrets refresh — load-bearing when present (a stale operating
+    // secret means the mediator silently fails to decrypt its own inbound
+    // DIDComm). Only spawned for VTA-linked deployments. `run` honours the
+    // shutdown token itself; the supervisor's abort is a backstop.
     if let Some(refresher) = config.vta_refresher.clone() {
         let refresh_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            refresher.run(refresh_token).await;
+        supervisor.spawn("vta_refresh", true, move || {
+            let refresher = refresher.clone();
+            let refresh_token = refresh_token.clone();
+            async move {
+                refresher.run(refresh_token).await;
+                Ok::<(), String>(())
+            }
         });
     }
 
@@ -577,6 +571,7 @@ pub async fn serve_internal(
         did_rate_limiter,
         shutdown_token: shutdown_token.clone(),
         self_authorities: Arc::new(self_authorities),
+        component_health: supervisor.registry(),
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);
@@ -610,6 +605,10 @@ pub async fn serve_internal(
         .route(
             join_api_path(&api_prefix, "readyz").as_str(),
             get(readiness_handler).with_state(shared_state.clone()),
+        )
+        .route(
+            join_api_path(&api_prefix, "livez").as_str(),
+            get(liveness_handler),
         )
         .route(
             join_api_path(&api_prefix, "admin/status").as_str(),

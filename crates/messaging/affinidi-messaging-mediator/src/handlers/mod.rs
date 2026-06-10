@@ -1,4 +1,4 @@
-use crate::{SharedData, common::session::Session};
+use crate::{SharedData, common::session::Session, tasks::supervisor::ComponentState};
 use affinidi_messaging_mediator_common::errors::AppError;
 use affinidi_messaging_sdk::messages::SuccessResponse;
 use axum::{
@@ -120,11 +120,31 @@ pub async fn health_checker_handler(State(state): State<SharedData>) -> impl Int
     Json(response_json)
 }
 
+/// Process-liveness probe. Returns 200 whenever the HTTP server can answer
+/// — deliberately decoupled from component readiness so an orchestrator
+/// does not kill a mediator that is still serving traffic while a
+/// background component is degraded or restarting. Use `/readyz` to decide
+/// whether an instance should *receive* traffic.
+pub async fn liveness_handler() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "alive" })),
+    )
+}
+
 /// Deep readiness check that verifies the mediator can serve traffic.
-/// Checks Redis connectivity, queue health, and shutdown state.
+/// Checks Redis connectivity, queue health, shutdown state, and the health
+/// of supervised background tasks.
+///
+/// Returns 503 `not_ready` when a hard dependency or a **load-bearing**
+/// background task is down; 200 `degraded` when only non-load-bearing
+/// components are unhealthy; 200 `ready` otherwise.
 pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResponse {
     let mut checks: Vec<serde_json::Value> = Vec::new();
     let mut all_ok = true;
+    // Non-fatal degradation (non-load-bearing components down). Keeps the
+    // instance in rotation (200) but flags the condition for dashboards.
+    let mut degraded = false;
 
     // Check if shutdown has been initiated
     if state.shutdown_token.is_cancelled() {
@@ -265,17 +285,53 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }
     };
 
+    // ── Supervised background-task health ────────────────────────────
+    //
+    // A load-bearing component that isn't `Running` fails readiness (503);
+    // a non-load-bearing one only marks the instance `degraded` (still 200,
+    // stays in rotation). A component that is `Running` but has restarted is
+    // reported for visibility without affecting the verdict.
+    let mut components: Vec<serde_json::Value> = Vec::new();
+    for entry in state.component_health.iter() {
+        let h = entry.value();
+        let healthy = h.state == ComponentState::Running;
+        if !healthy {
+            if h.load_bearing {
+                all_ok = false;
+            } else {
+                degraded = true;
+            }
+        }
+        components.push(serde_json::json!({
+            "name": h.name,
+            "state": h.state,
+            "load_bearing": h.load_bearing,
+            "restarts": h.restarts,
+            "last_error": h.last_error,
+        }));
+    }
+    // Stable order so dashboards diffing the payload don't see churn.
+    components.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+
     let status_code = if all_ok {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
+    let status = if !all_ok {
+        "not_ready"
+    } else if degraded {
+        "degraded"
+    } else {
+        "ready"
+    };
 
     let response = serde_json::json!({
-        "status": if all_ok { "ready" } else { "not_ready" },
+        "status": status,
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": (chrono::Utc::now() - state.service_start_timestamp).num_seconds(),
         "checks": checks,
+        "components": components,
         // Top-level fields (alongside `checks`) so ops dashboards can
         // pluck them without parsing the variable-length checks list.
         // The secrets backend URL is intentionally NOT exposed here —

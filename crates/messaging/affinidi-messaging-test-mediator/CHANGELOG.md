@@ -4,6 +4,15 @@
 
 ## 10th June 2026
 
+### 0.2.7 — health-endpoint integration tests (mediator T2)
+
+- **TEST:** new `health_endpoints` suite covering the task-supervision
+  health contract added in `affinidi-messaging-mediator` 0.15.22 — `/livez`
+  returns 200 (process-liveness only) and `/readyz` reports supervised
+  background tasks under `components` with the always-on `statistics` task
+  and the load-bearing `forwarding_processor` task both `running`. Runs on
+  the default in-memory backend; fixture API unchanged.
+
 ### 0.2.6 — relay rewrap builder knobs + end-to-end rewrap tests (#388)
 
 - **FEAT:** `TestMediatorBuilder::relay_mode(RelayMode)` and

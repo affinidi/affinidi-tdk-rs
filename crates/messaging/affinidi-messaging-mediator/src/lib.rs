@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthError};
 use http::request::Parts;
 use std::{collections::HashSet, fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
+use tasks::supervisor::HealthRegistry;
 use tasks::websocket_streaming::StreamingTask;
 use tokio_util::sync::CancellationToken;
 
@@ -60,6 +61,11 @@ pub struct SharedData {
     /// `config.listen_address` plus any operator-declared
     /// `config.local_endpoints` aliases.
     pub self_authorities: Arc<HashSet<(String, u16)>>,
+    /// Live health of supervised background tasks, published by the
+    /// [`TaskSupervisor`](tasks::supervisor::TaskSupervisor). The readiness
+    /// handler reads this to fail `/readyz` when a load-bearing component is
+    /// down and to report `degraded` for non-load-bearing ones.
+    pub component_health: HealthRegistry,
 }
 
 impl Debug for SharedData {
