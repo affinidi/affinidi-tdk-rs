@@ -146,6 +146,452 @@ pub(crate) fn relay_peer_trusted(allow: &ahash::AHashSet<String>, from: Option<&
 }
 
 /// Process a forward message, run checks and then if accepted place into FORWARD_TASKS stream
+/// Parse the `next` hop DID from a routing-2.0 forward body.
+fn parse_next_did(msg: &Message, session: &Session) -> Result<String, MediatorError> {
+    match serde_json::from_value::<ForwardRequest>(msg.body.to_owned()) {
+        Ok(body) => match body.next {
+            Some(next_str) => Ok(next_str),
+            None => Err(MediatorError::problem(
+                56,
+                &session.session_id,
+                Some(msg.id.to_string()),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.next.missing",
+                "Forwarding message is missing next field",
+                vec![],
+                StatusCode::BAD_REQUEST,
+            )),
+        },
+        Err(e) => Err(MediatorError::problem_with_log(
+            57,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "protocol.forwarding.parse",
+            "Failed to parse forwarding message body. Reason: {1}",
+            vec![e.to_string()],
+            StatusCode::BAD_REQUEST,
+            format!("Failed to parse forwarding message body. Reason: {e}"),
+        )),
+    }
+}
+
+/// Whether adding `incoming` messages to a queue already holding `queued`
+/// would meet or exceed `limit`. `-1` means "unlimited"; `ephemeral`
+/// forwards (live-stream only) never count against a queue.
+fn queue_at_capacity(queued: u32, incoming: usize, limit: i32, ephemeral: bool) -> bool {
+    limit != -1 && !ephemeral && queued + incoming as u32 >= limit as u32
+}
+
+/// Reject the forward when the sender already has too many messages queued.
+/// `ephemeral` forwards (live-stream only) bypass the queue accounting.
+fn validate_sender_queue_limit(
+    msg: &Message,
+    from_account: &Account,
+    attachment_count: usize,
+    ephemeral: bool,
+    state: &SharedData,
+    session: &Session,
+) -> Result<(), MediatorError> {
+    let send_limit = from_account
+        .queue_send_limit
+        .unwrap_or(state.config.limits.queued_send_messages_soft);
+    if queue_at_capacity(
+        from_account.send_queue_count,
+        attachment_count,
+        send_limit,
+        ephemeral,
+    ) {
+        warn!(
+            "Sender DID ({}) has too many messages waiting to be delivered",
+            session.did_hash
+        );
+        return Err(MediatorError::problem(
+            61,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "limits.queue.sender",
+            "Sender has too many messages waiting to be delivered",
+            vec![],
+            StatusCode::SERVICE_UNAVAILABLE,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject the forward when the recipient (next hop) already has too many
+/// messages queued. Bypassed for `ephemeral` forwards.
+fn validate_recipient_queue_limit(
+    msg: &Message,
+    next_account: &Account,
+    next_did_hash: &str,
+    attachment_count: usize,
+    ephemeral: bool,
+    state: &SharedData,
+    session: &Session,
+) -> Result<(), MediatorError> {
+    let recv_limit = next_account
+        .queue_receive_limit
+        .unwrap_or(state.config.limits.queued_receive_messages_soft);
+    if queue_at_capacity(
+        next_account.receive_queue_count,
+        attachment_count,
+        recv_limit,
+        ephemeral,
+    ) {
+        warn!(
+            "Next DID ({}) has too many messages waiting to be delivered",
+            next_did_hash
+        );
+        return Err(MediatorError::problem(
+            62,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "limits.queue.recipient",
+            "Recipient (next) has too many messages waiting to be delivered",
+            vec![],
+            StatusCode::SERVICE_UNAVAILABLE,
+        ));
+    }
+    Ok(())
+}
+
+/// Decode the first attachment of a forward into its inner DIDComm payload.
+///
+/// Supports base64 and inline JSON attachments; rejects JWS-signed JSON
+/// (verification not yet implemented), linked attachments, and unknown
+/// formats. Returns the decoded payload string.
+fn decode_first_attachment(
+    msg: &Message,
+    session: &Session,
+    attachments: &[Attachment],
+) -> Result<String, MediatorError> {
+    let attachment = match attachments.first() {
+        Some(a) => a,
+        None => {
+            return Err(MediatorError::problem(
+                59,
+                &session.session_id,
+                Some(msg.id.to_string()),
+                ProblemReportSorter::Warning,
+                ProblemReportScope::Message,
+                "protocol.forwarding.attachments.missing",
+                "Forward message has empty attachments list",
+                vec![],
+                StatusCode::BAD_REQUEST,
+            ));
+        }
+    };
+    let data = if let Some(ref b64) = attachment.data.base64 {
+        match BASE64_URL_SAFE_NO_PAD.decode(b64) {
+            Ok(data) => match String::from_utf8(data) {
+                Ok(data) => data,
+                Err(e) => {
+                    return Err(MediatorError::problem_with_log(
+                        68,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.forwarding.attachments.base64",
+                        "Failed to decode base64 attachment. Reason: {1}",
+                        vec![e.to_string()],
+                        StatusCode::BAD_REQUEST,
+                        format!("Failed to decode base64 attachment. Reason: {e}"),
+                    ));
+                }
+            },
+            Err(e) => {
+                return Err(MediatorError::problem_with_log(
+                    68,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Warning,
+                    ProblemReportScope::Message,
+                    "protocol.forwarding.attachments.base64",
+                    "Failed to decode base64 attachment. Reason: {1}",
+                    vec![e.to_string()],
+                    StatusCode::BAD_REQUEST,
+                    format!("Failed to decode base64 attachment. Reason: {e}"),
+                ));
+            }
+        }
+    } else if let Some(ref json_val) = attachment.data.json {
+        if attachment.data.jws.is_some() {
+            // JSON-with-JWS attachments would need a full
+            // verification path: parse the protected header,
+            // resolve the kid via the DID resolver, extract
+            // the Ed25519 verification key, then verify before
+            // forwarding. Until that lands, we reject rather
+            // than forward untrusted signed payloads. Most
+            // DIDComm clients use base64-encoded encrypted
+            // attachments instead, which don't require this
+            // path. Tracked as future work in PR #286's
+            // follow-up section.
+            return Err(MediatorError::problem(
+                66,
+                &session.session_id,
+                Some(msg.id.to_string()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "me.not_implemented",
+                "JWS verified attachments are not yet supported by this mediator",
+                vec![],
+                StatusCode::NOT_IMPLEMENTED,
+            ));
+        } else {
+            match serde_json::to_string(json_val) {
+                Ok(data) => data,
+                Err(e) => {
+                    return Err(MediatorError::problem_with_log(
+                        67,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Warning,
+                        ProblemReportScope::Message,
+                        "protocol.forwarding.attachments.json.invalid",
+                        "Invalid attachment JSON schema. Reason: {1}",
+                        vec![e.to_string()],
+                        StatusCode::BAD_REQUEST,
+                        format!("Invalid attachment JSON schema. Reason: {e}"),
+                    ));
+                }
+            }
+        }
+    } else if attachment.data.links.is_some() {
+        return Err(MediatorError::problem(
+            66,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "me.not_implemented",
+            "Linked attachments are not yet supported by this mediator",
+            vec![],
+            StatusCode::NOT_IMPLEMENTED,
+        ));
+    } else {
+        return Err(MediatorError::problem(
+            67,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Warning,
+            ProblemReportScope::Message,
+            "protocol.forwarding.attachments.unknown",
+            "Attachment data format is not supported",
+            vec![],
+            StatusCode::BAD_REQUEST,
+        ));
+    };
+    Ok(data)
+}
+
+/// Deliver an accepted forward to its next hop: live-stream it (ephemeral),
+/// enqueue it for a remote mediator (re-wrapping it in `Rewrap` relay mode),
+/// or store it locally. Also reads the inner envelope to enforce the
+/// recipient's anonymous-message policy before routing.
+#[allow(clippy::too_many_arguments)]
+async fn deliver_forward(
+    state: &SharedData,
+    session: &Session,
+    msg: &Message,
+    next: &str,
+    next_did_hash: &str,
+    next_acls: &MediatorACLSet,
+    from_account: &Account,
+    data: &str,
+    delay_milli: i64,
+    expires_at: u64,
+    ephemeral: bool,
+) -> Result<(), MediatorError> {
+    // Check attached message for routing information
+    let next_envelope = match MetaEnvelope::new(data, &state.did_resolver).await {
+        Ok(envelope) => envelope,
+        Err(e) => {
+            return Err(MediatorError::problem_with_log(
+                37,
+                &session.session_id,
+                Some(msg.id.to_string()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.envelope.read",
+                "Couldn't read forward attached DIDComm envelope: {1}",
+                vec![e.to_string()],
+                StatusCode::BAD_REQUEST,
+                format!("Couldn't read DIDComm envelope: {e}"),
+            ));
+        }
+    };
+
+    if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
+        return Err(MediatorError::problem(
+            69,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.receive_anon",
+            "Recipient isn't accepting anonymous messages",
+            vec![],
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    debug!(
+        "Forwarded message: to_did_hash={}, ephemeral={}",
+        next_did_hash, ephemeral
+    );
+
+    if ephemeral {
+        // Live stream the message?
+        if let Some(stream_uuid) = state
+            .database
+            .streaming_is_client_live(next_did_hash, false)
+            .await
+            && state
+                .database
+                .streaming_publish_message(next_did_hash, &stream_uuid, data, false)
+                .await
+                .is_ok()
+        {
+            debug!("Live streaming message to UUID: {}", stream_uuid);
+        }
+    } else {
+        // Determine if the next hop is local or remote by resolving the DID Document
+        let remote_endpoint = if state.config.processors.forwarding.external_forwarding {
+            match state.did_resolver.resolve(next).await {
+                Ok(resolve_response) => {
+                    match service_endpoint_for_remote(state, &resolve_response.doc) {
+                        Some(endpoint_url) => {
+                            debug!("Next hop ({}) is remote, endpoint: {}", next, endpoint_url);
+                            Some(endpoint_url)
+                        }
+                        None => {
+                            debug!("Next hop ({}) is local to this mediator", next);
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Can't resolve the DID — treat as local (store normally)
+                    warn!(
+                        "Couldn't resolve DID document for {}: {}. Treating as local.",
+                        next, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(endpoint_url) = remote_endpoint {
+            // Remote destination — enqueue to FORWARD_Q for the forwarding processor
+
+            // Check hop count for loop detection
+            let hop_count = msg
+                .extra
+                .get("hop_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+
+            if hop_count >= state.config.processors.forwarding.max_hops {
+                metrics::counter!(crate::common::metrics::names::FORWARD_LOOP_DETECTED_TOTAL)
+                    .increment(1);
+                return Err(MediatorError::problem_with_log(
+                    94,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "protocol.forwarding.loop_detected",
+                    "Message exceeded maximum hop count ({1}), possible forwarding loop",
+                    vec![state.config.processors.forwarding.max_hops.to_string()],
+                    StatusCode::LOOP_DETECTED,
+                    format!(
+                        "Message exceeded maximum hop count ({}), possible forwarding loop",
+                        state.config.processors.forwarding.max_hops
+                    ),
+                ));
+            }
+
+            let now_ms = unix_timestamp_millis();
+
+            // Get the sender's full DID for problem reports
+            let from_did = msg.from.as_deref().unwrap_or("").to_string();
+
+            // Blind relay forwards the inner envelope verbatim; rewrap relay
+            // re-encrypts it from this mediator to the peer (see
+            // `rewrap_for_relay`). Default is blind — no behaviour change.
+            let relay_message = match state.config.processors.forwarding.relay_mode {
+                RelayMode::Blind => data.to_string(),
+                RelayMode::Rewrap => {
+                    rewrap_for_relay(state, session, data, next, hop_count + 1).await?
+                }
+            };
+
+            let entry = ForwardQueueEntry {
+                stream_id: String::new(), // Set by Redis on XADD
+                message: relay_message,
+                to_did_hash: next_did_hash.to_string(),
+                from_did_hash: from_account.did_hash.clone(),
+                from_did,
+                to_did: next.to_string(),
+                endpoint_url: endpoint_url.clone(),
+                received_at_ms: now_ms,
+                delay_milli,
+                expires_at,
+                retry_count: 0,
+                hop_count: hop_count + 1,
+            };
+
+            state
+                .database
+                .forward_queue_enqueue_with_limit(&entry, state.config.limits.forward_task_queue)
+                .await
+                .map_err(|e| {
+                    MediatorError::problem_with_log(
+                        90,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.forwarding.enqueue",
+                        "Failed to enqueue message for remote forwarding: {1}",
+                        vec![e.to_string()],
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Failed to enqueue message for remote forwarding: {e}"),
+                    )
+                })?;
+
+            metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
+            info!(
+                "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
+                next_did_hash, from_account.did_hash, endpoint_url
+            );
+        } else {
+            // Local destination — store as before
+            store_forwarded_message(
+                state,
+                session,
+                data,
+                Some(&from_account.did_hash),
+                next,
+                Some(expires_at),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn process(
     msg: &Message,
     metadata: &UnpackMetadata,
@@ -181,38 +627,7 @@ pub(crate) async fn process(
             false
         };
 
-        let next: String = match serde_json::from_value::<ForwardRequest>(msg.body.to_owned()) {
-            Ok(body) => match body.next {
-                Some(next_str) => next_str,
-                None => {
-                    return Err(MediatorError::problem(
-                        56,
-                        &session.session_id,
-                        Some(msg.id.to_string()),
-                        ProblemReportSorter::Warning,
-                        ProblemReportScope::Message,
-                        "protocol.forwarding.next.missing",
-                        "Forwarding message is missing next field",
-                        vec![],
-                        StatusCode::BAD_REQUEST,
-                    ));
-                }
-            },
-            Err(e) => {
-                return Err(MediatorError::problem_with_log(
-                    57,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.parse",
-                    "Failed to parse forwarding message body. Reason: {1}",
-                    vec![e.to_string()],
-                    StatusCode::BAD_REQUEST,
-                    format!("Failed to parse forwarding message body. Reason: {e}"),
-                ));
-            }
-        };
+        let next = parse_next_did(msg, session)?;
         let next_did_hash = sha256::digest(next.as_bytes());
 
         // ****************************************************
@@ -428,59 +843,17 @@ pub(crate) async fn process(
             ));
         }
 
-        // Check against the limits
-        let send_limit = from_account
-            .queue_send_limit
-            .unwrap_or(state.config.limits.queued_send_messages_soft);
-        if send_limit != -1
-            && !ephemeral
-            && from_account.send_queue_count + attachments.len() as u32 >= send_limit as u32
-        {
-            warn!(
-                "Sender DID ({}) has too many messages waiting to be delivered",
-                session.did_hash
-            );
-            return Err(MediatorError::problem(
-                61,
-                &session.session_id,
-                Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "limits.queue.sender",
-                "Sender has too many messages waiting to be delivered",
-                vec![],
-                StatusCode::SERVICE_UNAVAILABLE,
-            ));
-        }
-
-        // Check limits and if this forward is accepted?
-        // Does next (receiver) have too many messages in queue?
-        // Does the sender have too many messages in queue?
-        // Too many attachments?
-        // Forwarding task queue is full?
-        let recv_limit = next_account
-            .queue_receive_limit
-            .unwrap_or(state.config.limits.queued_receive_messages_soft);
-        if recv_limit != -1
-            && !ephemeral
-            && next_account.receive_queue_count + attachments.len() as u32 >= recv_limit as u32
-        {
-            warn!(
-                "Next DID ({}) has too many messages waiting to be delivered",
-                next_did_hash
-            );
-            return Err(MediatorError::problem(
-                62,
-                &session.session_id,
-                Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "limits.queue.recipient",
-                "Recipient (next) has too many messages waiting to be delivered",
-                vec![],
-                StatusCode::SERVICE_UNAVAILABLE,
-            ));
-        }
+        // Check queue + attachment + forward-task-queue limits before accepting.
+        validate_sender_queue_limit(msg, &from_account, attachments.len(), ephemeral, state, session)?;
+        validate_recipient_queue_limit(
+            msg,
+            &next_account,
+            &next_did_hash,
+            attachments.len(),
+            ephemeral,
+            state,
+            session,
+        )?;
 
         if attachments.len() > state.config.limits.attachments_max_count {
             warn!(
@@ -573,125 +946,7 @@ pub(crate) async fn process(
         // First step is to determine if the next hop is local to the mediator or remote?
         //if next_did_doc.service
 
-        let attachment = match attachments.first() {
-            Some(a) => a,
-            None => {
-                return Err(MediatorError::problem(
-                    59,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.attachments.missing",
-                    "Forward message has empty attachments list",
-                    vec![],
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-        };
-        let data = if let Some(ref b64) = attachment.data.base64 {
-                match BASE64_URL_SAFE_NO_PAD.decode(b64) {
-                    Ok(data) => match String::from_utf8(data) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return Err(MediatorError::problem_with_log(
-                                68,
-                                &session.session_id,
-                                Some(msg.id.to_string()),
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "protocol.forwarding.attachments.base64",
-                                "Failed to decode base64 attachment. Reason: {1}",
-                                vec![e.to_string()],
-                                StatusCode::BAD_REQUEST,
-                                format!("Failed to decode base64 attachment. Reason: {e}"),
-                            ));
-                        }
-                    },
-                    Err(e) => {
-                        return Err(MediatorError::problem_with_log(
-                            68,
-                            &session.session_id,
-                            Some(msg.id.to_string()),
-                            ProblemReportSorter::Warning,
-                            ProblemReportScope::Message,
-                            "protocol.forwarding.attachments.base64",
-                            "Failed to decode base64 attachment. Reason: {1}",
-                            vec![e.to_string()],
-                            StatusCode::BAD_REQUEST,
-                            format!("Failed to decode base64 attachment. Reason: {e}"),
-                        ));
-                    }
-                }
-        } else if let Some(ref json_val) = attachment.data.json {
-                if attachment.data.jws.is_some() {
-                    // JSON-with-JWS attachments would need a full
-                    // verification path: parse the protected header,
-                    // resolve the kid via the DID resolver, extract
-                    // the Ed25519 verification key, then verify before
-                    // forwarding. Until that lands, we reject rather
-                    // than forward untrusted signed payloads. Most
-                    // DIDComm clients use base64-encoded encrypted
-                    // attachments instead, which don't require this
-                    // path. Tracked as future work in PR #286's
-                    // follow-up section.
-                    return Err(MediatorError::problem(
-                        66,
-                        &session.session_id,
-                        Some(msg.id.to_string()),
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.not_implemented",
-                        "JWS verified attachments are not yet supported by this mediator",
-                        vec![],
-                        StatusCode::NOT_IMPLEMENTED,
-                    ));
-                } else {
-                    match serde_json::to_string(json_val) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return Err(MediatorError::problem_with_log(
-                                67,
-                                &session.session_id,
-                                Some(msg.id.to_string()),
-                                ProblemReportSorter::Warning,
-                                ProblemReportScope::Message,
-                                "protocol.forwarding.attachments.json.invalid",
-                                "Invalid attachment JSON schema. Reason: {1}",
-                                vec![e.to_string()],
-                                StatusCode::BAD_REQUEST,
-                                format!(
-                                    "Invalid attachment JSON schema. Reason: {e}"
-                                ),
-                            ));
-                        }
-                    }
-                }
-        } else if attachment.data.links.is_some() {
-                return Err(MediatorError::problem(
-                    66,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.not_implemented",
-                    "Linked attachments are not yet supported by this mediator",
-                    vec![],
-                    StatusCode::NOT_IMPLEMENTED,
-                ));
-        } else {
-                return Err(MediatorError::problem(
-                    67,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Warning,
-                    ProblemReportScope::Message,
-                    "protocol.forwarding.attachments.unknown",
-                    "Attachment data format is not supported",
-                    vec![],
-                    StatusCode::BAD_REQUEST,
-                ));
-        };
+        let data = decode_first_attachment(msg, session, &attachments)?;
 
         let expires_at = if let Some(expires_at) = msg.expires_time {
             let now = unix_timestamp_secs();
@@ -706,181 +961,20 @@ pub(crate) async fn process(
                 + state.config.limits.message_expiry_seconds
         };
 
-        // Check attached message for routing information
-        let next_envelope = match MetaEnvelope::new(&data, &state.did_resolver).await {
-            Ok(envelope) => envelope,
-            Err(e) => {
-                return Err(MediatorError::problem_with_log(
-                    37,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "message.envelope.read",
-                    "Couldn't read forward attached DIDComm envelope: {1}",
-                    vec![e.to_string()],
-                    StatusCode::BAD_REQUEST,
-                    format!("Couldn't read DIDComm envelope: {e}"),
-                ));
-            }
-        };
-
-        if next_envelope.from_did.is_none() && !next_acls.get_anon_receive().0 {
-            return Err(MediatorError::problem(
-                69,
-                &session.session_id,
-                Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.receive_anon",
-                "Recipient isn't accepting anonymous messages",
-                vec![],
-                StatusCode::FORBIDDEN,
-            ));
-        }
-
-        debug!("Forwarded message: to_did_hash={}, ephemeral={}", next_did_hash, ephemeral);
-
-        if ephemeral {
-            // Live stream the message?
-            if let Some(stream_uuid) = state
-                .database
-                .streaming_is_client_live(&next_did_hash, false)
-                .await && state
-                    .database
-                    .streaming_publish_message(&next_did_hash, &stream_uuid, &data, false)
-                    .await
-                    .is_ok()
-                {
-                    debug!("Live streaming message to UUID: {}", stream_uuid);
-                }
-        } else {
-            // Determine if the next hop is local or remote by resolving the DID Document
-            let remote_endpoint = if state.config.processors.forwarding.external_forwarding {
-                match state.did_resolver.resolve(&next).await {
-                    Ok(resolve_response) => {
-                        match service_endpoint_for_remote(state, &resolve_response.doc) {
-                            Some(endpoint_url) => {
-                                debug!(
-                                    "Next hop ({}) is remote, endpoint: {}",
-                                    next, endpoint_url
-                                );
-                                Some(endpoint_url)
-                            }
-                            None => {
-                                debug!("Next hop ({}) is local to this mediator", next);
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Can't resolve the DID — treat as local (store normally)
-                        warn!(
-                            "Couldn't resolve DID document for {}: {}. Treating as local.",
-                            next, e
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
-            if let Some(endpoint_url) = remote_endpoint {
-                // Remote destination — enqueue to FORWARD_Q for the forwarding processor
-
-                // Check hop count for loop detection
-                let hop_count = msg
-                    .extra
-                    .get("hop_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-
-                if hop_count >= state.config.processors.forwarding.max_hops {
-                    metrics::counter!(crate::common::metrics::names::FORWARD_LOOP_DETECTED_TOTAL).increment(1);
-                    return Err(MediatorError::problem_with_log(
-                        94,
-                        &session.session_id,
-                        Some(msg.id.to_string()),
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "protocol.forwarding.loop_detected",
-                        "Message exceeded maximum hop count ({1}), possible forwarding loop",
-                        vec![state.config.processors.forwarding.max_hops.to_string()],
-                        StatusCode::LOOP_DETECTED,
-                        format!(
-                            "Message exceeded maximum hop count ({}), possible forwarding loop",
-                            state.config.processors.forwarding.max_hops
-                        ),
-                    ));
-                }
-
-                let now_ms = unix_timestamp_millis();
-
-                // Get the sender's full DID for problem reports
-                let from_did = msg.from.as_deref().unwrap_or("").to_string();
-
-                // Blind relay forwards the inner envelope verbatim; rewrap relay
-                // re-encrypts it from this mediator to the peer (see
-                // `rewrap_for_relay`). Default is blind — no behaviour change.
-                let relay_message = match state.config.processors.forwarding.relay_mode {
-                    RelayMode::Blind => data.clone(),
-                    RelayMode::Rewrap => {
-                        rewrap_for_relay(state, session, &data, &next, hop_count + 1).await?
-                    }
-                };
-
-                let entry = ForwardQueueEntry {
-                    stream_id: String::new(), // Set by Redis on XADD
-                    message: relay_message,
-                    to_did_hash: next_did_hash.clone(),
-                    from_did_hash: from_account.did_hash.clone(),
-                    from_did,
-                    to_did: next.clone(),
-                    endpoint_url: endpoint_url.clone(),
-                    received_at_ms: now_ms,
-                    delay_milli,
-                    expires_at,
-                    retry_count: 0,
-                    hop_count: hop_count + 1,
-                };
-
-                state.database.forward_queue_enqueue_with_limit(
-                    &entry,
-                    state.config.limits.forward_task_queue,
-                ).await.map_err(|e| {
-                    MediatorError::problem_with_log(
-                        90,
-                        &session.session_id,
-                        Some(msg.id.to_string()),
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.forwarding.enqueue",
-                        "Failed to enqueue message for remote forwarding: {1}",
-                        vec![e.to_string()],
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        format!("Failed to enqueue message for remote forwarding: {e}"),
-                    )
-                })?;
-
-                metrics::counter!(crate::common::metrics::names::MESSAGES_FORWARDED_TOTAL).increment(1);
-                info!(
-                    "FORWARD_ENQUEUED: to_did_hash={} from_did_hash={} endpoint={}",
-                    next_did_hash, from_account.did_hash, endpoint_url
-                );
-            } else {
-                // Local destination — store as before
-                store_forwarded_message(
-                    state,
-                    session,
-                    &data,
-                    Some(&from_account.did_hash),
-                    &next,
-                    Some(expires_at),
-                )
-                .await?;
-            }
-        }
+        deliver_forward(
+            state,
+            session,
+            msg,
+            &next,
+            &next_did_hash,
+            &next_acls,
+            &from_account,
+            &data,
+            delay_milli,
+            expires_at,
+            ephemeral,
+        )
+        .await?;
 
         Ok(ProcessMessageResponse {
             store_message: false,
@@ -978,8 +1072,10 @@ fn uri_points_at_self(
 #[cfg(test)]
 mod tests {
     use super::{
-        relay_peer_trusted, relay_sender_acls, rewrap_inner_attachment, uri_points_at_self,
+        parse_next_did, queue_at_capacity, relay_peer_trusted, relay_sender_acls,
+        rewrap_inner_attachment, uri_points_at_self,
     };
+    use crate::common::session::Session;
     use crate::server::{compute_self_authorities_from, normalize_host};
     use affinidi_messaging_didcomm::message::{Attachment, Message};
     use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
@@ -1040,6 +1136,50 @@ mod tests {
         )
         .finalize();
         assert!(rewrap_inner_attachment("did:peer:this_mediator", &msg).is_none());
+    }
+
+    #[test]
+    fn queue_at_capacity_logic() {
+        // `-1` means unlimited — never at capacity, even when massively over.
+        assert!(!queue_at_capacity(1_000, 1_000, -1, false));
+        // Ephemeral (live-stream) forwards bypass queue accounting entirely.
+        assert!(!queue_at_capacity(1_000, 1_000, 10, true));
+        // Strictly under the limit.
+        assert!(!queue_at_capacity(5, 4, 10, false)); // 9 < 10
+        // At the limit (>=) is rejected.
+        assert!(queue_at_capacity(5, 5, 10, false)); // 10 >= 10
+        // Over the limit.
+        assert!(queue_at_capacity(20, 1, 10, false)); // 21 >= 10
+    }
+
+    #[test]
+    fn parse_next_did_extracts_next() {
+        let msg = forward_to("did:peer:bob", b"x");
+        assert_eq!(
+            parse_next_did(&msg, &Session::default()).unwrap(),
+            "did:peer:bob"
+        );
+    }
+
+    #[test]
+    fn parse_next_did_rejects_missing_or_unparseable_next() {
+        // Body present but no `next` field.
+        let no_next = Message::build(
+            "id".to_string(),
+            "https://didcomm.org/routing/2.0/forward".to_string(),
+            serde_json::json!({}),
+        )
+        .finalize();
+        assert!(parse_next_did(&no_next, &Session::default()).is_err());
+
+        // Body that doesn't deserialize into a forward request at all.
+        let garbage = Message::build(
+            "id".to_string(),
+            "https://didcomm.org/routing/2.0/forward".to_string(),
+            serde_json::json!({ "next": 12345 }),
+        )
+        .finalize();
+        assert!(parse_next_did(&garbage, &Session::default()).is_err());
     }
 
     #[test]
