@@ -916,25 +916,23 @@ async fn generate_mediator_identity(
     service_uri: &str,
 ) -> Result<(String, Vec<Secret>, Arc<ThreadedSecretsResolver>), TestMediatorError> {
     // `service_uri` is `http://<bound>/mediator/v1/` (trailing slash).
-    // The DIDComm service entry advertises both HTTP and WS endpoints
-    // (matching the canonical mediator-template shape) so SDK clients
-    // that prefer the streaming transport can find a `ws://` URI. The
-    // `#auth` endpoint is `<service_uri>authenticate` (no extra slash
-    // — `service_uri` already ends in `/`); the auth library appends
-    // `/challenge` itself, yielding `…/authenticate/challenge`.
-    let ws_uri = format!(
-        "ws://{}",
-        service_uri
-            .trim_start_matches("http://")
-            .trim_end_matches('/'),
-    ) + "/ws";
-    let auth_uri = format!("{service_uri}authenticate");
+    // The DIDComm `dm` service endpoint must NOT carry that trailing
+    // slash: the production mediator DID advertises the bare base
+    // (`http://<host>/mediator/v1` — see mediator-setup's `did_peer`
+    // generator), and the SDK builds request URLs by concatenating
+    // (`{endpoint}/inbound`). A trailing slash there yields `…/v1//inbound`,
+    // which the mediator router 404s — so we mirror production and trim it.
+    // The `#auth` endpoint is `<base>/authenticate`; the auth library
+    // appends `/challenge` itself, yielding `…/authenticate/challenge`.
+    let base_uri = service_uri.trim_end_matches('/');
+    let ws_uri = format!("ws://{}", base_uri.trim_start_matches("http://")) + "/ws";
+    let auth_uri = format!("{base_uri}/authenticate");
     let services = vec![
         PeerService {
             type_: "dm".into(),
             endpoint: PeerServiceEndpoint::Long(OneOrMany::Many(vec![
                 PeerServiceEndpointLong {
-                    uri: service_uri.to_string(),
+                    uri: base_uri.to_string(),
                     accept: vec!["didcomm/v2".into()],
                     routing_keys: vec![],
                 },
