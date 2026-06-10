@@ -4,6 +4,29 @@
 
 ## 11th June 2026
 
+### 0.15.29 — Decompose routing `process()` (simplification T10)
+
+- Extracts the deepest, longest blocks of `routing::process()` (~745 lines,
+  7-deep nesting) into named, single-purpose functions, taking the body from
+  ~745 to ~390 lines and removing the worst nesting:
+  - `decode_first_attachment` — the base64/JSON/JWS/links attachment decode;
+  - `deliver_forward` — the inner-envelope read, anonymous-receive gate, and
+    the ephemeral / remote-enqueue (+ relay re-wrap) / local-store decision;
+  - `parse_next_did`, `validate_sender_queue_limit`,
+    `validate_recipient_queue_limit`, and a pure `queue_at_capacity`
+    predicate.
+- **Pure refactor — behaviour byte-identical**: every problem report (code,
+  message, args, HTTP status) and the exact validation ordering are
+  preserved. Verified by the unchanged routing unit tests plus the
+  `affinidi-messaging-test-mediator` `cross_mediator_forwarding` e2e suite
+  (which drives the real Alice → A → B → Bob forward path, blind and rewrap,
+  trusted and untrusted), and new unit tests for `queue_at_capacity` and
+  `parse_next_did`.
+- Conservative scope (by design): the account-resolution blocks
+  (`next_account` / forwarding-sender) and the remaining short linear
+  validations stay inline — they're security-sensitive account-mutation
+  paths, already well-commented, and a clean target for a follow-up pass.
+
 ### 0.15.28 — Migrate routing + ACL-protocol checks to authz (simplification T9)
 
 - Completes the authz migration so every runtime permission decision flows
