@@ -131,6 +131,21 @@ impl Listener {
                 }
             }
         }
+
+        // The websocket transport runs as an independent spawned task with its
+        // own auto-reconnect loop, and there is no `Drop` that stops it —
+        // dropping this listener's `ATM`/profile leaves that task alive. On the
+        // reconnect path `connect()` already tears the old socket down before
+        // opening a new one; the terminal-exit path (shutdown, `Never`, or
+        // exhausted `OnFailure` retries) must do the same. Without this, an
+        // in-process service teardown (e.g. a soft restart, where the process
+        // keeps running) orphans the websocket: it keeps reconnecting to the
+        // mediator while the freshly-started service opens a second channel
+        // for the same DID, triggering an endless `w.websocket.duplicate-channel`
+        // flood. `stop_websocket` is a no-op if the socket is already stopped.
+        if let Ok(profile) = self.profile() {
+            let _ = profile.stop_websocket().await;
+        }
     }
 }
 

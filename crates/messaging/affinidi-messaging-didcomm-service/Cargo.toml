@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-didcomm-service"
-version = "0.3.4"
+version = "0.3.5"
 description = "Shared DIDComm service framework for always-online DIDComm client. Manages mediator connection, message lifecycle, and handler dispatch."
 edition.workspace = true
 authors.workspace = true
@@ -32,6 +32,11 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 
 [dev-dependencies]
 affinidi-did-common = "0.3"
+# Embedded mediator fixture + DID generation for the soft-restart websocket
+# regression test. Sister-crate path deps carry an explicit `version =` so the
+# package stays publishable while using the in-tree path for dev-builds.
+affinidi-messaging-test-mediator = { version = "0.2", path = "../affinidi-messaging-test-mediator" }
+affinidi-tdk = { version = "0.7", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 
 
 [[example]]

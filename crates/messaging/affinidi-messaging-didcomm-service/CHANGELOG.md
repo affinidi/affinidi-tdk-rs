@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.5] - 2026-06-10
+
+### Fixed
+
+- Listener now tears down its websocket transport (`stop_websocket`) on
+  terminal exit — shutdown, `RestartPolicy::Never`, or exhausted
+  `OnFailure` retries — not only on the reconnect path. The SDK websocket
+  runs as an independent, self-reconnecting spawned task with no `Drop`
+  hook, so dropping the listener's `ATM`/profile previously left it alive.
+  In an in-process service teardown (e.g. a host's *soft restart*, where
+  the process keeps running) the orphaned socket kept reconnecting to the
+  mediator while the newly-started service opened a second channel for the
+  same DID, producing an endless `w.websocket.duplicate-channel` flood.
+
 ## [0.3.3] - 2026-06-01
 
 ### Changed
