@@ -5,6 +5,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
+    common::authz::{self, Capability},
     common::session::{Session, SessionClaims, SessionState},
 };
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
@@ -289,7 +290,7 @@ pub async fn authentication_refresh(
         }
 
         // Does the Global ACL still allow them to connect?
-        if session_check.acls.get_blocked() {
+        if authz::require_capability(&session_check.acls, Capability::NotBlocked).is_err() {
             info!("DID({}) is blocked from connecting", digest(&session_check.did));
             return Err(MediatorError::problem(
                 25,

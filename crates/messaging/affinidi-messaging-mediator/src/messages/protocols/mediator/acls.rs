@@ -189,7 +189,9 @@ pub(crate) async fn process(
                         }
                     };
 
-                    if let Some(errors) = acl_change_ok(&current_acls, &MediatorACLSet::from_u64(acls)) {
+                    if let Some(errors) =
+                        crate::common::authz::acl_change_ok(&current_acls, &MediatorACLSet::from_u64(acls))
+                    {
                         warn!("Can't change ACLs. Reason: self_change not allowed");
 
                         // Creates a string placement for each error. E.g. {1}, {2}, {3}
@@ -638,90 +640,6 @@ fn _generate_response_message(
         data: crate::messages::WrapperType::Message(Box::new(response)),
         forward_message: false,
     })
-}
-
-/// Helper method that checks if the ACL change is valid for non-admin accounts
-/// checks if self_change would block any modification of the ACLs
-/// returns None if ok
-/// returns Some(vec) with errors if not ok
-fn acl_change_ok(current_acls: &MediatorACLSet, new_acls: &MediatorACLSet) -> Option<Vec<String>> {
-    let mut errors = Vec::new();
-
-    if (current_acls.get_access_list_mode().0 != new_acls.get_access_list_mode().0)
-        && !current_acls.get_access_list_mode().1
-    {
-        errors.push("access_list_mode not allowed to change".to_string());
-    }
-
-    if current_acls.get_access_list_mode().1 != new_acls.get_access_list_mode().1 {
-        errors.push("access_list_mode:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_send_messages().0 != new_acls.get_send_messages().0)
-        && !current_acls.get_send_messages().1
-    {
-        errors.push("send_messages not allowed to change".to_string());
-    }
-
-    if current_acls.get_send_messages().1 != new_acls.get_send_messages().1 {
-        errors.push("send_messages:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_receive_messages().0 != new_acls.get_receive_messages().0)
-        && !current_acls.get_receive_messages().1
-    {
-        errors.push("receive_messages not allowed to change".to_string());
-    }
-
-    if current_acls.get_receive_messages().1 != new_acls.get_receive_messages().1 {
-        errors.push("receive_messages:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_send_forwarded().0 != new_acls.get_send_forwarded().0)
-        && !current_acls.get_send_forwarded().1
-    {
-        errors.push("send_forwarded not allowed to change".to_string());
-    }
-
-    if current_acls.get_send_forwarded().1 != new_acls.get_send_forwarded().1 {
-        errors.push("send_forwarded:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_receive_forwarded().0 != new_acls.get_receive_forwarded().0)
-        && !current_acls.get_receive_forwarded().1
-    {
-        errors.push("get_receive_forwarded not allowed to change".to_string());
-    }
-
-    if current_acls.get_receive_forwarded().1 != new_acls.get_receive_forwarded().1 {
-        errors.push("get_receive_forwarded:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_create_invites().0 != new_acls.get_create_invites().0)
-        && !current_acls.get_create_invites().1
-    {
-        errors.push("create_invites not allowed to change".to_string());
-    }
-
-    if current_acls.get_create_invites().1 != new_acls.get_create_invites().1 {
-        errors.push("create_invites:self_change can't modify!".to_string());
-    }
-
-    if (current_acls.get_anon_receive().0 != new_acls.get_anon_receive().0)
-        && !current_acls.get_anon_receive().1
-    {
-        errors.push("anon_receive not allowed to change".to_string());
-    }
-
-    if current_acls.get_anon_receive().1 != new_acls.get_anon_receive().1 {
-        errors.push("anon_receive:self_change can't modify!".to_string());
-    }
-
-    if errors.is_empty() {
-        None
-    } else {
-        Some(errors)
-    }
 }
 
 #[cfg(test)]

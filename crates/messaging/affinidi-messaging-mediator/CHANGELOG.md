@@ -2,6 +2,29 @@
 
 ## Changelog history
 
+## 11th June 2026
+
+### 0.15.28 — Migrate routing + ACL-protocol checks to authz (simplification T9)
+
+- Completes the authz migration so every runtime permission decision flows
+  through `common/authz.rs`:
+  - routing forward-path gates → `require_capability(ReceiveForwarded)` /
+    `require_capability(SendForwarded)` (sender account + anonymous-session
+    paths) and the next-hop access-list check → `check_access_list`;
+  - the `relay_sender_acls` seed condition and `jwt_auth`'s
+    `anonymous_inbound_allowed` → `authz::grants(SendForwarded)`;
+  - the refresh handler's blocked-DID gate → `require_capability(NotBlocked)`;
+  - the admin-protocol self-change validator `acl_change_ok` (a pure
+    authorization predicate) relocated from the mediator ACL handler into
+    `authz`.
+- After this, `get_send_forwarded` / `get_receive_forwarded` / `get_blocked`
+  appear only in `authz` and the `MediatorACLSet` type itself (outside of
+  tests). Structure only — behaviour byte-identical (same problem reports,
+  same allow/deny verdicts); the routing `relay_sender_acls` unit suite
+  passes unchanged. `check_permissions` (admin/self + signature) is left in
+  the admin handler — it makes no capability-bit decision, so it's outside
+  the authz capability surface.
+
 ## 10th June 2026
 
 ### 0.15.27 — Migrate handler/direct-delivery ACL checks to authz (simplification T8)
