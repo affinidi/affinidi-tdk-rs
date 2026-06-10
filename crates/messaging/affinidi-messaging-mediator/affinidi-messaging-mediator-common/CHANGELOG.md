@@ -4,6 +4,25 @@
 
 ## 10th June 2026
 
+### 0.15.7 — ACL bitfield round-trip safety net (simplification T5)
+
+- **TEST:** adds exhaustive round-trip coverage for `MediatorACLSet`'s
+  hand-packed `u64` layout — a full-set `set → to_u64 → from_u64 → get`
+  identity test (all 19 bits at once), every capability pair × both
+  access-list modes, and a bit-independence test (setting one capability
+  flips exactly one bit). These guard the "fields and bit order must stay
+  in sync" invariant the module header warns about.
+- **DOCS / invariant:** `MediatorACLSet::default()` is **kept** as
+  `ExplicitAllow` (deny-by-default: an empty access list denies unlisted
+  senders). The T5 plan suggested aligning it to the config's
+  `mediator_acl_mode` default (`ExplicitDeny`), but auditing the call sites
+  showed `default()` is the recipient-fallback ACL on the direct-delivery
+  (`inbound.rs`) and forward (`routing.rs`) paths, so flipping it to
+  `ExplicitDeny` would make every default-ACL recipient accept *all*
+  unlisted senders — a loosening, not a hardening. The divergence is now
+  documented on `AccessListModeType` and pinned by
+  `default_is_explicit_allow_deny_by_default`. No behaviour change.
+
 ### 0.15.6 — Fail-closed session rename in the trait default (simplification T4)
 
 - `MediatorStore::update_session_authenticated`'s **default** implementation
