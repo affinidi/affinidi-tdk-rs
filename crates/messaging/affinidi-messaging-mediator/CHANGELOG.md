@@ -2,6 +2,26 @@
 
 ## Changelog history
 
+## 10th June 2026
+
+### 0.15.18 — Boot guard covers network-published (VTA) DIDs (#398)
+
+- The operating-secret coverage guard added in #394 only ran for self-hosted
+  DIDs (`did_web_self_hosted` set), so a VTA-managed / network-published
+  mediator booted without verifying that its loaded operating secrets can
+  actually decrypt its own inbound DIDComm. A VTA key-label/kid mismatch
+  (e.g. `vta-sdk` < 0.11.1's label-as-kid bug) therefore surfaced only at
+  runtime, failing every message — including the `/authenticate` handshake —
+  with `No local secret matches any JWE recipient`, while the mediator
+  otherwise booted clean.
+- The guard now also runs in the non-self-hosted path: it resolves the
+  mediator's own published DID document and verifies the loaded operating
+  secrets cover a `keyAgreement` verification-method id, aborting boot with an
+  actionable error on a confirmed gap. A resolver failure is logged and
+  skipped so a transient DID-host outage cannot block startup; only a
+  *confirmed* coverage gap is fatal. Logic extracted into
+  `assert_operating_secrets_cover_key_agreement` with regression tests.
+
 ## 9th June 2026
 
 ### 0.15.17 — Consolidate mediator self-DID resolver preload (#395)
