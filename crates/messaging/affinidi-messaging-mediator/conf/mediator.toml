@@ -371,6 +371,13 @@ oob_invite_ttl = "86400"
 
 ### ****************************************************************************************************************************
 ### Forwarding processor configuration
+###
+### Runs on every storage backend. Durability of queued forwards follows
+### the backend: Redis and Fjall queues survive a restart (in-flight
+### entries are recovered automatically); the in-memory backend loses
+### queued forwards when the process exits. Scaling forwarding across
+### multiple processes (the standalone forwarding_processor binary in
+### mediator-processors) requires the Redis backend.
 ### ****************************************************************************************************************************
 [processors.forwarding]
 ### Env: PROCESSOR_FORWARDING_ENABLED
@@ -423,7 +430,9 @@ initial_backoff_ms = "1000"
 max_backoff_ms = "60000"
 
 ### Env: PROCESSOR_FORWARDING_CONSUMER_GROUP
-### Redis consumer group name (shared across processor instances)
+### Consumer group name for the forwarding queue. On Redis this is the
+### stream consumer group shared across processor instances; on Fjall and
+### in-memory backends it names the single in-process group.
 consumer_group = "forwarding"
 
 [processors.message_expiry_cleanup]

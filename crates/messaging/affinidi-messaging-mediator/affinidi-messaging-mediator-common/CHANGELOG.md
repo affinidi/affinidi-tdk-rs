@@ -2,6 +2,22 @@
 
 ## Changelog history
 
+## 10th June 2026
+
+### 0.15.4 — `ForwardingProcessor` compiles for all storage backends
+
+- `tasks::forwarding::processor` is no longer gated on `redis-backend`.
+  The processor has been backend-agnostic since the `MediatorStore`
+  trait refactor — it consumes only the `forward_queue_*` trait methods
+  (Redis implements them with Streams consumer groups; Fjall and Memory
+  with an in-process pending-claim emulation) — but the stale cfg gate
+  kept it out of Fjall/Memory builds. Its HTTP/WS delivery dependencies
+  (`reqwest`, `tokio-tungstenite`) already ride on the `server` umbrella
+  feature, so non-Redis builds gain no new dependencies.
+- Multi-process scaling (the standalone `forwarding_processor` binary in
+  `mediator-processors`) still requires the Redis backend; Fjall and
+  Memory forward queues are single-process by design.
+
 ## 1st June 2026
 
 ### 0.15.3 — clarify `Session::expires_at` semantics (docs)
