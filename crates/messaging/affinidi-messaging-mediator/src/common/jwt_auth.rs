@@ -1,5 +1,6 @@
 use crate::{
     SharedData,
+    common::authz::{self, Capability},
     common::session::{Session, SessionClaims},
 };
 use affinidi_messaging_mediator_common::errors::ErrorResponse;
@@ -160,7 +161,7 @@ pub(crate) async fn authenticate_token(
     }
 
     // Check if ACL is satisfied
-    if saved_session.acls.get_blocked() {
+    if authz::require_capability(&saved_session.acls, Capability::NotBlocked).is_err() {
         info!("DID({}) is blocked from connecting", did);
         return Err(AuthError::Blocked);
     }

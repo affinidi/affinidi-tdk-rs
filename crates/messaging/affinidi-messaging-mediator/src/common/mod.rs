@@ -1,4 +1,4 @@
-pub mod acl_checks;
+pub mod authz;
 pub mod circuit_breaker;
 pub mod config;
 pub mod did_rate_limiter;
