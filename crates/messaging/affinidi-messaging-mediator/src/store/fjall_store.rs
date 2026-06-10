@@ -3091,6 +3091,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forward_queue_pending_claim_survives_restart() {
+        // Crash-recovery path for the forwarding processor on Fjall: a
+        // claimed-but-unACKed forward must survive a process restart
+        // and be recoverable via autoclaim by a new consumer.
+        let dir = TempDir::new().expect("tempdir");
+        let entry = ForwardQueueEntry {
+            stream_id: String::new(),
+            message: "encrypted".into(),
+            to_did_hash: hash("to"),
+            from_did_hash: hash("from"),
+            from_did: "did:from".into(),
+            to_did: "did:to".into(),
+            endpoint_url: "http://example".into(),
+            received_at_ms: 0,
+            delay_milli: 0,
+            expires_at: 0,
+            retry_count: 0,
+            hop_count: 0,
+        };
+
+        let id = {
+            let store = FjallStore::open(dir.path()).expect("open");
+            let id = store
+                .forward_queue_enqueue(&entry, 0)
+                .await
+                .expect("enqueue");
+            // Claim under consumer c1, then "crash" before ACKing.
+            let read = store
+                .forward_queue_read("forwarding", "c1", 10, Duration::from_millis(0))
+                .await
+                .expect("read");
+            assert_eq!(read.len(), 1);
+            store.shutdown().await.expect("shutdown");
+            id
+        };
+
+        let store = FjallStore::open(dir.path()).expect("reopen");
+        // The group cursor is durable, so a plain read must not
+        // double-deliver the claimed entry...
+        let read = store
+            .forward_queue_read("forwarding", "c2", 10, Duration::from_millis(0))
+            .await
+            .expect("read after reopen");
+        assert!(read.is_empty());
+        // ...but autoclaim recovers it for the new consumer.
+        let claimed = store
+            .forward_queue_autoclaim("forwarding", "c2", Duration::from_millis(0), 10)
+            .await
+            .expect("autoclaim");
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].stream_id, id);
+        assert_eq!(claimed[0].message, "encrypted");
+
+        store
+            .forward_queue_ack("forwarding", &[&id])
+            .await
+            .expect("ack");
+        store.forward_queue_delete(&[&id]).await.expect("delete");
+        assert_eq!(store.forward_queue_len().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn forward_queue_blocks_then_returns_on_enqueue() {
         let dir = TempDir::new().expect("tempdir");
         let store = Arc::new(FjallStore::open(dir.path()).expect("open"));

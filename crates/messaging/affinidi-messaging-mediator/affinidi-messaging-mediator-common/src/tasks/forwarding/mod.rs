@@ -10,12 +10,15 @@
 pub mod config;
 pub use config::ForwardingConfig;
 
-// `ForwardingProcessor` runs only against the Redis backend (it uses
-// XREADGROUP / XACK / XAUTOCLAIM consumer-group semantics for
-// multi-process coordination). Gate it on `redis-backend` so memory-
-// and fjall-only mediator builds don't drag in `reqwest` /
-// `tokio-tungstenite` for code they can't run.
-#[cfg(feature = "redis-backend")]
+// `ForwardingProcessor` is backend-agnostic: it consumes the
+// `forward_queue_*` methods on `Arc<dyn MediatorStore>`, which every
+// backend implements (Redis via Streams consumer groups; Fjall and
+// Memory via an in-process pending-claim emulation of the same
+// semantics). Its HTTP/WS delivery deps (`reqwest`,
+// `tokio-tungstenite`) ride on the `server` umbrella feature, which
+// also gates the parent `tasks` module — so no extra cfg is needed.
+// Multi-process scaling (the standalone `forwarding_processor`
+// binary) still requires the Redis backend; Fjall and Memory queues
+// are single-process.
 pub mod processor;
-#[cfg(feature = "redis-backend")]
 pub use processor::ForwardingProcessor;
