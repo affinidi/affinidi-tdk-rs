@@ -33,7 +33,16 @@ pub enum ACLError {
 
 /// There are two access list Modes
 /// - `ExplicitAllow`: DIDs listed in the access list will be allowed
+///   (an *allowlist* — an empty list denies every unlisted sender).
 /// - `ExplicitDeny`: DIDs listed in the access list will be denied
+///   (a *denylist* — an empty list allows every unlisted sender).
+///
+/// The default is [`ExplicitAllow`](Self::ExplicitAllow): deny-by-default
+/// is the secure baseline for a DID's `MediatorACLSet`. This is
+/// intentionally *not* the same as the mediator-wide `mediator_acl_mode`
+/// config default (`ExplicitDeny`) — flipping this default to `ExplicitDeny`
+/// would make every default-ACL recipient accept all unlisted senders. The
+/// `default_is_explicit_allow_deny_by_default` test pins this invariant.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub enum AccessListModeType {
     #[default]
@@ -1201,5 +1210,183 @@ mod tests {
         // set to unblocked
         acl.set_self_manage_receive_queue_limit(false);
         assert!(!acl.get_self_manage_receive_queue_limit());
+    }
+
+    // ─── Bitfield safety net (mediator simplification T5) ────────────────────
+
+    /// `MediatorACLSet::default()` is `ExplicitAllow` — an *allowlist* whose
+    /// empty access list denies every unlisted sender (deny-by-default). This
+    /// is the secure baseline and is deliberately NOT the same as the config's
+    /// `mediator_acl_mode` default (`ExplicitDeny`, a permissive denylist):
+    /// flipping `default()` to `ExplicitDeny` would make every default-ACL
+    /// recipient accept all unlisted senders on the delivery/forward paths
+    /// (`access_list_allowed` returns true for an empty denylist). This test
+    /// pins the invariant so the divergence isn't "fixed" into a security
+    /// regression. See the T5 PR for the call-site audit.
+    #[test]
+    fn default_is_explicit_allow_deny_by_default() {
+        let (mode, self_change) = MediatorACLSet::default().get_access_list_mode();
+        assert_eq!(
+            mode,
+            AccessListModeType::ExplicitAllow,
+            "default() must stay deny-by-default (ExplicitAllow); flipping to \
+             ExplicitDeny loosens access control for default-ACL recipients"
+        );
+        assert!(
+            !self_change,
+            "default() must not grant self-change of the mode"
+        );
+        assert_eq!(
+            MediatorACLSet::default().to_u64(),
+            0,
+            "default packs to all-zero"
+        );
+    }
+
+    /// Set every field to a distinct value, pack to `u64`, unpack, and assert
+    /// every getter is identical — exercising all 19 bits together so a
+    /// collision or mis-ordered bit can't hide behind the per-field tests
+    /// above. Also checks `to_u64` is stable across the round trip.
+    #[test]
+    fn full_acl_set_round_trips_through_u64() {
+        let mut acl = MediatorACLSet::default();
+        acl.set_access_list_mode(AccessListModeType::ExplicitDeny, true, true)
+            .unwrap();
+        acl.set_blocked(true);
+        acl.set_local(true);
+        // Mixed (value, self_change) per pair so neither bit shadows the other.
+        acl.set_send_messages(true, false, true).unwrap();
+        acl.set_receive_messages(false, true, true).unwrap();
+        acl.set_send_forwarded(true, true, true).unwrap();
+        acl.set_receive_forwarded(false, false, true).unwrap();
+        acl.set_create_invites(true, false, true).unwrap();
+        acl.set_anon_receive(false, true, true).unwrap();
+        acl.set_self_manage_list(true);
+        acl.set_self_manage_send_queue_limit(false);
+        acl.set_self_manage_receive_queue_limit(true);
+
+        let packed = acl.to_u64();
+        let restored = MediatorACLSet::from_u64(packed);
+
+        assert_eq!(
+            restored.get_access_list_mode(),
+            (AccessListModeType::ExplicitDeny, true)
+        );
+        assert!(restored.get_blocked());
+        assert!(restored.get_local());
+        assert_eq!(restored.get_send_messages(), (true, false));
+        assert_eq!(restored.get_receive_messages(), (false, true));
+        assert_eq!(restored.get_send_forwarded(), (true, true));
+        assert_eq!(restored.get_receive_forwarded(), (false, false));
+        assert_eq!(restored.get_create_invites(), (true, false));
+        assert_eq!(restored.get_anon_receive(), (false, true));
+        assert!(restored.get_self_manage_list());
+        assert!(!restored.get_self_manage_send_queue_limit());
+        assert!(restored.get_self_manage_receive_queue_limit());
+        assert_eq!(restored.to_u64(), packed, "u64 round-trip is idempotent");
+    }
+
+    /// Every (value, self_change) combination of each capability pair survives
+    /// a `set → to_u64 → from_u64 → get` round trip, under *both* access-list
+    /// modes — the plan's exhaustive identity check.
+    #[test]
+    fn capability_pairs_round_trip_in_both_modes() {
+        // Each entry: (setter, getter) for a (value, self_change) pair.
+        type Setter = fn(&mut MediatorACLSet, bool, bool);
+        type Getter = fn(&MediatorACLSet) -> (bool, bool);
+        let pairs: &[(&str, Setter, Getter)] = &[
+            (
+                "send_messages",
+                |a, v, c| a.set_send_messages(v, c, true).unwrap(),
+                |a| a.get_send_messages(),
+            ),
+            (
+                "receive_messages",
+                |a, v, c| a.set_receive_messages(v, c, true).unwrap(),
+                |a| a.get_receive_messages(),
+            ),
+            (
+                "send_forwarded",
+                |a, v, c| a.set_send_forwarded(v, c, true).unwrap(),
+                |a| a.get_send_forwarded(),
+            ),
+            (
+                "receive_forwarded",
+                |a, v, c| a.set_receive_forwarded(v, c, true).unwrap(),
+                |a| a.get_receive_forwarded(),
+            ),
+            (
+                "create_invites",
+                |a, v, c| a.set_create_invites(v, c, true).unwrap(),
+                |a| a.get_create_invites(),
+            ),
+            (
+                "anon_receive",
+                |a, v, c| a.set_anon_receive(v, c, true).unwrap(),
+                |a| a.get_anon_receive(),
+            ),
+        ];
+
+        for mode in [
+            AccessListModeType::ExplicitAllow,
+            AccessListModeType::ExplicitDeny,
+        ] {
+            for (name, set, get) in pairs {
+                for value in [false, true] {
+                    for self_change in [false, true] {
+                        let mut acl = MediatorACLSet::default();
+                        acl.set_access_list_mode(mode.clone(), false, true).unwrap();
+                        set(&mut acl, value, self_change);
+
+                        let restored = MediatorACLSet::from_u64(acl.to_u64());
+                        assert_eq!(
+                            restored.get_access_list_mode().0,
+                            mode,
+                            "{name}: mode survives round trip"
+                        );
+                        assert_eq!(
+                            (get)(&restored),
+                            (value, self_change),
+                            "{name}: ({value}, {self_change}) survives round trip in {mode:?} mode"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Setting a single capability must not flip any other bit — guards
+    /// against overlapping bit positions in the hand-packed layout.
+    #[test]
+    fn capabilities_are_bit_independent() {
+        // Each closure sets exactly one capability "on"; every other getter
+        // must remain at its default.
+        let mutators: &[fn(&mut MediatorACLSet)] = &[
+            |a| a.set_blocked(true),
+            |a| a.set_local(true),
+            |a| a.set_send_messages(true, false, true).unwrap(),
+            |a| a.set_receive_messages(true, false, true).unwrap(),
+            |a| a.set_send_forwarded(true, false, true).unwrap(),
+            |a| a.set_receive_forwarded(true, false, true).unwrap(),
+            |a| a.set_create_invites(true, false, true).unwrap(),
+            |a| a.set_anon_receive(true, false, true).unwrap(),
+            |a| a.set_self_manage_list(true),
+            |a| a.set_self_manage_send_queue_limit(true),
+            |a| a.set_self_manage_receive_queue_limit(true),
+        ];
+
+        for (i, mutate) in mutators.iter().enumerate() {
+            let mut acl = MediatorACLSet::default();
+            mutate(&mut acl);
+            // Exactly one bit (plus possibly its change bit, here left false)
+            // should be set, so the packed value is a single power of two.
+            let bits = acl.to_u64();
+            assert_eq!(
+                bits.count_ones(),
+                1,
+                "mutator #{i} set {} bits, expected exactly 1 (bit collision?)",
+                bits.count_ones()
+            );
+        }
     }
 }
