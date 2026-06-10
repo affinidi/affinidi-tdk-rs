@@ -6,7 +6,12 @@ use crate::didcomm_compat::MetaEnvelope;
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::routing::{relay_peer_trusted, rewrap_inner_attachment};
-use crate::{SharedData, common::session::Session, messages::store::store_message};
+use crate::{
+    SharedData,
+    common::authz::{self, Capability},
+    common::session::Session,
+    messages::store::store_message,
+};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
@@ -231,7 +236,7 @@ async fn handle_inbound_didcomm(
                             state.config.security.global_acl_default.clone()
                         };
 
-                        if !from_acls.get_send_messages().0 {
+                        if authz::require_capability(&from_acls, Capability::SendMessages).is_err() {
                             return Err(MediatorError::problem(
                                 44,
                                 &session.session_id,
@@ -257,10 +262,13 @@ async fn handle_inbound_didcomm(
                             StatusCode::FORBIDDEN,
                         ));
                     }
-                    if !state
-                        .database
-                        .access_list_allowed(&digest(to_did), from_hash.as_deref())
-                        .await
+                    if authz::check_access_list(
+                        state.database.as_ref(),
+                        &digest(to_did),
+                        from_hash.as_deref(),
+                    )
+                    .await
+                    .is_err()
                     {
                         return Err(MediatorError::problem(
                             73,

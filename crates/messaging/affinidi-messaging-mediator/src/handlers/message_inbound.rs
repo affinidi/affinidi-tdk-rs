@@ -1,4 +1,9 @@
-use crate::{SharedData, common::jwt_auth::MaybeSession, messages::inbound::handle_inbound};
+use crate::{
+    SharedData,
+    common::authz::{self, Capability},
+    common::jwt_auth::MaybeSession,
+    messages::inbound::handle_inbound,
+};
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError, SuccessResponse};
 use affinidi_messaging_sdk::messages::{
     problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -56,7 +61,7 @@ pub async fn message_inbound_handler(
     );
     async move {
         // ACL Check
-        if !session.acls.get_send_messages().0 {
+        if authz::require_capability(&session.acls, Capability::SendMessages).is_err() {
             metrics::counter!(names::ACL_DENIALS_TOTAL, "action" => "send").increment(1);
             return Err(MediatorError::problem(
                 44,
