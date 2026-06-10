@@ -4,6 +4,26 @@
 
 ## 10th June 2026
 
+### 0.15.23 — Explicit timeout on request-validation storage calls (simplification T3)
+
+- Adds an explicit, configurable, backend-agnostic timeout
+  (`common::storage_timeout::with_storage_timeout`) around the storage
+  calls made while *admitting/validating* a request — the routing
+  forward-queue-depth admission check and the `/readyz` Redis-metadata and
+  forward-queue-length probes. On expiry these now return a clean
+  `DatabaseError` (HTTP 503 "Service temporarily unavailable") instead of
+  hanging the request (which would amplify load via client retries).
+- The bound reuses the existing `[database] database_timeout` (default 2s)
+  via a new `SharedData::storage_timeout()` accessor — no new config knob.
+- **Context:** the production Redis backend already caps every command at
+  `database_timeout` (the request path only uses the response-timeout
+  connection; the un-timed connection is reserved for background blocking
+  reads), so this is primarily defense-in-depth — it makes the admission/
+  probe bound explicit and testable, and extends it to in-process backends
+  (Fjall/Memory) and any future backend lacking its own command timeout.
+  Verified with a unit test that drives a never-resolving store through the
+  timeout.
+
 ### 0.15.22 — Supervised background tasks + `/livez` health split (simplification T2)
 
 - **Background tasks are now supervised.** Every long-lived background task

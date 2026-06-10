@@ -68,6 +68,16 @@ pub struct SharedData {
     pub component_health: HealthRegistry,
 }
 
+impl SharedData {
+    /// Bound for request-path storage calls made during admission/validation
+    /// (see [`common::storage_timeout`]). Sourced from the existing
+    /// `[database] database_timeout` (the same knob that caps Redis
+    /// commands), so it is operator-configurable and backend-agnostic.
+    pub fn storage_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.config.database.database_timeout as u64)
+    }
+}
+
 impl Debug for SharedData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SharedData")

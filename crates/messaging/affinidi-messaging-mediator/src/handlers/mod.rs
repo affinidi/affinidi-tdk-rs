@@ -1,4 +1,7 @@
-use crate::{SharedData, common::session::Session, tasks::supervisor::ComponentState};
+use crate::{
+    SharedData, common::session::Session, common::storage_timeout::with_storage_timeout,
+    tasks::supervisor::ComponentState,
+};
 use affinidi_messaging_mediator_common::errors::AppError;
 use affinidi_messaging_sdk::messages::SuccessResponse;
 use axum::{
@@ -179,8 +182,16 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }));
     }
 
-    // Check Redis connectivity
-    match state.database.get_db_metadata().await {
+    // Check Redis connectivity. Bounded so a wedged backend fails the probe
+    // promptly rather than hanging the load-balancer health check.
+    match with_storage_timeout(
+        state.storage_timeout(),
+        "get_db_metadata",
+        "NA",
+        state.database.get_db_metadata(),
+    )
+    .await
+    {
         Ok(_) => {
             checks.push(serde_json::json!({
                 "name": "redis",
@@ -197,8 +208,15 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
         }
     }
 
-    // Check FORWARD_Q length
-    match state.database.get_forward_tasks_len().await {
+    // Check FORWARD_Q length (bounded — see above).
+    match with_storage_timeout(
+        state.storage_timeout(),
+        "get_forward_tasks_len",
+        "NA",
+        state.database.get_forward_tasks_len(),
+    )
+    .await
+    {
         Ok(len) => {
             let queue_status = if len >= state.config.limits.forward_task_queue {
                 all_ok = false;
