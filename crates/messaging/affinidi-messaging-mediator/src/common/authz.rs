@@ -15,6 +15,7 @@
 //! below is intentionally complete ahead of every call site adopting it.
 
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::store::MediatorStore;
 use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
 use tracing::debug;
 
@@ -81,6 +82,28 @@ pub(crate) fn require_capability(
         Ok(())
     } else {
         Err(CapabilityDenied(capability))
+    }
+}
+
+/// Returned when a recipient's access list denies a sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AccessListDenied;
+
+/// Whether `sender_hash` may deliver to `recipient_hash` under the
+/// recipient's access list (interpreted as an allowlist or denylist per the
+/// recipient's ACL mode). The single wrapper over the store's
+/// `access_list_allowed`, so the allow/deny verdict and its error mapping
+/// live alongside the rest of the authz vocabulary. `sender_hash` is `None`
+/// for an anonymous sender.
+pub(crate) async fn check_access_list(
+    store: &dyn MediatorStore,
+    recipient_hash: &str,
+    sender_hash: Option<&str>,
+) -> Result<(), AccessListDenied> {
+    if store.access_list_allowed(recipient_hash, sender_hash).await {
+        Ok(())
+    } else {
+        Err(AccessListDenied)
     }
 }
 

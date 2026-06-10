@@ -4,6 +4,21 @@
 
 ## 10th June 2026
 
+### 0.15.27 — Migrate handler/direct-delivery ACL checks to authz (simplification T8)
+
+- Adds `authz::check_access_list` (the single wrapper over the store's
+  `access_list_allowed`, returning a typed allow/deny) and routes the
+  message-path ACL gates through the authz module:
+  - `message_inbound` `SEND_MESSAGES` gate → `require_capability(SendMessages)`;
+  - direct-delivery sender `SEND_MESSAGES` gate (`inbound.rs`) →
+    `require_capability(SendMessages)`;
+  - direct-delivery recipient access-list check (`inbound.rs`) →
+    `check_access_list`.
+- No inline capability/access-list logic remains in those handlers.
+  Structure only — behaviour byte-identical (same `authorization.send` /
+  `authorization.access_list.denied` problem reports, same anonymous-sender
+  handling). Phase 2, building on T7.
+
 ### 0.15.26 — Central authz module: auth-time checks (simplification T7)
 
 - Introduces `common/authz.rs` as the single home for permission semantics:
