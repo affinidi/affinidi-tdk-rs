@@ -4,6 +4,26 @@
 
 ## 10th June 2026
 
+### 0.15.25 — Boot-time config invariant validation (simplification T6)
+
+- Adds a single `validate_config` pass at config load (`common/config/validate.rs`)
+  that fails fast on hard misconfigurations and warns on suspicious-but-legal
+  combinations, replacing the lone inline JWT-expiry check.
+- **Errors (abort startup):** `mediator_did` / `admin_did` not valid DID
+  syntax; `jwt_access_expiry >= jwt_refresh_expiry`; `use_ssl = true` with a
+  missing, empty, or unreadable certificate/key file (previously only caught
+  later, at the TLS handshake in the binary path).
+- **Warnings (logged, non-fatal):** `admin_did == mediator_did` (privilege
+  confusion); `mediator_acl_mode = ExplicitDeny` together with a
+  `global_acl_default` of `ALLOW_ALL` (every new DID accepts everything);
+  `block_remote_admin_msgs = false` (remote DIDs may send admin messages).
+- `admin_did == mediator_did` is a **warning, not an error** despite the plan
+  listing it as fatal: the shipped example config (and possibly live
+  deployments) use one DID for both, and the validation contract requires that
+  no currently-valid deployment starts failing to boot. The footgun is still
+  surfaced loudly. Each check is a pure helper with unit tests (valid config
+  passes; each bad input fails with the right message).
+
 ### 0.15.24 — Fail-closed session rename for the in-memory backend (simplification T4)
 
 - Picks up the fail-closed `update_session_authenticated` default from

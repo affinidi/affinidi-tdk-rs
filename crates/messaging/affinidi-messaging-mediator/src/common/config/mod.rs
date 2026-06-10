@@ -2,6 +2,7 @@ pub mod helpers;
 pub mod limits;
 pub mod processors;
 pub mod security;
+pub mod validate;
 pub(crate) mod vta_bootstrap;
 pub mod vta_cache;
 
@@ -859,18 +860,9 @@ impl TryFrom<ConfigRaw> for Config {
             did_document = Some(parsed_document);
         }
 
-        // Ensure that the security JWT expiry times are valid
-        if config.security.jwt_access_expiry >= config.security.jwt_refresh_expiry {
-            error!(
-                "JWT Access expiry ({}) must be less than JWT Refresh expiry ({})",
-                config.security.jwt_access_expiry, config.security.jwt_refresh_expiry
-            );
-            return Err(MediatorError::ConfigError(
-                12,
-                "NA".into(),
-                "JWT Access expiry must be less than JWT Refresh expiry".into(),
-            ));
-        }
+        // Cross-field config invariants (incl. JWT access < refresh) are
+        // validated as one pass once `config` is fully populated — see the
+        // `validate::validate_config` call before `Ok(config)` below.
 
         // Get Subscriber unique hostname
         if config.streaming_enabled {
@@ -946,6 +938,10 @@ impl TryFrom<ConfigRaw> for Config {
             &raw.processors.forwarding.blocked_forwarding_dids,
         )
         .await?;
+
+        // Boot-time invariant validation: hard conflicts abort startup with
+        // an actionable message; suspicious-but-legal combinations warn.
+        validate::validate_config(&config)?;
 
         Ok(config)
     }
