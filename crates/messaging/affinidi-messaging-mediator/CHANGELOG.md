@@ -4,6 +4,19 @@
 
 ## 10th June 2026
 
+### 0.15.21 — Streaming task: remove lock-poison hazard (simplification T1)
+
+- The WebSocket streaming task guarded its in-flight inbox-redelivery set
+  with a `std::sync::Mutex<HashSet<String>>` accessed via `.lock().unwrap()`.
+  If any holder panicked, the mutex would be poisoned and every subsequent
+  `.unwrap()` would panic in turn — turning one fault into a cascading
+  failure of the streaming task. Replaced with a `dashmap::DashSet`, which
+  has no poisoning and no `.unwrap()`; `DashSet::insert` returns the same
+  "newly inserted" boolean the duplicate-drain guard relies on, so behaviour
+  is unchanged. `dashmap` was already compiled in the tree (via `governor`),
+  so this adds no new dependency to the build graph. First task of the
+  mediator architectural-simplification plan (Phase 1).
+
 ### 0.15.20 — Per-hop re-wrapping for inter-mediator relay (#385 item 3, #388)
 
 - Final piece of #385. Adds **per-hop re-wrapping** for the inter-mediator

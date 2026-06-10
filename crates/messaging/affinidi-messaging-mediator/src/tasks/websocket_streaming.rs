@@ -30,9 +30,9 @@ use affinidi_messaging_mediator_common::{
     types::messages::FetchOptions,
 };
 use ahash::AHashMap as HashMap;
+use dashmap::DashSet;
 use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -163,8 +163,7 @@ impl StreamingTask {
             // every couple of seconds must not re-dump the whole inbox on each
             // replacement. A replay already running for a DID covers the current
             // inbox state, so concurrent replacements skip spawning another.
-            let replay_in_progress: Arc<Mutex<HashSet<String>>> =
-                Arc::new(Mutex::new(HashSet::new()));
+            let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
 
             // Subscribe to delivery notifications via the trait. Backends
             // are responsible for the wire-level transport (Redis pub/sub,
@@ -318,7 +317,7 @@ impl StreamingTask {
         &self,
         database: &Arc<dyn MediatorStore>,
         clients: &mut HashMap<String, ClientEntry>,
-        replay_in_progress: &Arc<Mutex<HashSet<String>>>,
+        replay_in_progress: &Arc<DashSet<String>>,
         value: &StreamingUpdate,
     ) {
         let StreamingUpdateState::Register {
@@ -410,10 +409,11 @@ impl StreamingTask {
         // DID is already running, so a flip-flop duel can't amplify into a
         // repeated whole-inbox dump.
         if replacing {
-            let spawn = {
-                let mut guard = replay_in_progress.lock().unwrap();
-                guard.insert(value.did_hash.clone())
-            };
+            // `DashSet::insert` returns `true` only when the hash was newly
+            // added, so a concurrent redelivery for the same DID still sees
+            // `false` and skips the duplicate drain — same guard semantics as
+            // the previous `HashSet`, without the lock-poison hazard.
+            let spawn = replay_in_progress.insert(value.did_hash.clone());
             if spawn {
                 spawn_inbox_redelivery(
                     Arc::clone(database),
@@ -447,7 +447,7 @@ fn spawn_inbox_redelivery(
     client_tx: mpsc::Sender<WebSocketCommands>,
     did_hash: String,
     session_id: String,
-    replay_in_progress: Arc<Mutex<HashSet<String>>>,
+    replay_in_progress: Arc<DashSet<String>>,
 ) {
     tokio::spawn(async move {
         let mut start_id: Option<String> = None;
@@ -521,7 +521,7 @@ fn spawn_inbox_redelivery(
         if total > 0 {
             debug!(did_hash = %did_hash, total, "Inbox redelivery complete");
         }
-        replay_in_progress.lock().unwrap().remove(&did_hash);
+        replay_in_progress.remove(&did_hash);
     });
 }
 
@@ -563,7 +563,7 @@ mod tests {
             .expect("store message");
 
         let task = streaming_task();
-        let replay_in_progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
         let mut clients: HashMap<String, ClientEntry> = HashMap::new();
 
         // Client A is the existing live session.
@@ -631,7 +631,7 @@ mod tests {
             .expect("store message");
 
         let task = streaming_task();
-        let replay_in_progress: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let replay_in_progress: Arc<DashSet<String>> = Arc::new(DashSet::new());
         let mut clients: HashMap<String, ClientEntry> = HashMap::new();
 
         let (b_tx, mut b_rx) = mpsc::channel(5);
