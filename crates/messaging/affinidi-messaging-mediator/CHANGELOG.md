@@ -4,6 +4,41 @@
 
 ## 10th June 2026
 
+### 0.15.20 — Per-hop re-wrapping for inter-mediator relay (#385 item 3, #388)
+
+- Final piece of #385. Adds **per-hop re-wrapping** for the inter-mediator
+  relay path, behind the new `[processors.forwarding] relay_mode` config
+  (`blind` | `rewrap`, default `blind` — **no behaviour change** for
+  existing deployments).
+- **Why:** in the historical *blind* relay the relaying mediator forwards
+  the inner envelope byte-for-byte, so (a) the receiving mediator never
+  sees the relaying *peer's* identity — making a trusted-peer allowlist
+  impossible at the DIDComm layer — and (b) the inner authcrypt JWE carries
+  the original sender's key id (`skid`) in cleartext on the
+  mediator↔mediator hop. In `rewrap` mode each mediator re-encrypts the
+  inner forward in a fresh `forward` authcrypted *from itself* to the next
+  hop: the original sender and inner envelope are hidden from on-wire
+  observers, and the receiver gets an authenticated peer identity to
+  allowlist.
+- **Send** (`routing.rs::rewrap_for_relay`): wraps the inner attachment in a
+  new `forward` authcrypted from this mediator to the next hop (carrying the
+  running `hop_count`), enqueued instead of the verbatim bytes.
+- **Receive** (`inbound.rs::peel_relay_rewrap_layers`): a pre-pass (rewrap
+  mode only) that strips `forward`-to-self layers a peer produced,
+  authenticates the relaying peer against `relay_trusted_mediators`
+  (empty = any; non-empty = members only, anonymous rejected with
+  `authorization.relay.untrusted_peer`), and continues on the inner
+  envelope. Bounded by `max_hops`. Implemented as a pre-pass so
+  `handle_inbound_didcomm`'s body is unchanged — zero regression risk on the
+  direct-delivery and normal-message paths; cost is one extra unpack of the
+  outer layer for to-mediator messages on a rewrap mediator.
+- Both mediators in a relaying pair must use the same mode. Verified
+  end-to-end on the memory backend by `affinidi-messaging-test-mediator`'s
+  `cross_mediator_forwarding` suite (rewrap round trip + trusted-peer
+  admit/reject), now possible because #399 made the forwarding processor
+  run on non-Redis backends; the on-wire crypto is covered by
+  `tests/relay_rewrap.rs`. Closes #385.
+
 ### 0.15.19 — Forwarding runs on Fjall and in-memory backends (#399)
 
 - The forwarding processor now spawns for every storage backend, not just

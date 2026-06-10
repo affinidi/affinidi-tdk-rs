@@ -4,6 +4,15 @@
 
 ## 10th June 2026
 
+### 0.15.5 — `RelayMode` config for inter-mediator relay (#385 item 3)
+
+- Adds the `RelayMode` enum (`Blind` | `Rewrap`, default `Blind`) and two
+  fields on `ForwardingConfig`: `relay_mode` and `relay_trusted_mediators`
+  (a peer-mediator DID allowlist used only in `Rewrap`). Purely additive —
+  `Default` keeps the historical blind-relay behaviour, so existing
+  deployments are unchanged. Consumed by the mediator's routing/inbound
+  rewrap paths (see `affinidi-messaging-mediator` 0.15.20).
+
 ### 0.15.4 — `ForwardingProcessor` compiles for all storage backends
 
 - `tasks::forwarding::processor` is no longer gated on `redis-backend`.

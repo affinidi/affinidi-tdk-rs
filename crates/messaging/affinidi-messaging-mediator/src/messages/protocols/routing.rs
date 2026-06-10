@@ -11,9 +11,10 @@ use crate::{
     },
 };
 use affinidi_did_common::Document;
-use affinidi_messaging_didcomm::message::Message;
+use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_mediator_common::store::types::ForwardQueueEntry;
+use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReport, ProblemReportScope, ProblemReportSorter},
@@ -25,6 +26,7 @@ use serde::Deserialize;
 use sha256::digest;
 use tracing::{Instrument, debug, info, span, warn};
 use url::Url;
+use uuid::Uuid;
 
 // Reads the body of an incoming forward message
 #[derive(Default, Deserialize)]
@@ -51,6 +53,94 @@ fn relay_sender_acls(global_acl_default: &MediatorACLSet) -> MediatorACLSet {
         let _ = acls.set_send_forwarded(true, false, true);
     }
     acls
+}
+
+/// Re-wrap an inner forward envelope for relay to a remote peer mediator
+/// ([`RelayMode::Rewrap`]).
+///
+/// Produces a fresh `forward` whose single attachment is `inner`, authcrypted
+/// FROM this mediator TO `next` (the peer mediator) and carrying the running
+/// `hop_count`. The peer mediator authenticates *this* mediator as the sender
+/// (which is what makes its trusted-peer allowlist possible), sees that
+/// `next == its own DID`, and peels the attachment to continue routing. Because
+/// the inner envelope is now ciphertext inside this layer, on-wire observers
+/// between the two mediators no longer see the original sender's key id (which
+/// authcrypt otherwise carries, in the clear, in the inner JWE header).
+async fn rewrap_for_relay(
+    state: &SharedData,
+    session: &Session,
+    inner: &str,
+    next: &str,
+    hop_count: u32,
+) -> Result<String, MediatorError> {
+    let attachment = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(inner)).finalize();
+    let mut forward = Message::build(
+        Uuid::new_v4().to_string(),
+        "https://didcomm.org/routing/2.0/forward".to_owned(),
+        serde_json::json!({ "next": next }),
+    )
+    .to(next.to_owned())
+    .from(state.config.mediator_did.clone())
+    .attachment(attachment)
+    .finalize();
+    // Carry the running hop count so the peer mediator continues loop detection
+    // across the re-wrap rather than resetting it.
+    forward
+        .extra
+        .insert("hop_count".to_string(), serde_json::json!(hop_count));
+
+    crate::didcomm_compat::pack_encrypted(
+        &forward,
+        next,
+        Some(&state.config.mediator_did),
+        &state.did_resolver,
+        &*state.config.security.mediator_secrets,
+    )
+    .await
+    .map(|(packed, _)| packed)
+    .map_err(|e| {
+        MediatorError::problem_with_log(
+            47,
+            &session.session_id,
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "message.pack",
+            "Couldn't re-wrap forward for relay: {1}",
+            vec![e.clone()],
+            StatusCode::BAD_REQUEST,
+            format!("Couldn't re-wrap forward for relay: {e}"),
+        )
+    })
+}
+
+/// If `msg` is a relay re-wrap layer — a `forward` whose `next` hop is this
+/// mediator itself (the envelope produced by [`rewrap_for_relay`] on a peer) —
+/// decode and return its inner attachment (the envelope to continue processing).
+///
+/// Returns `None` for any other message, including an ordinary `forward` bound
+/// for a different next hop, so non-relay traffic is never altered.
+pub(crate) fn rewrap_inner_attachment(mediator_did: &str, msg: &Message) -> Option<String> {
+    if msg.typ != "https://didcomm.org/routing/2.0/forward" {
+        return None;
+    }
+    let next = serde_json::from_value::<ForwardRequest>(msg.body.clone())
+        .ok()?
+        .next?;
+    if next != mediator_did {
+        return None;
+    }
+    let b64 = msg.attachments.as_ref()?.first()?.data.base64.as_ref()?;
+    let bytes = BASE64_URL_SAFE_NO_PAD.decode(b64).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Whether `from` (the authcrypt sender of a re-wrap layer) is an allowed relay
+/// peer. An empty allowlist accepts any peer (the relay capability is still
+/// gated by ACLs); a non-empty list admits only its members, and rejects an
+/// anonymous (`None`) peer outright.
+pub(crate) fn relay_peer_trusted(allow: &ahash::AHashSet<String>, from: Option<&str>) -> bool {
+    allow.is_empty() || matches!(from, Some(did) if allow.contains(did))
 }
 
 /// Process a forward message, run checks and then if accepted place into FORWARD_TASKS stream
@@ -719,9 +809,19 @@ pub(crate) async fn process(
                 // Get the sender's full DID for problem reports
                 let from_did = msg.from.as_deref().unwrap_or("").to_string();
 
+                // Blind relay forwards the inner envelope verbatim; rewrap relay
+                // re-encrypts it from this mediator to the peer (see
+                // `rewrap_for_relay`). Default is blind — no behaviour change.
+                let relay_message = match state.config.processors.forwarding.relay_mode {
+                    RelayMode::Blind => data.clone(),
+                    RelayMode::Rewrap => {
+                        rewrap_for_relay(state, session, &data, &next, hop_count + 1).await?
+                    }
+                };
+
                 let entry = ForwardQueueEntry {
                     stream_id: String::new(), // Set by Redis on XADD
-                    message: data.clone(),
+                    message: relay_message,
                     to_did_hash: next_did_hash.clone(),
                     from_did_hash: from_account.did_hash.clone(),
                     from_did,
@@ -866,10 +966,70 @@ fn uri_points_at_self(
 
 #[cfg(test)]
 mod tests {
-    use super::{relay_sender_acls, uri_points_at_self};
+    use super::{
+        relay_peer_trusted, relay_sender_acls, rewrap_inner_attachment, uri_points_at_self,
+    };
     use crate::server::{compute_self_authorities_from, normalize_host};
+    use affinidi_messaging_didcomm::message::{Attachment, Message};
     use affinidi_messaging_sdk::protocols::mediator::acls::MediatorACLSet;
+    use base64::prelude::*;
     use std::collections::HashSet;
+
+    fn allowlist(entries: &[&str]) -> ahash::AHashSet<String> {
+        entries.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn relay_peer_trusted_empty_allowlist_accepts_any() {
+        let empty = ahash::AHashSet::new();
+        assert!(relay_peer_trusted(&empty, Some("did:peer:anyone")));
+        assert!(relay_peer_trusted(&empty, None));
+    }
+
+    #[test]
+    fn relay_peer_trusted_nonempty_allowlist_is_membership_only() {
+        let allow = allowlist(&["did:peer:alice_mediator", "did:peer:bob_mediator"]);
+        assert!(relay_peer_trusted(&allow, Some("did:peer:alice_mediator")));
+        assert!(!relay_peer_trusted(&allow, Some("did:peer:stranger")));
+        // A non-empty allowlist rejects an anonymous relaying peer.
+        assert!(!relay_peer_trusted(&allow, None));
+    }
+
+    fn forward_to(next: &str, attachment_bytes: &[u8]) -> Message {
+        let att = Attachment::base64(BASE64_URL_SAFE_NO_PAD.encode(attachment_bytes)).finalize();
+        Message::build(
+            "id-1".to_string(),
+            "https://didcomm.org/routing/2.0/forward".to_string(),
+            serde_json::json!({ "next": next }),
+        )
+        .attachment(att)
+        .finalize()
+    }
+
+    #[test]
+    fn rewrap_inner_attachment_peels_forward_to_self() {
+        let msg = forward_to("did:peer:this_mediator", b"INNER-ENVELOPE");
+        let inner = rewrap_inner_attachment("did:peer:this_mediator", &msg);
+        assert_eq!(inner.as_deref(), Some("INNER-ENVELOPE"));
+    }
+
+    #[test]
+    fn rewrap_inner_attachment_ignores_forward_to_other_next() {
+        // An ordinary forward bound for a different next hop must NOT be peeled.
+        let msg = forward_to("did:peer:some_recipient", b"INNER");
+        assert!(rewrap_inner_attachment("did:peer:this_mediator", &msg).is_none());
+    }
+
+    #[test]
+    fn rewrap_inner_attachment_ignores_non_forward() {
+        let msg = Message::build(
+            "id-2".to_string(),
+            "https://didcomm.org/basicmessage/2.0/message".to_string(),
+            serde_json::json!({ "content": "hi" }),
+        )
+        .finalize();
+        assert!(rewrap_inner_attachment("did:peer:this_mediator", &msg).is_none());
+    }
 
     #[test]
     fn relay_sender_acls_grant_only_send_forwarded_on_a_relay() {

@@ -1,5 +1,6 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
 pub use affinidi_messaging_mediator_common::tasks::forwarding::ForwardingConfig;
+use affinidi_messaging_mediator_common::tasks::forwarding::RelayMode;
 use ahash::AHashSet as HashSet;
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +122,12 @@ pub(crate) struct ForwardingConfigRaw {
     pub accept_invalid_certs: String,
     #[serde(default = "default_10")]
     pub max_hops: String,
+    /// Relay mode for remote next-hop forwards: "blind" (default) or "rewrap".
+    #[serde(default = "default_blind")]
+    pub relay_mode: String,
+    /// Comma-separated allowlist of trusted peer-mediator DIDs (rewrap mode).
+    #[serde(default)]
+    pub relay_trusted_mediators: String,
 }
 
 fn default_300() -> String {
@@ -155,6 +162,9 @@ fn default_true() -> String {
 }
 fn default_10() -> String {
     "10".to_string()
+}
+fn default_blind() -> String {
+    "blind".to_string()
 }
 
 impl std::convert::TryFrom<ForwardingConfigRaw> for ForwardingConfig {
@@ -222,6 +232,21 @@ impl std::convert::TryFrom<ForwardingConfigRaw> for ForwardingConfig {
                 warn_default("max_hops", "10");
                 10
             }),
+            relay_mode: match raw.relay_mode.trim().to_ascii_lowercase().as_str() {
+                "rewrap" => RelayMode::Rewrap,
+                "blind" | "" => RelayMode::Blind,
+                other => {
+                    warn_default(&format!("relay_mode (unrecognised: {other:?})"), "blind");
+                    RelayMode::Blind
+                }
+            },
+            relay_trusted_mediators: raw
+                .relay_trusted_mediators
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
         })
     }
 }
@@ -268,6 +293,8 @@ mod tests {
             consumer_group: default_forwarding_group(),
             accept_invalid_certs: default_false(),
             max_hops: default_10(),
+            relay_mode: default_blind(),
+            relay_trusted_mediators: String::new(),
         };
         let config = ForwardingConfig::try_from(raw).unwrap();
         assert!(config.enabled);
@@ -306,6 +333,8 @@ mod tests {
             consumer_group: "custom_group".to_string(),
             accept_invalid_certs: "false".to_string(),
             max_hops: "5".to_string(),
+            relay_mode: "rewrap".to_string(),
+            relay_trusted_mediators: "did:peer:alice , did:peer:bob".to_string(),
         };
         let config = ForwardingConfig::try_from(raw).unwrap();
         assert!(!config.enabled);
@@ -322,6 +351,46 @@ mod tests {
         assert_eq!(config.initial_backoff_ms, 2000);
         assert_eq!(config.max_backoff_ms, 120000);
         assert_eq!(config.consumer_group, "custom_group");
+        // relay_mode parses case-insensitively; the trusted-mediator list is
+        // comma-split with surrounding whitespace trimmed and blanks dropped.
+        assert_eq!(config.relay_mode, RelayMode::Rewrap);
+        assert!(config.relay_trusted_mediators.contains("did:peer:alice"));
+        assert!(config.relay_trusted_mediators.contains("did:peer:bob"));
+        assert_eq!(config.relay_trusted_mediators.len(), 2);
+    }
+
+    #[test]
+    fn relay_mode_defaults_to_blind_with_empty_allowlist() {
+        // The first try_from fixture leaves relay_mode = "blind" and an empty
+        // trusted list — the historical, no-regression default.
+        let config = ForwardingConfig::default();
+        assert_eq!(config.relay_mode, RelayMode::Blind);
+        assert!(config.relay_trusted_mediators.is_empty());
+    }
+
+    #[test]
+    fn unrecognised_relay_mode_falls_back_to_blind() {
+        let raw = ForwardingConfigRaw {
+            enabled: "true".to_string(),
+            external_forwarding: "true".to_string(),
+            future_time_limit: "3600".to_string(),
+            report_errors: "true".to_string(),
+            blocked_forwarding_dids: String::new(),
+            rate_window_seconds: default_300(),
+            ws_threshold_msgs_per_10s: default_1(),
+            ws_idle_timeout_seconds: default_60(),
+            batch_size: default_50(),
+            max_retries: default_5(),
+            initial_backoff_ms: default_1000(),
+            max_backoff_ms: default_60000(),
+            consumer_group: default_forwarding_group(),
+            accept_invalid_certs: default_false(),
+            max_hops: default_10(),
+            relay_mode: "bogus".to_string(),
+            relay_trusted_mediators: String::new(),
+        };
+        let config = ForwardingConfig::try_from(raw).unwrap();
+        assert_eq!(config.relay_mode, RelayMode::Blind);
     }
 
     #[test]
@@ -342,10 +411,13 @@ mod tests {
             consumer_group: "forwarding".to_string(),
             accept_invalid_certs: "bad".to_string(),
             max_hops: "bad".to_string(),
+            relay_mode: "bad".to_string(),
+            relay_trusted_mediators: String::new(),
         };
         let config = ForwardingConfig::try_from(raw).unwrap();
         // All invalid values should fall back to unwrap_or defaults
         assert!(config.enabled); // default true
+        assert_eq!(config.relay_mode, RelayMode::Blind); // unrecognised → blind
         assert!(config.external_forwarding); // default true
         assert!(config.report_errors); // default true
         assert_eq!(config.future_time_limit, 86400);

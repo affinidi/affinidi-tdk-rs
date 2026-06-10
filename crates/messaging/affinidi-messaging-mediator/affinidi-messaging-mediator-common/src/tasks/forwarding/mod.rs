@@ -8,7 +8,7 @@
 //! the same [`ForwardingProcessor`] over `Arc<dyn MediatorStore>`.
 
 pub mod config;
-pub use config::ForwardingConfig;
+pub use config::{ForwardingConfig, RelayMode};
 
 // `ForwardingProcessor` is backend-agnostic: it consumes the
 // `forward_queue_*` methods on `Arc<dyn MediatorStore>`, which every

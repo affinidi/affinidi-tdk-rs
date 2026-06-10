@@ -26,7 +26,7 @@ mod common;
 use std::time::Duration;
 
 use affinidi_messaging_didcomm::Message;
-use affinidi_messaging_test_mediator::{TestEnvironment, TestMediator, TestUser, acl};
+use affinidi_messaging_test_mediator::{RelayMode, TestEnvironment, TestMediator, TestUser, acl};
 use common::init_tracing;
 use serde_json::json;
 use uuid::Uuid;
@@ -55,6 +55,34 @@ async fn spawn_relay_environment() -> TestEnvironment {
         .expect("wire SDK environment to forwarding mediator")
 }
 
+/// Spawn a forwarding mediator running in `RelayMode::Rewrap`, with an
+/// optional trusted-peer allowlist.
+///
+/// In rewrap mode each mediator re-encrypts the inner forward from itself
+/// to the next hop (hiding the original sender on the mediator↔mediator
+/// wire) and the receiver authenticates the relaying peer. `trusted_peers`
+/// is the receiver-side allowlist: empty accepts any relaying peer,
+/// non-empty admits only the listed mediator DIDs (an unlisted peer's
+/// relay is rejected with `authorization.relay.untrusted_peer`).
+///
+/// Otherwise identical to [`spawn_relay_environment`] — same relay
+/// deployment ACLs, so the cross-mediator sender is still auto-registered
+/// with `SEND_FORWARDED` once its layer is peeled.
+async fn spawn_rewrap_environment(trusted_peers: &[String]) -> TestEnvironment {
+    let mediator = TestMediator::builder()
+        .enable_forwarding(true)
+        .enable_external_forwarding(true)
+        .global_acl_default(acl::allow_all())
+        .relay_mode(RelayMode::Rewrap)
+        .relay_trusted_mediators(trusted_peers.iter().cloned())
+        .spawn()
+        .await
+        .expect("spawn rewrap forwarding mediator");
+    TestEnvironment::new(mediator)
+        .await
+        .expect("wire SDK environment to rewrap mediator")
+}
+
 /// Add a user and bring up its WebSocket live-stream connection.
 ///
 /// Retrieval uses message-pickup `live_stream_get` (the supported
@@ -73,11 +101,12 @@ async fn add_live_user(env: &TestEnvironment, alias: &str) -> TestUser {
 }
 
 /// Drive one cross-mediator delivery: wrap `text` as the routing-2.0
-/// double forward, send it to the sender's own mediator, then poll the
-/// recipient's mediator until the decrypted message arrives.
+/// double forward, send it to the sender's own mediator, then wait up to
+/// `wait` for the recipient's live stream to surface the decrypted message.
 ///
 /// Returns the recipient's view of the `content` body field, or `None`
-/// if nothing arrived within the timeout.
+/// if nothing arrived within `wait` (used by the negative trust test,
+/// which expects no delivery, with a shorter `wait`).
 #[allow(clippy::too_many_arguments)]
 async fn forward_and_receive(
     sender_env: &TestEnvironment,
@@ -87,6 +116,7 @@ async fn forward_and_receive(
     recipient: &TestUser,
     recipient_mediator_did: &str,
     text: &str,
+    wait: Duration,
 ) -> Option<String> {
     let now = unix_secs();
 
@@ -160,7 +190,7 @@ async fn forward_and_receive(
     match recipient_env
         .atm
         .message_pickup()
-        .live_stream_get(&recipient.profile, &msg_id, Duration::from_secs(15), true)
+        .live_stream_get(&recipient.profile, &msg_id, wait, true)
         .await
     {
         Ok(Some((received, _meta))) => received
@@ -200,6 +230,7 @@ async fn cross_mediator_forward_delivers_over_memory_backend() {
         &bob,
         &mediator_b_did,
         text,
+        Duration::from_secs(15),
     )
     .await;
 
@@ -238,6 +269,7 @@ async fn cross_mediator_forward_round_trips() {
         &bob,
         &mediator_b_did,
         to_bob,
+        Duration::from_secs(15),
     )
     .await;
     assert_eq!(
@@ -255,12 +287,158 @@ async fn cross_mediator_forward_round_trips() {
         &alice,
         &mediator_a_did,
         to_alice,
+        Duration::from_secs(15),
     )
     .await;
     assert_eq!(
         got_by_alice.as_deref(),
         Some(to_alice),
         "Alice should receive Bob's pong (B → A)"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+// ─── RelayMode::Rewrap (per-hop re-encryption) ──────────────────────────────
+//
+// Same Alice → A → B → Bob double-forward construction as the blind tests
+// above — only the mediators' relay posture changes. In rewrap mode each
+// mediator re-encrypts the inner forward from itself to the next hop, so the
+// A → B wire envelope is authcrypted `from = mediator A` (not the original
+// sender) and B authenticates A before peeling. These exercise the full
+// rewrap plumbing end-to-end (routing rewrap → FORWARD_Q → processor → HTTP
+// → inbound peel pre-pass) on the memory backend; the on-wire crypto
+// properties themselves are covered by the mediator crate's
+// `tests/relay_rewrap.rs`.
+
+/// Rewrap relay round-trips end to end (empty allowlist = accept any peer).
+#[tokio::test]
+async fn rewrap_relay_round_trips_end_to_end() {
+    init_tracing();
+
+    let env_a = spawn_rewrap_environment(&[]).await;
+    let env_b = spawn_rewrap_environment(&[]).await;
+
+    let mediator_a_did = env_a.mediator.did().to_string();
+    let mediator_b_did = env_b.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let to_bob = "Rewrapped ping from Alice.";
+    let got_by_bob = forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        to_bob,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        got_by_bob.as_deref(),
+        Some(to_bob),
+        "Bob should receive Alice's message relayed in rewrap mode (A → B)"
+    );
+
+    let to_alice = "Rewrapped pong from Bob.";
+    let got_by_alice = forward_and_receive(
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        to_alice,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        got_by_alice.as_deref(),
+        Some(to_alice),
+        "Alice should receive Bob's rewrapped reply (B → A)"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// A populated allowlist that names the relaying peer admits the relay —
+/// the item-3 trust gate's positive case.
+#[tokio::test]
+async fn rewrap_relay_admits_trusted_peer() {
+    init_tracing();
+
+    // Spawn A first so its DID can be placed on B's trusted-peer allowlist.
+    let env_a = spawn_rewrap_environment(&[]).await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    let env_b = spawn_rewrap_environment(std::slice::from_ref(&mediator_a_did)).await;
+    let mediator_b_did = env_b.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let text = "Hello from a trusted relay.";
+    let received = forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        text,
+        Duration::from_secs(15),
+    )
+    .await;
+    assert_eq!(
+        received.as_deref(),
+        Some(text),
+        "Bob should receive the relay because mediator A is on B's trusted-peer allowlist"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// A populated allowlist that does NOT name the relaying peer rejects the
+/// relay (`authorization.relay.untrusted_peer`), so nothing reaches Bob —
+/// the item-3 trust gate's negative case.
+#[tokio::test]
+async fn rewrap_relay_rejects_untrusted_peer() {
+    init_tracing();
+
+    let env_a = spawn_rewrap_environment(&[]).await;
+    let mediator_a_did = env_a.mediator.did().to_string();
+
+    // B trusts only some *other* mediator — never A — so A's re-wrapped
+    // relay must be rejected at B's inbound peel pre-pass.
+    let stranger = "did:peer:2.NotTheRelayingMediator".to_string();
+    let env_b = spawn_rewrap_environment(std::slice::from_ref(&stranger)).await;
+    let mediator_b_did = env_b.mediator.did().to_string();
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let received = forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        "This relay should be dropped.",
+        // Short wait: delivery is sub-second on success, so a few seconds of
+        // silence is conclusive that the untrusted relay was rejected.
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(
+        received, None,
+        "Bob must NOT receive a relay from a mediator absent from his trusted-peer allowlist"
     );
 
     env_a.shutdown().await.expect("shutdown mediator A");

@@ -435,6 +435,23 @@ max_backoff_ms = "60000"
 ### in-memory backends it names the single in-process group.
 consumer_group = "forwarding"
 
+### Env: PROCESSOR_FORWARDING_RELAY_MODE
+### How to relay a forward whose next hop is a *remote* mediator:
+###   "blind"  (default) — relay the inner envelope unchanged. The inner
+###            envelope (incl. the original sender's key id) is visible on the
+###            wire and the receiving mediator cannot identify the relaying peer.
+###   "rewrap" — re-encrypt the inner envelope for the next mediator, authcrypted
+###            from THIS mediator. Hides the sender/inner envelope from the wire
+###            and lets the receiving mediator authenticate & allowlist the peer
+###            mediator. BOTH mediators in the pair must use "rewrap".
+relay_mode = "blind"
+
+### Env: PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS
+### Comma-separated allowlist of peer-mediator DIDs whose re-wrapped relays this
+### mediator will accept (rewrap mode only). Empty = accept any peer (still ACL
+### gated). Ignored in blind mode.
+relay_trusted_mediators = ""
+
 [processors.message_expiry_cleanup]
 ### Env: PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED
 ### Enable the message expiry cleanup processor

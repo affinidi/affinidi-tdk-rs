@@ -4,6 +4,22 @@
 
 ## 10th June 2026
 
+### 0.2.6 — relay rewrap builder knobs + end-to-end rewrap tests (#388)
+
+- **FEAT:** `TestMediatorBuilder::relay_mode(RelayMode)` and
+  `relay_trusted_mediators(...)` expose the inter-mediator relay posture so
+  tests can stand up `RelayMode::Rewrap` mediators (per-hop re-encryption)
+  with an optional trusted-peer allowlist. `RelayMode` is re-exported from
+  the crate root.
+- **TEST:** extends `cross_mediator_forwarding` with three rewrap
+  end-to-end cases on the memory backend — a bidirectional rewrap round
+  trip, a trusted-peer allowlist *admitting* the relaying mediator, and an
+  allowlist *rejecting* an unlisted peer (no delivery; the relay is refused
+  with `authorization.relay.untrusted_peer`). This is the automated pre-merge
+  verification `affinidi-messaging-mediator` #388 had been waiting on — the
+  full rewrap plumbing (routing rewrap → FORWARD_Q → processor → HTTP →
+  inbound peel), now exercisable without Redis thanks to #399.
+
 ### 0.2.5 — cross-mediator forwarding test + production-shaped mediator DID
 
 - **FIX:** the fixture's generated mediator `did:peer` advertised its
