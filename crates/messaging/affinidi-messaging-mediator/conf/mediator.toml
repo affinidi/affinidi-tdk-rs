@@ -369,6 +369,11 @@ oob_invite_ttl = "86400"
 ### Maximum concurrent WebSocket connections (0 = unlimited)
 # max_websocket_connections = "10000"
 
+### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS_PER_DID
+### Maximum concurrent WebSocket connections for a single DID, so one DID
+### can't exhaust the global max_websocket_connections budget (0 = unlimited)
+# max_websocket_connections_per_did = "100"
+
 ### Env: LIMIT_DID_RATE_LIMIT_PER_SECOND
 ### Requests per second per authenticated DID (0 = disabled)
 # did_rate_limit_per_second = "0"

@@ -206,6 +206,10 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "LIMIT_MAX_WEBSOCKET_CONNECTIONS"
     );
     env_override!(
+        config.limits.max_websocket_connections_per_did,
+        "LIMIT_MAX_WEBSOCKET_CONNECTIONS_PER_DID"
+    );
+    env_override!(
         config.limits.did_rate_limit_per_second,
         "LIMIT_DID_RATE_LIMIT_PER_SECOND"
     );

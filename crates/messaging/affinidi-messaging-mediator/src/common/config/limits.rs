@@ -28,6 +28,10 @@ pub struct LimitsConfig {
     pub rate_limit_burst: u32,
     /// Maximum number of concurrent WebSocket connections. 0 = unlimited.
     pub max_websocket_connections: usize,
+    /// Maximum concurrent WebSocket connections for a single DID, so one DID
+    /// can't exhaust the global `max_websocket_connections` budget.
+    /// 0 = unlimited (only the global cap applies).
+    pub max_websocket_connections_per_did: usize,
     /// Maximum requests per second per authenticated DID. 0 = unlimited (disabled).
     pub did_rate_limit_per_second: u32,
     /// Burst size for per-DID rate limiting (additional requests allowed in a burst).
@@ -58,6 +62,7 @@ impl Default for LimitsConfig {
             rate_limit_per_ip: 100,
             rate_limit_burst: 50,
             max_websocket_connections: 10000,
+            max_websocket_connections_per_did: 100,
             did_rate_limit_per_second: 0,
             did_rate_limit_burst: 10,
         }
@@ -90,6 +95,8 @@ pub(crate) struct LimitsConfigRaw {
     pub rate_limit_burst: String,
     #[serde(default = "default_max_websocket_connections")]
     pub max_websocket_connections: String,
+    #[serde(default = "default_max_websocket_connections_per_did")]
+    pub max_websocket_connections_per_did: String,
     #[serde(default = "default_did_rate_limit_per_second")]
     pub did_rate_limit_per_second: String,
     #[serde(default = "default_did_rate_limit_burst")]
@@ -104,6 +111,9 @@ fn default_rate_limit_burst() -> String {
 }
 fn default_max_websocket_connections() -> String {
     "10000".to_string()
+}
+fn default_max_websocket_connections_per_did() -> String {
+    "100".to_string()
 }
 fn default_did_rate_limit_per_second() -> String {
     "0".to_string()
@@ -214,6 +224,13 @@ impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
                 warn_default("max_websocket_connections", "10000");
                 10000
             }),
+            max_websocket_connections_per_did: raw
+                .max_websocket_connections_per_did
+                .parse()
+                .unwrap_or_else(|_| {
+                    warn_default("max_websocket_connections_per_did", "100");
+                    100
+                }),
             did_rate_limit_per_second: raw.did_rate_limit_per_second.parse().unwrap_or_else(|_| {
                 warn_default("did_rate_limit_per_second", "0");
                 0
@@ -282,6 +299,7 @@ mod tests {
             rate_limit_per_ip: "200".to_string(),
             rate_limit_burst: "100".to_string(),
             max_websocket_connections: "5000".to_string(),
+            max_websocket_connections_per_did: "250".to_string(),
             did_rate_limit_per_second: "50".to_string(),
             did_rate_limit_burst: "20".to_string(),
         };
@@ -336,6 +354,7 @@ mod tests {
             rate_limit_per_ip: default_rate_limit_per_ip(),
             rate_limit_burst: default_rate_limit_burst(),
             max_websocket_connections: default_max_websocket_connections(),
+            max_websocket_connections_per_did: default_max_websocket_connections_per_did(),
             did_rate_limit_per_second: default_did_rate_limit_per_second(),
             did_rate_limit_burst: default_did_rate_limit_burst(),
         };

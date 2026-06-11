@@ -568,6 +568,7 @@ pub async fn serve_internal(
         #[cfg(feature = "didcomm")]
         discover_features,
         active_websocket_count: Arc::new(AtomicUsize::new(0)),
+        ws_connections_per_did: Arc::new(dashmap::DashMap::new()),
         did_rate_limiter,
         shutdown_token: shutdown_token.clone(),
         self_authorities: Arc::new(self_authorities),

@@ -14,6 +14,7 @@ use affinidi_messaging_sdk::protocols::discover_features::DiscoverFeatures;
 use axum::extract::{FromRef, FromRequestParts};
 use chrono::{DateTime, Utc};
 use common::{config::Config, did_rate_limiter::DidRateLimiter, jwt_auth::AuthError};
+use dashmap::DashMap;
 use http::request::Parts;
 use std::{collections::HashSet, fmt::Debug, sync::Arc, sync::atomic::AtomicUsize};
 use tasks::supervisor::HealthRegistry;
@@ -51,6 +52,11 @@ pub struct SharedData {
     pub discover_features: Arc<DiscoverFeatures>,
     /// Counter for active WebSocket connections (used for connection limiting).
     pub active_websocket_count: Arc<AtomicUsize>,
+    /// Live WebSocket connection count per DID hash, enforcing
+    /// `limits.max_websocket_connections_per_did` so a single DID can't
+    /// exhaust the global connection budget. Entries are removed when a DID's
+    /// count returns to zero.
+    pub ws_connections_per_did: Arc<DashMap<String, u32>>,
     /// Per-DID rate limiter for authenticated endpoints.
     pub did_rate_limiter: DidRateLimiter,
     /// Cancellation token for coordinated graceful shutdown of all background tasks.

@@ -4,6 +4,29 @@
 
 ## 11th June 2026
 
+### 0.15.32 — Per-DID WebSocket cap + always-on admin TTL (hardening T13)
+
+- **(a) Per-DID WebSocket connection cap.** Adds
+  `limits.max_websocket_connections_per_did` (env
+  `LIMIT_MAX_WEBSOCKET_CONNECTIONS_PER_DID`, default `100`, `0` = unlimited),
+  enforced at WebSocket upgrade so a single DID can't exhaust the global
+  `max_websocket_connections` budget. The reserved slot is released by an RAII
+  guard, so it's decremented on every connection-teardown path (including the
+  early returns the global counter misses). Over-cap connections complete the
+  101 handshake and are then closed by the server.
+- **(b) Admin-message TTL hardening.** The `created_time` / TTL check that
+  bounds admin-message replay was duplicated inline across the three admin
+  protocol handlers (`acls`, `administration`, `accounts`). Consolidated into
+  one unit-tested helper, `authz::admin_message_ttl_status`, which all three
+  now call (byte-identical problem reports). Audit note: the check was already
+  enforced **unconditionally** — it never depended on `block_remote_admin_msgs`
+  (that flag only gates the admin *signature* check), so the replay window the
+  plan flagged was already closed; the helper + tests pin that invariant so it
+  can't regress.
+- Tests: new `affinidi-messaging-test-mediator` e2e
+  (`second_connection_for_one_did_over_the_cap_is_closed`) and unit tests for
+  `admin_message_ttl_status` (fresh / stale / future / missing / `expiry == 0`).
+
 ### 0.15.31 — Explicit inter-mediator relay flag (simplification T12)
 
 - Adds `security.enable_inter_mediator_relay` (env `ENABLE_INTER_MEDIATOR_RELAY`,

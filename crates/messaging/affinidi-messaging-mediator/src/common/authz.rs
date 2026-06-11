@@ -240,9 +240,87 @@ pub(crate) fn acl_change_ok(
     }
 }
 
+/// Outcome of checking an admin message's `created_time` against the
+/// admin-message TTL.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AdminTtlStatus {
+    /// Within the allowed window — accept.
+    Ok,
+    /// `created_time` is too old (or in the future) — reject as expired; the
+    /// value is carried for the problem report.
+    Expired(u64),
+    /// No `created_time` header — reject as missing.
+    Missing,
+}
+
+/// Validate an admin message's `created_time` against `admin_messages_expiry`,
+/// bounding replay of captured admin messages.
+///
+/// This is deliberately independent of `block_remote_admin_msgs`: admin
+/// messages are *always* subject to the replay-bounding TTL, whether or not
+/// the mediator also requires a signature on remote admin messages. A
+/// `created_time` in the future is rejected too (clock skew / forgery).
+pub(crate) fn admin_message_ttl_status(
+    created_time: Option<u64>,
+    expiry: u64,
+    now: u64,
+) -> AdminTtlStatus {
+    match created_time {
+        Some(ct) if ct.saturating_add(expiry) <= now || ct > now => AdminTtlStatus::Expired(ct),
+        Some(_) => AdminTtlStatus::Ok,
+        None => AdminTtlStatus::Missing,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_ttl_accepts_fresh_and_rejects_stale_future_and_missing() {
+        let now = 1_000_000;
+        let expiry = 3;
+
+        // Fresh: created within the window.
+        assert_eq!(
+            admin_message_ttl_status(Some(now), expiry, now),
+            AdminTtlStatus::Ok
+        );
+        assert_eq!(
+            admin_message_ttl_status(Some(now - 2), expiry, now),
+            AdminTtlStatus::Ok
+        );
+
+        // Stale: created_time + expiry <= now (the boundary is inclusive).
+        assert_eq!(
+            admin_message_ttl_status(Some(now - 3), expiry, now),
+            AdminTtlStatus::Expired(now - 3)
+        );
+        assert_eq!(
+            admin_message_ttl_status(Some(now - 100), expiry, now),
+            AdminTtlStatus::Expired(now - 100)
+        );
+
+        // Future created_time is rejected (clock skew / forgery).
+        assert_eq!(
+            admin_message_ttl_status(Some(now + 1), expiry, now),
+            AdminTtlStatus::Expired(now + 1)
+        );
+
+        // Missing header.
+        assert_eq!(
+            admin_message_ttl_status(None, expiry, now),
+            AdminTtlStatus::Missing
+        );
+
+        // The verdict never depends on `block_remote_admin_msgs` — it isn't an
+        // input here, so admin replay is bounded regardless of that flag. With
+        // `expiry == 0` every admin message (created_time == now) is expired.
+        assert_eq!(
+            admin_message_ttl_status(Some(now), 0, now),
+            AdminTtlStatus::Expired(now)
+        );
+    }
 
     /// Build an ACL set granting everything (ALLOW_ALL), then we revoke
     /// individual capabilities to test the gate.

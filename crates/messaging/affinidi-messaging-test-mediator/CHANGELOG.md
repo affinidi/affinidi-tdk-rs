@@ -4,6 +4,13 @@
 
 ## 11th June 2026
 
+### 0.2.9 — builder support for the per-DID WebSocket cap (mediator T13)
+
+- Adds `TestMediatorBuilder::max_websocket_connections_per_did(usize)` (passing
+  a custom `LimitsConfig` through to the mediator) and a new e2e
+  (`second_connection_for_one_did_over_the_cap_is_closed`) verifying the
+  over-cap WebSocket connection is closed by the server.
+
 ### 0.2.8 — builder support for the explicit relay flag (mediator T12)
 
 - Adds `TestMediatorBuilder::enable_inter_mediator_relay(bool)` to override

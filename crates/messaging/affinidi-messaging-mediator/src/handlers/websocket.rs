@@ -27,8 +27,10 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
+use dashmap::DashMap;
 use http::{HeaderMap, HeaderValue, StatusCode, header::ORIGIN, header::SEC_WEBSOCKET_PROTOCOL};
 use serde_json::json;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::{
@@ -236,6 +238,25 @@ pub async fn websocket_handler(
         .await
 }
 
+/// Releases a DID's reserved per-DID WebSocket slot on drop, so the count is
+/// decremented on *every* `handle_socket` return path (including the early
+/// returns before the main loop). The entry is removed once it reaches zero
+/// so the registry doesn't accumulate idle DIDs.
+struct PerDidConnectionGuard {
+    registry: Arc<DashMap<String, u32>>,
+    did_hash: String,
+}
+
+impl Drop for PerDidConnectionGuard {
+    fn drop(&mut self) {
+        if let Some(mut count) = self.registry.get_mut(&self.did_hash) {
+            *count = count.saturating_sub(1);
+        }
+        self.registry
+            .remove_if(&self.did_hash, |_, &count| count == 0);
+    }
+}
+
 /// WebSocket state machine. This is spawned per connection.
 async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Session) {
     let _span = span!(
@@ -244,11 +265,38 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         session = session.session_id
     );
     async move {
-        // Enforce connection limit
+        // Enforce the global connection limit.
         let current = state.active_websocket_count.fetch_add(1, Ordering::Relaxed);
         if current >= state.config.limits.max_websocket_connections {
             state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
             warn!("WebSocket connection limit reached ({}/{})", current, state.config.limits.max_websocket_connections);
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+
+        // Enforce the per-DID connection cap (0 = unlimited). Reserve the slot
+        // immediately and bind a guard so it's released on every return path;
+        // then reject if this DID is over its cap (the global slot reserved
+        // above is backed out explicitly, the per-DID slot by the guard).
+        let per_did_count = {
+            let mut entry = state
+                .ws_connections_per_did
+                .entry(session.did_hash.clone())
+                .or_insert(0);
+            *entry += 1;
+            *entry
+        };
+        let _per_did_guard = PerDidConnectionGuard {
+            registry: state.ws_connections_per_did.clone(),
+            did_hash: session.did_hash.clone(),
+        };
+        let per_did_cap = state.config.limits.max_websocket_connections_per_did;
+        if per_did_cap != 0 && per_did_count as usize > per_did_cap {
+            state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
+            warn!(
+                "Per-DID WebSocket connection limit reached for {} ({}/{})",
+                session.did_hash, per_did_count, per_did_cap
+            );
             let _ = socket.send(Message::Close(None)).await;
             return;
         }

@@ -321,6 +321,8 @@ pub struct TestMediatorBuilder {
     jwt_access_expiry_secs: Option<u64>,
     /// Override for `SecurityConfig.jwt_refresh_expiry` (seconds).
     jwt_refresh_expiry_secs: Option<u64>,
+    /// Override for `LimitsConfig.max_websocket_connections_per_did`.
+    max_websocket_connections_per_did: Option<usize>,
     /// Stable admin identity for the mediator. `None` mints the
     /// historical opaque `did:key:z6Mk{uuid}` shape with no usable
     /// secrets — suitable for tests that don't authenticate as admin.
@@ -355,6 +357,7 @@ impl Default for TestMediatorBuilder {
             enable_inter_mediator_relay: None,
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
+            max_websocket_connections_per_did: None,
             admin_identity: None,
             #[cfg(feature = "fjall-backend")]
             fjall_dir: None,
@@ -515,6 +518,14 @@ impl TestMediatorBuilder {
     /// Defaults to the production default (`false`).
     pub fn enable_inter_mediator_relay(mut self, enabled: bool) -> Self {
         self.enable_inter_mediator_relay = Some(enabled);
+        self
+    }
+
+    /// Override `LimitsConfig.max_websocket_connections_per_did` — the cap on
+    /// concurrent WebSocket connections a single DID may hold. Defaults to the
+    /// production default (100). Set small to exercise the cap in tests.
+    pub fn max_websocket_connections_per_did(mut self, max: usize) -> Self {
+        self.max_websocket_connections_per_did = Some(max);
         self
     }
 
@@ -690,6 +701,12 @@ impl TestMediatorBuilder {
             security.jwt_refresh_expiry = secs;
         }
 
+        // Limits: production defaults, with any test overrides applied.
+        let mut limits = affinidi_messaging_mediator::common::config::LimitsConfig::default();
+        if let Some(max) = self.max_websocket_connections_per_did {
+            limits.max_websocket_connections_per_did = max;
+        }
+
         // Disable processors that aren't useful in most tests.
         let mut processors =
             affinidi_messaging_mediator::common::config::ProcessorsConfig::default();
@@ -718,6 +735,7 @@ impl TestMediatorBuilder {
             .listen_addr(bound_addr)
             .api_prefix(api_prefix)
             .security(security)
+            .limits(limits)
             .processors(processors)
             .streaming_enabled(self.enable_streaming)
             .local_endpoints(self.local_endpoints.clone())

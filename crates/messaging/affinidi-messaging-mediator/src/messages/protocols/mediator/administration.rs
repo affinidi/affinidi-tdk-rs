@@ -1,5 +1,6 @@
 //! Adds and removed administration accounts from the mediator
 //! Must be a administrator to use this protocol
+use crate::common::authz;
 use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
@@ -29,13 +30,17 @@ pub(crate) async fn process(
     let _span = span!(tracing::Level::DEBUG, "mediator_administration");
 
     async move {
-        // Check if message is valid from an expiry perspective
+        // Check if message is valid from an expiry perspective. Always enforced
+        // (independent of `block_remote_admin_msgs`) to bound replay of captured
+        // admin messages.
         let now = unix_timestamp_secs();
-
-        if let Some(created_time) = msg.created_time {
-            if (created_time + state.config.security.admin_messages_expiry) <= now
-                || created_time > now
-            {
+        match authz::admin_message_ttl_status(
+            msg.created_time,
+            state.config.security.admin_messages_expiry,
+            now,
+        ) {
+            authz::AdminTtlStatus::Ok => {}
+            authz::AdminTtlStatus::Expired(created_time) => {
                 warn!("ADMIN related message has an invalid created_time header.");
                 return Err(MediatorError::problem_with_log(
                     31,
@@ -50,19 +55,20 @@ pub(crate) async fn process(
                     "Message was created too long ago for admin requests",
                 ));
             }
-        } else {
-            warn!("ADMIN related message has no created_time header. Required.");
-            return Err(MediatorError::problem(
-                91,
-                &session.session_id,
-                Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "message.created_time.missing",
-                "Admin messages must include a created_time header",
-                vec![],
-                StatusCode::BAD_REQUEST,
-            ));
+            authz::AdminTtlStatus::Missing => {
+                warn!("ADMIN related message has no created_time header. Required.");
+                return Err(MediatorError::problem(
+                    91,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "message.created_time.missing",
+                    "Admin messages must include a created_time header",
+                    vec![],
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
         }
 
         // Sender identity: prefer JWS signature, fall back to authcrypt sender
