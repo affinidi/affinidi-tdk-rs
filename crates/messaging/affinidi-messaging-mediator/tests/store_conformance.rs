@@ -14,18 +14,19 @@
 //!   --test store_conformance
 //! ```
 //!
-//! Coverage (this increment): account lifecycle, ACL set/get, message store +
-//! inbox counters, forward-queue consumer-group claim/ack — against **Memory**
-//! and **Fjall**. Memory and Fjall agree on all of the above (no divergence
-//! found in these areas).
+//! Coverage so far (against **Memory** and **Fjall**):
+//! account lifecycle; ACL set/get; message store + inbox counters;
+//! forward-queue consumer-group claim/ack, delete, and autoclaim (crashed-
+//! consumer recovery); session put/get/delete lifecycle; access-list
+//! add/count/remove/clear. Memory and Fjall agree on all of these — no
+//! divergence found between the two independent implementations.
 //!
-//! Planned next increments (tracked under mediator T15): the remaining
-//! high-drift-risk areas (session lifecycle/expiry, access-list mode
-//! semantics, forward-queue autoclaim/delete, streaming state), and a
-//! **`REDIS_URL`-gated** backend in a Redis CI job. Redis needs per-test
-//! isolation (the in-process backends get a fresh store per test; a shared
-//! Redis needs a unique key prefix or `FLUSHDB`), so it lands with that
-//! plumbing rather than as an unverifiable stub here.
+//! Planned next increments (tracked under mediator T15): session-expiry /
+//! TTL-sweep semantics and access-list *mode* (allow-list vs deny-list)
+//! evaluation, plus a **`REDIS_URL`-gated** backend in a Redis CI job. Redis
+//! needs per-test isolation (the in-process backends get a fresh store per
+//! test; a shared Redis needs a unique key prefix or `FLUSHDB`), so it lands
+//! with that plumbing rather than as an unverifiable stub here.
 
 #![cfg(any(feature = "memory-backend", feature = "fjall-backend"))]
 
@@ -229,6 +230,176 @@ async fn check_forward_queue_claim_ack(store: Arc<dyn MediatorStore>) {
         .expect("forward_queue_ack");
 }
 
+/// Session put → get (found) → delete → get (gone). `get_session` joins the
+/// session record with the DID account, so the account is created first.
+async fn check_session_lifecycle(store: Arc<dyn MediatorStore>) {
+    let did = "did:example:conformance_session_user";
+    let did_hash = sha256::digest(did);
+    store
+        .account_add(&did_hash, &allow_all(), None)
+        .await
+        .expect("account_add for session DID");
+
+    let session = Session {
+        session_id: "conformance-session-1".to_string(),
+        did: did.to_string(),
+        did_hash: did_hash.clone(),
+        ..Default::default()
+    };
+    store
+        .put_session(&session, Duration::from_secs(300))
+        .await
+        .expect("put_session");
+
+    let fetched = store
+        .get_session(&session.session_id, did)
+        .await
+        .expect("get_session returns the stored session");
+    assert_eq!(fetched.did, did, "round-tripped session keeps its DID");
+
+    store
+        .delete_session(&session.session_id)
+        .await
+        .expect("delete_session");
+    assert!(
+        store.get_session(&session.session_id, did).await.is_err(),
+        "get_session must error once the session is deleted"
+    );
+}
+
+/// Access-list add → count → list → remove → clear.
+async fn check_access_list_lifecycle(store: Arc<dyn MediatorStore>) {
+    let owner = "did_hash_access_list_owner";
+    store
+        .account_add(owner, &allow_all(), None)
+        .await
+        .expect("account_add owner");
+
+    assert_eq!(
+        store.access_list_count(owner).await.expect("count empty"),
+        0,
+        "access list starts empty"
+    );
+
+    let sender = "did_hash_listed_sender".to_string();
+    store
+        .access_list_add(1000, owner, std::slice::from_ref(&sender))
+        .await
+        .expect("access_list_add");
+    assert_eq!(
+        store
+            .access_list_count(owner)
+            .await
+            .expect("count after add"),
+        1,
+        "count reflects the added entry"
+    );
+
+    store
+        .access_list_remove(owner, std::slice::from_ref(&sender))
+        .await
+        .expect("access_list_remove");
+    assert_eq!(
+        store
+            .access_list_count(owner)
+            .await
+            .expect("count after remove"),
+        0,
+        "count returns to zero after remove"
+    );
+
+    // Clear is idempotent on an already-empty list.
+    store
+        .access_list_clear(owner)
+        .await
+        .expect("access_list_clear");
+    assert_eq!(
+        store
+            .access_list_count(owner)
+            .await
+            .expect("count after clear"),
+        0,
+    );
+}
+
+/// Forward-queue: an unread enqueued entry can be deleted directly, dropping
+/// the queue length back to zero.
+async fn check_forward_queue_delete(store: Arc<dyn MediatorStore>) {
+    let entry = ForwardQueueEntry {
+        stream_id: String::new(),
+        message: "to-delete".to_string(),
+        to_did_hash: "next_hash".to_string(),
+        from_did_hash: "from_hash".to_string(),
+        from_did: "did:peer:from".to_string(),
+        to_did: "did:peer:next".to_string(),
+        endpoint_url: "https://peer.example.com/inbound".to_string(),
+        received_at_ms: 1,
+        delay_milli: 0,
+        expires_at: NEVER,
+        retry_count: 0,
+        hop_count: 1,
+    };
+    let stream_id = store
+        .forward_queue_enqueue(&entry, 1000)
+        .await
+        .expect("forward_queue_enqueue");
+    assert_eq!(store.forward_queue_len().await.expect("len"), 1);
+
+    store
+        .forward_queue_delete(&[stream_id.as_str()])
+        .await
+        .expect("forward_queue_delete");
+    assert_eq!(
+        store.forward_queue_len().await.expect("len after delete"),
+        0,
+        "deleting the entry empties the queue"
+    );
+}
+
+/// Forward-queue autoclaim: an entry claimed by one consumer and left idle is
+/// reclaimable by another (the recovery path for a crashed consumer).
+async fn check_forward_queue_autoclaim(store: Arc<dyn MediatorStore>) {
+    let entry = ForwardQueueEntry {
+        stream_id: String::new(),
+        message: "to-reclaim".to_string(),
+        to_did_hash: "next_hash".to_string(),
+        from_did_hash: "from_hash".to_string(),
+        from_did: "did:peer:from".to_string(),
+        to_did: "did:peer:next".to_string(),
+        endpoint_url: "https://peer.example.com/inbound".to_string(),
+        received_at_ms: 1,
+        delay_milli: 0,
+        expires_at: NEVER,
+        retry_count: 0,
+        hop_count: 1,
+    };
+    store
+        .forward_queue_enqueue(&entry, 1000)
+        .await
+        .expect("forward_queue_enqueue");
+
+    // Consumer 1 claims it, then leaves it pending (no ack).
+    let claimed = store
+        .forward_queue_read("g", "consumer-1", 10, Duration::from_millis(50))
+        .await
+        .expect("forward_queue_read");
+    assert_eq!(claimed.len(), 1, "consumer-1 claims the entry");
+
+    // Consumer 2 reclaims anything idle beyond zero — i.e. the pending entry.
+    let reclaimed = store
+        .forward_queue_autoclaim("g", "consumer-2", Duration::ZERO, 10)
+        .await
+        .expect("forward_queue_autoclaim");
+    assert_eq!(
+        reclaimed.len(),
+        1,
+        "consumer-2 reclaims the idle pending entry"
+    );
+
+    let ids: Vec<&str> = reclaimed.iter().map(|e| e.stream_id.as_str()).collect();
+    store.forward_queue_ack("g", &ids).await.expect("ack");
+}
+
 // ─── Backend instantiation + test generation ────────────────────────────────
 
 /// A constructed backend plus anything that must outlive it (Fjall's temp dir).
@@ -286,6 +457,22 @@ macro_rules! conformance_for {
             #[tokio::test]
             async fn forward_queue_claim_ack() {
                 check_forward_queue_claim_ack(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn session_lifecycle() {
+                check_session_lifecycle(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn access_list_lifecycle() {
+                check_access_list_lifecycle(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn forward_queue_delete() {
+                check_forward_queue_delete(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn forward_queue_autoclaim() {
+                check_forward_queue_autoclaim(ready($ctor).await).await;
             }
         }
     };
