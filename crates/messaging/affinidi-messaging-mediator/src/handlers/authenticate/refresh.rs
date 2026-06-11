@@ -18,7 +18,7 @@ use http::StatusCode;
 use jsonwebtoken::Validation;
 use sha256::digest;
 use subtle::ConstantTimeEq;
-use tracing::{Instrument, Level, debug, info, span};
+use tracing::{Instrument, Level, info, span};
 
 /// POST /authenticate/refresh
 /// Refresh existing JWT tokens.
@@ -60,50 +60,9 @@ pub async fn authentication_refresh(
             }
         };
 
-        // Unpack the message
-        let (msg, unpack_metadata) = match envelope
-            .unpack(
-                &state.did_resolver,
-                &*state.config.security.mediator_secrets,
-            )
-            .await
-        {
-            Ok(ok) => ok,
-            Err(e) => {
-                return Err(MediatorError::problem_with_log(
-                    32,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "message.unpack",
-                    "Failed to unpack message. Reason: {1}",
-                    vec![e.to_string()],
-                    StatusCode::FORBIDDEN,
-                    format!("Failed to unpack message. Reason: {e}"),
-                )
-                .into());
-            }
-        };
-
-        // Authentication messages MUST be signed and authenticated!
-        if unpack_metadata.authenticated && unpack_metadata.encrypted {
-            debug!("Auth message verified: signed and encrypted")
-        } else {
-                return Err(MediatorError::problem_with_log(
-                    86,
-                    "",
-                    None,
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authentication.message.not_signed_or_encrypted",
-                    "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
-                    vec![unpack_metadata.authenticated.to_string(), unpack_metadata.encrypted.to_string()],
-                    StatusCode::BAD_REQUEST,
-                    format!("DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction", unpack_metadata.authenticated, unpack_metadata.encrypted),
-                )
-                .into());
-        }
+        // Unpack the message + enforce the signed/encrypted invariant.
+        let (msg, _unpack_metadata) =
+            super::helpers::unpack_auth_message(&envelope, &state).await?;
 
         // Only accepts AffinidiAuthenticateRefresh messages
         match msg.typ.as_str().parse::<MessageType>().map_err(|err| {

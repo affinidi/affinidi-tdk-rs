@@ -1,11 +1,80 @@
+use crate::SharedData;
 use crate::common::session::SessionClaims;
 use crate::common::time::unix_timestamp_secs;
+use crate::didcomm_compat::MetaEnvelope;
+use affinidi_messaging_didcomm::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
 use http::StatusCode;
 use jsonwebtoken::{EncodingKey, Header, encode};
 use rand::{RngExt, distr::Alphanumeric};
 use sha256::digest;
+use tracing::debug;
+
+/// Unpack an authentication envelope and enforce the signed-AND-encrypted
+/// invariant in a single place, shared by the `authenticate` response and
+/// refresh handlers (the two previously carried byte-identical copies of
+/// this block).
+///
+/// The caller builds the [`MetaEnvelope`] first (the two handlers use
+/// different parse-error codes there, so that step stays handler-local) and
+/// retains it for any post-unpack checks; this borrows it, so it remains
+/// usable afterwards.
+pub(crate) async fn unpack_auth_message(
+    envelope: &MetaEnvelope,
+    state: &SharedData,
+) -> Result<(Message, UnpackMetadata), MediatorError> {
+    let (msg, unpack_metadata) = match envelope
+        .unpack(
+            &state.did_resolver,
+            &*state.config.security.mediator_secrets,
+        )
+        .await
+    {
+        Ok(ok) => ok,
+        Err(e) => {
+            return Err(MediatorError::problem_with_log(
+                32,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "message.unpack",
+                "Failed to unpack message. Reason: {1}",
+                vec![e.to_string()],
+                StatusCode::FORBIDDEN,
+                format!("Failed to unpack message. Reason: {e}"),
+            ));
+        }
+    };
+
+    // Authentication messages MUST be signed and authenticated!
+    if unpack_metadata.authenticated && unpack_metadata.encrypted {
+        debug!("Auth message verified: signed and encrypted")
+    } else {
+        return Err(MediatorError::problem_with_log(
+            86,
+            "",
+            None,
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authentication.message.not_signed_or_encrypted",
+            "DIDComm message MUST be signed ({1}) and encrypted ({2}) for this transaction",
+            vec![
+                unpack_metadata.authenticated.to_string(),
+                unpack_metadata.encrypted.to_string(),
+            ],
+            StatusCode::BAD_REQUEST,
+            format!(
+                "DIDComm message MUST be signed ({}) and encrypted ({}) for this transaction",
+                unpack_metadata.authenticated, unpack_metadata.encrypted
+            ),
+        ));
+    }
+
+    Ok((msg, unpack_metadata))
+}
 
 /// creates a random string of up to length characters
 pub fn create_random_string(length: usize) -> String {

@@ -4,6 +4,21 @@
 
 ## 11th June 2026
 
+### 0.15.30 — Dedupe authenticate unpack/verify boilerplate (simplification T11)
+
+- The `authenticate` response and refresh handlers carried byte-identical
+  copies of the "unpack the DIDComm message, then require it be signed AND
+  encrypted" block. Extracted it into `helpers::unpack_auth_message`, so the
+  encrypted-AND-authenticated invariant for the unpacked message lives in
+  exactly one place. Behaviour unchanged (same `message.unpack` /
+  `authentication.message.not_signed_or_encrypted` problem reports).
+- The helper takes the already-built `MetaEnvelope` (the two handlers use
+  different envelope-parse error codes, so that step stays handler-local) and
+  borrows it, so the response handler can still run its post-unpack
+  inner/outer `from`-match check. The response handler also keeps its
+  separate pre-unpack outer-envelope check (a distinct earlier gate) so error
+  precedence is preserved.
+
 ### 0.15.29 — Decompose routing `process()` (simplification T10)
 
 - Extracts the deepest, longest blocks of `routing::process()` (~745 lines,
