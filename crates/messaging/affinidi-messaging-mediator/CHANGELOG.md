@@ -4,6 +4,23 @@
 
 ## 11th June 2026
 
+### 0.15.34 — Supervise the WebSocket streaming task (T2 follow-up)
+
+- The WebSocket live-streaming task was the last background task still
+  spawned detached, with its `JoinHandle` dropped — a panic killed live
+  delivery silently with no restart and no health signal. It now runs under
+  the `TaskSupervisor` (`StreamingTask::spawn_supervised`), so a panic or a
+  transient startup error (`streaming_clean_start` / `streaming_subscribe`)
+  restarts it with capped backoff and surfaces it as a component in `/readyz`.
+- Registered **not load-bearing**: if streaming is down, clients fall back to
+  message-pickup polling, so it degrades `/readyz` rather than failing it
+  (consistent with the statistics/sweep tasks).
+- The command channel survives restarts: the `tx` (held in `SharedData` and
+  every WebSocket handler) is unchanged, and the `rx` is wrapped in an
+  `Arc<Mutex<_>>` that each restart re-locks, so queued commands and live
+  socket registrations aren't lost. Side effect: a streaming backend hiccup
+  at startup no longer aborts mediator boot — it degrades and retries.
+
 ### 0.15.33 — Finish routing `process()` decomposition (T10 follow-up)
 
 - Completes the conservative `process()` decomposition started in 0.15.29 by
