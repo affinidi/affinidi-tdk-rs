@@ -24,6 +24,7 @@ use crate::common::metrics::names::{
     WEBSOCKET_DUPLICATE_CHURN_TOTAL, WEBSOCKET_DUPLICATE_REPLACEMENTS_TOTAL,
     WEBSOCKET_REDELIVERED_MESSAGES_TOTAL,
 };
+use crate::tasks::supervisor::TaskSupervisor;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
     store::{MediatorStore, types::PubSubRecord},
@@ -37,8 +38,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{broadcast, mpsc},
-    task::JoinHandle,
+    sync::{Mutex, broadcast, mpsc},
     time::sleep,
 };
 use tracing::{Instrument, Level, debug, error, info, span, warn};
@@ -105,39 +105,46 @@ pub struct StreamingTask {
 }
 
 impl StreamingTask {
-    /// Creates the streaming task handler
-    pub async fn new(
+    /// Create the streaming task's command channel and register the task with
+    /// the [`TaskSupervisor`], so a panic or startup error restarts it with
+    /// backoff (and surfaces as a `degraded` component in `/readyz`) instead of
+    /// dying silently with a dropped `JoinHandle`.
+    ///
+    /// The returned [`StreamingTask`] holds the `tx` side of the command
+    /// channel (cloned into `SharedData` and every WebSocket handler). The `rx`
+    /// side is wrapped in an `Arc<Mutex<_>>` so it survives restarts: the
+    /// supervisor builds a fresh future each restart, but it re-locks the
+    /// *same* receiver, so queued commands and the live `tx` clones stay valid.
+    /// `tokio`'s `Mutex` doesn't poison, so a panicking run releases the guard
+    /// cleanly for the next restart.
+    ///
+    /// Not load-bearing: if streaming is down, clients fall back to
+    /// message-pickup polling, so it degrades `/readyz` rather than failing it.
+    pub fn spawn_supervised(
+        supervisor: &TaskSupervisor,
         database: Arc<dyn MediatorStore>,
         mediator_uuid: &str,
-    ) -> Result<(Self, JoinHandle<()>), MediatorError> {
-        let _span = span!(Level::INFO, "StreamingTask::new");
+    ) -> Self {
+        // Create the inter-task channel - allows up to 10 queued messages
+        let (tx, rx) = mpsc::channel(10);
+        let task = StreamingTask {
+            channel: tx,
+            uuid: mediator_uuid.to_string(),
+        };
+        let rx = Arc::new(Mutex::new(rx));
 
-        async move {
-            // Create the inter-task channel - allows up to 10 queued messages
-            let (tx, mut rx) = mpsc::channel(10);
-            let task = StreamingTask {
-                channel: tx.clone(),
-                uuid: mediator_uuid.to_string(),
-            };
+        let supervised = task.clone();
+        supervisor.spawn("websocket_streaming", false, move || {
+            let task = supervised.clone();
+            let database = database.clone();
+            let rx = rx.clone();
+            async move {
+                let mut rx = rx.lock().await;
+                task.ws_streaming_task(database, &mut rx).await
+            }
+        });
 
-            // Start the streaming task
-            // With it's own clone of required data
-            let handle = {
-                let _task = task.clone();
-                tokio::spawn(async move {
-                    _task
-                        .ws_streaming_task(database, &mut rx)
-                        .await
-                        .unwrap_or_else(|e| {
-                            error!("websocket_streaming thread failed: {e}");
-                        });
-                })
-            };
-
-            Ok((task, handle))
-        }
-        .instrument(_span)
-        .await
+        task
     }
 
     /// Streams messages to subscribed clients over websocket.

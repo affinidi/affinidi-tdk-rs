@@ -457,17 +457,18 @@ pub async fn serve_internal(
 
     // Streaming task: subscribes via the trait, so it runs on any
     // backend. RedisStore bridges Redis pub/sub into a tokio
-    // broadcast; Memory and Fjall feed the broadcast directly.
-    let (streaming_task, _) = if config.streaming_enabled {
-        let _database = store.clone();
-        let uuid = config.streaming_uuid.clone();
-        let (_task, _handle) = StreamingTask::new(_database, &uuid).await.map_err(|e| {
-            error!("Error starting streaming task: {e}");
-            e
-        })?;
-        (Some(_task), Some(_handle))
+    // broadcast; Memory and Fjall feed the broadcast directly. Supervised
+    // (restart-and-degrade) rather than spawned detached, so a panic or a
+    // transient startup error restarts it instead of silently killing live
+    // delivery. Not load-bearing — clients fall back to message-pickup polling.
+    let streaming_task = if config.streaming_enabled {
+        Some(StreamingTask::spawn_supervised(
+            &supervisor,
+            store.clone(),
+            &config.streaming_uuid,
+        ))
     } else {
-        (None, None)
+        None
     };
 
     let mut did_resolver = DIDCacheClient::new(config.did_resolver_config.clone())
