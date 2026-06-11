@@ -58,6 +58,10 @@ use tokio::sync::broadcast;
 
 pub mod types;
 
+/// Backend-agnostic decision logic (authorization checks shared by the
+/// in-process Rust backends), extracted so it can't drift between them.
+pub mod ops;
+
 #[cfg(feature = "redis-backend")]
 pub mod redis;
 

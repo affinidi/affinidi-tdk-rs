@@ -2,6 +2,18 @@
 
 ## Changelog history
 
+## 11th June 2026
+
+### 0.15.8 — Extract shared store decision logic to `store::ops` (simplification T16)
+
+- Adds `store::ops`, a home for backend-agnostic decision logic shared by the
+  in-process Rust backends so it can't drift between them. First extraction:
+  `ops::delete_message_permitted` (message-delete authorization — Admin
+  bypasses; an Owner must be the recipient or the non-anonymous sender), which
+  `FjallStore` and `MemoryStore` previously each implemented identically. Now
+  unit-tested directly; both backends call it. Additive, no behaviour change.
+  (The Redis backend performs the equivalent check in Lua and is unaffected.)
+
 ## 10th June 2026
 
 ### 0.15.7 — ACL bitfield round-trip safety net (simplification T5)
