@@ -592,6 +592,157 @@ async fn deliver_forward(
     Ok(())
 }
 
+/// Fetch the next-hop account, registering it with the global default ACL on
+/// first contact. Returns a storage problem report on backend failure.
+async fn resolve_next_account(
+    state: &SharedData,
+    session: &Session,
+    msg: &Message,
+    next_did_hash: &str,
+) -> Result<Account, MediatorError> {
+    match state.database.account_get(next_did_hash).await {
+        Ok(Some(next_account)) => Ok(next_account),
+        Ok(None) => {
+            debug!("Next account not found, creating a new one");
+            state
+                .database
+                .account_add(
+                    next_did_hash,
+                    &state.config.security.global_acl_default,
+                    None,
+                )
+                .await
+                .map_err(|e| {
+                    MediatorError::problem_with_log(
+                        14,
+                        &session.session_id,
+                        Some(msg.id.to_string()),
+                        ProblemReportSorter::Error,
+                        ProblemReportScope::Protocol,
+                        "me.res.storage.error",
+                        "Database transaction error: {1}",
+                        vec![e.to_string()],
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        format!("Database transaction error: {e}"),
+                    )
+                })
+        }
+        Err(e) => Err(MediatorError::problem_with_log(
+            14,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "me.res.storage.error",
+            "Database transaction error: {1}",
+            vec![e.to_string()],
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("Database transaction error: {e}"),
+        )),
+    }
+}
+
+/// Resolve the account a forward is *from*: the message's `from` DID
+/// (auto-registering it with a minimal relay ACL on first contact), or — for
+/// an anonymous forward — a synthetic account carrying the global default ACL.
+/// Enforces the `SEND_FORWARDED` capability on the resolved sender.
+async fn resolve_forward_sender(
+    state: &SharedData,
+    session: &Session,
+    msg: &Message,
+) -> Result<Account, MediatorError> {
+    if let Some(from) = &msg.from {
+        let from_account = match state.database.account_get(&digest(from.as_str())).await {
+            Ok(Some(from_account)) => from_account,
+            Ok(None) => {
+                // First time we've seen this forwarding sender. Persist it
+                // as a registered account (mirrors the `next_account` branch
+                // above). Without this, `store_message` later creates a bare
+                // `DID:<hash>` record holding only queue counters (no `ACLS`
+                // field). On every subsequent forward `account_get` then
+                // returns that phantom record with `acls = 0` (DENY_ALL), so
+                // the `send_forwarded` gate below rejects the relay with 403;
+                // registering here keeps cross-mediator forwarding
+                // reproducible.
+                //
+                // Seed with a minimal relay ACL (`SEND_FORWARDED` only, and
+                // only if `global_acl_default` grants it) rather than the
+                // full default — see `relay_sender_acls`. A DID that merely
+                // relays a forward should not also be persisted with LOCAL /
+                // RECEIVE / invite / self-manage capabilities.
+                debug!("Forwarding sender account not found, creating a new one");
+                let from_acl_seed = relay_sender_acls(&state.config.security.global_acl_default);
+                state
+                    .database
+                    .account_add(&digest(from.as_str()), &from_acl_seed, None)
+                    .await
+                    .map_err(|e| {
+                        MediatorError::problem_with_log(
+                            14,
+                            &session.session_id,
+                            Some(msg.id.to_string()),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("Database transaction error: {e}"),
+                        )
+                    })?
+            }
+            Err(e) => {
+                return Err(MediatorError::problem_with_log(
+                    14,
+                    &session.session_id,
+                    Some(msg.id.to_string()),
+                    ProblemReportSorter::Error,
+                    ProblemReportScope::Protocol,
+                    "me.res.storage.error",
+                    "Database transaction error: {1}",
+                    vec![e.to_string()],
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("Database transaction error: {e}"),
+                ));
+            }
+        };
+        let from_acls = MediatorACLSet::from_u64(from_account.acls);
+
+        if authz::require_capability(&from_acls, Capability::SendForwarded).is_err() {
+            return Err(MediatorError::problem(
+                60,
+                &session.session_id,
+                Some(msg.id.to_string()),
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authorization.send_forwarded",
+                "Sender isn't allowed to send forwarded messages",
+                vec![],
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
+        Ok(from_account)
+    } else if authz::require_capability(&session.acls, Capability::SendForwarded).is_err() {
+        Err(MediatorError::problem(
+            60,
+            &session.session_id,
+            Some(msg.id.to_string()),
+            ProblemReportSorter::Error,
+            ProblemReportScope::Protocol,
+            "authorization.send_forwarded",
+            "Sender isn't allowed to send forwarded messages",
+            vec![],
+            StatusCode::FORBIDDEN,
+        ))
+    } else {
+        Ok(Account {
+            acls: state.config.security.global_acl_default.to_u64(),
+            ..Default::default()
+        })
+    }
+}
+
 pub(crate) async fn process(
     msg: &Message,
     metadata: &UnpackMetadata,
@@ -631,49 +782,8 @@ pub(crate) async fn process(
         let next_did_hash = sha256::digest(next.as_bytes());
 
         // ****************************************************
-        // Get the next account if it exists
-        let next_account = match state.database.account_get(&next_did_hash).await {
-            Ok(Some(next_account)) => next_account,
-            Ok(None) => {
-                debug!("Next account not found, creating a new one");
-                state
-                    .database
-                    .account_add(
-                        &next_did_hash,
-                        &state.config.security.global_acl_default,
-                        None,
-                    )
-                    .await
-                    .map_err(|e| {
-                        MediatorError::problem_with_log(
-                            14,
-                            &session.session_id,
-                            Some(msg.id.to_string()),
-                            ProblemReportSorter::Error,
-                            ProblemReportScope::Protocol,
-                            "me.res.storage.error",
-                            "Database transaction error: {1}",
-                            vec![e.to_string()],
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            format!("Database transaction error: {e}"),
-                        )
-                    })?
-            }
-            Err(e) => {
-                return Err(MediatorError::problem_with_log(
-                    14,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "me.res.storage.error",
-                    "Database transaction error: {1}",
-                    vec![e.to_string()],
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    format!("Database transaction error: {e}"),
-                ));
-            }
-        };
+        // Get the next account (registering it on first contact).
+        let next_account = resolve_next_account(state, session, msg, &next_did_hash).await?;
 
         // ****************************************************
         // Check if the next hop is allowed to receive forwarded messages
@@ -721,97 +831,7 @@ pub(crate) async fn process(
         // Determine who the from did is
         // If message is anonymous, then use the session DID
 
-        let from_account = if let Some(from) = &msg.from {
-            let from_account = match state.database.account_get(&digest(from.as_str())).await {
-                Ok(Some(from_account)) => from_account,
-                Ok(None) => {
-                    // First time we've seen this forwarding sender. Persist it
-                    // as a registered account (mirrors the `next_account` branch
-                    // above). Without this, `store_message` later creates a bare
-                    // `DID:<hash>` record holding only queue counters (no `ACLS`
-                    // field). On every subsequent forward `account_get` then
-                    // returns that phantom record with `acls = 0` (DENY_ALL), so
-                    // the `send_forwarded` gate below rejects the relay with 403;
-                    // registering here keeps cross-mediator forwarding
-                    // reproducible.
-                    //
-                    // Seed with a minimal relay ACL (`SEND_FORWARDED` only, and
-                    // only if `global_acl_default` grants it) rather than the
-                    // full default — see `relay_sender_acls`. A DID that merely
-                    // relays a forward should not also be persisted with LOCAL /
-                    // RECEIVE / invite / self-manage capabilities.
-                    debug!("Forwarding sender account not found, creating a new one");
-                    let from_acl_seed =
-                        relay_sender_acls(&state.config.security.global_acl_default);
-                    state
-                        .database
-                        .account_add(&digest(from.as_str()), &from_acl_seed, None)
-                        .await
-                        .map_err(|e| {
-                            MediatorError::problem_with_log(
-                                14,
-                                &session.session_id,
-                                Some(msg.id.to_string()),
-                                ProblemReportSorter::Error,
-                                ProblemReportScope::Protocol,
-                                "me.res.storage.error",
-                                "Database transaction error: {1}",
-                                vec![e.to_string()],
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                format!("Database transaction error: {e}"),
-                            )
-                        })?
-                }
-                Err(e) => {
-                    return Err(MediatorError::problem_with_log(
-                        14,
-                        &session.session_id,
-                        Some(msg.id.to_string()),
-                        ProblemReportSorter::Error,
-                        ProblemReportScope::Protocol,
-                        "me.res.storage.error",
-                        "Database transaction error: {1}",
-                        vec![e.to_string()],
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        format!("Database transaction error: {e}"),
-                    ));
-                }
-            };
-            let from_acls = MediatorACLSet::from_u64(from_account.acls);
-
-            if authz::require_capability(&from_acls, Capability::SendForwarded).is_err() {
-                return Err(MediatorError::problem(
-                    60,
-                    &session.session_id,
-                    Some(msg.id.to_string()),
-                    ProblemReportSorter::Error,
-                    ProblemReportScope::Protocol,
-                    "authorization.send_forwarded",
-                    "Sender isn't allowed to send forwarded messages",
-                    vec![],
-                    StatusCode::FORBIDDEN,
-                ));
-            }
-
-            from_account
-        } else if authz::require_capability(&session.acls, Capability::SendForwarded).is_err() {
-            return Err(MediatorError::problem(
-                60,
-                &session.session_id,
-                Some(msg.id.to_string()),
-                ProblemReportSorter::Error,
-                ProblemReportScope::Protocol,
-                "authorization.send_forwarded",
-                "Sender isn't allowed to send forwarded messages",
-                vec![],
-                StatusCode::FORBIDDEN,
-            ));
-        } else {
-            Account {
-                acls: state.config.security.global_acl_default.to_u64(),
-                ..Default::default()
-            }
-        };
+        let from_account = resolve_forward_sender(state, session, msg).await?;
 
         // ****************************************************
 

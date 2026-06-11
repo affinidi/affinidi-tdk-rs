@@ -4,6 +4,24 @@
 
 ## 11th June 2026
 
+### 0.15.33 — Finish routing `process()` decomposition (T10 follow-up)
+
+- Completes the conservative `process()` decomposition started in 0.15.29 by
+  extracting the two remaining inline account-resolution blocks into named
+  async helpers:
+  - `resolve_next_account` — fetch the next-hop account, registering it with
+    the global default ACL on first contact;
+  - `resolve_forward_sender` — resolve the account a forward is *from* (the
+    `from` DID, auto-registered with a minimal relay ACL on first contact, or
+    a synthetic account for an anonymous forward), enforcing `SEND_FORWARDED`.
+- `process()` no longer contains any inline account-store operations; its body
+  is now ~260 lines (down from ~745 before 0.15.29).
+- Pure refactor — behaviour byte-identical (problem reports, the relay-sender
+  least-privilege seed, and validation ordering all preserved verbatim).
+  Verified by the routing unit tests and the
+  `affinidi-messaging-test-mediator` `cross_mediator_forwarding` e2e suite
+  (the real Alice → A → B → Bob forward path, blind and rewrap).
+
 ### 0.15.32 — Per-DID WebSocket cap + always-on admin TTL (hardening T13)
 
 - **(a) Per-DID WebSocket connection cap.** Adds
