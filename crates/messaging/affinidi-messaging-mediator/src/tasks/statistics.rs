@@ -23,7 +23,7 @@ pub async fn statistics(
 
         loop {
             interval.tick().await;
-            let stats = database.get_db_metadata().await?;
+            let stats = database.get_global_stats().await?;
             let delta = stats.delta(&previous_stats);
             info!(
                 event_type = "UpdateStats",

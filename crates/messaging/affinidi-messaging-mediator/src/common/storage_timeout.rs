@@ -66,12 +66,8 @@ mod tests {
     async fn maps_a_hung_call_to_a_database_error() {
         // A future that never resolves stands in for a wedged backend.
         let never = std::future::pending::<Result<(), MediatorError>>();
-        let fut = with_storage_timeout(
-            Duration::from_secs(5),
-            "get_forward_tasks_len",
-            "sess-1",
-            never,
-        );
+        let fut =
+            with_storage_timeout(Duration::from_secs(5), "forward_queue_len", "sess-1", never);
         tokio::pin!(fut);
 
         // Before the timeout elapses the call is still pending.
@@ -85,7 +81,7 @@ mod tests {
         match fut.await {
             Err(MediatorError::DatabaseError(_, session, msg)) => {
                 assert_eq!(session, "sess-1");
-                assert!(msg.contains("get_forward_tasks_len"), "msg was: {msg}");
+                assert!(msg.contains("forward_queue_len"), "msg was: {msg}");
                 assert!(msg.contains("timed out"), "msg was: {msg}");
             }
             other => panic!("expected DatabaseError, got {other:?}"),

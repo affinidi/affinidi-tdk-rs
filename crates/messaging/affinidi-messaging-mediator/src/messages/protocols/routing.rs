@@ -553,7 +553,7 @@ async fn deliver_forward(
 
             state
                 .database
-                .forward_queue_enqueue_with_limit(&entry, state.config.limits.forward_task_queue)
+                .forward_queue_enqueue(&entry, state.config.limits.forward_task_queue)
                 .await
                 .map_err(|e| {
                     MediatorError::problem_with_log(
@@ -904,9 +904,9 @@ pub(crate) async fn process(
         if !ephemeral
             && with_storage_timeout(
                 state.storage_timeout(),
-                "get_forward_tasks_len",
+                "forward_queue_len",
                 &session.session_id,
-                state.database.get_forward_tasks_len(),
+                state.database.forward_queue_len(),
             )
             .await?
                 >= state.config.limits.forward_task_queue

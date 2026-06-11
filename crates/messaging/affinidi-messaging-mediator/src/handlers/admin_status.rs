@@ -115,7 +115,7 @@ pub async fn admin_status_handler(
 
     // Get message stats from Redis GLOBAL hash
     let (received_count, received_bytes, sent_count, sent_bytes, deleted_count) =
-        match state.database.get_db_metadata().await {
+        match state.database.get_global_stats().await {
             Ok(stats) => (
                 stats.received_count,
                 stats.received_bytes,
@@ -127,7 +127,7 @@ pub async fn admin_status_handler(
         };
 
     // Get forward queue length
-    let queue_length = state.database.get_forward_tasks_len().await.unwrap_or(0);
+    let queue_length = state.database.forward_queue_len().await.unwrap_or(0);
 
     let status = AdminStatus {
         version: env!("CARGO_PKG_VERSION"),

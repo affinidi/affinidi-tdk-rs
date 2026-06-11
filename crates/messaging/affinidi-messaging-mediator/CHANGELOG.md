@@ -4,6 +4,18 @@
 
 ## 11th June 2026
 
+### 0.15.36 — Migrate off the removed `MediatorStore` legacy aliases (simplification T16, part 2)
+
+- Updates the ~15 call sites that used the ten rename-only `MediatorStore`
+  aliases removed in `mediator-common` 0.15.9 to call the canonical methods
+  directly: stats/forward-queue reads (`get_global_stats`, `forward_queue_len`,
+  `forward_queue_enqueue`), the account role change (`account_set_role`), the
+  WebSocket streaming state transitions (`streaming_set_state(...)`), and the
+  websocket-open/close counters (`stats_increment(...)`). No behaviour change —
+  the aliases were thin delegates; verified against the store-conformance suite
+  and the cross-mediator / WebSocket e2e suites.
+- Requires `affinidi-messaging-mediator-common` 0.15.9.
+
 ### 0.15.35 — Route store delete-authorization through `store::ops` (simplification T16)
 
 - `FjallStore` and `MemoryStore` now call `mediator-common`'s new

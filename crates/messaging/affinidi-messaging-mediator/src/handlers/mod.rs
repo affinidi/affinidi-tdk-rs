@@ -186,9 +186,9 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     // promptly rather than hanging the load-balancer health check.
     match with_storage_timeout(
         state.storage_timeout(),
-        "get_db_metadata",
+        "get_global_stats",
         "NA",
-        state.database.get_db_metadata(),
+        state.database.get_global_stats(),
     )
     .await
     {
@@ -211,9 +211,9 @@ pub async fn readiness_handler(State(state): State<SharedData>) -> impl IntoResp
     // Check FORWARD_Q length (bounded — see above).
     match with_storage_timeout(
         state.storage_timeout(),
-        "get_forward_tasks_len",
+        "forward_queue_len",
         "NA",
-        state.database.get_forward_tasks_len(),
+        state.database.forward_queue_len(),
     )
     .await
     {
@@ -389,7 +389,7 @@ impl LoadState {
         }
 
         // Check queue depth
-        if let Ok(queue_len) = state.database.get_forward_tasks_len().await {
+        if let Ok(queue_len) = state.database.forward_queue_len().await {
             let limit = state.config.limits.forward_task_queue;
             if queue_len >= limit {
                 return LoadState::Critical;
