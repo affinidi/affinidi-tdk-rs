@@ -219,6 +219,10 @@ pub struct SecurityConfigRaw {
     pub block_remote_admin_msgs: String,
     pub force_session_did_match: String,
     pub admin_messages_expiry: String,
+    /// Explicit inter-mediator relay switch. `#[serde(default)]` so configs
+    /// that predate the flag deserialize without it (empty → `false`).
+    #[serde(default)]
+    pub enable_inter_mediator_relay: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -249,6 +253,12 @@ pub struct SecurityConfig {
     pub force_session_did_match: bool,
     pub block_remote_admin_msgs: bool,
     pub admin_messages_expiry: u64,
+    /// When `true`, this mediator explicitly acts as an inter-mediator relay
+    /// (accepts anonymous `/inbound` forwards). Defaults to `false`. Today
+    /// relay is still permitted when `global_acl_default` grants
+    /// `SEND_FORWARDED` even without this flag (with a deprecation warning at
+    /// boot); a future release will require the flag.
+    pub enable_inter_mediator_relay: bool,
 }
 
 impl Debug for SecurityConfig {
@@ -280,6 +290,10 @@ impl Debug for SecurityConfig {
             .field("force_session_did_match", &self.force_session_did_match)
             .field("block_remote_admin_msgs", &self.block_remote_admin_msgs)
             .field("admin_messages_expiry", &self.admin_messages_expiry)
+            .field(
+                "enable_inter_mediator_relay",
+                &self.enable_inter_mediator_relay,
+            )
             .finish()
     }
 }
@@ -316,6 +330,7 @@ impl SecurityConfig {
             force_session_did_match: true,
             block_remote_admin_msgs: true,
             admin_messages_expiry: 3,
+            enable_inter_mediator_relay: false,
         }
     }
 }
@@ -531,6 +546,22 @@ impl SecurityConfigRaw {
                 warn_default("admin_messages_expiry", &self.admin_messages_expiry, "3");
                 3
             }),
+            // Absent (legacy configs) → false silently; a non-empty but
+            // unparseable value is a typo worth warning about.
+            enable_inter_mediator_relay: if self.enable_inter_mediator_relay.is_empty() {
+                false
+            } else {
+                self.enable_inter_mediator_relay
+                    .parse()
+                    .unwrap_or_else(|_| {
+                        warn_default(
+                            "enable_inter_mediator_relay",
+                            &self.enable_inter_mediator_relay,
+                            "false",
+                        );
+                        false
+                    })
+            },
             ..SecurityConfig::default(secrets_resolver)
         };
 

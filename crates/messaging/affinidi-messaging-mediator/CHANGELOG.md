@@ -4,6 +4,27 @@
 
 ## 11th June 2026
 
+### 0.15.31 — Explicit inter-mediator relay flag (simplification T12)
+
+- Adds `security.enable_inter_mediator_relay` (env `ENABLE_INTER_MEDIATOR_RELAY`,
+  default `false`) — an explicit switch for acting as an inter-mediator relay
+  (accepting anonymous `/inbound` forwards). The anonymous-relay synthesis path
+  (`jwt_auth`) now gates on `flag || global_acl_default grants SEND_FORWARDED`.
+- **Deprecation (non-breaking this release):** existing mediators that relay
+  *implicitly* — `global_acl_default` grants `SEND_FORWARDED` without the flag —
+  keep working, but now log a deprecation **warning** at boot
+  (`validate_config`). A future release will require the explicit flag
+  (`flag && ACL`).
+- **Migration:** if your mediator relays inter-mediator forwards, set
+  `security.enable_inter_mediator_relay = "true"`. If it should not relay, drop
+  `SEND_FORWARDED` from `global_acl_default`. Documented in `conf/mediator.toml`.
+- Verified: new unit tests for the gate (`anonymous_session_for` with/without
+  the flag) and the boot warning (`warn_implicit_relay`); new
+  `affinidi-messaging-test-mediator` e2e
+  (`non_relay_mediator_rejects_cross_mediator_forward`) confirms a non-relay
+  mediator drops the anonymous cross-mediator hop, while the existing relay e2e
+  suite still delivers.
+
 ### 0.15.30 — Dedupe authenticate unpack/verify boilerplate (simplification T11)
 
 - The `authenticate` response and refresh handlers carried byte-identical

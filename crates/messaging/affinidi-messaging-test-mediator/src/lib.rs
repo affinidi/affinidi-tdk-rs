@@ -315,6 +315,8 @@ pub struct TestMediatorBuilder {
     force_session_did_match: Option<bool>,
     /// Override for `SecurityConfig.block_remote_admin_msgs`.
     block_remote_admin_msgs: Option<bool>,
+    /// Override for `SecurityConfig.enable_inter_mediator_relay`.
+    enable_inter_mediator_relay: Option<bool>,
     /// Override for `SecurityConfig.jwt_access_expiry` (seconds).
     jwt_access_expiry_secs: Option<u64>,
     /// Override for `SecurityConfig.jwt_refresh_expiry` (seconds).
@@ -350,6 +352,7 @@ impl Default for TestMediatorBuilder {
             block_anonymous_outer_envelope: None,
             force_session_did_match: None,
             block_remote_admin_msgs: None,
+            enable_inter_mediator_relay: None,
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
             admin_identity: None,
@@ -504,6 +507,14 @@ impl TestMediatorBuilder {
     /// control. Defaults to `MediatorACLSet::default()`.
     pub fn global_acl_default(mut self, acls: MediatorACLSet) -> Self {
         self.global_acl_default = Some(acls);
+        self
+    }
+
+    /// Override `SecurityConfig.enable_inter_mediator_relay` — the explicit
+    /// switch for accepting anonymous inter-mediator `/inbound` forwards.
+    /// Defaults to the production default (`false`).
+    pub fn enable_inter_mediator_relay(mut self, enabled: bool) -> Self {
+        self.enable_inter_mediator_relay = Some(enabled);
         self
     }
 
@@ -668,6 +679,9 @@ impl TestMediatorBuilder {
         }
         if let Some(b) = self.block_remote_admin_msgs {
             security.block_remote_admin_msgs = b;
+        }
+        if let Some(b) = self.enable_inter_mediator_relay {
+            security.enable_inter_mediator_relay = b;
         }
         if let Some(secs) = self.jwt_access_expiry_secs {
             security.jwt_access_expiry = secs;
