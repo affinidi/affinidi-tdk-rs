@@ -134,6 +134,10 @@ pub(crate) fn apply_env_overrides(config: &mut super::ConfigRaw) {
         "BLOCK_REMOTE_ADMIN_MSGS"
     );
     env_override!(
+        config.security.enable_inter_mediator_relay,
+        "ENABLE_INTER_MEDIATOR_RELAY"
+    );
+    env_override!(
         config.security.admin_messages_expiry,
         "ADMIN_MESSAGES_EXPIRY"
     );

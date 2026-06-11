@@ -237,6 +237,14 @@ block_remote_admin_msgs = "true"
 ### TTL in seconds for admin messages (minimizes replay attack risk)
 admin_messages_expiry = "3"
 
+### Env: ENABLE_INTER_MEDIATOR_RELAY
+### Explicitly act as an inter-mediator relay (accept anonymous /inbound
+### forwards from other mediators). Defaults to "false".
+### NOTE: today relay is also permitted when global_acl_default grants
+### SEND_FORWARDED even without this flag (you'll see a deprecation warning at
+### boot). A future release will require this flag to be "true" for relay.
+enable_inter_mediator_relay = "false"
+
 ### ****************************************************************************************************************************
 ### Live streaming setup
 ### ****************************************************************************************************************************

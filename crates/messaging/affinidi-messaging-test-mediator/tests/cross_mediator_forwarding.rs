@@ -83,6 +83,25 @@ async fn spawn_rewrap_environment(trusted_peers: &[String]) -> TestEnvironment {
         .expect("wire SDK environment to rewrap mediator")
 }
 
+/// Spawn a mediator that is explicitly NOT a relay: its global default ACL
+/// does not grant `SEND_FORWARDED` and `enable_inter_mediator_relay` is off,
+/// so it must refuse the anonymous inter-mediator `/inbound` hop. Locally
+/// registered users (added via `add_user` with an explicit allow-all ACL) can
+/// still authenticate and receive their own direct messages.
+async fn spawn_non_relay_environment() -> TestEnvironment {
+    let mediator = TestMediator::builder()
+        .enable_forwarding(true)
+        .enable_external_forwarding(true)
+        .global_acl_default(acl::deny_all())
+        .enable_inter_mediator_relay(false)
+        .spawn()
+        .await
+        .expect("spawn non-relay mediator");
+    TestEnvironment::new(mediator)
+        .await
+        .expect("wire SDK environment to non-relay mediator")
+}
+
 /// Add a user and bring up its WebSocket live-stream connection.
 ///
 /// Retrieval uses message-pickup `live_stream_get` (the supported
@@ -238,6 +257,46 @@ async fn cross_mediator_forward_delivers_over_memory_backend() {
         received.as_deref(),
         Some(text),
         "Bob should receive Alice's message after it routes A → B"
+    );
+
+    env_a.shutdown().await.expect("shutdown mediator A");
+    env_b.shutdown().await.expect("shutdown mediator B");
+}
+
+/// Negative counterpart of the above + the end-to-end half of T12: a mediator
+/// that is NOT configured as a relay must drop the anonymous inter-mediator
+/// hop, so a cross-mediator forward never reaches the recipient. (The flag's
+/// gate logic in isolation is unit-tested in `jwt_auth`; here we confirm the
+/// observable end-to-end behaviour with relay off.)
+#[tokio::test]
+async fn non_relay_mediator_rejects_cross_mediator_forward() {
+    init_tracing();
+
+    let env_a = spawn_relay_environment().await;
+    let env_b = spawn_non_relay_environment().await;
+
+    let mediator_a_did = env_a.mediator.did().to_string();
+    let mediator_b_did = env_b.mediator.did().to_string();
+    assert_ne!(mediator_a_did, mediator_b_did);
+
+    let alice = add_live_user(&env_a, "Alice").await;
+    let bob = add_live_user(&env_b, "Bob").await;
+
+    let received = forward_and_receive(
+        &env_a,
+        &alice,
+        &mediator_a_did,
+        &env_b,
+        &bob,
+        &mediator_b_did,
+        "This must not arrive — mediator B is not a relay.",
+        Duration::from_secs(4),
+    )
+    .await;
+
+    assert_eq!(
+        received, None,
+        "a non-relay mediator must drop the anonymous cross-mediator hop"
     );
 
     env_a.shutdown().await.expect("shutdown mediator A");

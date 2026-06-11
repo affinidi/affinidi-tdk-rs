@@ -16,6 +16,7 @@ use affinidi_messaging_mediator_common::types::acls::{AccessListModeType, Mediat
 use tracing::warn;
 
 use super::Config;
+use crate::common::authz::{Capability, grants};
 use crate::common::error_codes;
 
 /// Run all config invariants. Hard conflicts return an error (aborting
@@ -52,8 +53,40 @@ pub fn validate_config(config: &Config) -> Result<(), MediatorError> {
     if let Some(msg) = warn_remote_admin_allowed(config.security.block_remote_admin_msgs) {
         warn!("{msg}");
     }
+    if let Some(msg) = warn_implicit_relay(
+        config.security.enable_inter_mediator_relay,
+        &config.security.global_acl_default,
+    ) {
+        warn!("{msg}");
+    }
 
     Ok(())
+}
+
+/// Warn when this mediator relays inter-mediator forwards *implicitly* — i.e.
+/// `global_acl_default` grants `SEND_FORWARDED` (so anonymous `/inbound`
+/// forwards are accepted) but the operator hasn't set the explicit
+/// `security.enable_inter_mediator_relay` flag.
+///
+/// This is the deprecation half of the explicit-relay rollout: today the
+/// implicit configuration still works, but a future release will require the
+/// flag, so we surface it loudly now. Setting the flag (or removing
+/// `SEND_FORWARDED` from the global default) silences the warning.
+pub(crate) fn warn_implicit_relay(
+    enable_relay_flag: bool,
+    global_acl_default: &MediatorACLSet,
+) -> Option<String> {
+    if !enable_relay_flag && grants(global_acl_default, Capability::SendForwarded) {
+        return Some(
+            "inter-mediator relay is enabled implicitly: global_acl_default grants SEND_FORWARDED \
+             but security.enable_inter_mediator_relay is not set. This still works today, but a \
+             future release will require the explicit flag — set \
+             security.enable_inter_mediator_relay = \"true\" to opt in (or drop SEND_FORWARDED from \
+             the global default if this mediator should not relay)."
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Warn when `admin_did` equals `mediator_did`: sharing one identity lets
@@ -193,6 +226,27 @@ mod tests {
         let msg = warn_admin_is_mediator("did:peer:2.same", "did:peer:2.same")
             .expect("identical DIDs should warn");
         assert!(msg.contains("privilege confusion"), "msg was: {msg}");
+    }
+
+    #[test]
+    fn implicit_relay_warning_fires_only_for_acl_without_flag() {
+        let relay = MediatorACLSet::from_string_ruleset("ALLOW_ALL").unwrap();
+        let no_relay =
+            MediatorACLSet::from_string_ruleset("DENY_ALL,LOCAL,SEND_MESSAGES,RECEIVE_MESSAGES")
+                .unwrap();
+
+        // ACL grants SEND_FORWARDED but flag off → deprecation warning.
+        let msg = warn_implicit_relay(false, &relay).expect("implicit relay should warn");
+        assert!(
+            msg.contains("enable_inter_mediator_relay"),
+            "msg was: {msg}"
+        );
+
+        // Flag explicitly set → no warning (operator opted in).
+        assert!(warn_implicit_relay(true, &relay).is_none());
+        // ACL doesn't grant SEND_FORWARDED → not relaying, no warning.
+        assert!(warn_implicit_relay(false, &no_relay).is_none());
+        assert!(warn_implicit_relay(true, &no_relay).is_none());
     }
 
     #[test]

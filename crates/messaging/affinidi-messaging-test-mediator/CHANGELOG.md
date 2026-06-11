@@ -2,6 +2,15 @@
 
 ## Changelog history
 
+## 11th June 2026
+
+### 0.2.8 — builder support for the explicit relay flag (mediator T12)
+
+- Adds `TestMediatorBuilder::enable_inter_mediator_relay(bool)` to override
+  `SecurityConfig.enable_inter_mediator_relay`, and a new e2e
+  (`non_relay_mediator_rejects_cross_mediator_forward`) verifying a non-relay
+  mediator drops the anonymous cross-mediator hop.
+
 ## 10th June 2026
 
 ### 0.2.7 — health-endpoint integration tests (mediator T2)
