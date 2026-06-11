@@ -14,19 +14,23 @@
 //!   --test store_conformance
 //! ```
 //!
-//! Coverage so far (against **Memory** and **Fjall**):
+//! Coverage (against **Memory** and **Fjall**) — ten semantic areas:
 //! account lifecycle; ACL set/get; message store + inbox counters;
 //! forward-queue consumer-group claim/ack, delete, and autoclaim (crashed-
-//! consumer recovery); session put/get/delete lifecycle; access-list
-//! add/count/remove/clear. Memory and Fjall agree on all of these — no
-//! divergence found between the two independent implementations.
+//! consumer recovery); session put/get/delete lifecycle; session-expiry sweep;
+//! access-list add/count/remove/clear; access-list *mode* (allow-list vs
+//! deny-list) evaluation.
 //!
-//! Planned next increments (tracked under mediator T15): session-expiry /
-//! TTL-sweep semantics and access-list *mode* (allow-list vs deny-list)
-//! evaluation, plus a **`REDIS_URL`-gated** backend in a Redis CI job. Redis
-//! needs per-test isolation (the in-process backends get a fresh store per
-//! test; a shared Redis needs a unique key prefix or `FLUSHDB`), so it lands
-//! with that plumbing rather than as an unverifiable stub here.
+//! Memory and Fjall agree on all of these, with **one documented divergence**
+//! the suite surfaced: `sweep_expired_sessions`'s `now_secs` argument is
+//! honored by Fjall (wall-clock) but ignored by Memory (monotonic `Instant`) —
+//! benign in production, see `check_session_expiry_sweep` and the trait doc.
+//!
+//! Planned next increment (tracked under mediator T15): a **`REDIS_URL`-gated**
+//! backend in a Redis CI job. Redis needs per-test isolation (the in-process
+//! backends get a fresh store per test; a shared Redis needs a unique key
+//! prefix or `FLUSHDB`), so it lands with that plumbing rather than as an
+//! unverifiable stub here.
 
 #![cfg(any(feature = "memory-backend", feature = "fjall-backend"))]
 
@@ -37,7 +41,7 @@ use affinidi_messaging_mediator_common::store::MediatorStore;
 use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session};
 use affinidi_messaging_sdk::protocols::mediator::{
     accounts::{Account, AccountType},
-    acls::MediatorACLSet,
+    acls::{AccessListModeType, MediatorACLSet},
 };
 
 /// Far-future expiry so stored messages don't lapse mid-test.
@@ -45,6 +49,15 @@ const NEVER: u64 = 9_999_999_999;
 
 fn allow_all() -> MediatorACLSet {
     MediatorACLSet::from_string_ruleset("ALLOW_ALL").expect("ALLOW_ALL ruleset")
+}
+
+/// A default ACL set with an explicit access-list `mode` applied.
+fn acls_with_mode(mode: AccessListModeType) -> MediatorACLSet {
+    let mut acls = MediatorACLSet::default();
+    // admin = true so the bit can be set on a fresh set.
+    acls.set_access_list_mode(mode, false, true)
+        .expect("set_access_list_mode");
+    acls
 }
 
 /// An admin session, used as the authority for account/message removal.
@@ -400,6 +413,112 @@ async fn check_forward_queue_autoclaim(store: Arc<dyn MediatorStore>) {
     store.forward_queue_ack("g", &ids).await.expect("ack");
 }
 
+/// Session-expiry: a session whose TTL has lapsed is reclaimed by
+/// `sweep_expired_sessions`, so `get_session` then errors. Both in-process
+/// backends must agree on this (the trait default is a no-op, so each
+/// overrides it).
+///
+/// DOCUMENTED DIVERGENCE (surfaced by this suite): the `now_secs` argument is
+/// **not** honored uniformly. `FjallStore` (and Redis) treat it as the
+/// wall-clock cutoff and sweep records whose stored `expires_at_unix <=
+/// now_secs`. `MemoryStore` ignores `now_secs` entirely and sweeps against its
+/// own monotonic `Instant::now()` (matching its lazy-expiry path). In
+/// production this is benign — the `session_expiry_sweep` task always passes
+/// the real clock, so both reclaim the same lapsed sessions — but a caller
+/// that passed a *synthetic* `now_secs` (as a naive test would) would see
+/// Fjall act on it and Memory not. This test therefore lets the TTL lapse in
+/// real time so both backends agree regardless of how they read `now_secs`.
+async fn check_session_expiry_sweep(store: Arc<dyn MediatorStore>) {
+    let did = "did:example:conformance_expiry_user";
+    let did_hash = sha256::digest(did);
+    store
+        .account_add(&did_hash, &allow_all(), None)
+        .await
+        .expect("account_add");
+
+    let session = Session {
+        session_id: "conformance-expiring-session".to_string(),
+        did: did.to_string(),
+        did_hash,
+        ..Default::default()
+    };
+    store
+        .put_session(&session, Duration::from_secs(1))
+        .await
+        .expect("put_session");
+    assert!(
+        store.get_session(&session.session_id, did).await.is_ok(),
+        "session is present before its 1s TTL lapses"
+    );
+
+    // Let the 1-second TTL lapse in real (monotonic *and* wall-clock) time, so
+    // both the Instant-based (Memory) and now_secs-based (Fjall) sweeps agree.
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    store
+        .sweep_expired_sessions(NEVER)
+        .await
+        .expect("sweep_expired_sessions");
+    assert!(
+        store.get_session(&session.session_id, did).await.is_err(),
+        "session is gone after the sweep reclaims the lapsed record"
+    );
+}
+
+/// Access-list *mode* evaluation: `ExplicitAllow` is an allow-list (only listed
+/// senders may send), `ExplicitDeny` is a deny-list (only listed senders are
+/// blocked). The two backends must agree on this gate — it is the per-recipient
+/// authorization the mediator enforces on every delivery.
+async fn check_access_list_mode_semantics(store: Arc<dyn MediatorStore>) {
+    let listed = "did_hash_listed_sender".to_string();
+    let unlisted = "did_hash_unlisted_sender";
+
+    // ExplicitAllow (allow-list): listed → allowed, unlisted → denied.
+    let allow_owner = "did_hash_allowlist_owner";
+    store
+        .account_add(
+            allow_owner,
+            &acls_with_mode(AccessListModeType::ExplicitAllow),
+            None,
+        )
+        .await
+        .expect("add allow-list owner");
+    store
+        .access_list_add(1000, allow_owner, std::slice::from_ref(&listed))
+        .await
+        .expect("add to allow-list");
+    assert!(
+        store.access_list_allowed(allow_owner, Some(&listed)).await,
+        "allow-list admits a listed sender"
+    );
+    assert!(
+        !store.access_list_allowed(allow_owner, Some(unlisted)).await,
+        "allow-list rejects an unlisted sender"
+    );
+
+    // ExplicitDeny (deny-list): listed → denied, unlisted → allowed.
+    let deny_owner = "did_hash_denylist_owner";
+    store
+        .account_add(
+            deny_owner,
+            &acls_with_mode(AccessListModeType::ExplicitDeny),
+            None,
+        )
+        .await
+        .expect("add deny-list owner");
+    store
+        .access_list_add(1000, deny_owner, std::slice::from_ref(&listed))
+        .await
+        .expect("add to deny-list");
+    assert!(
+        !store.access_list_allowed(deny_owner, Some(&listed)).await,
+        "deny-list rejects a listed sender"
+    );
+    assert!(
+        store.access_list_allowed(deny_owner, Some(unlisted)).await,
+        "deny-list admits an unlisted sender"
+    );
+}
+
 // ─── Backend instantiation + test generation ────────────────────────────────
 
 /// A constructed backend plus anything that must outlive it (Fjall's temp dir).
@@ -473,6 +592,14 @@ macro_rules! conformance_for {
             #[tokio::test]
             async fn forward_queue_autoclaim() {
                 check_forward_queue_autoclaim(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn session_expiry_sweep() {
+                check_session_expiry_sweep(ready($ctor).await).await;
+            }
+            #[tokio::test]
+            async fn access_list_mode_semantics() {
+                check_access_list_mode_semantics(ready($ctor).await).await;
             }
         }
     };

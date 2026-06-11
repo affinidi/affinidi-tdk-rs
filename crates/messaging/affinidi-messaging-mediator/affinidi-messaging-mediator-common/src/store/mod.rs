@@ -608,6 +608,15 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// lingers on disk/in the map indefinitely. The session processor
     /// calls this on a fixed cadence so those orphaned records are
     /// reclaimed regardless of whether they're ever read.
+    ///
+    /// `now_secs` contract (note the backend divergence, asserted by the
+    /// `store_conformance` suite): `FjallStore` honors it as the wall-clock
+    /// cutoff (`expires_at_unix <= now_secs`). `MemoryStore` **ignores** it and
+    /// sweeps against its own monotonic `Instant::now()` — its TTLs are tracked
+    /// as `Instant`s, which can't be compared to a unix `now_secs`. Production
+    /// callers (`tasks::session_expiry`) always pass the real clock, so the two
+    /// reclaim the same lapsed sessions; only a caller passing a *synthetic*
+    /// `now_secs` would observe the difference.
     async fn sweep_expired_sessions(
         &self,
         now_secs: u64,
