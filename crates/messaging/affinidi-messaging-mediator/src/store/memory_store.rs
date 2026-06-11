@@ -29,7 +29,7 @@ use affinidi_messaging_mediator_common::{
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
         MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
-        StoreHealth, StreamingClientState,
+        StoreHealth, StreamingClientState, ops,
     },
 };
 use affinidi_messaging_sdk::{
@@ -465,18 +465,13 @@ impl MediatorStore for MemoryStore {
             )
         })?;
 
-        // Authorisation. Owner must be TO or FROM. Admin bypasses.
-        let permitted = match &by {
-            DeletionAuthority::Admin { .. } => true,
-            DeletionAuthority::Owner { did_hash } => {
-                did_hash == &record.to_did_hash
-                    || record
-                        .from_did_hash
-                        .as_deref()
-                        .map(|f| f == did_hash)
-                        .unwrap_or(false)
-            }
-        };
+        // Authorisation. Owner must be TO or FROM. Admin bypasses. Shared with
+        // the Fjall backend via `store::ops` so the two can't drift.
+        let permitted = ops::delete_message_permitted(
+            &by,
+            &record.to_did_hash,
+            record.from_did_hash.as_deref(),
+        );
         if !permitted {
             return Err(MediatorError::InternalError(
                 403,

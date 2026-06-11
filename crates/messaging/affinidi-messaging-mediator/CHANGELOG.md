@@ -4,6 +4,15 @@
 
 ## 11th June 2026
 
+### 0.15.35 — Route store delete-authorization through `store::ops` (simplification T16)
+
+- `FjallStore` and `MemoryStore` now call `mediator-common`'s new
+  `store::ops::delete_message_permitted` for the message-delete authorization
+  check instead of each carrying their own identical copy. Pure refactor — the
+  decision (Admin bypasses; an Owner must be the message's recipient or
+  non-anonymous sender) is unchanged and now unit-tested in one place.
+- Requires `affinidi-messaging-mediator-common` 0.15.8.
+
 ### 0.15.34 — Supervise the WebSocket streaming task (T2 follow-up)
 
 - The WebSocket live-streaming task was the last background task still
