@@ -638,34 +638,6 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     // delegates to its canonical counterpart. New code should call the
     // canonical method directly.
 
-    /// Legacy alias for [`get_global_stats`](Self::get_global_stats).
-    async fn get_db_metadata(&self) -> Result<MetadataStats, MediatorError> {
-        self.get_global_stats().await
-    }
-
-    /// Legacy alias for [`forward_queue_len`](Self::forward_queue_len).
-    async fn get_forward_tasks_len(&self) -> Result<usize, MediatorError> {
-        self.forward_queue_len().await
-    }
-
-    /// Legacy alias for [`forward_queue_enqueue`](Self::forward_queue_enqueue).
-    async fn forward_queue_enqueue_with_limit(
-        &self,
-        entry: &ForwardQueueEntry,
-        max_len: usize,
-    ) -> Result<String, MediatorError> {
-        self.forward_queue_enqueue(entry, max_len).await
-    }
-
-    /// Legacy alias for [`account_set_role`](Self::account_set_role).
-    async fn account_change_type(
-        &self,
-        did_hash: &str,
-        account_type: &AccountType,
-    ) -> Result<(), MediatorError> {
-        self.account_set_role(did_hash, account_type).await
-    }
-
     /// Legacy: synchronous health summary. Default impl calls the async
     /// [`health`](Self::health) and stringifies, but the cost of an
     /// async call from a sync context is real — backends with cheap
@@ -674,61 +646,6 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// admin status handler already shows in operator dashboards.
     fn circuit_breaker_state(&self) -> &'static str {
         "closed"
-    }
-
-    /// Legacy alias for [`streaming_set_state`](Self::streaming_set_state)
-    /// with [`StreamingClientState::Registered`].
-    async fn streaming_register_client(
-        &self,
-        did_hash: &str,
-        mediator_uuid: &str,
-    ) -> Result<(), MediatorError> {
-        self.streaming_set_state(did_hash, mediator_uuid, StreamingClientState::Registered)
-            .await
-    }
-
-    /// Legacy alias for [`streaming_set_state`](Self::streaming_set_state)
-    /// with [`StreamingClientState::Live`].
-    async fn streaming_start_live(
-        &self,
-        did_hash: &str,
-        mediator_uuid: &str,
-    ) -> Result<(), MediatorError> {
-        self.streaming_set_state(did_hash, mediator_uuid, StreamingClientState::Live)
-            .await
-    }
-
-    /// Legacy: stop active live delivery. Conceptually a transition
-    /// back to `Registered` (still subscribed, queueing rather than
-    /// pushing).
-    async fn streaming_stop_live(
-        &self,
-        did_hash: &str,
-        mediator_uuid: &str,
-    ) -> Result<(), MediatorError> {
-        self.streaming_set_state(did_hash, mediator_uuid, StreamingClientState::Registered)
-            .await
-    }
-
-    /// Legacy alias for [`streaming_set_state`](Self::streaming_set_state)
-    /// with [`StreamingClientState::Deregistered`].
-    async fn streaming_deregister_client(
-        &self,
-        did_hash: &str,
-        mediator_uuid: &str,
-    ) -> Result<(), MediatorError> {
-        self.streaming_set_state(did_hash, mediator_uuid, StreamingClientState::Deregistered)
-            .await
-    }
-
-    /// Legacy alias — increments the websocket-open counter by 1.
-    async fn global_stats_increment_websocket_open(&self) -> Result<(), MediatorError> {
-        self.stats_increment(StatCounter::WebsocketOpen, 1).await
-    }
-
-    /// Legacy alias — increments the websocket-close counter by 1.
-    async fn global_stats_increment_websocket_close(&self) -> Result<(), MediatorError> {
-        self.stats_increment(StatCounter::WebsocketClose, 1).await
     }
 
     /// Legacy: increment the GLOBAL "sent" counters in one call.

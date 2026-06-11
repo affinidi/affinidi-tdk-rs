@@ -400,7 +400,7 @@ pub(crate) async fn process(
 
                 // If here, then it is a simple type change at this point
 
-                match state.database.account_change_type(&did_hash, &_type).await {
+                match state.database.account_set_role(&did_hash, &_type).await {
                     Ok(_) => {
                         let current_type = if let Some(current) = &current {
                             current._type.to_string()

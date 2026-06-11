@@ -13,6 +13,7 @@ use crate::{
 #[cfg(feature = "didcomm")]
 use affinidi_messaging_didcomm::message::Message as DidcommMessage;
 use affinidi_messaging_mediator_common::errors::{AppError, MediatorError};
+use affinidi_messaging_mediator_common::store::StatCounter;
 use affinidi_messaging_sdk::messages::problem_report::{
     ProblemReport, ProblemReportScope, ProblemReportSorter,
 };
@@ -326,7 +327,10 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
             }
         }
 
-        let _ = state.database.global_stats_increment_websocket_open().await;
+        let _ = state
+            .database
+            .stats_increment(StatCounter::WebsocketOpen, 1)
+            .await;
         info!("Websocket connection established");
 
         // Set a timeout for the websocket connection for when the JWT Auth token expires
@@ -492,7 +496,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         }
         let _ = state
             .database
-            .global_stats_increment_websocket_close()
+            .stats_increment(StatCounter::WebsocketClose, 1)
             .await;
 
         info!("Websocket connection closed");

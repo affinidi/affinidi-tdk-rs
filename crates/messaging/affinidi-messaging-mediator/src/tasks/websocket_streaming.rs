@@ -27,7 +27,7 @@ use crate::common::metrics::names::{
 use crate::tasks::supervisor::TaskSupervisor;
 use affinidi_messaging_mediator_common::{
     errors::MediatorError,
-    store::{MediatorStore, types::PubSubRecord},
+    store::{MediatorStore, StreamingClientState, types::PubSubRecord},
     types::messages::FetchOptions,
 };
 use ahash::AHashMap as HashMap;
@@ -222,7 +222,7 @@ impl StreamingTask {
                                         entry.active = true;
                                     };
 
-                                    if let Err(err) = database.streaming_start_live(&value.did_hash, &self.uuid).await {
+                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Live).await {
                                         error!("Error starting streaming to client ({}) streaming: {}",value.did_hash, err);
                                     }
                                 },
@@ -233,7 +233,7 @@ impl StreamingTask {
                                         entry.active = false;
                                     };
 
-                                    if let Err(err) = database.streaming_stop_live(&value.did_hash, &self.uuid).await {
+                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Registered).await {
                                         error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
                                     }
                                 },
@@ -245,7 +245,7 @@ impl StreamingTask {
                                         0
                                     };
                                     info!("Deregistered streaming for DID: ({}) registered_clients({})", value.did_hash, count);
-                                    if let Err(err) = database.streaming_deregister_client(&value.did_hash, &self.uuid).await {
+                                    if let Err(err) = database.streaming_set_state(&value.did_hash, &self.uuid, StreamingClientState::Deregistered).await {
                                         error!("Error stopping streaming for client ({}): {}",value.did_hash, err);
                                     }
                                     clients.remove(value.did_hash.as_str());
@@ -282,7 +282,11 @@ impl StreamingTask {
                         );
                         clients.remove(&payload.did_hash);
                         if let Err(e) = database
-                            .streaming_deregister_client(&payload.did_hash, &self.uuid)
+                            .streaming_set_state(
+                                &payload.did_hash,
+                                &self.uuid,
+                                StreamingClientState::Deregistered,
+                            )
                             .await
                         {
                             error!(
@@ -299,7 +303,11 @@ impl StreamingTask {
                         payload.did_hash
                     );
                     if let Err(err) = database
-                        .streaming_stop_live(&payload.did_hash, &self.uuid)
+                        .streaming_set_state(
+                            &payload.did_hash,
+                            &self.uuid,
+                            StreamingClientState::Registered,
+                        )
                         .await
                     {
                         error!(
@@ -401,7 +409,11 @@ impl StreamingTask {
         );
 
         if let Err(err) = database
-            .streaming_register_client(&value.did_hash, &self.uuid)
+            .streaming_set_state(
+                &value.did_hash,
+                &self.uuid,
+                StreamingClientState::Registered,
+            )
             .await
         {
             error!(

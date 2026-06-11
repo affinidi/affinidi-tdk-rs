@@ -4,6 +4,23 @@
 
 ## 11th June 2026
 
+### 0.15.9 — Remove legacy 1:1 aliases from `MediatorStore` (simplification T16, part 2)
+
+- Removes ten pure rename-only default methods from the `MediatorStore` trait,
+  each of which delegated 1:1 to its canonical counterpart: `get_db_metadata`
+  (→ `get_global_stats`), `get_forward_tasks_len` (→ `forward_queue_len`),
+  `forward_queue_enqueue_with_limit` (→ `forward_queue_enqueue`),
+  `account_change_type` (→ `account_set_role`), the four streaming aliases
+  `streaming_register_client` / `streaming_start_live` / `streaming_stop_live`
+  / `streaming_deregister_client` (→ `streaming_set_state(state)`), and
+  `global_stats_increment_websocket_open` / `_close`
+  (→ `stats_increment(WebsocketOpen|WebsocketClose, 1)`). Call sites now invoke
+  the canonical method directly. No behaviour change — each alias was a thin
+  delegate. The multi-step legacy helpers (`create_session`,
+  `update_send_stats`, `add_admin_accounts`, `strip_admin_accounts`, the
+  session-rename helpers) are retained. The Redis backend's inherent methods of
+  the same names are unaffected (they are storage-level, not trait methods).
+
 ### 0.15.8 — Extract shared store decision logic to `store::ops` (simplification T16)
 
 - Adds `store::ops`, a home for backend-agnostic decision logic shared by the
