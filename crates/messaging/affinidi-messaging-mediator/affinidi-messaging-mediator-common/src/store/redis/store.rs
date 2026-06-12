@@ -695,10 +695,6 @@ impl MediatorStore for RedisStore {
         self.access_list_list(did_hash, cursor).await
     }
 
-    async fn access_list_count(&self, did_hash: &str) -> Result<usize, MediatorError> {
-        self.access_list_count(did_hash).await
-    }
-
     async fn access_list_add(
         &self,
         access_list_limit: usize,

@@ -371,9 +371,6 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
         cursor: u64,
     ) -> Result<MediatorAccessListListResponse, MediatorError>;
 
-    /// Number of entries currently in a DID's access list.
-    async fn access_list_count(&self, did_hash: &str) -> Result<usize, MediatorError>;
-
     /// Add `hashes` to a DID's access list. Truncates if the addition
     /// would exceed `access_list_limit`; the response signals truncation
     /// and reports which hashes were actually inserted.

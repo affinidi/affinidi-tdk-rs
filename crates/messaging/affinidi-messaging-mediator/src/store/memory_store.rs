@@ -1035,20 +1035,17 @@ impl MediatorStore for MemoryStore {
         let Some(account) = state.accounts.get(to_hash) else {
             return false;
         };
-        match from_hash {
-            Some(from) => {
-                let in_list = state
+        let sender = match from_hash {
+            Some(from) => ops::Sender::Known {
+                on_access_list: state
                     .access_lists
                     .get(to_hash)
                     .map(|v| v.iter().any(|d| d == from))
-                    .unwrap_or(false);
-                match account.acls.get_access_list_mode().0 {
-                    AccessListModeType::ExplicitAllow => in_list,
-                    AccessListModeType::ExplicitDeny => !in_list,
-                }
-            }
-            None => account.acls.get_anon_receive().0,
-        }
+                    .unwrap_or(false),
+            },
+            None => ops::Sender::Anonymous,
+        };
+        ops::access_list_allowed(&account.acls, sender)
     }
 
     async fn access_list_list(
@@ -1074,17 +1071,6 @@ impl MediatorStore for MemoryStore {
             cursor: next,
             did_hashes: entries,
         })
-    }
-
-    async fn access_list_count(&self, did_hash: &str) -> Result<usize, MediatorError> {
-        Ok(self
-            .state
-            .lock()
-            .await
-            .access_lists
-            .get(did_hash)
-            .map(|v| v.len())
-            .unwrap_or(0))
     }
 
     async fn access_list_add(
@@ -1973,7 +1959,15 @@ mod tests {
             .expect("add");
         assert_eq!(resp.did_hashes.len(), 2);
         assert!(!resp.truncated);
-        assert_eq!(store.access_list_count("alice").await.unwrap(), 2);
+        assert_eq!(
+            store
+                .access_list_list("alice", 0)
+                .await
+                .unwrap()
+                .did_hashes
+                .len(),
+            2
+        );
 
         let got = store
             .access_list_get("alice", &["bob".into(), "eve".into()])
@@ -1986,7 +1980,15 @@ mod tests {
             .await
             .expect("remove");
         assert_eq!(removed, 1);
-        assert_eq!(store.access_list_count("alice").await.unwrap(), 1);
+        assert_eq!(
+            store
+                .access_list_list("alice", 0)
+                .await
+                .unwrap()
+                .did_hashes
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

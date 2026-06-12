@@ -1635,16 +1635,13 @@ impl MediatorStore for FjallStore {
             Err(_) => return false,
         };
         let acls = MediatorACLSet::from_u64(acc.acls);
-        match from_hash {
-            Some(from) => {
-                let in_list = self.access_list_contains(to_hash, from).unwrap_or(false);
-                match acls.get_access_list_mode().0 {
-                    AccessListModeType::ExplicitAllow => in_list,
-                    AccessListModeType::ExplicitDeny => !in_list,
-                }
-            }
-            None => acls.get_anon_receive().0,
-        }
+        let sender = match from_hash {
+            Some(from) => ops::Sender::Known {
+                on_access_list: self.access_list_contains(to_hash, from).unwrap_or(false),
+            },
+            None => ops::Sender::Anonymous,
+        };
+        ops::access_list_allowed(&acls, sender)
     }
 
     async fn access_list_list(
@@ -1688,10 +1685,6 @@ impl MediatorStore for FjallStore {
             cursor: next,
             did_hashes: entries,
         })
-    }
-
-    async fn access_list_count(&self, did_hash: &str) -> Result<usize, MediatorError> {
-        self.access_list_count_inner(did_hash)
     }
 
     async fn access_list_add(
@@ -2968,7 +2961,7 @@ mod tests {
             .expect("add");
         assert_eq!(resp.did_hashes.len(), 2);
         assert!(!resp.truncated);
-        assert_eq!(store.access_list_count(&alice).await.unwrap(), 2);
+        assert_eq!(store.access_list_count_inner(&alice).unwrap(), 2);
 
         let got = store
             .access_list_get(&alice, &[bob.clone(), hash("eve")])
@@ -2981,11 +2974,11 @@ mod tests {
             .await
             .expect("remove");
         assert_eq!(removed, 1);
-        assert_eq!(store.access_list_count(&alice).await.unwrap(), 1);
+        assert_eq!(store.access_list_count_inner(&alice).unwrap(), 1);
 
         // Clear leaves the list empty.
         store.access_list_clear(&alice).await.expect("clear");
-        assert_eq!(store.access_list_count(&alice).await.unwrap(), 0);
+        assert_eq!(store.access_list_count_inner(&alice).unwrap(), 0);
     }
 
     #[tokio::test]
