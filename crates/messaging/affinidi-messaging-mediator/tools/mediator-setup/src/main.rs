@@ -12,6 +12,7 @@ mod generators;
 mod recipe;
 mod reprovision;
 mod sealed_handoff;
+mod secret_backend;
 mod secure_fs;
 mod ui;
 mod vta;
@@ -1408,12 +1409,7 @@ async fn provision_secret_backend(
         );
     }
     let mediator_secrets_store =
-        affinidi_messaging_mediator_common::MediatorSecrets::from_url(&backend_url)
-            .map_err(|e| anyhow::anyhow!("Failed to open secret backend '{backend_url}': {e}"))?;
-    mediator_secrets_store
-        .probe()
-        .await
-        .map_err(|e| anyhow::anyhow!("Secret backend '{backend_url}' failed probe: {e}"))?;
+        secret_backend::open_and_probe_secret_backend(&backend_url).await?;
 
     // JWT signing key — only when generated. Provide-mode skips this
     // and relies on the boot-time env-var/flag path.

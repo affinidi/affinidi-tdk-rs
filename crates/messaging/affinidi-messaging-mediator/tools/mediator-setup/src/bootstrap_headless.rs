@@ -31,7 +31,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use affinidi_messaging_mediator_common::MediatorSecrets;
 use tracing::{info, warn};
 
 use crate::consts::{VTA_MODE_ONLINE, VTA_MODE_SEALED_EXPORT, VTA_MODE_SEALED_MINT};
@@ -155,7 +154,7 @@ fn resolve_bootstrap_seed_ttl() -> Duration {
 /// more actionable error if the backend is actually broken.
 async fn sweep_stale_bootstrap_seeds(config: &crate::app::WizardConfig) {
     let backend_url = crate::config_writer::build_backend_url(config);
-    let store = match MediatorSecrets::from_url(&backend_url) {
+    let store = match crate::secret_backend::open_secret_backend(&backend_url) {
         Ok(s) => s,
         Err(e) => {
             warn!(
@@ -194,12 +193,7 @@ async fn phase1_emit_request(config: &crate::app::WizardConfig) -> anyhow::Resul
     // secret store — no point minting a request, writing it to disk,
     // and then discovering `aws_secrets://...` can't talk to AWS.
     let backend_url = crate::config_writer::build_backend_url(config);
-    let store = MediatorSecrets::from_url(&backend_url)
-        .map_err(|e| anyhow::anyhow!("open secret backend '{backend_url}': {e}"))?;
-    store
-        .probe()
-        .await
-        .map_err(|e| anyhow::anyhow!("secret backend '{backend_url}' failed probe: {e}"))?;
+    let store = crate::secret_backend::open_and_probe_secret_backend(&backend_url).await?;
 
     // Refuse to clobber an in-flight bootstrap. The backend index is
     // our cross-invocation state now; any entry means "a request is
@@ -313,8 +307,7 @@ async fn phase2_apply(
 
     // Open the backend up front; a broken store is a phase-2 fatal.
     let backend_url = crate::config_writer::build_backend_url(config);
-    let store = MediatorSecrets::from_url(&backend_url)
-        .map_err(|e| anyhow::anyhow!("open secret backend '{backend_url}': {e}"))?;
+    let store = crate::secret_backend::open_secret_backend(&backend_url)?;
 
     // Reconstruct a synthetic `SealedHandoffState` keyed to this
     // bundle. The reconstructed state doesn't need the ephemeral

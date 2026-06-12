@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 12th June 2026
+
+### 0.1.11 — Centralise secret-backend opening (simplification T21)
+
+- The online (`provision_secret_backend`) and sealed/headless
+  (`bootstrap_headless`: seed sweep, phase-1, phase-2) flows each inlined the
+  same `MediatorSecrets::from_url` + `probe()` + error-mapping. Extracted into a
+  small `secret_backend` module — `open_secret_backend` (open) and
+  `open_and_probe_secret_backend` (open + fail-fast probe) — so the four call
+  sites share one implementation. Behaviour-identical refactor; the rest of the
+  VTA session lifecycle was already centralised (`VtaSession` +
+  `provision_secret_backend`), so no further extraction was warranted.
+
 ## 9th June 2026
 
 ### 0.1.10 — optional did:web export for self-hosted webvh DIDs
