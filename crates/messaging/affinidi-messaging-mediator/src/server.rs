@@ -141,7 +141,12 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
                             )
                         })?;
                     info!("Opening Fjall data directory at {data_dir}");
-                    let store = crate::store::FjallStore::open(&data_dir).map_err(|e| {
+                    let store = crate::store::FjallStore::open_with_circuit_breaker(
+                        &data_dir,
+                        config.database.circuit_breaker_threshold,
+                        config.database.circuit_breaker_recovery_secs,
+                    )
+                    .map_err(|e| {
                         error!("Failed to open Fjall data directory: {e}");
                         e
                     })?;
