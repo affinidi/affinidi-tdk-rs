@@ -162,6 +162,9 @@ serial_test = "3"
 ## VTA's `/auth/challenge` and `/auth/` endpoints so we can verify
 ## the wrapper returns the right `AttemptOutcome` without a live VTA.
 wiremock = "0.6"
+## Round-trip guard: the config-writer tests parse the wizard's generated TOML
+## into the mediator's shared `ConfigRaw` schema so the two can't drift apart.
+affinidi-messaging-mediator-config = { path = "../../affinidi-messaging-mediator-config" }
 
 [lints]
 workspace = true
