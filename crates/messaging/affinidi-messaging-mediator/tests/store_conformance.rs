@@ -26,19 +26,24 @@
 //! honored by Fjall (wall-clock) but ignored by Memory (monotonic `Instant`) —
 //! benign in production, see `check_session_expiry_sweep` and the trait doc.
 //!
-//! Planned next increment (tracked under mediator T15): a **`REDIS_URL`-gated**
-//! backend in a Redis CI job. Redis needs per-test isolation (the in-process
-//! backends get a fresh store per test; a shared Redis needs a unique key
-//! prefix or `FLUSHDB`), so it lands with that plumbing rather than as an
-//! unverifiable stub here.
+//! The same checks also run against **Redis** under `redis-backend`, gated on a
+//! `REDIS_URL` environment variable (CI sets it via a `redis:7` service; a plain
+//! local `cargo test` without it skips them). Redis keys are global (no per-test
+//! namespace), so each Redis check is pinned to its own logical DB index and
+//! `FLUSHDB`-ed at setup — that gives the same fresh-store-per-test isolation the
+//! in-process backends get for free. See `redis_backend` and `conformance_for_redis!`.
 
-#![cfg(any(feature = "memory-backend", feature = "fjall-backend"))]
+#![cfg(any(
+    feature = "memory-backend",
+    feature = "fjall-backend",
+    feature = "redis-backend"
+))]
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use affinidi_messaging_mediator_common::store::MediatorStore;
-use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session};
+use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session, SessionState};
 use affinidi_messaging_sdk::protocols::mediator::{
     accounts::{Account, AccountType},
     acls::{AccessListModeType, MediatorACLSet},
@@ -72,6 +77,15 @@ fn admin_session(admin_did_hash: &str) -> Session {
 /// Count a DID's access-list entries by paging `access_list_list`. The store
 /// has no standalone count primitive (callers derive it from the listing or
 /// from `account_get().access_list_count`); this mirrors that.
+///
+/// **Backend divergence in the terminal-cursor convention** (surfaced by this
+/// suite): the in-process backends signal "no more pages" with `cursor: None`,
+/// while Redis pages via `SSCAN`, whose terminal cursor is `0` — so it returns
+/// `cursor: Some(0)`. Production never loops on this itself (the handler returns
+/// the cursor straight to the client), so both conventions ship; a correct
+/// cursor consumer must therefore treat **either `None` or `Some(0)`** as
+/// terminal. A consumer that stops only on `None` loops forever against Redis.
+/// See the `access_list_list` trait doc.
 async fn access_list_len(store: &Arc<dyn MediatorStore>, did_hash: &str) -> usize {
     let mut total = 0;
     let mut cursor = 0u64;
@@ -82,8 +96,9 @@ async fn access_list_len(store: &Arc<dyn MediatorStore>, did_hash: &str) -> usiz
             .expect("access_list_list");
         total += page.did_hashes.len();
         match page.cursor {
+            // `None` (in-process backends) or `0` (Redis/SSCAN) both mean done.
+            None | Some(0) => break,
             Some(next) => cursor = next,
-            None => break,
         }
     }
     total
@@ -277,6 +292,11 @@ async fn check_session_lifecycle(store: Arc<dyn MediatorStore>) {
         session_id: "conformance-session-1".to_string(),
         did: did.to_string(),
         did_hash: did_hash.clone(),
+        // A realistic state: production only ever persists sessions in a valid
+        // state. Redis's `get_session` rejects `SessionState::Unknown` (the
+        // `..Default::default()` value) as a corrupt pre-0.14 record, so a
+        // backend-agnostic test must store a real state to round-trip on Redis.
+        state: SessionState::Authenticated,
         ..Default::default()
     };
     store
@@ -448,6 +468,9 @@ async fn check_session_expiry_sweep(store: Arc<dyn MediatorStore>) {
         session_id: "conformance-expiring-session".to_string(),
         did: did.to_string(),
         did_hash,
+        // Valid state so Redis's `get_session` accepts the record (see
+        // `check_session_lifecycle`); the in-process backends ignore it.
+        state: SessionState::Authenticated,
         ..Default::default()
     };
     store
@@ -563,7 +586,74 @@ fn fjall_backend() -> Backend {
     }
 }
 
+/// Build a Redis-backed store on a dedicated logical DB (`db_index`), or `None`
+/// when `REDIS_URL` is unset so a plain `cargo test` skips the Redis checks
+/// instead of failing on a missing server. CI sets `REDIS_URL` to a `redis:7`
+/// service and runs every index.
+///
+/// Isolation: Redis keys are global (counters, the forward-queue stream,
+/// `SCHEMA_MIGRATIONS`), so two checks sharing a DB would interfere. Each check
+/// gets its own index and a `FLUSHDB` here wipes anything a prior run left —
+/// reproducing the fresh-store-per-test guarantee the in-process backends have.
+#[cfg(feature = "redis-backend")]
+async fn redis_backend(db_index: u8) -> Option<Backend> {
+    use affinidi_messaging_mediator::store::RedisStore;
+    use affinidi_messaging_mediator_common::database::{DatabaseHandler, config::DatabaseConfig};
+
+    let base = match std::env::var("REDIS_URL") {
+        Ok(url) if !url.trim().is_empty() => url,
+        _ => {
+            eprintln!("SKIP redis conformance (db {db_index}): REDIS_URL not set");
+            return None;
+        }
+    };
+    // Append the DB index as the URL path component Redis reads as `SELECT`.
+    let database_url = format!("{}/{db_index}", base.trim_end_matches('/'));
+
+    // The mediator's own Lua functions — the Redis backend can't operate
+    // without them. `initialize()` (called by `ready`) loads this file.
+    let functions_file = concat!(env!("CARGO_MANIFEST_DIR"), "/conf/atm-functions.lua").to_string();
+
+    let config = DatabaseConfig {
+        functions_file: Some(functions_file.clone()),
+        database_url,
+        database_timeout: 2,
+        circuit_breaker_threshold: 5,
+        circuit_breaker_recovery_secs: 10,
+    };
+
+    let handler = DatabaseHandler::new(&config)
+        .await
+        .expect("connect to REDIS_URL — is the server reachable?");
+    let store = RedisStore::new(
+        handler,
+        config.circuit_breaker_threshold,
+        config.circuit_breaker_recovery_secs,
+        config.functions_file.clone(),
+    );
+
+    // Wipe this logical DB so the check starts from a clean keyspace. Loaded
+    // Lua FUNCTIONs are server-global, not per-DB, so FLUSHDB doesn't disturb
+    // them (and `initialize()` reloads them anyway).
+    let mut conn = store.get_connection().await.expect("redis connection");
+    // `::redis` — the extern crate, not the sibling `mod redis` this suite's
+    // test-generation macro creates (which would shadow a bare `redis::`).
+    ::redis::cmd("FLUSHDB")
+        .query_async::<()>(&mut conn)
+        .await
+        .expect("FLUSHDB");
+
+    Some(Backend {
+        store: Arc::new(store),
+        keepalive: None,
+    })
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
+/// Gated to the in-process backends that use it — a Redis-only build drives the
+/// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
+/// under `-D warnings`.
+#[cfg(any(feature = "memory-backend", feature = "fjall-backend"))]
 macro_rules! conformance_for {
     ($modname:ident, $ctor:expr) => {
         mod $modname {
@@ -618,3 +708,38 @@ conformance_for!(memory, memory_backend());
 
 #[cfg(feature = "fjall-backend")]
 conformance_for!(fjall, fjall_backend());
+
+/// Like [`conformance_for!`] but for the async, `REDIS_URL`-gated Redis ctor.
+/// Each test is pinned to a distinct logical DB index for isolation and skips
+/// (returns early) when `redis_backend` yields `None` (no `REDIS_URL`).
+#[cfg(feature = "redis-backend")]
+macro_rules! conformance_for_redis {
+    ($modname:ident, $($test:ident => $check:ident @ $db:literal),+ $(,)?) => {
+        mod $modname {
+            use super::*;
+            $(
+                #[tokio::test]
+                async fn $test() {
+                    let Some(backend) = redis_backend($db).await else { return };
+                    $check(ready(backend).await).await;
+                }
+            )+
+        }
+    };
+}
+
+// One distinct DB index per check (1..=10) so the global keys (counters, the
+// forward-queue stream) never collide across the suite running in parallel.
+#[cfg(feature = "redis-backend")]
+conformance_for_redis!(redis,
+    account_lifecycle        => check_account_lifecycle        @ 1,
+    acl_set_get_roundtrip    => check_acl_set_get_roundtrip    @ 2,
+    message_store_and_counters => check_message_store_and_counters @ 3,
+    forward_queue_claim_ack  => check_forward_queue_claim_ack  @ 4,
+    session_lifecycle        => check_session_lifecycle        @ 5,
+    access_list_lifecycle    => check_access_list_lifecycle    @ 6,
+    forward_queue_delete     => check_forward_queue_delete     @ 7,
+    forward_queue_autoclaim  => check_forward_queue_autoclaim  @ 8,
+    session_expiry_sweep     => check_session_expiry_sweep     @ 9,
+    access_list_mode_semantics => check_access_list_mode_semantics @ 10,
+);

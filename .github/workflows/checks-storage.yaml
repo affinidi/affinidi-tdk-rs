@@ -83,6 +83,55 @@ jobs:
             --lib \
             "store::${{ matrix.backend.test_module }}"
 
+  redis-conformance:
+    # Run the store-conformance suite against a real Redis. The
+    # in-process backends (memory, fjall) are covered by the
+    # `backend-matrix` job's `--lib store::<backend>` tests; this job
+    # gives the *Redis* backend the same backend-agnostic semantic
+    # checks so Fjall/Redis stay aligned (the Lua-based Redis logic
+    # can't share code with the Rust backends, so only a live run
+    # catches drift). Gated on `REDIS_URL`; each check runs on its own
+    # logical DB for isolation.
+    name: redis conformance
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps for aws_lc_rs + keyring
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-conformance
+
+      - name: cargo test store_conformance against Redis
+        env:
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cargo test \
+            -p affinidi-messaging-mediator \
+            --no-default-features \
+            --features "didcomm,redis-backend" \
+            --test store_conformance
+
   test-mediator-e2e:
     # The e2e fixture defaults to MemoryStore now; this job confirms
     # the integration suite runs end-to-end without Redis. Catches

@@ -364,7 +364,16 @@ pub trait MediatorStore: Send + Sync + std::fmt::Debug {
     /// consults `to_hash`'s `anon_receive` ACL bit.
     async fn access_list_allowed(&self, to_hash: &str, from_hash: Option<&str>) -> bool;
 
-    /// Page through a DID's access list using a server-side cursor.
+    /// Page through a DID's access list using a server-side cursor. Pass `0` to
+    /// start; feed the returned `cursor` back in for the next page.
+    ///
+    /// **Terminal-cursor convention differs by backend.** The in-process
+    /// backends (memory, fjall) return `cursor: None` when the listing is
+    /// exhausted; the Redis backend pages via `SSCAN`, whose end-of-iteration
+    /// cursor is `0`, so it returns `cursor: Some(0)`. Callers MUST treat both
+    /// `None` and `Some(0)` as "no more pages" — a loop that stops only on
+    /// `None` runs forever against Redis. (The conformance suite's
+    /// `access_list_len` helper documents and exercises this.)
     async fn access_list_list(
         &self,
         did_hash: &str,
