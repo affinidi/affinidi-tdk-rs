@@ -24,7 +24,14 @@ tracing = "0.1"
 # For `DatabaseConfigRaw` (the one raw field type that lives in mediator-common)
 # and the lean ACL types used by validation. `default-features = false` keeps
 # this crate off the axum/redis/secrets stack.
-affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator-common", default-features = false }
+#
+# Pinned to >=0.15.11 (not the looser "0.15"): the lean `database::config`
+# module — which holds `DatabaseConfigRaw` — only became available without the
+# `server` feature in 0.15.11. The older published 0.15.10 still gates it behind
+# `server`, so a "0.15" requirement lets `cargo publish` resolve to 0.15.10 and
+# fail with "cannot find `database`". This floor also tells the release tooling
+# that this crate must publish *after* mediator-common 0.15.11.
+affinidi-messaging-mediator-common = { version = "0.15.11", path = "../affinidi-messaging-mediator-common", default-features = false }
 
 [dev-dependencies]
 # `check_tls` test writes temp cert/key files.
