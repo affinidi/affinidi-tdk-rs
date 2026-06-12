@@ -69,6 +69,26 @@ fn admin_session(admin_did_hash: &str) -> Session {
     }
 }
 
+/// Count a DID's access-list entries by paging `access_list_list`. The store
+/// has no standalone count primitive (callers derive it from the listing or
+/// from `account_get().access_list_count`); this mirrors that.
+async fn access_list_len(store: &Arc<dyn MediatorStore>, did_hash: &str) -> usize {
+    let mut total = 0;
+    let mut cursor = 0u64;
+    loop {
+        let page = store
+            .access_list_list(did_hash, cursor)
+            .await
+            .expect("access_list_list");
+        total += page.did_hashes.len();
+        match page.cursor {
+            Some(next) => cursor = next,
+            None => break,
+        }
+    }
+    total
+}
+
 // ─── Conformance checks (backend-agnostic) ──────────────────────────────────
 
 /// Account create → exists → fetch → remove → gone.
@@ -289,7 +309,7 @@ async fn check_access_list_lifecycle(store: Arc<dyn MediatorStore>) {
         .expect("account_add owner");
 
     assert_eq!(
-        store.access_list_count(owner).await.expect("count empty"),
+        access_list_len(&store, owner).await,
         0,
         "access list starts empty"
     );
@@ -300,10 +320,7 @@ async fn check_access_list_lifecycle(store: Arc<dyn MediatorStore>) {
         .await
         .expect("access_list_add");
     assert_eq!(
-        store
-            .access_list_count(owner)
-            .await
-            .expect("count after add"),
+        access_list_len(&store, owner).await,
         1,
         "count reflects the added entry"
     );
@@ -313,10 +330,7 @@ async fn check_access_list_lifecycle(store: Arc<dyn MediatorStore>) {
         .await
         .expect("access_list_remove");
     assert_eq!(
-        store
-            .access_list_count(owner)
-            .await
-            .expect("count after remove"),
+        access_list_len(&store, owner).await,
         0,
         "count returns to zero after remove"
     );
@@ -326,13 +340,7 @@ async fn check_access_list_lifecycle(store: Arc<dyn MediatorStore>) {
         .access_list_clear(owner)
         .await
         .expect("access_list_clear");
-    assert_eq!(
-        store
-            .access_list_count(owner)
-            .await
-            .expect("count after clear"),
-        0,
-    );
+    assert_eq!(access_list_len(&store, owner).await, 0);
 }
 
 /// Forward-queue: an unread enqueued entry can be deleted directly, dropping

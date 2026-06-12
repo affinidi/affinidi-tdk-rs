@@ -2,7 +2,19 @@
 
 ## Changelog history
 
-## 11th June 2026
+## 12th June 2026
+
+### 0.15.37 — Route access-list admission through `store::ops` (simplification T16, part 3)
+
+- `FjallStore` and `MemoryStore` now call `mediator-common`'s new
+  `store::ops::access_list_allowed` for the sender-admission decision instead
+  of each inlining the mode/anon-bit logic. Pure refactor — the decision is
+  unchanged and now unit-tested in one place; the backends still perform their
+  own account and access-list-membership lookups.
+- Drops the backends' `access_list_count` trait implementations following its
+  removal from the trait (no production caller). Backend-internal count helpers
+  used by `account_get`/`access_list_add` are unchanged.
+- Requires `affinidi-messaging-mediator-common` 0.15.10.
 
 ### 0.15.36 — Migrate off the removed `MediatorStore` legacy aliases (simplification T16, part 2)
 

@@ -2,7 +2,29 @@
 
 ## Changelog history
 
-## 11th June 2026
+## 12th June 2026
+
+### 0.15.10 — Consolidate the access-list method family (simplification T16, part 3)
+
+- Extracts the access-list admission *decision* into `store::ops`: a new
+  `ops::access_list_allowed(recipient_acls, Sender)` captures the pure logic
+  the in-process backends each inlined — anonymous senders follow the
+  `anon_receive` ACL bit; known senders are judged by the recipient's
+  access-list mode (`ExplicitAllow` admits only listed senders, `ExplicitDeny`
+  admits all but listed). `FjallStore` and `MemoryStore` now call it (they
+  still do their own backend-specific account/membership lookups); the decision
+  can no longer drift between them. Unit-tested directly. (Redis evaluates the
+  equivalent in Lua and is unaffected.)
+- Removes the `access_list_count` trait method. It had no production caller —
+  callers read a DID's entry count from `account_get().access_list_count` or by
+  paging `access_list_list`, and the standalone primitive was redundant. The
+  backends' internal count helpers (used by `account_get`/`access_list_add`)
+  are retained.
+- Trait method count: 61 → 60. `get_did_acl` was evaluated for folding into
+  `account_get` but kept deliberately — it is an O(1) read on the per-message
+  inbound ACL gate, whereas `account_get` additionally computes the
+  access-list count (an O(list) scan on Fjall), so folding would regress that
+  hot path. No behaviour change.
 
 ### 0.15.9 — Remove legacy 1:1 aliases from `MediatorStore` (simplification T16, part 2)
 
