@@ -41,6 +41,7 @@ members = [
   "crates/messaging/affinidi-messaging-helpers",
   "crates/messaging/affinidi-messaging-didcomm-service",
   "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-common",
+  "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-config",
   "crates/messaging/affinidi-messaging-mediator/affinidi-messaging-mediator-processors",
   "crates/messaging/affinidi-messaging-mediator",
   "crates/messaging/affinidi-messaging-mediator/tools/mediator-setup",

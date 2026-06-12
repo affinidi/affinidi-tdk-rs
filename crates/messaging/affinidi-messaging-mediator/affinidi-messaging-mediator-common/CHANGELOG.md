@@ -4,6 +4,19 @@
 
 ## 12th June 2026
 
+### 0.15.11 — Make `DatabaseConfigRaw` available without the `server` feature (simplification T18, part a)
+
+- The `database` module (and its `config` submodule holding `DatabaseConfigRaw`
+  / `DatabaseConfig`) is no longer gated behind the `server` feature — it's now
+  always available. The new dependency-light `affinidi-messaging-mediator-config`
+  crate embeds `DatabaseConfigRaw` in its top-level `ConfigRaw` and needs it with
+  `default-features = false`.
+- Only the parts that require the server tier stay gated: the
+  `TryFrom<DatabaseConfigRaw> for DatabaseConfig` conversion (it returns
+  `MediatorError`) is now `#[cfg(feature = "server")]`, and `DatabaseHandler` +
+  its redis helpers remain on `redis-backend`. Purely additive for lean
+  consumers; server builds are unchanged.
+
 ### 0.15.10 — Consolidate the access-list method family (simplification T16, part 3)
 
 - Extracts the access-list admission *decision* into `store::ops`: a new

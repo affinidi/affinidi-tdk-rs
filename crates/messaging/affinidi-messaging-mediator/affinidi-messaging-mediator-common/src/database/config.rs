@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// The raw/typed structs below are lean (pure serde) so the
+// `affinidi-messaging-mediator-config` crate can embed `DatabaseConfigRaw`
+// without the `server` stack. Only the `TryFrom` conversion needs
+// `MediatorError`, so it (and this import) is gated on `server`.
+#[cfg(feature = "server")]
 use crate::errors::MediatorError;
 
 /// Database Struct contains database and storage of messages related configuration details
@@ -45,6 +50,7 @@ impl Default for DatabaseConfig {
     }
 }
 
+#[cfg(feature = "server")]
 impl std::convert::TryFrom<DatabaseConfigRaw> for DatabaseConfig {
     type Error = MediatorError;
 

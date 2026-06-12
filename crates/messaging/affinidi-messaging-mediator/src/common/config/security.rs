@@ -1,13 +1,19 @@
 use affinidi_messaging_mediator_common::{MediatorSecrets, errors::MediatorError};
+// `SecurityConfigRaw` (the raw TOML schema) now lives in the config crate; the
+// conversion to the runtime `SecurityConfig` stays here as an extension trait
+// (inherent impls must live in the type's crate, but this conversion loads
+// secrets and builds runtime objects the schema crate avoids).
+use affinidi_messaging_mediator_config::SecurityConfigRaw;
 use affinidi_messaging_sdk::protocols::mediator::acls::{AccessListModeType, MediatorACLSet};
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
+use async_trait::async_trait;
 use http::{
     HeaderValue, Method,
     header::{AUTHORIZATION, CONTENT_TYPE},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::signature::{Ed25519KeyPair, KeyPair};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{
     fmt::{self, Debug},
     sync::Arc,
@@ -198,33 +204,6 @@ fn build_cors_layer(policy: &CorsOriginPolicy) -> CorsLayer {
     }
 }
 
-/// Security configuration for the mediator.
-///
-/// JWT signing secret + operating keys are no longer in this struct — they
-/// live in the unified secret backend (`[secrets] backend = "..."` in
-/// `mediator.toml`) and are loaded during [`SecurityConfigRaw::convert`].
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SecurityConfigRaw {
-    pub mediator_acl_mode: String,
-    pub global_acl_default: String,
-    pub local_direct_delivery_allowed: String,
-    pub local_direct_delivery_allow_anon: String,
-    pub use_ssl: String,
-    pub ssl_certificate_file: Option<String>,
-    pub ssl_key_file: Option<String>,
-    pub jwt_access_expiry: String,
-    pub jwt_refresh_expiry: String,
-    pub cors_allow_origin: Option<String>,
-    pub block_anonymous_outer_envelope: String,
-    pub block_remote_admin_msgs: String,
-    pub force_session_did_match: String,
-    pub admin_messages_expiry: String,
-    /// Explicit inter-mediator relay switch. `#[serde(default)]` so configs
-    /// that predate the flag deserialize without it (empty → `false`).
-    #[serde(default)]
-    pub enable_inter_mediator_relay: String,
-}
-
 #[derive(Clone, Serialize)]
 pub struct SecurityConfig {
     pub mediator_acl_mode: AccessListModeType,
@@ -335,7 +314,24 @@ impl SecurityConfig {
     }
 }
 
-impl SecurityConfigRaw {
+/// Conversion + parsing helpers for the (now foreign) [`SecurityConfigRaw`].
+/// An extension trait because inherent impls must live in the type's crate, but
+/// this logic loads secrets and builds runtime objects the schema crate avoids.
+/// Method bodies are unchanged from the former inherent impl.
+#[async_trait]
+pub(crate) trait SecurityConfigRawExt {
+    fn parse_cors_origins(cors_allow_origin: &str) -> Result<CorsOriginPolicy, MediatorError>;
+    fn parse_origin_matcher(token: &str) -> Result<OriginMatcher, MediatorError>;
+    async fn convert(
+        &self,
+        secrets_resolver: Arc<ThreadedSecretsResolver>,
+        secrets: &MediatorSecrets,
+        vta_bundle: Option<&DidSecretsBundle>,
+    ) -> Result<SecurityConfig, MediatorError>;
+}
+
+#[async_trait]
+impl SecurityConfigRawExt for SecurityConfigRaw {
     /// Parse the raw `cors_allow_origin` config value into a
     /// [`CorsOriginPolicy`].
     ///
@@ -461,7 +457,7 @@ impl SecurityConfigRaw {
     ///
     /// The JWT secret is always loaded from the backend's `JWT_SECRET`
     /// well-known entry — no inline `string://` path.
-    pub(crate) async fn convert(
+    async fn convert(
         &self,
         secrets_resolver: Arc<ThreadedSecretsResolver>,
         secrets: &MediatorSecrets,
@@ -693,7 +689,9 @@ impl SecurityConfigRaw {
 
 #[cfg(test)]
 mod tests {
-    use super::{CorsOriginPolicy, OriginMatcher, SecurityConfigRaw, origin_matches};
+    use super::{
+        CorsOriginPolicy, OriginMatcher, SecurityConfigRaw, SecurityConfigRawExt, origin_matches,
+    };
     use http::HeaderValue;
 
     /// Parse `spec` into a `List` policy and return its matchers, or panic

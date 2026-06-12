@@ -1,4 +1,7 @@
 use affinidi_messaging_mediator_common::errors::MediatorError;
+// `LimitsConfigRaw` (the raw TOML schema) lives in the config crate; the
+// conversion to the typed `LimitsConfig` (a mediator-local type) stays here.
+use affinidi_messaging_mediator_config::LimitsConfigRaw;
 use serde::{Deserialize, Serialize};
 
 /// Resource limits configuration for the mediator
@@ -67,59 +70,6 @@ impl Default for LimitsConfig {
             did_rate_limit_burst: 10,
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct LimitsConfigRaw {
-    pub attachments_max_count: String,
-    pub crypto_operations_per_message: String,
-    pub deleted_messages: String,
-    pub forward_task_queue: String,
-    pub http_size: String,
-    pub listed_messages: String,
-    pub local_max_acl: String,
-    pub message_expiry_seconds: String,
-    pub message_size: String,
-    pub queued_send_messages_soft: String,
-    pub queued_send_messages_hard: String,
-    pub queued_receive_messages_soft: String,
-    pub queued_receive_messages_hard: String,
-    pub to_keys_per_recipient: String,
-    pub to_recipients: String,
-    pub ws_size: String,
-    pub access_list_limit: String,
-    pub oob_invite_ttl: String,
-    #[serde(default = "default_rate_limit_per_ip")]
-    pub rate_limit_per_ip: String,
-    #[serde(default = "default_rate_limit_burst")]
-    pub rate_limit_burst: String,
-    #[serde(default = "default_max_websocket_connections")]
-    pub max_websocket_connections: String,
-    #[serde(default = "default_max_websocket_connections_per_did")]
-    pub max_websocket_connections_per_did: String,
-    #[serde(default = "default_did_rate_limit_per_second")]
-    pub did_rate_limit_per_second: String,
-    #[serde(default = "default_did_rate_limit_burst")]
-    pub did_rate_limit_burst: String,
-}
-
-fn default_rate_limit_per_ip() -> String {
-    "100".to_string()
-}
-fn default_rate_limit_burst() -> String {
-    "50".to_string()
-}
-fn default_max_websocket_connections() -> String {
-    "10000".to_string()
-}
-fn default_max_websocket_connections_per_did() -> String {
-    "100".to_string()
-}
-fn default_did_rate_limit_per_second() -> String {
-    "0".to_string()
-}
-fn default_did_rate_limit_burst() -> String {
-    "10".to_string()
 }
 
 impl std::convert::TryFrom<LimitsConfigRaw> for LimitsConfig {
@@ -351,12 +301,12 @@ mod tests {
             ws_size: "10485760".to_string(),
             access_list_limit: "1000".to_string(),
             oob_invite_ttl: "86400".to_string(),
-            rate_limit_per_ip: default_rate_limit_per_ip(),
-            rate_limit_burst: default_rate_limit_burst(),
-            max_websocket_connections: default_max_websocket_connections(),
-            max_websocket_connections_per_did: default_max_websocket_connections_per_did(),
-            did_rate_limit_per_second: default_did_rate_limit_per_second(),
-            did_rate_limit_burst: default_did_rate_limit_burst(),
+            rate_limit_per_ip: "100".to_string(),
+            rate_limit_burst: "50".to_string(),
+            max_websocket_connections: "10000".to_string(),
+            max_websocket_connections_per_did: "100".to_string(),
+            did_rate_limit_per_second: "0".to_string(),
+            did_rate_limit_burst: "10".to_string(),
         };
         let limits = LimitsConfig::try_from(raw).unwrap();
         // Invalid values should fall back to unwrap_or defaults

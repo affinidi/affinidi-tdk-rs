@@ -4,6 +4,35 @@
 
 ## 12th June 2026
 
+### 0.15.40 — Extract the `mediator-config` crate: raw TOML schema (simplification T18, part a)
+
+- Phase 4 (config unification) begins. The mediator's TOML *schema* — the
+  `*ConfigRaw` serde types that mirror `mediator.toml` — moves into a new,
+  dependency-light `affinidi-messaging-mediator-config` crate so it can be shared
+  with the `mediator-setup` wizard (which today hand-renders the same TOML with
+  no shared types). The crate pulls only serde + the lean tier of
+  mediator-common; **no** axum/redis/secrets/SDK.
+- Moved: `ConfigRaw` + `ServerConfig` / `StreamingConfig` / `DIDResolverConfig` /
+  `SecretsConfigRaw` / `StorageConfig` / `SecurityConfigRaw` / `LimitsConfigRaw` /
+  `ProcessorsConfigRaw` (+ the forwarding/cleanup raw structs) and their serde
+  default fns. The mediator re-exports them (`pub use
+  affinidi_messaging_mediator_config::*`), so every `crate::common::config::*`
+  path — and external consumers like `affinidi-messaging-test-mediator` — keep
+  resolving unchanged.
+- Stayed in the mediator (all runtime concerns): the resolved `Config` /
+  `SecurityConfig` / `LimitsConfig` / `ProcessorsConfig`, every `ConfigRaw →
+  Config` conversion, the secret-backend/VTA/DID-resolver loading, and (for now)
+  the env-var overrides + boot validation. Three conversions that the orphan rule
+  no longer allows as inherent/`TryFrom` impls became free fns / an extension
+  trait with **verbatim bodies**: `did_resolver_cache_config`,
+  `forwarding_config_from_raw`, and `SecurityConfigRawExt::convert`.
+- **Scope note:** the env-var override logic and boot-time validation were
+  originally slated for this PR but both carry mediator-common's server-tier
+  `MediatorError`; they move together in T18b (with a crate-local config error
+  type) rather than dragging the server stack into the schema crate. Behaviour is
+  byte-identical; a golden test parses the shipped `conf/mediator.toml` into the
+  relocated `ConfigRaw`. mediator-common bumped to 0.15.11 (additive).
+
 ### 0.15.39 — Schema-version marker for the Fjall backend (simplification T17, part 2)
 
 - Completes the Fjall/Redis operational-parity work: the Redis backend records

@@ -1,0 +1,29 @@
+[package]
+name = "affinidi-messaging-mediator-config"
+version = "0.1.0"
+description = "Raw TOML configuration schema for the Affinidi Messaging Mediator (shared by the mediator and its setup tool)"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+publish.workspace = true
+license.workspace = true
+readme = "README.md"
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Pure serde schema — no runtime/server dependencies. The resolved
+# (runtime) `Config` and all conversions live in the mediator binary.
+serde = { version = "1", features = ["derive"] }
+# Only for `DatabaseConfigRaw`, the one raw field type that lives in
+# mediator-common. Taken with `default-features = false` so this crate
+# stays lean (no axum/redis/secrets stack).
+affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator-common", default-features = false }
+
+[dev-dependencies]
+# Golden test parses the shipped `mediator.toml` into `ConfigRaw`.
+toml = "1"
+
+[lints]
+workspace = true
