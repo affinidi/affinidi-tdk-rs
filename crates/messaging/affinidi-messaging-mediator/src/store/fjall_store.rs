@@ -45,6 +45,7 @@
 //! [`Notify`] that fires on each `forward_queue_enqueue`.
 
 use affinidi_messaging_mediator_common::{
+    circuit_breaker::CircuitBreaker,
     errors::MediatorError,
     store::{
         DeletionAuthority, ExpiryReport, ForwardQueueEntry, InboxStatusReply, MediatorStore,
@@ -152,6 +153,12 @@ pub struct FjallStore {
     /// Fires on every `forward_queue_enqueue` so blocking
     /// `forward_queue_read` callers wake up immediately.
     forward_notify: Arc<Notify>,
+    /// Probe-driven circuit breaker. The embedded store has no
+    /// per-request connection chokepoint like the Redis backend, so the
+    /// breaker is driven by a cheap point read in
+    /// [`circuit_breaker_state`](MediatorStore::circuit_breaker_state):
+    /// disk errors trip it open and `/readyz` degrades accordingly.
+    circuit_breaker: CircuitBreaker,
 }
 
 // ─── Stream IDs and key encoding ────────────────────────────────────────────
@@ -342,6 +349,18 @@ struct StoredStreamingClient {
     state: StreamingClientState,
 }
 
+/// Default circuit-breaker tuning for the Fjall backend, matching the shared
+/// `[database]` config defaults. Used by [`FjallStore::open`]; the mediator
+/// binary threads the configured values via
+/// [`FjallStore::open_with_circuit_breaker`].
+const DEFAULT_CB_THRESHOLD: u32 = 5;
+const DEFAULT_CB_RECOVERY_SECS: u64 = 10;
+
+/// Key read by the circuit-breaker liveness probe. It need not exist — a
+/// missing key still exercises the partition's read path (a healthy disk
+/// returns `Ok(None)`); only an actual I/O error counts as a failure.
+const CB_PROBE_KEY: &[u8] = b"__circuit_breaker_probe__";
+
 impl FjallStore {
     /// Open or create a Fjall-backed store at the given directory path.
     /// The directory is created if it doesn't exist; existing data is
@@ -350,7 +369,23 @@ impl FjallStore {
     /// All partitions named in the module-level docs are eagerly
     /// created so subsequent operations don't pay the overhead of
     /// checking for partition existence on every call.
+    ///
+    /// Uses the default circuit-breaker tuning; the mediator binary calls
+    /// [`open_with_circuit_breaker`](Self::open_with_circuit_breaker) to
+    /// thread the configured `[database]` values.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, MediatorError> {
+        Self::open_with_circuit_breaker(path, DEFAULT_CB_THRESHOLD, DEFAULT_CB_RECOVERY_SECS)
+    }
+
+    /// Like [`open`](Self::open) but with explicit circuit-breaker tuning.
+    /// The mediator threads `[database] circuit_breaker_threshold` /
+    /// `circuit_breaker_recovery_secs` here so the Fjall backend degrades
+    /// `/readyz` on disk errors the same way the Redis backend does.
+    pub fn open_with_circuit_breaker<P: AsRef<Path>>(
+        path: P,
+        circuit_breaker_threshold: u32,
+        circuit_breaker_recovery_secs: u64,
+    ) -> Result<Self, MediatorError> {
         let path = path.as_ref().to_path_buf();
         let cfg = FjallConfig::new(&path);
         let db = Database::create_or_recover(cfg).map_err(|e| {
@@ -395,6 +430,10 @@ impl FjallStore {
             next_stream_seq: AtomicU64::new(0),
             broadcast_channels: Arc::new(Mutex::new(HashMap::new())),
             forward_notify: Arc::new(Notify::new()),
+            circuit_breaker: CircuitBreaker::new(
+                circuit_breaker_threshold,
+                circuit_breaker_recovery_secs,
+            ),
         })
     }
 
@@ -542,7 +581,35 @@ impl MediatorStore for FjallStore {
     }
 
     async fn health(&self) -> StoreHealth {
-        StoreHealth::Healthy
+        match self.circuit_breaker_state() {
+            "open" => StoreHealth::Unavailable,
+            "half_open" => StoreHealth::Degraded,
+            _ => StoreHealth::Healthy,
+        }
+    }
+
+    /// Cheap synchronous liveness probe that drives the circuit breaker.
+    ///
+    /// Unlike the Redis backend — which records breaker outcomes on every
+    /// pooled connection — the embedded Fjall store has no per-request
+    /// chokepoint, so the breaker is probe-driven: each call does a single
+    /// point read against the `globals` partition. A successful read keeps
+    /// the breaker closed (or, from half-open, closes it); a disk error
+    /// records a failure and, after `circuit_breaker_threshold` consecutive
+    /// failures, trips it open so `/readyz` (which polls this method)
+    /// reports the backend unavailable instead of erroring per request.
+    ///
+    /// While open the probe fails fast (no disk read) until the recovery
+    /// window elapses, at which point one probe is allowed through to test
+    /// recovery — the same state machine the Redis backend uses.
+    fn circuit_breaker_state(&self) -> &'static str {
+        if self.circuit_breaker.allow_request() {
+            match self.globals.get(CB_PROBE_KEY) {
+                Ok(_) => self.circuit_breaker.record_success(),
+                Err(_) => self.circuit_breaker.record_failure(),
+            }
+        }
+        self.circuit_breaker.state_str()
     }
 
     async fn shutdown(&self) -> Result<(), MediatorError> {
@@ -2414,6 +2481,51 @@ mod tests {
         store.initialize().await.expect("initialize");
         assert!(matches!(store.health().await, StoreHealth::Healthy));
         store.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_probe_stays_closed_on_a_healthy_store() {
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+        // Each call probes the globals partition; on a healthy disk the
+        // breaker stays closed and `/readyz` reports the backend ready.
+        for _ in 0..3 {
+            assert_eq!(store.circuit_breaker_state(), "closed");
+        }
+        assert!(matches!(store.health().await, StoreHealth::Healthy));
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_trips_open_after_threshold_failures() {
+        let dir = TempDir::new().expect("tempdir");
+        // threshold 2, a long recovery window so it stays open for the test.
+        let store = FjallStore::open_with_circuit_breaker(dir.path(), 2, 60).expect("open");
+        assert_eq!(store.circuit_breaker_state(), "closed");
+
+        // A real Fjall I/O error is impractical to induce in-process, so we
+        // record the failures the probe would record on a broken disk.
+        store.circuit_breaker.record_failure();
+        store.circuit_breaker.record_failure(); // 2nd hit == threshold
+
+        // Now open: the probe must fail fast (no heal) within the window, and
+        // `/readyz`/health must report the backend unavailable.
+        assert_eq!(store.circuit_breaker_state(), "open");
+        assert_eq!(store.circuit_breaker_state(), "open");
+        assert!(matches!(store.health().await, StoreHealth::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_recovers_via_probe_after_window() {
+        let dir = TempDir::new().expect("tempdir");
+        // threshold 1, 0s recovery so the next probe is allowed immediately.
+        let store = FjallStore::open_with_circuit_breaker(dir.path(), 1, 0).expect("open");
+        store.circuit_breaker.record_failure(); // trips open
+        assert_eq!(store.circuit_breaker.state_str(), "open");
+
+        // The recovery window has elapsed (0s), so the next probe is allowed
+        // through (half-open); the healthy disk read closes the breaker.
+        assert_eq!(store.circuit_breaker_state(), "closed");
+        assert!(matches!(store.health().await, StoreHealth::Healthy));
     }
 
     #[tokio::test]

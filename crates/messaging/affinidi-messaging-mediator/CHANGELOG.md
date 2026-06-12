@@ -4,6 +4,27 @@
 
 ## 12th June 2026
 
+### 0.15.38 — Circuit breaker for the Fjall backend (simplification T17, part 1)
+
+- Gives `FjallStore` a circuit breaker for operational parity with the Redis
+  backend, so `/readyz` degrades cleanly on disk errors. The embedded store
+  has no per-request connection chokepoint, so the breaker is **probe-driven**:
+  the overridden `circuit_breaker_state()` does a single cheap point read
+  against the `globals` partition on each call (`/readyz` and `/admin/status`
+  already poll it). A healthy read keeps the breaker closed; a disk I/O error
+  records a failure and, after `circuit_breaker_threshold` consecutive
+  failures, trips it open — `/readyz` then reports the backend unavailable and
+  the probe fails fast until the recovery window elapses, when one probe tests
+  recovery. `health()` now maps the breaker state to `StoreHealth` instead of
+  always returning `Healthy`.
+- Tuning reuses the shared `[database]` config: `FjallStore::open_with_circuit_breaker`
+  threads `circuit_breaker_threshold` / `circuit_breaker_recovery_secs` (the
+  binary uses it; `FjallStore::open` keeps the same defaults — 5 / 10 — for the
+  builder and tests). No config-file change required.
+- Unit tests cover the healthy-probe, trip-after-threshold, and
+  recover-after-window paths; the breaker state machine itself is already
+  covered in `mediator-common`.
+
 ### 0.15.37 — Route access-list admission through `store::ops` (simplification T16, part 3)
 
 - `FjallStore` and `MemoryStore` now call `mediator-common`'s new
