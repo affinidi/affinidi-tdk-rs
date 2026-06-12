@@ -555,6 +555,36 @@ impl FjallStore {
             .unwrap_or(0)
     }
 
+    /// Read the persisted schema-version marker from the `globals`
+    /// partition. `None` means no marker has ever been written — a fresh
+    /// data dir, or one created before schema versioning existed.
+    ///
+    /// `pub(super)` so the sibling [`fjall_migrations`](super::fjall_migrations)
+    /// runner can read it without exposing the `globals` partition itself.
+    pub(super) fn read_schema_version(&self) -> Result<Option<u32>, MediatorError> {
+        let raw = self
+            .globals
+            .get(super::fjall_migrations::SCHEMA_VERSION_KEY)
+            .map_err(|e| Self::db_err("read_schema_version:get", e))?;
+        Ok(raw.and_then(|v| {
+            let bytes: [u8; 4] = v.as_ref().try_into().ok()?;
+            Some(u32::from_le_bytes(bytes))
+        }))
+    }
+
+    /// Persist the schema-version marker into the `globals` partition as
+    /// little-endian `u32`. Matches the durability of the other `globals`
+    /// writes (counters, cursors) — survives a clean reopen.
+    pub(super) fn write_schema_version(&self, version: u32) -> Result<(), MediatorError> {
+        self.globals
+            .insert(
+                super::fjall_migrations::SCHEMA_VERSION_KEY,
+                version.to_le_bytes().to_vec(),
+            )
+            .map_err(|e| Self::db_err("write_schema_version:insert", e))?;
+        Ok(())
+    }
+
     /// Path the database was opened from.
     pub fn path(&self) -> &Path {
         &self.path
@@ -574,10 +604,12 @@ impl MediatorStore for FjallStore {
     // ─── Bootstrap & health ─────────────────────────────────────────────────
 
     async fn initialize(&self) -> Result<(), MediatorError> {
-        // All partitions opened in `open`; nothing further to do at
-        // the moment. Future commits may seed schema versions or run
-        // migrations here.
-        Ok(())
+        // Partitions are opened eagerly in `open`. The remaining bootstrap
+        // step is the schema-version check: stamp the current version on a
+        // fresh data dir, run any pending migrations on an older one, and
+        // refuse to start on a data dir written by a newer mediator rather
+        // than silently misread its records. See `fjall_migrations`.
+        super::fjall_migrations::run_migrations(self)
     }
 
     async fn health(&self) -> StoreHealth {
@@ -2481,6 +2513,80 @@ mod tests {
         store.initialize().await.expect("initialize");
         assert!(matches!(store.health().await, StoreHealth::Healthy));
         store.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn initialize_stamps_current_schema_version_on_a_fresh_store() {
+        use crate::store::fjall_migrations::CURRENT_SCHEMA_VERSION;
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        // Fresh data dir: no marker yet.
+        assert_eq!(store.read_schema_version().expect("read"), None);
+
+        store.initialize().await.expect("initialize");
+        assert_eq!(
+            store.read_schema_version().expect("read"),
+            Some(CURRENT_SCHEMA_VERSION),
+            "fresh init stamps the current schema version"
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_is_idempotent_across_restarts() {
+        use crate::store::fjall_migrations::CURRENT_SCHEMA_VERSION;
+        let dir = TempDir::new().expect("tempdir");
+
+        {
+            let store = FjallStore::open(dir.path()).expect("open");
+            store.initialize().await.expect("first initialize");
+            store.shutdown().await.expect("shutdown");
+        }
+
+        // Re-open the same dir: the marker persisted, and a second initialize
+        // is a clean no-op (UpToDate), not a re-stamp or error.
+        let store = FjallStore::open(dir.path()).expect("reopen");
+        assert_eq!(
+            store.read_schema_version().expect("read"),
+            Some(CURRENT_SCHEMA_VERSION),
+            "marker survives a reopen"
+        );
+        store
+            .initialize()
+            .await
+            .expect("second initialize is a no-op");
+        assert_eq!(
+            store.read_schema_version().expect("read"),
+            Some(CURRENT_SCHEMA_VERSION)
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_rejects_a_data_dir_from_a_newer_mediator() {
+        use crate::store::fjall_migrations::CURRENT_SCHEMA_VERSION;
+        let dir = TempDir::new().expect("tempdir");
+        let store = FjallStore::open(dir.path()).expect("open");
+
+        // Simulate a data dir written by a future mediator.
+        store
+            .write_schema_version(CURRENT_SCHEMA_VERSION + 1)
+            .expect("seed newer version");
+
+        let err = store
+            .initialize()
+            .await
+            .expect_err("must refuse a newer schema");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this mediator supports"),
+            "error should name the version mismatch, got: {msg}"
+        );
+
+        // The marker must be left untouched — we never downgrade it.
+        assert_eq!(
+            store.read_schema_version().expect("read"),
+            Some(CURRENT_SCHEMA_VERSION + 1)
+        );
     }
 
     #[tokio::test]
