@@ -286,100 +286,157 @@ network_limit = "100"
 ### Resource limits
 ### ****************************************************************************************************************************
 [limits]
+### These are OPERATIONAL limits — tune them to your deployment; the defaults are
+### NOT protocol constants. They suit a small-to-medium single-node mediator.
+### Every value is overridable at runtime via the listed `Env:` variable (env
+### wins over this file). Each entry notes what it protects and a `Scale:` hint
+### for when to raise or lower it.
+
 ### Env: LIMIT_ATTACHMENTS_MAX_COUNT
+### Maximum attachments accepted on a single message.
+### Scale: raise for clients that batch many attachments per message; each one
+### adds unpack + crypto work, so weigh against crypto_operations_per_message.
 attachments_max_count = "20"
 
 ### Env: LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE
-### Protects against DoS attacks via excessive crypto operations
+### Protects against DoS attacks via excessive crypto operations.
+### Scale: the main per-message CPU guard (caps recipients x keys). Raise only if
+### legitimate traffic is fan-out heavy; higher = more CPU per message under load.
 crypto_operations_per_message = "1000"
 
 ### Env: LIMIT_DELETED_MESSAGES
-### Maximum messages that can be deleted at once
+### Maximum messages that can be deleted at once.
+### Scale: raise to cut round-trips for clients clearing large inboxes; higher =
+### a larger single storage transaction per delete call.
 deleted_messages = "100"
 
 ### Env: LIMIT_FORWARD_TASK_QUEUE
-### Maximum queued forward tasks
+### Maximum queued forward tasks.
+### Scale: raise for relay/hub mediators with bursty forward volume; the queue
+### lives in the storage backend, so this is bounded by backend memory/disk.
 forward_task_queue = "50000"
 
 ### Env: LIMIT_HTTP_SIZE
-### Maximum HTTP request payload in bytes (10MB)
+### Maximum HTTP request payload in bytes (10MB).
+### Scale: raise for large-attachment use cases; keep >= message_size; higher =
+### more memory buffered per in-flight request.
 http_size = "10485760"
 
 ### Env: LIMIT_LISTED_MESSAGES
-### Maximum messages listed at a time
+### Maximum messages listed at a time.
+### Scale: raise to reduce pagination round-trips for busy inboxes; higher =
+### larger list responses (memory + bandwidth per call).
 listed_messages = "100"
 
 ### Env: LIMIT_LOCAL_MAX_ACL
-### Maximum ACL entries per DID
+### Maximum ACL entries per DID.
+### Scale: raise for DIDs that maintain large allow/deny lists; each entry is one
+### stored set member (cheap individually; this caps unbounded growth).
 local_max_acl = "1000"
 
 ### Env: LIMIT_MESSAGE_EXPIRY_SECONDS
-### TTL in seconds for stored messages (7 days)
+### TTL in seconds for stored messages (7 days).
+### Scale: lower to cap storage growth on high-volume mediators; raise for
+### recipients that poll infrequently and must not miss messages.
 message_expiry_seconds = "604800"
 
 ### Env: LIMIT_MESSAGE_SIZE
-### Maximum message size in bytes (1MB)
+### Maximum message size in bytes (1MB).
+### Scale: raise for large-payload workloads; keep <= http_size and ws_size;
+### higher = more memory per message and per queued copy.
 message_size = "1048576"
 
 ### Env: LIMIT_QUEUED_SEND_MESSAGES_SOFT
-### Default outbound queue limit per DID (-1 = no limit)
+### Default outbound queue limit per DID (-1 = no limit).
+### Scale: the default ceiling a DID gets; raise for senders that burst while a
+### recipient is offline. `soft` is the default, `hard` (below) is the max.
 queued_send_messages_soft = "200"
 
 ### Env: LIMIT_QUEUED_SEND_MESSAGES_HARD
-### Maximum outbound queue limit settable by non-admin (-1 = no limit)
+### Maximum outbound queue limit settable by non-admin (-1 = no limit).
+### Scale: per-DID outbound ceiling; raise for high-throughput senders. Bounds
+### worst-case backend storage per DID (this x message_size).
 queued_send_messages_hard = "1000"
 
 ### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT
-### Default inbound queue limit per DID (-1 = no limit)
+### Default inbound queue limit per DID (-1 = no limit).
+### Scale: raise for DIDs that receive bursts while offline (store-and-forward).
 queued_receive_messages_soft = "200"
 
 ### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_HARD
-### Maximum inbound queue limit settable by non-admin (-1 = no limit)
+### Maximum inbound queue limit settable by non-admin (-1 = no limit).
+### Scale: per-DID inbox cap; raise for offline-heavy clients. Bounds worst-case
+### backend storage per DID (this x message_size).
 queued_receive_messages_hard = "1000"
 
 ### Env: LIMIT_TO_KEYS_PER_DID
-### Maximum keys per recipient DID (DoS protection)
+### Maximum keys per recipient DID (DoS protection).
+### Scale: rarely needs changing; only raise for recipients that legitimately
+### publish many key-agreement keys.
 to_keys_per_recipient = "100"
 
 ### Env: LIMIT_TO_RECIPIENTS
-### Maximum recipients per message (DoS protection)
+### Maximum recipients per message (DoS protection).
+### Scale: raise for group/broadcast messaging; each recipient multiplies fan-out
+### work and stored copies, so this interacts with crypto_operations_per_message.
 to_recipients = "100"
 
 ### Env: LIMIT_WS_SIZE
-### Maximum WebSocket payload in bytes (10MB)
+### Maximum WebSocket payload in bytes (10MB).
+### Scale: mirror http_size; raise for large streamed payloads. Higher = more
+### memory buffered per WebSocket frame.
 ws_size = "10485760"
 
 ### Env: ACCESS_LIST_LIMIT
-### Maximum access list entries per DID
+### Maximum access list entries per DID.
+### Scale: raise for DIDs with large allow/deny lists (companion to
+### local_max_acl); each entry is one stored set member.
 access_list_limit = "1000"
 
 ### Env: OOB_INVITE_TTL
-### TTL in seconds for OOB invites
+### TTL in seconds for OOB invites (24h).
+### Scale: lower for tighter, short-lived invite windows; raise if invites are
+### distributed out-of-band slowly (e.g. printed/QR onboarding).
 oob_invite_ttl = "86400"
 
 ### Env: LIMIT_RATE_LIMIT_PER_IP
-### Requests per second per IP (0 = disabled)
+### Requests per second per IP (0 = disabled).
+### Scale: lower to harden against per-IP abuse; RAISE (or disable) when behind a
+### trusted load balancer / NAT where many clients share one source IP, or it
+### will throttle legitimate traffic. Commented out = built-in default (100).
 # rate_limit_per_ip = "100"
 
 ### Env: LIMIT_RATE_LIMIT_BURST
-### Burst size for IP-based rate limiting
+### Burst size for IP-based rate limiting.
+### Scale: raise to tolerate bursty-but-legitimate traffic without 429s — this is
+### the token-bucket depth above the steady per-IP rate.
 # rate_limit_burst = "50"
 
 ### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS
-### Maximum concurrent WebSocket connections (0 = unlimited)
+### Maximum concurrent WebSocket connections (0 = unlimited).
+### Scale: size to expected concurrent clients plus headroom; ultimately bounded
+### by the process file-descriptor limit and memory. Commented out = default
+### (10000).
 # max_websocket_connections = "10000"
 
 ### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS_PER_DID
 ### Maximum concurrent WebSocket connections for a single DID, so one DID
-### can't exhaust the global max_websocket_connections budget (0 = unlimited)
+### can't exhaust the global max_websocket_connections budget (0 = unlimited).
+### Scale: raise for DIDs running many devices/clients, but keep well below the
+### global cap so one DID can't starve others. Commented out = default (100).
 # max_websocket_connections_per_did = "100"
 
 ### Env: LIMIT_DID_RATE_LIMIT_PER_SECOND
-### Requests per second per authenticated DID (0 = disabled)
+### Requests per second per authenticated DID (0 = disabled).
+### Scale: enable (set > 0) to throttle an abusive *authenticated* client a
+### per-IP limit can't catch (e.g. one DID behind many IPs); leave 0 if per-IP
+### limits suffice. Commented out = default (0/disabled).
 # did_rate_limit_per_second = "0"
 
 ### Env: LIMIT_DID_RATE_LIMIT_BURST
-### Burst size for per-DID rate limiting
+### Burst size for per-DID rate limiting.
+### Scale: token-bucket depth above the steady per-DID rate; raise to tolerate
+### bursty authenticated clients once did_rate_limit_per_second is enabled.
 # did_rate_limit_burst = "10"
 
 ### ****************************************************************************************************************************
