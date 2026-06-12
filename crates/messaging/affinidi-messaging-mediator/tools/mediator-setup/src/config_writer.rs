@@ -729,6 +729,74 @@ mod tests {
         assert!(!toml.contains("context = "));
     }
 
+    /// Round-trip drift guard (mediator T19): every wizard-generated config must
+    /// deserialize into the mediator's shared `ConfigRaw` schema. The wizard
+    /// renders TOML from a commented template via `toml_edit` (so operators keep
+    /// the inline docs); this proves that output still matches the types the
+    /// mediator actually parses, so the wizard and the mediator can't silently
+    /// drift apart. Covers the renderer's main branches (network mode, storage
+    /// backend, CORS, secret backend, VTA vs self-hosted).
+    #[test]
+    fn generated_config_parses_as_shared_config_schema() {
+        use crate::consts;
+        use affinidi_messaging_mediator_config::ConfigRaw;
+
+        let cases: Vec<(&str, WizardConfig)> = vec![
+            (
+                "open / redis / string-backend",
+                WizardConfig {
+                    network_mode: consts::NETWORK_MODE_OPEN.into(),
+                    secret_storage: consts::STORAGE_STRING.into(),
+                    database_url: consts::DEFAULT_REDIS_URL.into(),
+                    listen_address: consts::DEFAULT_LISTEN_ADDR.into(),
+                    ..WizardConfig::default()
+                },
+            ),
+            (
+                "closed / fjall / cors-list",
+                WizardConfig {
+                    network_mode: consts::NETWORK_MODE_CLOSED.into(),
+                    storage_backend: consts::STORAGE_BACKEND_FJALL.into(),
+                    fjall_data_dir: "./data".into(),
+                    cors_mode: consts::CORS_MODE_LIST.into(),
+                    cors_domains: "https://app.affinidi.com".into(),
+                    ..WizardConfig::default()
+                },
+            ),
+            (
+                "vta-online",
+                WizardConfig {
+                    use_vta: true,
+                    vta_mode: consts::VTA_MODE_ONLINE.into(),
+                    did_method: consts::DID_VTA.into(),
+                    secret_storage: consts::STORAGE_VTA.into(),
+                    ..WizardConfig::default()
+                },
+            ),
+        ];
+
+        for (label, cfg) in cases {
+            let generated = test_generated();
+            let toml = generate_toml(&cfg, &generated)
+                .unwrap_or_else(|e| panic!("[{label}] generate_toml failed: {e}"));
+            let parsed: ConfigRaw = toml::from_str(&toml).unwrap_or_else(|e| {
+                panic!(
+                    "[{label}] wizard output must parse as the mediator's ConfigRaw schema: {e}\n\
+                     --- generated ---\n{toml}"
+                )
+            });
+            // Spot-check that wizard-set values survived the round trip.
+            assert!(
+                parsed.mediator_did.contains(&generated.mediator_did),
+                "[{label}] mediator_did round-trips into the schema"
+            );
+            assert!(
+                !parsed.secrets.backend.is_empty(),
+                "[{label}] secrets.backend is populated"
+            );
+        }
+    }
+
     #[test]
     fn test_generate_toml_vta() {
         let config = WizardConfig {
