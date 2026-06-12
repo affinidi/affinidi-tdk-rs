@@ -18,11 +18,15 @@
 //! validation move here in a follow-up (T18b), once they carry a crate-local
 //! error type instead of the mediator's server-tier `MediatorError`.
 
+pub mod env;
+pub mod error;
 mod limits;
 mod processors;
 mod schema;
 mod security;
+pub mod validate;
 
+pub use error::ConfigError;
 pub use limits::*;
 pub use processors::*;
 pub use schema::*;
@@ -38,7 +42,8 @@ mod golden {
     #[test]
     fn shipped_mediator_toml_parses() {
         let toml = include_str!("../../conf/mediator.toml");
-        let raw: ConfigRaw = ::toml::from_str(toml).expect("conf/mediator.toml parses as ConfigRaw");
+        let raw: ConfigRaw =
+            ::toml::from_str(toml).expect("conf/mediator.toml parses as ConfigRaw");
 
         // Spot-check a field from a few different sections so an accidental
         // rename or moved field is caught, not just "it deserialized".

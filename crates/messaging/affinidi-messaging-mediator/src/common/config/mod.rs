@@ -10,14 +10,18 @@ pub use limits::*;
 pub use processors::*;
 pub use security::*;
 
-// The raw TOML schema (`ConfigRaw`, `ServerConfig`, `StreamingConfig`,
-// `DIDResolverConfig`, `SecretsConfigRaw`, `StorageConfig`, and the `*ConfigRaw`
-// types) now lives in the dependency-light `affinidi-messaging-mediator-config`
-// crate. Re-exported here so existing `crate::common::config::*` paths (and
-// external consumers like `affinidi-messaging-test-mediator`) keep resolving.
-// The resolved runtime `Config` and every `ConfigRaw → Config` conversion stay
-// in this module.
-pub use affinidi_messaging_mediator_config::*;
+// The raw TOML schema types now live in the dependency-light
+// `affinidi-messaging-mediator-config` crate. Re-exported here so existing
+// `crate::common::config::*` paths (and external consumers like
+// `affinidi-messaging-test-mediator`) keep resolving. Only the *types* are
+// re-exported — the crate's `env` / `validate` modules are used fully-qualified
+// (a bare `env` would shadow `std::env`). The resolved runtime `Config` and
+// every `ConfigRaw → Config` conversion stay in this module.
+pub use affinidi_messaging_mediator_config::{
+    ConfigRaw, DIDResolverConfig, ForwardingConfigRaw, LimitsConfigRaw,
+    MessageExpiryCleanupConfigRaw, ProcessorsConfigRaw, SecretsConfigRaw, SecurityConfigRaw,
+    ServerConfig, SessionExpiryCleanupConfigRaw, StorageConfig, StreamingConfig,
+};
 
 use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::{
@@ -52,7 +56,7 @@ use vta_sdk::integration::{
 
 use helpers::{
     assert_operating_secrets_cover_key_agreement, get_hostname, load_forwarding_protection_blocks,
-    preload_self_did, read_config_file, read_did_config, read_document,
+    preload_self_did, read_did_config, read_document,
 };
 
 /// Build the runtime [`DIDCacheConfig`] from the raw [`DIDResolverConfig`]
@@ -872,8 +876,16 @@ impl TryFrom<ConfigRaw> for Config {
 }
 
 pub async fn init(config_file: &str, with_ansi: bool) -> Result<Config, MediatorError> {
-    // Read configuration file parameters
-    let config = read_config_file(config_file)?;
+    // Read configuration file parameters. `read_config_file` lives in the config
+    // crate now (returns its lean `ConfigError`); map it back to MediatorError.
+    let config =
+        affinidi_messaging_mediator_config::env::read_config_file(config_file).map_err(|e| {
+            MediatorError::ConfigError(
+                crate::common::error_codes::CONFIG_ERROR,
+                "NA".into(),
+                e.to_string(),
+            )
+        })?;
 
     // setup logging/tracing framework
     let filter = if env::var("RUST_LOG").is_ok() {

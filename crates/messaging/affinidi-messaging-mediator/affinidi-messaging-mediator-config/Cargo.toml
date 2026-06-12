@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-config"
-version = "0.1.0"
+version = "0.1.1"
 description = "Raw TOML configuration schema for the Affinidi Messaging Mediator (shared by the mediator and its setup tool)"
 edition.workspace = true
 authors.workspace = true
@@ -13,17 +13,22 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
-# Pure serde schema — no runtime/server dependencies. The resolved
-# (runtime) `Config` and all conversions live in the mediator binary.
+# Schema + config loading + validation. Still lean — no runtime/server stack.
 serde = { version = "1", features = ["derive"] }
-# Only for `DatabaseConfigRaw`, the one raw field type that lives in
-# mediator-common. Taken with `default-features = false` so this crate
-# stays lean (no axum/redis/secrets stack).
+# TOML parsing for `read_config_file`.
+toml = "1"
+# Lean error type for config loading (`ConfigError`).
+thiserror = "2"
+# Structured logging in the file-reading helpers, matching the mediator.
+tracing = "0.1"
+# For `DatabaseConfigRaw` (the one raw field type that lives in mediator-common)
+# and the lean ACL types used by validation. `default-features = false` keeps
+# this crate off the axum/redis/secrets stack.
 affinidi-messaging-mediator-common = { version = "0.15", path = "../affinidi-messaging-mediator-common", default-features = false }
 
 [dev-dependencies]
-# Golden test parses the shipped `mediator.toml` into `ConfigRaw`.
-toml = "1"
+# `check_tls` test writes temp cert/key files.
+tempfile = "3"
 
 [lints]
 workspace = true

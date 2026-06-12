@@ -4,6 +4,23 @@
 
 ## 12th June 2026
 
+### 0.15.41 — Move config loading + validation into the mediator-config crate (simplification T18, part b)
+
+- Completes T18. The env-var override logic + config-file reading
+  (`read_config_file`, `apply_env_overrides`) and the boot-time validation checks
+  (DID syntax, JWT-expiry ordering, TLS presence, and the suspicious-combo
+  warnings) move out of `src/common/config/{helpers,validate}.rs` into the
+  `affinidi-messaging-mediator-config` crate, so both the mediator and (next, T19)
+  the `mediator-setup` wizard share one implementation.
+- The crate gains a lean `ConfigError` (it can't use the server-tier
+  `MediatorError`); the mediator maps it back at the single `read_config_file`
+  call site. `validate_config(&Config)` stays here as a thin orchestrator over the
+  crate's pure check helpers. The relay-warning check is decoupled from the
+  mediator's `authz` module (direct `MediatorACLSet` bit accessor) so the schema
+  crate needs only the lean ACL types.
+- Behaviour-identical; the moved checks keep their unit tests (now in the crate).
+  No mediator-common change. mediator-config bumped to 0.1.1.
+
 ### 0.15.40 — Extract the `mediator-config` crate: raw TOML schema (simplification T18, part a)
 
 - Phase 4 (config unification) begins. The mediator's TOML *schema* — the
