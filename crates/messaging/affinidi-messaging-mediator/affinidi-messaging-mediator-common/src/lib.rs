@@ -24,13 +24,12 @@ pub mod types;
 
 #[cfg(feature = "server")]
 pub mod circuit_breaker;
-/// Database wiring. The raw serde structs in `database::config`
-/// (`DatabaseConfigRaw`, `DatabaseConfig`) are **always available** —
-/// the lean `affinidi-messaging-mediator-config` crate embeds
-/// `DatabaseConfigRaw` in its top-level `ConfigRaw` and must reach it
-/// with `default-features = false`. The `DatabaseConfig` `TryFrom`
-/// (which returns `MediatorError`) is gated on `server`, and
-/// `DatabaseHandler` + its redis helpers are gated on `redis-backend`.
+/// Database wiring: the lean `DatabaseConfig` serde struct is always
+/// available under `server` (the mediator's main config parses it
+/// regardless of which storage backend is selected). The
+/// `DatabaseHandler` and its redis-specific helpers are gated inside
+/// the module on `redis-backend`.
+#[cfg(feature = "server")]
 pub mod database;
 #[cfg(feature = "server")]
 pub mod errors;

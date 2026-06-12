@@ -78,6 +78,24 @@ fn did_resolver_cache_config(raw: &DIDResolverConfig) -> DIDCacheConfig {
     config.build()
 }
 
+/// Build the runtime [`DatabaseConfig`] from the raw `[database]` schema.
+/// `DatabaseConfigRaw` lives in the config crate and `DatabaseConfig` in
+/// mediator-common, so this is a free function (the orphan rule forbids a
+/// `TryFrom` impl here). Mirrors mediator-common's former
+/// `TryFrom<DatabaseConfigRaw>` exactly: the circuit-breaker tuning is fixed
+/// here and `database_timeout` falls back to 2 on a parse error.
+fn database_config_from_raw(
+    raw: affinidi_messaging_mediator_config::DatabaseConfigRaw,
+) -> DatabaseConfig {
+    DatabaseConfig {
+        functions_file: Some(raw.functions_file),
+        database_url: raw.database_url,
+        database_timeout: raw.database_timeout.parse().unwrap_or(2),
+        circuit_breaker_threshold: 5,
+        circuit_breaker_recovery_secs: 10,
+    }
+}
+
 /// Default VTA cache TTL when `[secrets].cache_ttl` is not set.
 const DEFAULT_CACHE_TTL_SECS: u64 = 30 * 86_400; // 30 days
 
@@ -644,7 +662,7 @@ impl TryFrom<ConfigRaw> for Config {
             mediator_did,
             admin_did: read_did_config(&raw.server.admin_did, &aws_config, "admin_did").await?,
             local_endpoints: raw.server.local_endpoints,
-            database: raw.database.try_into()?,
+            database: database_config_from_raw(raw.database),
             streaming_enabled: raw.streaming.enabled.parse().unwrap_or_else(|_| {
                 warn!(
                     "Could not parse streaming.enabled value '{}', using default: true",

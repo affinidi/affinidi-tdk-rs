@@ -1,10 +1,27 @@
 //! Top-level raw config schema (`[server]`, `[streaming]`, `[did_resolver]`,
 //! `[secrets]`, `[storage]`, and the `ConfigRaw` root).
 
-use affinidi_messaging_mediator_common::database::config::DatabaseConfigRaw;
 use serde::{Deserialize, Serialize};
 
 use crate::{LimitsConfigRaw, ProcessorsConfigRaw, SecurityConfigRaw};
+
+/// `[database]` section schema (raw, all-strings TOML form).
+///
+/// Defined here rather than imported from mediator-common: that crate gates its
+/// `database` module behind the `server` feature, so importing `DatabaseConfigRaw`
+/// would force this lean schema crate to depend on a build of mediator-common
+/// that exposes `database` without `server` — a publish-ordering hazard (the
+/// published mediator-common keeps `database` gated). The raw DB config is config
+/// schema, so it lives here; the resolved `DatabaseConfig` (with circuit-breaker
+/// tuning, used by the runtime `DatabaseHandler`) stays in mediator-common, and
+/// the mediator converts between them.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DatabaseConfigRaw {
+    pub functions_file: String,
+    pub database_url: String,
+    pub database_timeout: String,
+    pub scripts_path: Option<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
