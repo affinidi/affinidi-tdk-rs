@@ -4,6 +4,31 @@
 
 ## 12th June 2026
 
+### 0.15.39 — Schema-version marker for the Fjall backend (simplification T17, part 2)
+
+- Completes the Fjall/Redis operational-parity work: the Redis backend records
+  applied schema migrations in a `SCHEMA_MIGRATIONS` set so a record-shape
+  change runs exactly once, but Fjall had no equivalent — a future change to an
+  on-disk record shape would silently deserialise old bytes as `serde` defaults
+  with no signal. `FjallStore` now writes a **schema-version marker** into the
+  `globals` partition and checks it on every `initialize()`.
+- New `store::fjall_migrations` module: a `CURRENT_SCHEMA_VERSION` constant, an
+  append-only migration registry (`all_migrations()`, empty until the first
+  record-shape change), and a `run_migrations` runner. On startup it stamps the
+  current version on a fresh (or pre-versioning) data dir, runs any pending
+  migrations in ascending order on an older one — advancing the marker only
+  after each migration's `up` succeeds, so a crash mid-migration re-runs from
+  the same point — and **aborts with a clear `DB_SCHEMA_VERSION_ERROR`** when
+  the marker is *newer* than the running binary supports, rather than risk
+  misreading records it doesn't understand.
+- The version-comparison logic is a pure `plan_schema` function (initialise /
+  up-to-date / migrate / too-new), unit-tested across every branch; registry
+  invariants (unique, ascending, in-range versions; unique non-empty names) are
+  enforced by tests mirroring the Redis migration suite. Behaviour tests cover
+  fresh-init stamping, idempotent re-init across a reopen, and the newer-schema
+  rejection. No config-file change; no behaviour change for existing data dirs
+  (their current shape is the version-1 baseline).
+
 ### 0.15.38 — Circuit breaker for the Fjall backend (simplification T17, part 1)
 
 - Gives `FjallStore` a circuit breaker for operational parity with the Redis

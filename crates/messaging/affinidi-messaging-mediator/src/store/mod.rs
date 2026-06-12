@@ -18,6 +18,9 @@ pub use affinidi_messaging_mediator_common::store::redis::RedisStore;
 pub mod fjall_store;
 
 #[cfg(feature = "fjall-backend")]
+mod fjall_migrations;
+
+#[cfg(feature = "fjall-backend")]
 pub use fjall_store::FjallStore;
 
 #[cfg(feature = "memory-backend")]
