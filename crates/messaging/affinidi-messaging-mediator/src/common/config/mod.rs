@@ -10,16 +10,22 @@ pub use limits::*;
 pub use processors::*;
 pub use security::*;
 
+// The raw TOML schema (`ConfigRaw`, `ServerConfig`, `StreamingConfig`,
+// `DIDResolverConfig`, `SecretsConfigRaw`, `StorageConfig`, and the `*ConfigRaw`
+// types) now lives in the dependency-light `affinidi-messaging-mediator-config`
+// crate. Re-exported here so existing `crate::common::config::*` paths (and
+// external consumers like `affinidi-messaging-test-mediator`) keep resolving.
+// The resolved runtime `Config` and every `ConfigRaw → Config` conversion stay
+// in this module.
+pub use affinidi_messaging_mediator_config::*;
+
 use affinidi_did_common::Document;
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient,
     config::{DIDCacheConfig, DIDCacheConfigBuilder},
 };
 use affinidi_messaging_mediator_common::{
-    MediatorSecrets,
-    database::config::{DatabaseConfig, DatabaseConfigRaw},
-    errors::MediatorError,
-    secrets::open_store,
+    MediatorSecrets, database::config::DatabaseConfig, errors::MediatorError, secrets::open_store,
 };
 use affinidi_secrets_resolver::ThreadedSecretsResolver;
 use async_convert::{TryFrom, async_trait};
@@ -35,7 +41,7 @@ use vta_sdk::credentials::CredentialBundle;
 pub(crate) type AwsConfig = aws_config::SdkConfig;
 #[cfg(not(feature = "aws"))]
 pub(crate) type AwsConfig = ();
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha256::digest;
 use std::{collections::HashMap, env, fmt, sync::Arc};
 use tracing::{error, info, warn};
@@ -49,111 +55,27 @@ use helpers::{
     preload_self_did, read_config_file, read_did_config, read_document,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub listen_address: String,
-    pub api_prefix: String,
-    pub admin_did: String,
-    pub did_web_self_hosted: Option<String>,
-    /// Additional URL aliases the mediator should treat as
-    /// pointing at *itself* when resolving a routing-2.0 next-hop.
-    /// Each entry is a full URL (e.g. `"https://mediator.example.com"`);
-    /// host + port are extracted and compared against the next-hop's
-    /// service endpoint. `listen_address` is automatically included,
-    /// so this is only needed when the mediator is reachable via
-    /// hostnames or ports that differ from its bind address (e.g.,
-    /// behind a load balancer or reverse proxy).
-    #[serde(default)]
-    pub local_endpoints: Vec<String>,
-}
+/// Build the runtime [`DIDCacheConfig`] from the raw [`DIDResolverConfig`]
+/// schema. Was `DIDResolverConfig::convert`; became a free function when the
+/// raw type relocated to `affinidi-messaging-mediator-config` (inherent impls
+/// must live in the type's crate, and this conversion pulls the DID-resolver
+/// SDK, which the schema crate avoids).
+fn did_resolver_cache_config(raw: &DIDResolverConfig) -> DIDCacheConfig {
+    let mut config = DIDCacheConfigBuilder::default()
+        .with_cache_capacity(raw.cache_capacity.parse().unwrap_or(1000))
+        .with_cache_ttl(raw.cache_ttl.parse().unwrap_or(300))
+        .with_network_timeout(raw.network_timeout.parse().unwrap_or(5))
+        .with_network_cache_limit_count(raw.network_limit.parse().unwrap_or(100));
 
-/// Live streaming configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StreamingConfig {
-    pub enabled: String,
-    pub uuid: String,
-}
-
-/// DID resolver configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DIDResolverConfig {
-    pub address: Option<String>,
-    pub cache_capacity: String,
-    pub cache_ttl: String,
-    pub network_timeout: String,
-    pub network_limit: String,
-}
-
-impl DIDResolverConfig {
-    pub fn convert(&self) -> DIDCacheConfig {
-        let mut config = DIDCacheConfigBuilder::default()
-            .with_cache_capacity(self.cache_capacity.parse().unwrap_or(1000))
-            .with_cache_ttl(self.cache_ttl.parse().unwrap_or(300))
-            .with_network_timeout(self.network_timeout.parse().unwrap_or(5))
-            .with_network_cache_limit_count(self.network_limit.parse().unwrap_or(100));
-
-        if let Some(address) = &self.address {
-            config = config.with_network_mode(address);
-        }
-
-        config.build()
+    if let Some(address) = &raw.address {
+        config = config.with_network_mode(address);
     }
-}
 
-/// `[secrets]` config section — the unified secret-storage backend.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SecretsConfigRaw {
-    /// Backend URL. Examples: `keyring://affinidi-mediator`,
-    /// `file:///var/lib/mediator/secrets.json`,
-    /// `aws_secrets://us-east-1/prod/mediator/`.
-    pub backend: String,
-    /// Maximum age for the cached VTA bundle (humantime format, e.g.
-    /// `"30d"` or `"12h"`). `None` or `"0"` means no expiry. Defaults to
-    /// 30 days when unset.
-    #[serde(default)]
-    pub cache_ttl: Option<String>,
+    config.build()
 }
 
 /// Default VTA cache TTL when `[secrets].cache_ttl` is not set.
 const DEFAULT_CACHE_TTL_SECS: u64 = 30 * 86_400; // 30 days
-
-/// Raw configuration deserialized from the TOML file, converted to [`Config`]
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ConfigRaw {
-    pub log_level: String,
-    pub log_json: String,
-    pub mediator_did: String,
-    pub server: ServerConfig,
-    pub database: DatabaseConfigRaw,
-    pub security: SecurityConfigRaw,
-    pub streaming: StreamingConfig,
-    pub did_resolver: DIDResolverConfig,
-    pub limits: LimitsConfigRaw,
-    pub processors: ProcessorsConfigRaw,
-    /// Unified secret backend — required whenever the mediator has any
-    /// persistent identity (which is effectively always).
-    pub secrets: SecretsConfigRaw,
-    /// Optional storage backend selector. Absent → Redis (legacy
-    /// behaviour, uses `[database]`). Present with `backend = "fjall"`
-    /// → embedded Fjall at `data_dir`, `[database]` is ignored.
-    #[serde(default)]
-    pub storage: Option<StorageConfig>,
-}
-
-/// `[storage]` section — selects the mediator's storage backend.
-/// Mirrors the wizard recipe shape so a `mediator.toml` produced by
-/// the wizard parses unchanged.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StorageConfig {
-    /// `"redis"` (default) or `"fjall"`. Memory backend is not
-    /// exposed here — it's a tests-only backend.
-    pub backend: String,
-    /// On-disk path for the Fjall data directory. Required when
-    /// `backend = "fjall"`. The mediator creates this directory if
-    /// it doesn't exist.
-    #[serde(default)]
-    pub data_dir: Option<String>,
-}
 
 #[derive(Clone, Serialize)]
 pub struct Config {
@@ -726,7 +648,7 @@ impl TryFrom<ConfigRaw> for Config {
                 );
                 true
             }),
-            did_resolver_config: raw.did_resolver.convert(),
+            did_resolver_config: did_resolver_cache_config(&raw.did_resolver),
             api_prefix: {
                 let normalized = helpers::normalize_api_prefix(&raw.server.api_prefix);
                 if normalized != raw.server.api_prefix {
@@ -747,7 +669,9 @@ impl TryFrom<ConfigRaw> for Config {
                 )
                 .await?,
             processors: ProcessorsConfig {
-                forwarding: raw.processors.forwarding.clone().try_into()?,
+                forwarding: processors::forwarding_config_from_raw(
+                    raw.processors.forwarding.clone(),
+                )?,
                 message_expiry_cleanup: raw.processors.message_expiry_cleanup.clone().try_into()?,
                 session_expiry_cleanup: raw.processors.session_expiry_cleanup.clone().try_into()?,
             },

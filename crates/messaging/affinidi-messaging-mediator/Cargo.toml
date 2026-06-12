@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator"
-version = "0.15.39"
+version = "0.15.40"
 description = "Messaging Mediator service for Affinidi Messaging (DIDComm and TSP)"
 edition.workspace = true
 authors.workspace = true
@@ -73,6 +73,9 @@ affinidi-encoding = { version = "0.1", optional = true }
 ## Backend features are enabled below via the mediator's own cargo features
 ## so operators only compile the backends their deployment needs.
 affinidi-messaging-mediator-common = { version = "0.15", path = "affinidi-messaging-mediator-common" }
+## Raw TOML config schema — the `*ConfigRaw` types are defined here and the
+## mediator re-exports them; the runtime `Config` + conversions stay local.
+affinidi-messaging-mediator-config = { version = "0.1", path = "affinidi-messaging-mediator-config" }
 ## Humantime for the VTA cache TTL (`[secrets].cache_ttl = "30d"`).
 humantime = "2"
 ## CLI parsing for the mediator binary's subcommands (`mediator`,
