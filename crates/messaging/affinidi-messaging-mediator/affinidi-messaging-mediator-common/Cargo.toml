@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.15.11"
+version = "0.15.10"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true

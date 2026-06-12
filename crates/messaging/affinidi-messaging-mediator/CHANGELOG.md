@@ -48,7 +48,10 @@
   `MediatorError`; they move together in T18b (with a crate-local config error
   type) rather than dragging the server stack into the schema crate. Behaviour is
   byte-identical; a golden test parses the shipped `conf/mediator.toml` into the
-  relocated `ConfigRaw`. mediator-common bumped to 0.15.11 (additive).
+  relocated `ConfigRaw`. (`DatabaseConfigRaw` — the one raw field type that
+  previously lived in mediator-common — is defined in the config crate itself, so
+  mediator-common is unchanged and the schema crate stays publishable against any
+  0.15.x.)
 
 ### 0.15.39 — Schema-version marker for the Fjall backend (simplification T17, part 2)
 

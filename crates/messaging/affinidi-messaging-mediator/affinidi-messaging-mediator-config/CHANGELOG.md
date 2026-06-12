@@ -26,6 +26,9 @@
   these types and keeps all runtime resolution; the goal is one schema shared
   with the `mediator-setup` wizard.
 - Dependency-light by design: serde + the lean (`default-features = false`) tier
-  of `affinidi-messaging-mediator-common` (for `DatabaseConfigRaw`). No
-  server/runtime dependencies.
+  of `affinidi-messaging-mediator-common` (only for the always-available ACL
+  types used by validation). The raw `DatabaseConfigRaw` is defined in this crate
+  rather than imported from mediator-common's `server`-gated `database` module,
+  so the crate builds and publishes against any 0.15.x without needing that
+  module un-gated. No server/runtime dependencies.
 - A golden test parses the shipped `conf/mediator.toml` into `ConfigRaw`.
