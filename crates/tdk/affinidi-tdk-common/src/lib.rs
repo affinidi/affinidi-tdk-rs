@@ -11,7 +11,7 @@ The crate is organised around four core concepts:
   authentication handlers used by the rest of the stack.
 - **[`TDKSharedState`]** — the runtime container that other Affinidi crates take
   by reference. It bundles the DID resolver, secrets resolver, HTTPS client, and
-  the [`AuthenticationCache`](tasks::authentication::AuthenticationCache).
+  the [`AuthenticationCache`].
   Subsystems are exposed via accessors (e.g. [`TDKSharedState::client`]) rather
   than public fields, so the internal layout can evolve without breaking
   consumers.
@@ -24,6 +24,38 @@ The crate is organised around four core concepts:
 
 Errors are funneled through [`TDKError`]; consumers convert it to their own
 error types via `From<TDKError>` impls.
+
+# API stability & evolution
+
+This crate is consumed widely (re-exported by the `affinidi-tdk` facade and a
+private dependency of several others), so its public surface is treated as a
+stability contract. The boundary:
+
+- **Stable consumer surface** — [`TDKSharedState`] (its accessor methods),
+  [`TDKConfig`] + its builder, [`TDKProfile`], [`TDKEnvironment`] /
+  [`TDKEnvironments`], and [`TDKError`]. Consumers depend on these.
+- **Internal (not API)** — the OS-keyring integration
+  ([`KeyringStore`](secrets::KeyringStore) internals), environment-file IO, the
+  [`AuthenticationCache`] machinery, and HTTP-client construction. These may
+  change without a breaking release.
+
+**How additive evolution stays non-breaking** (so an internal change doesn't
+cascade consumer bumps): the data/config types keep their fields `pub(crate)`
+(or, for `TDKProfile`, a private `secrets` field) and are built via
+constructors/builders — so the layout can grow without breaking external
+construction; subsystems are reached through accessor methods rather than public
+fields; and `TDKError` is `#[non_exhaustive]`. New public types must follow the
+same pattern. See `docs/adr/0003-public-api-semver-policy.md`.
+
+**Swapping a subsystem** (e.g. an alternate secrets store, a remote environment
+source, a mock authenticator for tests): invert *that one* subsystem at the
+boundary — the secrets resolver and DID resolver are already reached through
+traits ([`affinidi_secrets_resolver::SecretsResolver`] and the
+`affinidi_did_resolver_cache_sdk` resolver traits); introduce a trait for the
+keyring/auth piece only when a real second implementation appears. A full
+trait-inversion of [`TDKSharedState`] over all its subsystems was considered and
+deliberately deferred: the abstractions mostly already exist and the concrete
+churn it would isolate is rare, so it isn't worth pre-abstracting.
 */
 
 use std::sync::{Arc, OnceLock};
