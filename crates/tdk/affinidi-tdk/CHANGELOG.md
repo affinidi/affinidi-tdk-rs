@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.8.1] - 2026-06-13
+
+### Added
+
+- Re-export the DID resolver cache SDK as `affinidi_tdk::did_resolver` so the
+  resolver is reachable through the facade (it was the only core dep not
+  re-exported).
+- Facade-first examples (W13): `examples/did_auth.rs` rewritten to import only
+  through `affinidi_tdk::*`; new `examples/resolve_did.rs`. A CI step
+  (`cargo build -p affinidi-tdk --examples`) keeps them compiling.
+
 ## [0.8.0] - 2026-06-13
 
 ### Added

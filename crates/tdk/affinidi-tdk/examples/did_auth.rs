@@ -6,15 +6,17 @@
  *  - `manual-entry`: read raw DID secrets JSON from stdin.
  */
 
-use affinidi_did_authentication::DIDAuthentication;
-use affinidi_did_resolver_cache_sdk::{DIDCacheClient, config::DIDCacheConfigBuilder};
-use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
-use affinidi_tdk_common::{
+// Facade-first: every Affinidi type comes through `affinidi_tdk::*` re-exports,
+// so this example never depends on a sub-crate directly.
+use affinidi_tdk::common::{
     create_http_client,
     environments::TDKEnvironments,
     errors::{Result, TDKError},
     profiles::TDKProfile,
 };
+use affinidi_tdk::did_authentication::DIDAuthentication;
+use affinidi_tdk::did_resolver::{DIDCacheClient, config::DIDCacheConfigBuilder};
+use affinidi_tdk::secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use clap::{Parser, Subcommand};
 use std::{
     env,

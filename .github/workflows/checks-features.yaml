@@ -126,3 +126,8 @@ jobs:
 
       - name: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}
         run: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}
+
+      # The facade examples must stay facade-first and keep compiling.
+      - name: cargo build -p affinidi-tdk --examples
+        if: matrix.combo.short == 'default'
+        run: cargo build -p affinidi-tdk --examples
