@@ -9,6 +9,18 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Changed
+
+- **`affinidi-sd-jwt-vc` merged into `affinidi-vc` (W18b).** SD-JWT VC is a
+  credential format, so it now lives at `affinidi_vc::sd_jwt_vc` (in
+  **`affinidi-vc` 0.2.0**) instead of its own crate. The public surface is
+  unchanged — only the import path moved. **`affinidi-sd-jwt-vc` 0.2.0** is now
+  a deprecated re-export shim kept for one release; direct consumers should
+  switch to `affinidi_vc::sd_jwt_vc` and drop the dependency. **`affinidi-tdk`
+  0.8.2** re-points `affinidi_tdk::sd_jwt_vc` at the new home (no source change
+  for facade users; the `sd-jwt-vc` feature now implies `vc`). See
+  [docs/migration/2026-06-sd-jwt-vc-merge.md](docs/migration/2026-06-sd-jwt-vc-merge.md).
+
 ## 2026-05-05 — Test-mediator ergonomics, routing self-loopback fix, types relocation
 
 ### Breaking

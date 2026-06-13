@@ -13,7 +13,7 @@ W3C Verifiable Credentials Data Model implementation supporting both
 
 ```toml
 [dependencies]
-affinidi-vc = "0.1"
+affinidi-vc = "0.2"
 ```
 
 ## Features
@@ -24,10 +24,12 @@ affinidi-vc = "0.1"
 - Proof-format agnostic (works with Data Integrity, JWT, SD-JWT-VC, COSE)
 - JSON-LD context validation
 - Credential status integration point
+- `sd_jwt_vc` module — SD-JWT VC issuance and verification (merged in from the
+  former `affinidi-sd-jwt-vc` crate)
 
 ## Related Crates
 
-- [`affinidi-sd-jwt-vc`](../affinidi-sd-jwt-vc/) - SD-JWT VC profile
+- [`affinidi-sd-jwt`](../affinidi-sd-jwt/) - Base SD-JWT (RFC 9901), backs `sd_jwt_vc`
 - [`affinidi-data-integrity`](../affinidi-data-integrity/) - W3C Data Integrity proofs
 - [`affinidi-status-list`](../affinidi-status-list/) - Credential status/revocation
 

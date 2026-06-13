@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.8.1"
+version = "0.8.2"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -27,7 +27,9 @@ did-peer = []
 credentials = ["vc", "sd-jwt", "sd-jwt-vc", "mdoc", "status-list", "data-integrity"]
 vc = ["dep:affinidi-vc"]
 sd-jwt = ["dep:affinidi-sd-jwt"]
-sd-jwt-vc = ["dep:affinidi-sd-jwt-vc"]
+# SD-JWT VC merged into affinidi-vc; the module lives at affinidi_vc::sd_jwt_vc,
+# so this feature just pulls in `vc` and the facade re-exports the module.
+sd-jwt-vc = ["vc"]
 mdoc = ["dep:affinidi-mdoc"]
 status-list = ["dep:affinidi-status-list"]
 data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
@@ -68,9 +70,8 @@ affinidi-meeting-place = { version = "0.4", optional = true }
 affinidi-data-integrity = { version = "0.7", optional = true }
 
 # Credentials
-affinidi-vc = { version = "0.1", path = "../../credentials/affinidi-vc", optional = true }
+affinidi-vc = { version = "0.2", path = "../../credentials/affinidi-vc", optional = true }
 affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt", optional = true }
-affinidi-sd-jwt-vc = { version = "0.1", path = "../../credentials/affinidi-sd-jwt-vc", optional = true }
 affinidi-mdoc = { version = "0.2", path = "../../credentials/affinidi-mdoc", optional = true }
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list", optional = true }
 

@@ -2,35 +2,29 @@
 
 [![Crates.io](https://img.shields.io/crates/v/affinidi-sd-jwt-vc.svg)](https://crates.io/crates/affinidi-sd-jwt-vc)
 [![Documentation](https://docs.rs/affinidi-sd-jwt-vc/badge.svg)](https://docs.rs/affinidi-sd-jwt-vc)
-[![Rust](https://img.shields.io/badge/rust-1.90.0%2B-blue.svg?maxAge=3600)](https://github.com/affinidi/affinidi-tdk-rs/tree/main/crates/credentials/affinidi-sd-jwt-vc)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/affinidi/affinidi-tdk-rs/blob/main/LICENSE)
 
-SD-JWT-based Verifiable Credentials per
-[IETF SD-JWT VC](https://datatracker.ietf.org/doc/draft-ietf-oauth-sd-jwt-vc/).
+> **⚠️ DEPRECATED — merged into [`affinidi-vc`](../affinidi-vc/).**
+>
+> SD-JWT VC is a credential format, so it now lives at `affinidi_vc::sd_jwt_vc`
+> (in `affinidi-vc` 0.2+). This crate is a thin re-export kept for one release
+> and will be removed. The public surface is unchanged — only the import path
+> moved.
 
-Layers VC semantics (credential type, issuer metadata, temporal claims) on top of
-the base [SD-JWT (RFC 9901)](https://www.rfc-editor.org/rfc/rfc9901.html) format.
-
-## Installation
+## Migrate
 
 ```toml
 [dependencies]
-affinidi-sd-jwt-vc = "0.1"
+- affinidi-sd-jwt-vc = "0.1"
++ affinidi-vc = "0.2"
 ```
 
-## Features
+```diff
+- use affinidi_sd_jwt_vc::{SdJwtVc, issue, verify_temporal, SdJwtVcError};
++ use affinidi_vc::sd_jwt_vc::{SdJwtVc, issue, verify_temporal, SdJwtVcError};
+```
 
-- `vct` (Verifiable Credential Type) claim enforcement
-- Issuer metadata (`iss`) and temporal claims (`iat`, `exp`, `nbf`)
-- Status integration (`status` claim for revocation/suspension)
-- Key binding via `cnf.jwk` (holder proof of possession)
-- Built on `affinidi-sd-jwt` for selective disclosure
-
-## Related Crates
-
-- [`affinidi-sd-jwt`](../affinidi-sd-jwt/) — Base SD-JWT (RFC 9901)
-- [`affinidi-vc`](../affinidi-vc/) — W3C VC Data Model types
-- [`affinidi-status-list`](../affinidi-status-list/) — Credential status/revocation
+See the [migration note](https://github.com/affinidi/affinidi-tdk-rs/blob/main/docs/migration/2026-06-sd-jwt-vc-merge.md).
 
 ## License
 
