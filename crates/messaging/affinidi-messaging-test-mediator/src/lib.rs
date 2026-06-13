@@ -77,7 +77,9 @@
 
 pub mod acl;
 pub mod environment;
+pub mod topology;
 pub use environment::{TestEnvironment, TestEnvironmentError, TestUser};
+pub use topology::{TestTopology, TestTopologyBuilder, TestTopologyError};
 
 // Re-exports so consumers don't have to add a direct dep on
 // mediator-common just to construct an `acl_mode(...)` argument or

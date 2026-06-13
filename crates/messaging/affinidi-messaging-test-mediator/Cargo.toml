@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-test-mediator"
-version = "0.2.9"
+version = "0.2.10"
 description = "Embedded mediator fixture for integration tests against affinidi-messaging-mediator"
 edition.workspace = true
 authors.workspace = true
@@ -67,6 +67,11 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 ## Used to hash DIDs into their canonical account-store key shape when
 ## pre-registering local DIDs at startup.
 sha256 = "1"
+## `serde_json` + the DIDComm `Message` builder back the `TestTopology`
+## forwarding helper, which constructs the routing-2.0 double forward in
+## library code (the SDK doesn't re-export `Message`).
+serde_json = "1"
+affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm" }
 
 [dev-dependencies]
 ## Used by integration tests to hit the mediator's HTTP endpoints
@@ -83,10 +88,6 @@ futures-util = "0.3"
 ## browser scenario can't go through tokio-tungstenite's client, which
 ## errors when it offers a subprotocol the server doesn't echo back).
 tokio = { workspace = true, features = ["io-util"] }
-serde_json = "1"
-## DIDComm `Message` builder for the cross-mediator forwarding test, which
-## hand-rolls the routing-2.0 double forward (the SDK doesn't re-export it).
-affinidi-messaging-didcomm = { version = "0.15", path = "../affinidi-messaging-didcomm" }
 
 [lints]
 workspace = true

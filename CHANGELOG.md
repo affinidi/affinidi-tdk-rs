@@ -9,6 +9,15 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Added
+
+- **`TestTopology` multi-mediator fixture (TI1).** `affinidi-messaging-test-mediator`
+  0.2.10 adds `TestTopology` — spawns N in-process relay-enabled mediators (Blind
+  or Rewrap), each wired to its own SDK environment, and a `forward(..)` helper
+  that drives the routing-2.0 double forward hop-to-hop. Cross-mediator and
+  relay-REWRAP scenarios become plain `#[tokio::test]`s with no Redis and no
+  external network. Additive (patch).
+
 ### Security
 
 - **OID4VC JWT algorithm allowlist (W5).** `affinidi-oid4vc-core` 0.1.4 adds
