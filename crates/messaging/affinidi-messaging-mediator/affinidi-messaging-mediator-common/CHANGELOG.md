@@ -4,6 +4,13 @@
 
 ## 13th June 2026
 
+### 0.15.12 — Admin audit-log query request (simplification T25, part b)
+
+- Adds the `AuditLogList { cursor, limit }` variant to `MediatorAdminRequest`
+  (wire tag `audit_log_list`) so the audit log recorded in 0.15.11 can be paged
+  back over the admin-management protocol. Additive; a serde wire-contract test
+  guards the tag. Response is the existing `MediatorAuditLogList`.
+
 ### 0.15.11 — Audit-log store API for privileged changes (simplification T25, part a)
 
 - Adds the storage layer for a privileged-change audit log. New

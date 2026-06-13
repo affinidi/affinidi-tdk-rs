@@ -4,6 +4,16 @@
 
 ## 13th June 2026
 
+### 0.15.44 — Admin query for the audit log (simplification T25, part b)
+
+- Completes T25. The administration protocol gains an `audit_log_list` request
+  (admin-only, gated by the same `check_admin_account` check as the rest of the
+  protocol) that pages the privileged-change audit log recorded in 0.15.43,
+  newest-first via cursor — mirroring the existing `admin_list` handler.
+- Read-only; no new storage. Requires mediator-common >= 0.15.12 (the new
+  `MediatorAdminRequest::AuditLogList` variant) and pairs with the SDK's
+  `Mediator::list_audit_log` client method (affinidi-messaging-sdk 0.18.8).
+
 ### 0.15.43 — Record privileged changes to an audit log (simplification T25, part a)
 
 - Every privileged change is now recorded to a bounded, newest-first audit log:
