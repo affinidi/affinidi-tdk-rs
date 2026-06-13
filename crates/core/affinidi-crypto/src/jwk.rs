@@ -9,7 +9,12 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::{CryptoError, KeyType};
 
 /// RFC 7517 JWK Struct
+///
+/// `#[non_exhaustive]`: construct via [`JWK::new`] (or deserialization) rather
+/// than a struct literal, so new fields are not a breaking change. Fields stay
+/// public for reads.
 #[derive(Debug, Serialize, Deserialize, Clone, Zeroize, ZeroizeOnDrop)]
+#[non_exhaustive]
 pub struct JWK {
     #[serde(rename = "kid")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,6 +24,11 @@ pub struct JWK {
 }
 
 impl JWK {
+    /// Construct a JWK from an optional key id and its parameters.
+    pub fn new(key_id: Option<String>, params: Params) -> Self {
+        Self { key_id, params }
+    }
+
     /// Returns the KeyType for a JWK
     pub fn key_type(&self) -> KeyType {
         match &self.params {
@@ -69,19 +79,32 @@ impl JWK {
 /// JWK Key Types and associated Parameters
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Zeroize, ZeroizeOnDrop)]
 #[serde(tag = "kty")]
+#[non_exhaustive]
 pub enum Params {
     EC(ECParams),
     OKP(OctectParams),
 }
 
 /// Elliptic Curve parameters (P-256, P-384, secp256k1)
+///
+/// `#[non_exhaustive]`: construct via [`ECParams::new`] rather than a struct
+/// literal. Fields stay public for reads.
 #[derive(Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
+#[non_exhaustive]
 pub struct ECParams {
     #[serde(rename = "crv")]
     pub curve: String,
     pub x: String,
     pub y: String,
     pub d: Option<String>,
+}
+
+impl ECParams {
+    /// Construct EC parameters (`d` is the private scalar, `None` for a public
+    /// key).
+    pub fn new(curve: String, x: String, y: String, d: Option<String>) -> Self {
+        Self { curve, x, y, d }
+    }
 }
 
 impl std::fmt::Debug for ECParams {
@@ -96,12 +119,24 @@ impl std::fmt::Debug for ECParams {
 }
 
 /// Octet Key Pair parameters (Ed25519, X25519)
+///
+/// `#[non_exhaustive]`: construct via [`OctectParams::new`] rather than a struct
+/// literal. Fields stay public for reads.
 #[derive(Serialize, Deserialize, Clone, Zeroize, PartialEq, ZeroizeOnDrop)]
+#[non_exhaustive]
 pub struct OctectParams {
     #[serde(rename = "crv")]
     pub curve: String,
     pub x: String,
     pub d: Option<String>,
+}
+
+impl OctectParams {
+    /// Construct octet key-pair parameters (`d` is the private key, `None` for
+    /// a public key).
+    pub fn new(curve: String, x: String, d: Option<String>) -> Self {
+        Self { curve, x, d }
+    }
 }
 
 impl std::fmt::Debug for OctectParams {
