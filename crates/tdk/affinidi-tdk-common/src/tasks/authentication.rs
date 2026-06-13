@@ -100,6 +100,11 @@ pub(crate) enum AuthenticationCommand {
         service_endpoint_did: Arc<String>,
         retry_limit: u8,
         timeout: Duration,
+        /// Force a token refresh even when the cached access token is still
+        /// within its validity window (used for proactive refresh ahead of
+        /// expiry). Falls back to a full handshake only if the refresh token
+        /// has itself expired.
+        force_refresh: bool,
         tx: oneshot::Sender<Result<AuthorizationTokens, DIDAuthError>>,
     },
 
@@ -270,6 +275,7 @@ impl AuthenticationCache {
             service_endpoint_did: Arc::new(service_endpoint_did),
             retry_limit,
             timeout,
+            force_refresh: false,
             tx,
         }) {
             Ok(_) => {}
@@ -321,6 +327,68 @@ impl AuthenticationCache {
             None,
         )
         .await
+    }
+
+    /// Force a token refresh for the given pair, regardless of whether the
+    /// cached access token is still within its validity window.
+    ///
+    /// This drives the refresh-token flow (a fresh access token is minted from
+    /// the still-valid refresh token, with the mediator re-checking that the
+    /// DID is still allowed to connect); it falls back to a full handshake only
+    /// if the refresh token has itself expired or there is no cached record.
+    ///
+    /// Used for *proactive* refresh ahead of expiry (e.g. a long-lived
+    /// WebSocket that must reconnect with a fresh token before the server
+    /// closes the socket at token expiry). After this returns, a subsequent
+    /// [`authenticate`](Self::authenticate) returns the freshly cached token.
+    pub async fn refresh(
+        &self,
+        profile_did: String,
+        service_endpoint_did: String,
+    ) -> Result<AuthorizationTokens, DIDAuthError> {
+        let timeout = DEFAULT_AUTH_TIMEOUT;
+        let (tx, rx) = oneshot::channel();
+        match self.tx.try_send(AuthenticationCommand::Authenticate {
+            profile_did: Arc::new(profile_did),
+            service_endpoint_did: Arc::new(service_endpoint_did),
+            retry_limit: DEFAULT_AUTH_RETRIES,
+            timeout,
+            force_refresh: true,
+            tx,
+        }) {
+            Ok(_) => {}
+            Err(TrySendError::Closed(_)) => {
+                warn!("Authentication task channel closed unexpectedly");
+                return Err(DIDAuthError::AuthenticationAbort(
+                    "Authentication Task channel closed unexpectedly".to_string(),
+                ));
+            }
+            Err(TrySendError::Full(_)) => {
+                warn!(
+                    "Authentication task channel full (capacity {})",
+                    COMMAND_CHANNEL_CAPACITY
+                );
+                return Err(DIDAuthError::AuthenticationAbort(
+                    "Authentication Task channel full".to_string(),
+                ));
+            }
+        }
+
+        let sleep = tokio::time::sleep(timeout);
+        tokio::pin!(sleep);
+
+        tokio::select! {
+            value = rx => match value {
+                Ok(tokens) => tokens,
+                Err(_) => Err(DIDAuthError::AuthenticationAbort(
+                    "Authentication Task channel closed unexpectedly".to_string(),
+                )),
+            },
+            _ = &mut sleep => {
+                warn!("Timeout reached during refresh()");
+                Err(DIDAuthError::AuthenticationAbort("Timeout reached".to_string()))
+            }
+        }
     }
 
     /// Send an Invalidate command for the given pair, dropping any cached
@@ -384,12 +452,14 @@ impl AuthenticationCacheInner {
                 tx,
                 retry_limit,
                 timeout,
+                force_refresh,
             }) => {
                 self.handle_authenticate(
                     profile_did,
                     service_endpoint_did,
                     retry_limit,
                     timeout,
+                    force_refresh,
                     tx,
                 )
                 .await;
@@ -422,17 +492,30 @@ impl AuthenticationCacheInner {
         service_endpoint_did: Arc<String>,
         retry_limit: u8,
         timeout: Duration,
+        force_refresh: bool,
         tx: oneshot::Sender<Result<AuthorizationTokens, DIDAuthError>>,
     ) {
         let key = hash(&profile_did, &service_endpoint_did);
         debug!(
             profile = %profile_did,
             service = %service_endpoint_did,
+            force_refresh,
             "authenticating"
         );
 
         let mut auth = if let Some(record) = self.cache.get(&key).await {
-            match refresh_check(&record.tokens) {
+            // `force_refresh` skips the "still valid → return cached" path and
+            // forces a refresh, but still degrades to a full handshake if the
+            // refresh token has itself expired.
+            let check = if force_refresh {
+                match refresh_check(&record.tokens) {
+                    RefreshCheck::Expired => RefreshCheck::Expired,
+                    _ => RefreshCheck::Refresh,
+                }
+            } else {
+                refresh_check(&record.tokens)
+            };
+            match check {
                 RefreshCheck::Ok => {
                     debug!("Cached tokens valid; returning");
                     let _ = tx.send(Ok(record.tokens));

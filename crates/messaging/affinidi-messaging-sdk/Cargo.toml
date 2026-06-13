@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.9"
+version = "0.18.10"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -25,6 +25,8 @@ affinidi-did-authentication = "0.3"
 affinidi-did-common = { version = "0.3", features = ["key-agreement"] }
 affinidi-encoding = "0.1"
 affinidi-secrets-resolver = "0.5"
+## Shared background-task supervision (delete-handler restart + health)
+affinidi-task-utils = "0.1"
 
 # External Crates
 ahash = { version = "0.8", features = ["serde"] }

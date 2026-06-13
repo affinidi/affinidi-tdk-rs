@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.18.10] - 2026-06-13
+
+WS resilience (W16, part 2 of 2).
+
+### Added
+
+- **Proactive WebSocket token refresh.** The mediator force-closes a WebSocket
+  at access-token expiry (it only checks the JWT at upgrade, and has no in-band
+  refresh). The transport now records the token's expiry and, at ~80% of its
+  lifetime, refreshes the token via the refresh-token flow
+  (`AuthenticationCache::refresh`, which has the mediator re-verify the DID is
+  still allowed to connect) and reconnects with the fresh token — *before* the
+  forced close — rather than waiting to be kicked and reconnecting reactively.
+
+### Changed
+
+- **The background deletion handler is now supervised** via the shared
+  `affinidi-task-utils` `TaskSupervisor`: a panic or error is detected and the
+  task restarted with capped backoff (it previously died silently, leaving
+  background deletions unprocessed for the life of the process). Shutdown now
+  flows through a `CancellationToken`. Public method signatures are unchanged.
+
 ## [0.18.9] - 2026-06-13
 
 SDK request-path hardening (W16, part 1 of 2).

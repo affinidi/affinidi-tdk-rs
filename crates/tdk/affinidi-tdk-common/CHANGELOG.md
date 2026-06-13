@@ -6,6 +6,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk-common`.
 
+## 0.6.4 — 2026-06-13
+
+### Added
+
+- `AuthenticationCache::refresh(profile_did, service_endpoint_did)` — forces a
+  token refresh regardless of whether the cached access token is still within
+  its validity window (driving the refresh-token flow, with the mediator
+  re-checking the DID is still allowed to connect), falling back to a full
+  handshake only if the refresh token has itself expired. Enables *proactive*
+  refresh ahead of expiry — e.g. a long-lived WebSocket reconnecting with a
+  fresh token before the mediator force-closes the socket at token expiry
+  (affinidi-messaging-sdk W16). Existing `authenticate()` behaviour is
+  unchanged.
+
 ## 0.6.3 — 2026-06-07
 
 ### Fixed
