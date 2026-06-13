@@ -20,7 +20,7 @@ use affinidi_messaging_sdk::messages::problem_report::{
 use axum::{
     extract::{
         State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
+        ws::{CloseFrame, Message, WebSocket},
     },
     response::{IntoResponse, Response},
 };
@@ -258,6 +258,29 @@ impl Drop for PerDidConnectionGuard {
     }
 }
 
+/// RFC 6455 close codes the mediator uses, so clients learn *why* a socket was
+/// closed instead of seeing a bare close.
+mod close_code {
+    /// Normal closure (graceful end / client-initiated).
+    pub const NORMAL: u16 = 1000;
+    /// Endpoint going away — peer unresponsive or the stream ended.
+    pub const GOING_AWAY: u16 = 1001;
+    /// Policy violation — auth expired, per-DID cap, duplicate displacement.
+    pub const POLICY: u16 = 1008;
+    /// Unexpected server-side condition.
+    pub const SERVER_ERROR: u16 = 1011;
+    /// Transient capacity limit — try again later.
+    pub const TRY_AGAIN_LATER: u16 = 1013;
+}
+
+/// Build a close message carrying an RFC 6455 code + human-readable reason.
+fn close_with(code: u16, reason: &'static str) -> Message {
+    Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }))
+}
+
 /// WebSocket state machine. This is spawned per connection.
 async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Session) {
     let _span = span!(
@@ -271,7 +294,12 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         if current >= state.config.limits.max_websocket_connections {
             state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
             warn!("WebSocket connection limit reached ({}/{})", current, state.config.limits.max_websocket_connections);
-            let _ = socket.send(Message::Close(None)).await;
+            let _ = socket
+                .send(close_with(
+                    close_code::TRY_AGAIN_LATER,
+                    "server connection limit reached",
+                ))
+                .await;
             return;
         }
 
@@ -298,7 +326,12 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                 "Per-DID WebSocket connection limit reached for {} ({}/{})",
                 session.did_hash, per_did_count, per_did_cap
             );
-            let _ = socket.send(Message::Close(None)).await;
+            let _ = socket
+                .send(close_with(
+                    close_code::POLICY,
+                    "per-DID connection limit reached",
+                ))
+                .await;
             return;
         }
 
@@ -337,6 +370,12 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         let epoch = unix_timestamp_secs();
         if session.expires_at <= epoch {
             warn!("JWT access token has expired. Closing Session");
+            let _ = socket
+                .send(close_with(
+                    close_code::POLICY,
+                    "authentication token expired",
+                ))
+                .await;
             return;
         }
         let auth_timeout = tokio::time::sleep(Duration::from_secs(session.expires_at - epoch));
@@ -352,10 +391,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         // due to duplicate channels. If we were to deregister on close in this scenario, we would
         // also deregister the new channel that is still in use.
         let mut already_deregistered_flag = false;
+        // Why this socket ends up closing — surfaced in the final close frame.
+        let mut close_reason: (u16, &'static str) = (close_code::NORMAL, "normal closure");
         loop {
             select! {
                 _ = &mut auth_timeout => {
                     debug!("Auth Timeout reached");
+                    close_reason = (close_code::POLICY, "authentication token expired");
                     break;
                 }
                 value = socket.recv() => {
@@ -438,12 +480,14 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                         }
                     } _ => {
                         debug!("Received None, closing connection");
+                        close_reason = (close_code::GOING_AWAY, "client disconnected");
                         break;
                     }}
                 }
                 _ = ping_interval.tick() => {
                     if let Err(e) = socket.send(Message::Ping(vec![].into())).await {
                         debug!("Failed to send WebSocket ping: {e}");
+                        close_reason = (close_code::GOING_AWAY, "connection unresponsive");
                         break;
                     }
                 }
@@ -465,11 +509,13 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
                                 }
                                 debug!("Streaming task requested close (duplicate connection)");
                                 already_deregistered_flag = true;
+                                close_reason = (close_code::POLICY, "replaced by a newer connection");
                                 break;
                             }
                         }
                     } else {
                         debug!("Received None from streaming task, closing connection");
+                        close_reason = (close_code::SERVER_ERROR, "streaming task unavailable");
                         break;
                     }
                 }
@@ -490,8 +536,11 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         state.active_websocket_count.fetch_sub(1, Ordering::Relaxed);
         metrics::gauge!(ACTIVE_WEBSOCKET_CONNECTIONS).decrement(1.0);
 
-        // We're done, close the connection
-        if let Err(e) = socket.send(Message::Close(None)).await {
+        // We're done, close the connection with the reason that ended the loop.
+        if let Err(e) = socket
+            .send(close_with(close_reason.0, close_reason.1))
+            .await
+        {
             debug!("Failed to send WebSocket close frame: {e}");
         }
         let _ = state

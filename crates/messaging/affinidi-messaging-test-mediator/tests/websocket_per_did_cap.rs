@@ -89,7 +89,25 @@ async fn second_connection_for_one_did_over_the_cap_is_closed() {
         .await
         .expect("the over-cap connection should be closed promptly, not hang");
     match frame {
-        Some(Ok(Message::Close(_))) | None => { /* rejected as expected */ }
+        Some(Ok(Message::Close(Some(cf)))) => {
+            // T26: the close must carry an RFC 6455 code + reason, not a bare
+            // close. Over-cap is a policy rejection → 1008.
+            assert_eq!(
+                u16::from(cf.code),
+                1008,
+                "over-cap close should carry the policy code 1008, got {:?}",
+                cf.code
+            );
+            assert!(
+                format!("{}", cf.reason).contains("per-DID"),
+                "close reason should name the per-DID cap, got: {}",
+                cf.reason
+            );
+        }
+        Some(Ok(Message::Close(None))) => {
+            panic!("expected a Close frame WITH a code+reason, got a bare close")
+        }
+        None => { /* connection dropped without a frame is also acceptable */ }
         other => panic!("expected a Close frame on the over-cap connection, got: {other:?}"),
     }
 

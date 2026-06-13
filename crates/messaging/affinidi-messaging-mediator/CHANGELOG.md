@@ -4,6 +4,27 @@
 
 ## 13th June 2026
 
+### 0.15.45 — Request/response hygiene: access logs, Retry-After, WS close reasons (simplification T26)
+
+- Closes Phase 6. Three day-2 improvements to HTTP/WebSocket request handling:
+- **Request metrics + structured access log.** A new innermost middleware
+  (`common::request_metrics::track_request`) emits the previously-named-but-dead
+  `http_requests_total`, `http_requests_in_flight`, and
+  `http_request_duration_seconds` metrics, plus one structured `tracing` line per
+  request (request id, method, route, status, latency). The metric `route` label
+  is the axum `MatchedPath` route *template* (not the raw URI) to keep Prometheus
+  cardinality bounded; unrouted requests bucket under `unmatched`.
+- **Retry-After on 429.** The per-IP rate limiter now sets an accurate
+  `Retry-After` header on its `429 Too Many Requests` responses, derived from
+  governor's report of when the next token frees up (rounded up to whole seconds).
+- **WebSocket close reasons.** Every server-initiated close now carries an RFC
+  6455 close code + human-readable reason instead of a bare close: `1013` for the
+  global connection limit, `1008` for the per-DID cap / expired auth token /
+  duplicate-connection displacement, `1001` for an unresponsive or vanished peer,
+  `1011` for an internal streaming fault, `1000` for a normal close.
+- No new dependencies; no public API change. The per-DID-cap WebSocket
+  conformance test now asserts the close code (1008) and reason.
+
 ### 0.15.44 — Admin query for the audit log (simplification T25, part b)
 
 - Completes T25. The administration protocol gains an `audit_log_list` request

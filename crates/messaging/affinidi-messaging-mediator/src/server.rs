@@ -596,6 +596,12 @@ pub async fn serve_internal(
 
     let app = Router::new()
         .merge(app)
+        // Innermost layer: runs inside routing (so `MatchedPath` is set) and
+        // after the request-id layer has stamped the id. Emits the
+        // `http_requests_*` metrics + a structured access-log line per request.
+        .layer(axum::middleware::from_fn(
+            crate::common::request_metrics::track_request,
+        ))
         .layer(config.security.cors_allow_origin.clone())
         .layer(
             TraceLayer::new_for_http()
