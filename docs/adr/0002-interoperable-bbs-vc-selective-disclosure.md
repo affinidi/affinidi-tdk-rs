@@ -248,3 +248,22 @@ ADR 0001).
 - **Big-bang single PR.** Rejected for the same reason as ADR 0001:
   unreviewable and unsafe for wire-affecting crypto. The KAT-gated stages
   are the safe path.
+
+## Discharges the workspace-hardening "BBS signing KATs" item (W19)
+
+The workspace-hardening plan carried a task (W19) to add external-vector KATs
+for the BBS **signing** path, noting it had "only round-trip tests." That gap is
+**closed by the KAT-gated work above** — the signing surface now has exact-match
+IETF/DIF vector coverage end to end, so no separate W19 work is warranted:
+
+- **Base sign** — `affinidi-bbs/tests/interop_kat.rs` reproduces the DIF
+  `bls12-381-sha-256` signature vectors byte-for-byte and verifies them
+  (`signature001`, `signature004`), plus proof-verify KATs.
+- **Blind sign** — `affinidi-bbs/src/blind.rs` against the
+  `draft-irtf-cfrg-bbs-blind-signatures` vectors (`tests/fixtures/blind/`), with
+  deterministic mocked scalars for exact reproduction.
+- **Pseudonym / holder binding** — `affinidi-bbs/src/nym.rs` against the
+  `draft-irtf-cfrg-bbs-per-verifier-linkability` vectors (`tests/fixtures/pseudonym/`).
+
+(Audited 2026-06-13: every shipped fixture is wired to a test; the full
+`affinidi-bbs` suite is green.) W19 is therefore considered satisfied.

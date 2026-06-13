@@ -16,18 +16,18 @@
  * [`KeyProof::verify`].
  *
  * ```no_run
- * # use affinidi_openid4vci::proof::{KeyProof, ProofPolicy};
+ * # use affinidi_openid4vci::proof::{KeyProof, ProofPolicy, DEFAULT_PROOF_ALGS};
  * # use affinidi_oid4vc_core::jwt::JwtVerifier;
  * # fn resolve(_kid: Option<&str>) -> Box<dyn JwtVerifier> { unimplemented!() }
  * # fn demo(jwt: &str, issuer_id: &str, c_nonce: &str, now: i64) -> Result<(), Box<dyn std::error::Error>> {
  * let proof = KeyProof::parse(jwt)?;                 // structural decode, no crypto
  * let verifier = resolve(proof.kid());               // caller resolves kid -> key
- * let claims = proof.verify(&*verifier, &ProofPolicy {
+ * let claims = proof.verify(&*verifier, DEFAULT_PROOF_ALGS, &ProofPolicy {
  *     audience: issuer_id,
  *     nonce: Some(c_nonce),                          // bind to the issued c_nonce
  *     now,
  *     max_age_secs: 300,
- * })?;                                               // sig + aud + nonce + freshness
+ * })?;                                               // alg + sig + aud + nonce + freshness
  * // `proof.kid()` is now a cryptographically-proven holder identifier.
  * # let _ = claims; Ok(())
  * # }
@@ -44,6 +44,14 @@ use crate::error::{Oid4vciError, Result};
 /// The required `typ` header value of an OpenID4VCI key-binding proof JWT
 /// (OpenID4VCI §8.2.1.1).
 pub const KEY_PROOF_TYP: &str = "openid4vci-proof+jwt";
+
+/// A sensible default algorithm allowlist for key-binding proofs: the
+/// asymmetric JWS algorithms this workspace ships verifiers for
+/// (`affinidi-oid4vc-core`'s `es256` / `eddsa`). Pass this to
+/// [`KeyProof::verify`] / [`verify_signature`](KeyProof::verify_signature)
+/// unless your issuer advertises a different set. Symmetric algorithms (HS\*)
+/// and `none` are intentionally excluded — a key-binding proof is asymmetric.
+pub const DEFAULT_PROOF_ALGS: &[&str] = &["ES256", "EdDSA"];
 
 /// Default tolerance, in seconds, for a proof `iat` slightly ahead of the
 /// verifier's clock (wallet clock drift).
@@ -180,7 +188,14 @@ impl KeyProof {
         &self.claims
     }
 
-    /// Verify the proof's signature with a caller-resolved verifier.
+    /// Verify the proof's signature with a caller-resolved verifier, enforcing
+    /// an algorithm allowlist.
+    ///
+    /// `allowed_algs` is the set of JWS `alg` values this issuer accepts for
+    /// key-binding proofs (e.g. `&["ES256", "EdDSA"]`). The proof's `alg` is
+    /// checked against it **before** the signature, so a token presenting an
+    /// unexpected algorithm is rejected outright. `alg=none` and empty
+    /// signatures are always rejected regardless.
     ///
     /// **Caller contract (load-bearing):** the `verifier` MUST wrap the key
     /// named by this proof's own [`kid`](Self::kid) / [`jwk`](Self::jwk) —
@@ -188,10 +203,13 @@ impl KeyProof {
     /// algorithm matches [`algorithm`](Self::algorithm). Resolving a verifier
     /// from anywhere else, or picking one by `alg` rather than by key, defeats
     /// the proof: this crate is crypto-agnostic by design and cannot police the
-    /// key↔proof binding for you. (`alg=none` and empty signatures are still
-    /// rejected here regardless.)
-    pub fn verify_signature(&self, verifier: &dyn JwtVerifier) -> Result<()> {
-        jwt::decode_compact_jws_verified(&self.jwt, verifier)
+    /// key↔proof binding for you.
+    pub fn verify_signature(
+        &self,
+        verifier: &dyn JwtVerifier,
+        allowed_algs: &[&str],
+    ) -> Result<()> {
+        jwt::decode_compact_jws_verified_with_algs(&self.jwt, verifier, allowed_algs)
             .map(|_| ())
             .map_err(jwt_err)
     }
@@ -234,14 +252,15 @@ impl KeyProof {
 
     /// Verify the signature **and** the bound claims, returning the proven
     /// claims. The convenience composition of [`verify_signature`](Self::verify_signature)
-    /// then [`verify_claims`](Self::verify_claims) — see those for the caller
-    /// contract and the checks performed.
+    /// (with the `allowed_algs` allowlist) then [`verify_claims`](Self::verify_claims)
+    /// — see those for the caller contract and the checks performed.
     pub fn verify(
         &self,
         verifier: &dyn JwtVerifier,
+        allowed_algs: &[&str],
         policy: &ProofPolicy<'_>,
     ) -> Result<&KeyProofClaims> {
-        self.verify_signature(verifier)?;
+        self.verify_signature(verifier, allowed_algs)?;
         self.verify_claims(policy)?;
         Ok(&self.claims)
     }
@@ -338,6 +357,7 @@ mod tests {
         let claims = proof
             .verify(
                 &v,
+                DEFAULT_PROOF_ALGS,
                 &ProofPolicy {
                     audience: ISSUER,
                     nonce: Some("c-nonce-1"),
@@ -356,12 +376,33 @@ mod tests {
         let jwt = build_key_proof_jwt(&s, ISSUER, None, NOW).unwrap();
         let proof = KeyProof::parse(&jwt).unwrap();
         let err = proof
-            .verify(&v, &policy("https://other.example", NOW))
+            .verify(
+                &v,
+                DEFAULT_PROOF_ALGS,
+                &policy("https://other.example", NOW),
+            )
             .unwrap_err();
         assert!(
             matches!(&err, Oid4vciError::InvalidProof(m) if m.contains("aud")),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn verify_signature_rejects_disallowed_alg() {
+        // A correctly-signed EdDSA proof is rejected when the issuer only
+        // allows ES256 — the alg allowlist fires before signature checking.
+        let s = signer(21, "did:key:zH#0");
+        let v = EdDsaVerifier::from_bytes(&s.public_key_bytes()).unwrap();
+        let jwt = build_key_proof_jwt(&s, ISSUER, None, NOW).unwrap();
+        let proof = KeyProof::parse(&jwt).unwrap();
+
+        assert!(
+            proof.verify_signature(&v, &["ES256"]).is_err(),
+            "EdDSA proof must be rejected when only ES256 is allowed"
+        );
+        // Allowed once EdDSA is in the set (and DEFAULT_PROOF_ALGS includes it).
+        assert!(proof.verify_signature(&v, DEFAULT_PROOF_ALGS).is_ok());
     }
 
     #[test]
@@ -413,7 +454,7 @@ mod tests {
         let v = EdDsaVerifier::from_bytes(&other.public_key_bytes()).unwrap();
         let jwt = build_key_proof_jwt(&s, ISSUER, None, NOW).unwrap();
         let proof = KeyProof::parse(&jwt).unwrap();
-        assert!(proof.verify_signature(&v).is_err());
+        assert!(proof.verify_signature(&v, DEFAULT_PROOF_ALGS).is_err());
     }
 
     #[test]

@@ -128,12 +128,57 @@ pub fn decode_compact_jws_unverified(jws: &str) -> Result<(Value, Value), JwtErr
     Ok((header, payload))
 }
 
+/// Decode and verify a compact JWS, enforcing a per-context **algorithm
+/// allowlist**.
+///
+/// The header `alg` must be one of `allowed_algs` (exact, case-sensitive match
+/// against the JWA registered name, e.g. `"ES256"`, `"EdDSA"`). This is checked
+/// **before** the signature, so a token presenting an algorithm the caller
+/// doesn't expect is rejected outright — closing the class of algorithm-
+/// substitution attacks where an attacker swaps the `alg` header to one the
+/// verifier mishandles. `alg=none`, a missing `alg`, and an empty signature are
+/// always rejected regardless of the list.
+///
+/// Pass the set the relying party actually accepts for this context (e.g. the
+/// `request_object_signing_alg_values_supported` you advertised). An empty list
+/// rejects every token.
+///
+/// Returns the header and payload if the algorithm is allowed and the signature
+/// is valid.
+pub fn decode_compact_jws_verified_with_algs(
+    jws: &str,
+    verifier: &dyn JwtVerifier,
+    allowed_algs: &[&str],
+) -> Result<(Value, Value), JwtError> {
+    decode_compact_jws_checked(jws, verifier, Some(allowed_algs))
+}
+
 /// Decode and verify a compact JWS string.
 ///
 /// Returns the header and payload if the signature is valid.
+///
+/// **Deprecated:** this entry point accepts any algorithm except `none`, which
+/// leaves the caller open to algorithm-substitution. Prefer
+/// [`decode_compact_jws_verified_with_algs`], which enforces a per-context
+/// allowlist before verifying the signature.
+#[deprecated(
+    since = "0.1.4",
+    note = "use decode_compact_jws_verified_with_algs to enforce a per-context algorithm allowlist; this entry point accepts any alg except `none`"
+)]
 pub fn decode_compact_jws_verified(
     jws: &str,
     verifier: &dyn JwtVerifier,
+) -> Result<(Value, Value), JwtError> {
+    decode_compact_jws_checked(jws, verifier, None)
+}
+
+/// Shared decode-and-verify core. `allowed_algs == None` accepts any algorithm
+/// except `none` (the legacy behaviour); `Some(list)` enforces the allowlist
+/// before signature verification.
+fn decode_compact_jws_checked(
+    jws: &str,
+    verifier: &dyn JwtVerifier,
+    allowed_algs: Option<&[&str]>,
 ) -> Result<(Value, Value), JwtError> {
     let parts: Vec<&str> = jws.splitn(3, '.').collect();
     if parts.len() != 3 {
@@ -150,15 +195,26 @@ pub fn decode_compact_jws_verified(
     // RFC 7515/7519: an Unsecured JWS (`alg: none`, empty signature) must
     // never satisfy a verified decode. Don't rely on every JwtVerifier impl
     // happening to reject a zero-length signature.
-    match header.get("alg").and_then(Value::as_str) {
+    let alg = match header.get("alg").and_then(Value::as_str) {
         Some(alg) if alg.eq_ignore_ascii_case("none") => {
             return Err(JwtError::Verification("alg=none is not permitted".into()));
         }
-        Some(_) => {}
+        Some(alg) => alg,
         None => {
             return Err(JwtError::Verification("missing alg in JWS header".into()));
         }
+    };
+
+    // Per-context allowlist: reject a disallowed `alg` before touching the
+    // signature, so the attacker-controlled header can't steer verification.
+    if let Some(allowed) = allowed_algs
+        && !allowed.contains(&alg)
+    {
+        return Err(JwtError::Verification(format!(
+            "JWS alg \"{alg}\" is not in the allowed set {allowed:?}"
+        )));
     }
+
     if parts[2].is_empty() {
         return Err(JwtError::Verification("empty JWS signature".into()));
     }
@@ -288,7 +344,7 @@ mod tests {
         assert_eq!(jws.split('.').count(), 3);
 
         let (decoded_header, decoded_payload) =
-            decode_compact_jws_verified(&jws, &verifier).unwrap();
+            decode_compact_jws_verified_with_algs(&jws, &verifier, &["HS256"]).unwrap();
         assert_eq!(decoded_header["alg"], "HS256");
         assert_eq!(decoded_payload["sub"], "user123");
     }
@@ -310,7 +366,41 @@ mod tests {
 
         let jws = encode_compact_jws(&json!({"alg": "HS256"}), &json!({"x": 1}), &signer).unwrap();
 
-        assert!(decode_compact_jws_verified(&jws, &wrong_verifier).is_err());
+        assert!(decode_compact_jws_verified_with_algs(&jws, &wrong_verifier, &["HS256"]).is_err());
+    }
+
+    #[test]
+    fn rejects_disallowed_alg() {
+        // A correctly-signed HS256 token is still rejected when the caller only
+        // allows ES256 — and rejected before the signature is checked, so even
+        // the matching verifier can't rescue it.
+        let signer = HmacTestSigner::new(b"shared-key-for-alg-allowlist!!!");
+        let verifier = HmacTestVerifier::new(b"shared-key-for-alg-allowlist!!!");
+
+        let jws = encode_compact_jws(&json!({"alg": "HS256"}), &json!({"x": 1}), &signer).unwrap();
+
+        let err = decode_compact_jws_verified_with_algs(&jws, &verifier, &["ES256"]).unwrap_err();
+        assert!(
+            matches!(&err, JwtError::Verification(m) if m.contains("not in the allowed set")),
+            "got {err:?}"
+        );
+
+        // The same token passes once HS256 is allowed.
+        assert!(
+            decode_compact_jws_verified_with_algs(&jws, &verifier, &["ES256", "HS256"]).is_ok()
+        );
+
+        // An empty allowlist rejects everything.
+        assert!(decode_compact_jws_verified_with_algs(&jws, &verifier, &[]).is_err());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn deprecated_decode_still_accepts_any_alg() {
+        let signer = HmacTestSigner::new(b"legacy-path-key-still-supported");
+        let verifier = HmacTestVerifier::new(b"legacy-path-key-still-supported");
+        let jws = encode_compact_jws(&json!({"alg": "HS256"}), &json!({"x": 1}), &signer).unwrap();
+        assert!(decode_compact_jws_verified(&jws, &verifier).is_ok());
     }
 
     #[test]
@@ -319,7 +409,7 @@ mod tests {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#);
         let payload = URL_SAFE_NO_PAD.encode(br#"{"sub":"x"}"#);
         let jws = format!("{header}.{payload}.");
-        let err = decode_compact_jws_verified(&jws, &verifier).unwrap_err();
+        let err = decode_compact_jws_verified_with_algs(&jws, &verifier, &["HS256"]).unwrap_err();
         assert!(matches!(err, JwtError::Verification(_)), "got {err:?}");
     }
 
