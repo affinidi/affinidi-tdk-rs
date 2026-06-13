@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.5.0"
+version = "0.6.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -43,6 +43,11 @@ affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt" 
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
 ## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs.
 affinidi-crypto = { version = "0.2", path = "../../core/affinidi-crypto" }
+
+# ── TI4a: seeded did:peer generation (determinism module) ─────────────────
+## Seeded `Secret` constructors (generate_ed25519(.., Some(seed)) etc.) +
+## KeyType; did-common's generate_peer / PeerCreateKey assemble the did:peer.
+affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secrets-resolver" }
 ## EdDSA signer/verifier backing the scenario's JWS signing (the workspace
 ## sd-jwt crate ships only an HMAC test signer).
 ed25519-dalek = { version = "2" }

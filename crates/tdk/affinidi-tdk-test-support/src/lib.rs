@@ -20,13 +20,15 @@
  * - **TI1** — `topology`: multi-mediator `TestTopology` (in-process, no Redis).
  * - **TI2** — [`did_web`] / [`resolver`]: in-process did:web / did:webvh mock
  *   server with fault injection, plus an injectable `StaticResolver`. ✅
- * - **TI4** — `determinism`: seeded did:peer generation and an injectable clock.
+ * - **TI4** — [`determinism`]: seeded did:peer generation (TI4a ✅); an
+ *   injectable clock follows in TI4b.
  * - **TI5** — [`credential_scenario`]: issuer/holder/verifier `CredentialScenario`
  *   for SD-JWT VC (TI5a) plus the [`mdoc_scenario`] and [`oid4vp`] flows (TI5b). ✅
  * - **TI7** — [`vectors`]: shared `tests/vectors/` layout and loader. ✅
  */
 
 pub mod credential_scenario;
+pub mod determinism;
 pub mod did_web;
 pub mod mdoc_scenario;
 pub mod oid4vp;

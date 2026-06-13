@@ -26,7 +26,8 @@ Fixtures land per task in the TI-series (see `tasks/testing-todo.md`):
 |-------|-----------------------|---------------------------------------------------------------|:------:|
 | TI1   | `topology`            | Multi-mediator `TestTopology` (in-process, no Redis)          |  ⏳   |
 | TI2   | `did_web` / `resolver`| did:web / did:webvh mock server + injectable `StaticResolver` |  ✅   |
-| TI4   | `determinism`         | Seeded did:peer generation + injectable clock                 |  ⏳   |
+| TI4a  | `determinism`         | Seeded `did:peer` generation (reproducible identities)        |  ✅   |
+| TI4b  | `determinism`         | Injectable clock (`Clock` trait through mediator + SDK)        |  ⏳   |
 | TI5a  | `credential_scenario` | `CredentialScenario` SD-JWT VC issue / present / verify        |  ✅   |
 | TI5b  | `mdoc_scenario` / `oid4vp` | mdoc (COSE) flows + OID4VP present / verify (both eIDAS formats) |  ✅   |
 | TI7   | `vectors`             | Shared `tests/vectors/` layout + loader                       |  ✅   |
