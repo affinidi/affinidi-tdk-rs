@@ -1,0 +1,40 @@
+name: release-guards
+# Cheap, build-free PR guards that protect the release pipeline:
+#
+#   1. toolchain-sync  — every `toolchain:` pin in .github/workflows/* and the
+#      Cargo.toml MSRV must match rust-toolchain.toml's channel. Kills the
+#      multi-file edit trap where a toolchain bump misses a workflow.
+#
+#   2. version-bump    — any publishable crate whose source changed in this PR
+#      must also bump its Cargo.toml version. Stops the 2026-06-13 trap where an
+#      edited-but-unbumped crate left stale source on crates.io that broke the
+#      registry-resolved publish verify build downstream.
+#
+# Deliberately standalone and outside the shared affinidi/pipeline-rust workflow
+# (those are org-owned). Pure bash + git + jq + `cargo metadata`; no Rust build.
+# It carries NO hardcoded `toolchain:` pin of its own — the toolchain is taken
+# from rust-toolchain.toml via rustup auto-install, so this workflow adds nothing
+# new for the toolchain-sync check to police.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+
+jobs:
+  guards:
+    name: release guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the version-bump guard can diff against, and read
+          # manifests from, the PR's base commit.
+          fetch-depth: 0
+
+      - name: Toolchain version sync
+        run: bash scripts/check-toolchain-sync.sh
+
+      - name: Version-bump guard for changed publishable crates
+        run: bash scripts/check-version-bumps.sh "${{ github.event.pull_request.base.sha }}"
