@@ -1,5 +1,14 @@
 # Affinidi Crypto Changelog
 
+## 13th June 2026 (0.2.2)
+
+Semver wave (W7/W8 — release W11). `CryptoError` and `Params` are now
+`#[non_exhaustive]`, and `JWK` / `ECParams` / `OctectParams` / `KeyPair` are
+`#[non_exhaustive]` with `new(..)` constructors (fields stay public for reads).
+Patch bump (not minor) so the `[patch.crates-io]` redirect keeps resolving for
+external consumers — see [ADR 0003](../../../docs/adr/0003-public-api-semver-policy.md)
+and [the migration guide](../../../docs/migration/2026-06-semver-wave.md).
+
 ## 13th June 2026 (0.2.1)
 
 RNG hygiene (W4): the PQC key generators (ML-DSA, SLH-DSA) now seed a CSPRNG

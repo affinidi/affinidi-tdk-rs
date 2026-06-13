@@ -4,6 +4,14 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.2] - 2026-06-13
+
+### Changed
+
+- `DIDCommError` is now `#[non_exhaustive]` (semver wave W7, released W11). Match
+  with a wildcard arm. Patch bump preserves the `vta-sdk` `[patch.crates-io]`
+  coupling — see ADR 0003 and `docs/migration/2026-06-semver-wave.md`.
+
 ## [0.15.1] - 2026-06-06
 
 ### Added

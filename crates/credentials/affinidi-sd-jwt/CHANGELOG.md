@@ -1,5 +1,12 @@
 # Affinidi SD-JWT Changelog
 
+## 13th June 2026 Release 0.1.4
+
+Semver wave (W7/W10 — release W11). `SdJwtError` and `SdJwt` are now
+`#[non_exhaustive]`; `SdJwt::new(jws, disclosures, kb_jwt)` is the construction
+path (fields stay public for reads). Patch bump — see ADR 0003 and the migration
+guide.
+
 ## 13th June 2026 Release 0.1.3
 
 ### Security
