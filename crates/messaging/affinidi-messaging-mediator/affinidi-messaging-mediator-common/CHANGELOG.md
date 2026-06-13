@@ -2,6 +2,24 @@
 
 ## Changelog history
 
+## 13th June 2026
+
+### 0.15.11 — Audit-log store API for privileged changes (simplification T25, part a)
+
+- Adds the storage layer for a privileged-change audit log. New
+  `types::audit` module: `AuditLogEntry` (timestamp, actor/target DID hash,
+  `AuditAction`, detail), `AuditAction` (set-acl, access-list add/remove/clear,
+  account add/remove/change-type/change-queue-limits, admin add/strip),
+  `MediatorAuditLogList` (cursor-paginated page), and `AUDIT_LOG_MAX_ENTRIES`
+  (10,000 — the log is a bounded ring).
+- New `MediatorStore` trait methods `audit_log_record` (append + trim) and
+  `audit_log_list` (newest-first, cursor-paginated). Implemented for the Redis
+  backend here as a capped `LPUSH`/`LTRIM` list with `LRANGE` paging.
+- Additive only — no behaviour change to existing methods. The mediator's
+  Fjall/Memory backends implement the same trait methods, and recording is
+  wired into the admin/ACL handlers, in the mediator crate. Reading the log
+  back over the admin protocol is a later increment (T25b).
+
 ## 12th June 2026
 
 ### 0.15.10 — Consolidate the access-list method family (simplification T16, part 3)

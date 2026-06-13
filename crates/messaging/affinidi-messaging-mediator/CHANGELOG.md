@@ -4,6 +4,26 @@
 
 ## 13th June 2026
 
+### 0.15.43 — Record privileged changes to an audit log (simplification T25, part a)
+
+- Every privileged change is now recorded to a bounded, newest-first audit log:
+  ACL set, access-list add/remove/clear, account add/remove/change-type/
+  change-queue-limits, and admin promote/strip. Each entry captures *who*
+  (`actor_did_hash`), *what* (action + short detail), *to whom*
+  (`target_did_hash`), and *when* (timestamp).
+- Recording is wired into the ACL, account-management, and administration
+  DIDComm handlers via a shared `record_audit` helper, fired only after the
+  underlying change succeeds. It is best-effort: a failure to record logs a
+  warning but never turns a successful admin action into an error.
+- The Fjall and Memory backends gain the `audit_log_record` / `audit_log_list`
+  store methods (Fjall: a dedicated `audit_log` partition, insertion-ordered
+  with an oldest-first trim; Memory: a capped `VecDeque`). The Redis
+  implementation ships in mediator-common 0.15.11.
+- Conformance suite extended (eleven areas now): a new `audit_log_lifecycle`
+  check exercises record, newest-first ordering, and cursor pagination across
+  Memory, Fjall, and Redis. Querying the log back over the admin protocol is the
+  next increment (T25b). Requires mediator-common >= 0.15.11.
+
 ### 0.15.42 — Activate dead metrics + add VTA health metrics (simplification T24)
 
 - Observability depth. The metrics registry defined many metric names that were

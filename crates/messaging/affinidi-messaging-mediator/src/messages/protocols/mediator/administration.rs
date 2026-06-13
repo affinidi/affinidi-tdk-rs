@@ -4,6 +4,7 @@ use crate::common::authz;
 use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -149,17 +150,30 @@ pub(crate) async fn process(
                 }
             }
             MediatorAdminRequest::AdminAdd(attr) => {
+                let targets = attr.clone();
                 match state
                     .database
                     .add_admin_accounts(attr, &state.config.security.global_acl_default)
                     .await
                 {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        for target in &targets {
+                            super::record_audit(
+                                state,
+                                session,
+                                target,
+                                AuditAction::AdminAdd,
+                                "promoted to admin".to_string(),
+                            )
+                            .await;
+                        }
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error adding admin accounts. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -209,13 +223,26 @@ pub(crate) async fn process(
                         StatusCode::BAD_REQUEST,
                     ));
                 }
+                let targets = attr.clone();
                 match state.database.strip_admin_accounts(attr).await {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        for target in &targets {
+                            super::record_audit(
+                                state,
+                                session,
+                                target,
+                                AuditAction::AdminStrip,
+                                "admin status stripped".to_string(),
+                            )
+                            .await;
+                        }
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error removing admin accounts. Reason: {}", e);
                         Err(MediatorError::problem_with_log(

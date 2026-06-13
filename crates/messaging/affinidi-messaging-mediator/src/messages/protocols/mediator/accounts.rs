@@ -7,6 +7,7 @@ use super::acls::check_permissions;
 use crate::{SharedData, common::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -222,12 +223,22 @@ pub(crate) async fn process(
                     .account_add(&did_hash, &acls, None)
                     .await
                 {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccountAdd,
+                            "account created".to_string(),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error adding account. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -299,12 +310,22 @@ pub(crate) async fn process(
                     .account_remove(&session.to_store_session(), &did_hash)
                     .await
                 {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccountRemove,
+                            "account removed".to_string(),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error removing account. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -389,6 +410,14 @@ pub(crate) async fn process(
                         // Need to add admin rights
                         state.database.setup_admin_account(&did_hash, _type, &MediatorACLSet::from_u64(current.acls)).await?;
                         info!("Added admin ({}) rights to DID: {}", _type, did_hash);
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccountChangeType,
+                            format!("type -> {_type}"),
+                        )
+                        .await;
                         return _generate_response_message(
                             &msg.id,
                             &session.did,
@@ -408,6 +437,14 @@ pub(crate) async fn process(
                             "Unknown".to_string()
                         };
                         info!("Changed account type for DID: ({}) from ({}) to ({})", did_hash, current_type, _type);
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccountChangeType,
+                            format!("type {current_type} -> {_type}"),
+                        )
+                        .await;
                         _generate_response_message(
                         &msg.id,
                         &session.did,
@@ -492,6 +529,14 @@ pub(crate) async fn process(
                 match state.database.account_change_queue_limits(&did_hash, send_queue_limit, receive_queue_limit).await {
                     Ok(_) => {
                         info!("Changed account queue_limits for DID: ({}) to send({:?}) receive({:?})", did_hash, send_queue_limit, receive_queue_limit);
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccountChangeQueueLimits,
+                            format!("send={send_queue_limit:?} receive={receive_queue_limit:?}"),
+                        )
+                        .await;
                         _generate_response_message(
                         &msg.id,
                         &session.did,

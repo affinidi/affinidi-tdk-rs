@@ -25,6 +25,7 @@ use crate::types::{
         MediatorAccessListListResponse,
     },
     administration::MediatorAdminList,
+    audit::{AuditLogEntry, MediatorAuditLogList},
     messages::{FetchOptions, Folder, GetMessagesResponse, MessageList, MessageListElement},
 };
 use crate::{
@@ -747,6 +748,18 @@ impl MediatorStore for RedisStore {
         limit: u32,
     ) -> Result<MediatorAdminList, MediatorError> {
         self.list_admin_accounts(cursor, limit).await
+    }
+
+    async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {
+        self.audit_log_record(entry).await
+    }
+
+    async fn audit_log_list(
+        &self,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<MediatorAuditLogList, MediatorError> {
+        self.audit_log_list(cursor, limit).await
     }
 
     // ─── OOB Discovery invitations ──────────────────────────────────────────

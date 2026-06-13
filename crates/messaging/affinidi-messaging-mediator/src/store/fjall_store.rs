@@ -36,6 +36,8 @@
 //! - `globals`            — counter name → `i64` little-endian
 //! - `streaming_clients`  — `{uuid}:{did_hash}` →
 //!   [`StreamingClientState`] tag byte
+//! - `audit_log`          — `{stream_id}` → JSON-serialised
+//!   [`AuditLogEntry`]; ascending by insertion (oldest-first), bounded ring
 //!
 //! # In-process state
 //!
@@ -52,6 +54,7 @@ use affinidi_messaging_mediator_common::{
         MessageMetaData, MetadataStats, PubSubRecord, Session, SessionState, SessionSweepReport,
         StatCounter, StoreHealth, StreamingClientState, ops,
     },
+    types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
 use affinidi_messaging_sdk::{
     messages::{
@@ -100,6 +103,7 @@ const PARTITION_FORWARD_QUEUE: &str = "forward_queue";
 const PARTITION_FORWARD_PENDING: &str = "forward_pending";
 const PARTITION_GLOBALS: &str = "globals";
 const PARTITION_STREAMING_CLIENTS: &str = "streaming_clients";
+const PARTITION_AUDIT_LOG: &str = "audit_log";
 
 /// Fjall-backed [`MediatorStore`].
 ///
@@ -135,6 +139,7 @@ pub struct FjallStore {
     forward_pending: Keyspace,
     globals: Keyspace,
     streaming_clients: Keyspace,
+    audit_log: Keyspace,
 
     // ─── In-process state ───────────────────────────────────────────
     /// Serializes writes across multiple partitions so composite ops
@@ -423,6 +428,7 @@ impl FjallStore {
             forward_pending: open_partition(PARTITION_FORWARD_PENDING)?,
             globals: open_partition(PARTITION_GLOBALS)?,
             streaming_clients: open_partition(PARTITION_STREAMING_CLIENTS)?,
+            audit_log: open_partition(PARTITION_AUDIT_LOG)?,
             db,
             path,
             write_lock: Arc::new(Mutex::new(())),
@@ -527,6 +533,20 @@ impl FjallStore {
             let _ = guard
                 .into_inner()
                 .map_err(|e| Self::db_err("forward_queue_count:iter", e))?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// O(n) count of audit-log entries. Used by `audit_log_record` for the
+    /// ring trim and by `audit_log_list` for cursor maths. Bounded by
+    /// `AUDIT_LOG_MAX_ENTRIES`.
+    fn audit_log_count_inner(&self) -> Result<usize, MediatorError> {
+        let mut count = 0usize;
+        for guard in self.audit_log.iter() {
+            let _ = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("audit_log_count:iter", e))?;
             count += 1;
         }
         Ok(count)
@@ -1974,6 +1994,81 @@ impl MediatorStore for FjallStore {
         Ok(MediatorAdminList {
             accounts,
             cursor: next,
+        })
+    }
+
+    async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {
+        let _guard = self.write_lock.lock().await;
+        let id = self.alloc_stream_id();
+
+        let mut batch = self.db.batch();
+        batch.insert(
+            &self.audit_log,
+            encode_stream_id(id.0, id.1).to_vec(),
+            Self::encode(entry)?,
+        );
+
+        // Bounded ring: drop the oldest entries (lowest keys, first in ascending
+        // order) once we'd exceed the cap. `+1` accounts for the entry we're
+        // adding in this same batch.
+        let current = self.audit_log_count_inner()?;
+        if current >= AUDIT_LOG_MAX_ENTRIES {
+            let over = current - AUDIT_LOG_MAX_ENTRIES + 1;
+            let mut to_remove = Vec::with_capacity(over);
+            for guard in self.audit_log.iter().take(over) {
+                let (key, _) = guard
+                    .into_inner()
+                    .map_err(|e| Self::db_err("audit_log_record:trim", e))?;
+                to_remove.push(key);
+            }
+            for k in to_remove {
+                batch.remove(&self.audit_log, k.as_ref());
+            }
+        }
+
+        batch
+            .commit()
+            .map_err(|e| Self::db_err("audit_log_record:commit", e))?;
+        Ok(())
+    }
+
+    async fn audit_log_list(
+        &self,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<MediatorAuditLogList, MediatorError> {
+        let limit = limit.min(100) as usize;
+        let total = self.audit_log_count_inner()?;
+
+        // Entries are stored oldest-first (ascending key). The newest-first page
+        // [cursor, cursor+limit) maps onto the oldest-first index window
+        // [start, end); we decode only that window, then reverse it.
+        let end = total.saturating_sub(cursor as usize);
+        let start = end.saturating_sub(limit);
+
+        let mut entries: Vec<AuditLogEntry> = Vec::with_capacity(end - start);
+        for (i, guard) in self.audit_log.iter().enumerate() {
+            if i < start {
+                continue;
+            }
+            if i >= end {
+                break;
+            }
+            let (_, value) = guard
+                .into_inner()
+                .map_err(|e| Self::db_err("audit_log_list:iter", e))?;
+            entries.push(Self::decode(&value)?);
+        }
+        entries.reverse(); // oldest-first window → newest-first page
+
+        let next_cursor = if cursor as usize + entries.len() >= total {
+            0
+        } else {
+            cursor + entries.len() as u32
+        };
+        Ok(MediatorAuditLogList {
+            entries,
+            cursor: next_cursor,
         })
     }
 

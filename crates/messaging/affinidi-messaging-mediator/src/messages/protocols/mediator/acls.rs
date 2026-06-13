@@ -6,6 +6,7 @@ use crate::common::time::unix_timestamp_secs;
 use crate::{SharedData, common::session::Session, messages::ProcessMessageResponse};
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
+use affinidi_messaging_mediator_common::types::audit::AuditAction;
 use affinidi_messaging_sdk::messages::compat::UnpackMetadata;
 use affinidi_messaging_sdk::{
     messages::problem_report::{ProblemReportScope, ProblemReportSorter},
@@ -227,12 +228,22 @@ pub(crate) async fn process(
                     .set_did_acl(&did_hash, &MediatorACLSet::from_u64(acls))
                     .await
                 {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!({"acls": response}),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::SetAcl,
+                            format!("acls=0x{acls:016x}"),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!({"acls": response}),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error setting ACLs. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -356,12 +367,22 @@ pub(crate) async fn process(
                     .access_list_add(state.config.limits.access_list_limit, &did_hash, &hashes)
                     .await
                 {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccessListAdd,
+                            format!("added {} hash(es)", hashes.len()),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error Add to Access List. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -434,12 +455,22 @@ pub(crate) async fn process(
                 }
 
                 match state.database.access_list_remove(&did_hash, &hashes).await {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccessListRemove,
+                            format!("removed {response} of {} requested", hashes.len()),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error Remove from Access List. Reason: {}", e);
                         Err(MediatorError::problem_with_log(
@@ -495,12 +526,22 @@ pub(crate) async fn process(
                 }
 
                 match state.database.access_list_clear(&did_hash).await {
-                    Ok(response) => _generate_response_message(
-                        &msg.id,
-                        &session.did,
-                        &state.config.mediator_did,
-                        &json!(response),
-                    ),
+                    Ok(response) => {
+                        super::record_audit(
+                            state,
+                            session,
+                            &did_hash,
+                            AuditAction::AccessListClear,
+                            "cleared access list".to_string(),
+                        )
+                        .await;
+                        _generate_response_message(
+                            &msg.id,
+                            &session.did,
+                            &state.config.mediator_did,
+                            &json!(response),
+                        )
+                    }
                     Err(e) => {
                         warn!("Error Clearing Access List. Reason: {}", e);
                         Err(MediatorError::problem_with_log(

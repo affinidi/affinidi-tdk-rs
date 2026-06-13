@@ -17,5 +17,6 @@ pub mod accounts;
 pub mod acls;
 pub mod acls_handler;
 pub mod administration;
+pub mod audit;
 pub mod messages;
 pub mod problem_report;
