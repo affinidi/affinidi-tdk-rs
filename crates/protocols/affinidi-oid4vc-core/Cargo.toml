@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-oid4vc-core"
 description = "Shared types for the OpenID for Verifiable Credentials (OID4VC) protocol family."
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"

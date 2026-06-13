@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.8.2"
+version = "0.8.3"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -78,7 +78,7 @@ affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-sta
 # Protocols
 affinidi-oid4vc-core = { version = "0.1", path = "../../protocols/affinidi-oid4vc-core", optional = true }
 affinidi-siopv2 = { version = "0.1", path = "../../protocols/affinidi-siopv2", optional = true }
-affinidi-openid4vci = { version = "0.1", path = "../../protocols/affinidi-openid4vci", optional = true }
+affinidi-openid4vci = { version = "0.2", path = "../../protocols/affinidi-openid4vci", optional = true }
 affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4vp", optional = true }
 
 # DID methods

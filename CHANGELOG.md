@@ -9,6 +9,20 @@ Per-crate version history is summarised here; for the full code history see
 
 ## [Unreleased]
 
+### Security
+
+- **OID4VC JWT algorithm allowlist (W5).** `affinidi-oid4vc-core` 0.1.4 adds
+  `jwt::decode_compact_jws_verified_with_algs(jws, verifier, allowed_algs)`,
+  which rejects a JWS whose header `alg` is not in the caller's allowlist
+  **before** verifying the signature — closing algorithm-substitution attacks.
+  The old `decode_compact_jws_verified` (any alg but `none`) is **deprecated**.
+  **`affinidi-openid4vci` 0.2.0** threads an `allowed_algs` argument through
+  `KeyProof::verify` / `verify_signature` (breaking) and ships a
+  `DEFAULT_PROOF_ALGS = ["ES256", "EdDSA"]` default; `affinidi-tdk` 0.8.3 picks
+  up the new openid4vci. Also adds `oid4vc-core::nonce::NonceStore`, an optional
+  in-memory single-use TTL helper, and documents that **replay prevention is a
+  MUST** (matching a nonce value is not sufficient).
+
 ### Changed
 
 - **`affinidi-sd-jwt-vc` merged into `affinidi-vc` (W18b).** SD-JWT VC is a

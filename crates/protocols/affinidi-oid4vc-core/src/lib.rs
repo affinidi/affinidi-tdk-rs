@@ -13,6 +13,9 @@
 
 pub mod jwt;
 
+/// In-memory nonce replay-prevention helper (single-process deployments).
+pub mod nonce;
+
 /// ES256 (ECDSA P-256) signer and verifier for production JWT operations.
 #[cfg(feature = "es256")]
 pub mod es256;

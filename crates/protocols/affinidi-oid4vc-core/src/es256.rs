@@ -146,7 +146,7 @@ impl JwtVerifier for Es256Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jwt::{decode_compact_jws_verified, encode_compact_jws};
+    use crate::jwt::{decode_compact_jws_verified_with_algs, encode_compact_jws};
     use serde_json::json;
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
 
         let jws = encode_compact_jws(&header, &payload, &signer).unwrap();
         let (decoded_header, decoded_payload) =
-            decode_compact_jws_verified(&jws, &verifier).unwrap();
+            decode_compact_jws_verified_with_algs(&jws, &verifier, &["ES256"]).unwrap();
 
         assert_eq!(decoded_header["alg"], "ES256");
         assert_eq!(decoded_payload["sub"], "user123");
@@ -173,7 +173,7 @@ mod tests {
 
         let jws = encode_compact_jws(&json!({"alg": "ES256"}), &json!({"x": 1}), &signer).unwrap();
 
-        assert!(decode_compact_jws_verified(&jws, &verifier).is_err());
+        assert!(decode_compact_jws_verified_with_algs(&jws, &verifier, &["ES256"]).is_err());
     }
 
     #[test]
@@ -186,7 +186,8 @@ mod tests {
         let jws =
             encode_compact_jws(&json!({"alg": "ES256"}), &json!({"test": true}), &signer).unwrap();
 
-        let (_, payload) = decode_compact_jws_verified(&jws, &verifier).unwrap();
+        let (_, payload) =
+            decode_compact_jws_verified_with_algs(&jws, &verifier, &["ES256"]).unwrap();
         assert_eq!(payload["test"], true);
     }
 
