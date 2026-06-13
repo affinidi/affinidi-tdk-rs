@@ -1,5 +1,19 @@
 # Affinidi DID Authentication
 
+## 13th June 2026 (0.3.7)
+
+Auth hygiene (W6):
+
+- Removed the `.expect("negotiated curve came from sender_curves")` in the
+  authcrypt packing path; a missing sender key now returns a `DIDComm` error
+  instead of panicking.
+- Sensitive authentication artifacts — the challenge, the signed challenge
+  response, the packed auth message, the received tokens, and the raw HTTP
+  request/response bodies — now log at `TRACE` via a `trace_sensitive` helper
+  rather than `DEBUG`. `DEBUG` keeps only non-sensitive breadcrumbs
+  ("Challenge received", "Tokens received", request URL + status). A capture
+  test asserts no sensitive value appears at `DEBUG`.
+
 ## 6th June 2026 (0.3.6)
 
 - Robust sender/recipient key-agreement negotiation (#357). The authcrypt

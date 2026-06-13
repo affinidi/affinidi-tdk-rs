@@ -30,7 +30,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::SystemTime;
-use tracing::{Instrument, Level, debug, error, info, span};
+use tracing::{Instrument, Level, debug, error, info, span, trace};
 use uuid::Uuid;
 
 pub mod custom_auth;
@@ -397,15 +397,16 @@ impl DIDAuthentication {
                 }
             }
 
-            debug!("Challenge received:\n{:#?}", step1_response);
+            debug!("Challenge received");
+            trace_sensitive("Challenge received", &format!("{step1_response:#?}"));
 
             // Step 2. Sign the challenge
 
             let auth_response =
                 self._create_auth_challenge_response(profile_did, endpoint_did, &step1_response)?;
-            debug!(
-                "Auth response message:\n{}",
-                serde_json::to_string_pretty(&auth_response).unwrap()
+            trace_sensitive(
+                "Auth response message",
+                &serde_json::to_string_pretty(&auth_response).unwrap_or_default(),
             );
 
             let auth_msg = _pack_encrypted_for_did(
@@ -417,7 +418,7 @@ impl DIDAuthentication {
             )
             .await?;
 
-            debug!("Successfully packed auth message\n{:#?}", auth_msg);
+            trace_sensitive("Packed auth message", &format!("{auth_msg:#?}"));
 
             let step2_body = if let DidChallenges::Complex(_) = step1_response {
                 auth_msg
@@ -431,7 +432,8 @@ impl DIDAuthentication {
             let step2_response =
                 _http_post::<TokensType>(client, &[&endpoint, ""].concat(), &step2_body).await?;
 
-            debug!("Tokens received:\n{:#?}", step2_response);
+            debug!("Tokens received");
+            trace_sensitive("Tokens received", &format!("{step2_response:#?}"));
 
             debug!("Successfully authenticated");
 
@@ -646,12 +648,20 @@ impl DIDAuthentication {
     }
 }
 
+/// Log a sensitive authentication artifact (challenge, token, packed message,
+/// HTTP body) at `TRACE` only — never `DEBUG` — so operational debug logs never
+/// contain raw tokens or challenges. Enabling `TRACE` is an explicit opt-in for
+/// deep debugging.
+fn trace_sensitive(label: &str, value: &str) {
+    trace!("{label}:\n{value}");
+}
+
 async fn _http_post<T>(client: &Client, url: &str, body: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
     debug!("POSTing to {}", url);
-    debug!("Body: {}", body);
+    trace_sensitive("HTTP POST body", body);
     let response = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -666,10 +676,8 @@ where
         .await
         .map_err(|e| DIDAuthError::Authentication(format!("Couldn't get HTTP body: {e:?}")))?;
 
-    debug!(
-        "status: {} response body: {}",
-        response_status, response_body
-    );
+    debug!("POST {url} -> status {response_status}");
+    trace_sensitive("HTTP response body", &response_body);
     if !response_status.is_success() {
         if response_status.as_u16() == 401 {
             return Err(DIDAuthError::ACLDenied("Authentication Denied".into()));
@@ -750,12 +758,17 @@ where
     )
     .map_err(|e| DIDAuthError::DIDComm(e.to_string()))?;
 
-    // The negotiated curve was drawn from `sender_curves`, so a matching
-    // sender key is guaranteed present.
+    // The negotiated curve was drawn from `sender_curves`, so a matching sender
+    // key should always be present; return an error rather than panicking if a
+    // future change to the negotiation ever breaks that invariant.
     let (sender_kid, sender_private, _) = sender_keys
         .iter()
         .find(|(_, _, c)| *c == pairing.curve)
-        .expect("negotiated curve came from sender_curves");
+        .ok_or_else(|| {
+            DIDAuthError::DIDComm(
+                "internal error: negotiated curve has no matching sender key".into(),
+            )
+        })?;
 
     // 3. Pack with authcrypt.
     pack::pack_encrypted_authcrypt(
@@ -828,6 +841,55 @@ pub fn refresh_check(tokens: &AuthorizationTokens) -> RefreshCheck {
 mod tests {
     use crate::{AuthorizationTokens, RefreshCheck, refresh_check};
     use std::time::SystemTime;
+
+    /// Sensitive auth artifacts must be logged via `trace_sensitive` (TRACE),
+    /// never at DEBUG, so operational debug logs can't leak tokens/challenges.
+    #[test]
+    fn sensitive_artifacts_are_not_logged_at_debug() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone)]
+        struct BufWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for BufWriter {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+            type Writer = BufWriter;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(BufWriter(buf.clone()))
+            .finish();
+
+        let secret = "SUPER_SECRET_JWT.header.payload.sig";
+        tracing::subscriber::with_default(subscriber, || {
+            crate::trace_sensitive("Tokens received", secret);
+            tracing::debug!("Tokens received");
+        });
+
+        let logged = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(
+            !logged.contains(secret),
+            "sensitive value must not appear at DEBUG level; got:\n{logged}"
+        );
+        assert!(
+            logged.contains("Tokens received"),
+            "the non-sensitive breadcrumb should still be logged at DEBUG"
+        );
+    }
 
     #[test]
     fn refresh_check_valid() {

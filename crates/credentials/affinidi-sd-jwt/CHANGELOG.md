@@ -1,5 +1,14 @@
 # Affinidi SD-JWT Changelog
 
+## 13th June 2026 Release 0.1.3
+
+### Security
+
+- The test-only `HmacSha256Verifier` now compares signatures in constant time
+  via `subtle::ConstantTimeEq` instead of `!=`, removing the timing side channel
+  and the copy-paste hazard if the verifier is ever lifted out of the test-only
+  module. `subtle` is pulled in by the existing `_test-utils` feature.
+
 ## 28th May 2026 Release 0.1.2
 
 ### Security
