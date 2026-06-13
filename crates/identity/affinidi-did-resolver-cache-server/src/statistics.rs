@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Level, debug, info, span};
 
 /// Statistics struct for the cache server
@@ -125,10 +126,14 @@ impl Statistics {
 
 /// Periodically logs statistics about the cache.
 /// Is spawned as a task from main().
+///
+/// Runs until `shutdown` is cancelled, at which point it returns cleanly so the
+/// supervising spawn can join it during graceful shutdown.
 pub async fn statistics(
     interval: Duration,
     stats: &Arc<Mutex<Statistics>>,
     cache: Cache<[u64; 2], Document>,
+    shutdown: CancellationToken,
 ) -> Result<(), CacheError> {
     let _span = span!(Level::INFO, "statistics");
 
@@ -138,19 +143,49 @@ pub async fn statistics(
 
         let mut previous_stats = Statistics::default();
         loop {
-            wait.tick().await;
+            tokio::select! {
+                _ = wait.tick() => {
+                    let mut stats = stats.lock().await;
 
-            let mut stats = stats.lock().await;
+                    cache.run_pending_tasks().await;
+                    stats.cache_size = cache.entry_count() as i64;
 
-            cache.run_pending_tasks().await;
-            stats.cache_size = cache.entry_count() as i64;
+                    info!("Statistics: {}", stats);
+                    info!("Delta: {}", stats.delta(&previous_stats));
 
-            info!("Statistics: {}", stats);
-            info!("Delta: {}", stats.delta(&previous_stats));
-
-            previous_stats = stats.clone();
+                    previous_stats = stats.clone();
+                }
+                _ = shutdown.cancelled() => {
+                    debug!("Statistics thread shutting down");
+                    break;
+                }
+            }
         }
+        Ok(())
     }
     .instrument(_span)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn statistics_exits_promptly_on_cancel() {
+        let stats = Arc::new(Mutex::new(Statistics::default()));
+        let cache: Cache<[u64; 2], Document> = Cache::new(10);
+        let token = CancellationToken::new();
+        // Pre-cancel: with a 1h interval the loop can only leave via the
+        // cancellation branch, so the call must return promptly (and Ok).
+        token.cancel();
+
+        let res = tokio::time::timeout(
+            Duration::from_secs(2),
+            statistics(Duration::from_secs(3600), &stats, cache, token),
+        )
+        .await;
+        assert!(res.is_ok(), "stats task must exit promptly after cancel");
+        assert!(res.unwrap().is_ok());
+    }
 }

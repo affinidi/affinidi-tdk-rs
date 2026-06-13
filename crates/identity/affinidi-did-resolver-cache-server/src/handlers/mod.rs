@@ -52,6 +52,12 @@ pub(crate) async fn resolve_with_timeout(
     apply_timeout(timeout, resolver.resolve(did)).await
 }
 
+/// Whether `did` is within the configured byte-length limit. Oversized DIDs are
+/// rejected before resolution so a crafted request can't drive unbounded work.
+pub(crate) fn did_within_size_limit(did: &str, max: usize) -> bool {
+    did.len() <= max
+}
+
 /// Read a response body as UTF-8 text, refusing anything larger than `limit` bytes.
 async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<String> {
     let mut buf = Vec::new();
@@ -80,7 +86,10 @@ async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<
 /// The target host is derived from the caller-supplied DID, so this client
 /// refuses redirects and caps the response body to avoid being used as an SSRF
 /// pivot / reflection oracle or memory-exhaustion vector.
-pub(crate) async fn fetch_webvh_log(did: &str) -> (Option<String>, Option<String>) {
+pub(crate) async fn fetch_webvh_log(
+    client: &reqwest::Client,
+    did: &str,
+) -> (Option<String>, Option<String>) {
     let parsed_url = match didwebvh_rs::url::WebVHURL::parse_did_url(did) {
         Ok(url) => url,
         Err(e) => {
@@ -93,18 +102,6 @@ pub(crate) async fn fetch_webvh_log(did: &str) -> (Option<String>, Option<String
         Ok(url) => url,
         Err(e) => {
             warn!("Failed to construct log URL for WebVH DID: {e}");
-            return (None, None);
-        }
-    };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to create HTTP client for WebVH log fetch: {e}");
             return (None, None);
         }
     };
@@ -207,5 +204,12 @@ mod tests {
         let fut = std::future::ready(Err::<(), _>(DIDCacheError::DIDError("bad".into())));
         let res = apply_timeout(Duration::from_secs(5), fut).await;
         assert!(matches!(res, Err(ResolveError::Resolver(_))));
+    }
+
+    #[test]
+    fn did_size_limit_boundary() {
+        assert!(did_within_size_limit("did:key:zABC", 1024));
+        assert!(did_within_size_limit(&"d".repeat(1024), 1024)); // exactly at limit
+        assert!(!did_within_size_limit(&"d".repeat(1025), 1024)); // one over
     }
 }

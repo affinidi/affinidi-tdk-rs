@@ -39,6 +39,8 @@ struct ConfigRaw {
     pub statistics_interval: String,
     #[serde(default = "default_resolve_timeout")]
     pub resolve_timeout: String,
+    #[serde(default = "default_max_did_size")]
+    pub max_did_size: String,
     pub cache: CacheConfig,
 }
 
@@ -46,6 +48,12 @@ struct ConfigRaw {
 /// predates the `resolve_timeout` key.
 fn default_resolve_timeout() -> String {
     "30".into()
+}
+
+/// Default maximum accepted DID length in bytes, used when the config file
+/// predates the `max_did_size` key.
+fn default_max_did_size() -> String {
+    "1024".into()
 }
 
 pub struct Config {
@@ -57,6 +65,9 @@ pub struct Config {
     /// Maximum time a single upstream DID resolution may take before the
     /// request path gives up and returns an error instead of blocking.
     pub resolve_timeout: Duration,
+    /// Maximum accepted DID length in bytes; longer DIDs are rejected before
+    /// resolution so a crafted request can't drive unbounded work.
+    pub max_did_size: usize,
     pub cache_capacity_count: u32,
     pub cache_expire: u32,
 }
@@ -76,6 +87,7 @@ impl fmt::Debug for Config {
                 "resolve_timeout",
                 &format!("{} seconds", self.resolve_timeout.as_secs()),
             )
+            .field("max_did_size", &format!("{} bytes", self.max_did_size))
             .field("cache_capacity_count", &self.cache_capacity_count)
             .field("cache_expire", &format!("{} seconds", self.cache_expire))
             .finish()
@@ -91,6 +103,7 @@ impl Default for Config {
             enable_websocket_endpoint: true,
             statistics_interval: Duration::from_secs(60),
             resolve_timeout: Duration::from_secs(30),
+            max_did_size: 1024,
             cache_capacity_count: CacheConfig::default()
                 .capacity_count
                 .parse()
@@ -118,6 +131,7 @@ impl TryFrom<ConfigRaw> for Config {
             enable_websocket_endpoint: raw.enable_websocket_endpoint.parse().unwrap_or(true),
             statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
             resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
+            max_did_size: raw.max_did_size.parse().unwrap_or(1024),
             cache_capacity_count: raw.cache.capacity_count.parse().unwrap_or(1000),
             cache_expire: raw.cache.expire.parse().unwrap_or(300),
         })

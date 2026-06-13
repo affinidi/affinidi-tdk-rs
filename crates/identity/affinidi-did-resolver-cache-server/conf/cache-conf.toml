@@ -16,6 +16,12 @@ statistics_interval = "${STATISTICS_INTERVAL:10}"
 ### Default: 30 seconds
 resolve_timeout = "${RESOLVE_TIMEOUT:30}"
 
+### max_did_size: maximum accepted DID length in bytes. Longer DIDs are
+### rejected before resolution (HTTP 400 / WebSocket error) so a crafted
+### request can't drive unbounded work. Also bounds the WebSocket frame size.
+### Default: 1024 bytes
+max_did_size = "${MAX_DID_SIZE:1024}"
+
 ### enable_http_endpoint: true/false
 ### Default: true
 ### If true, the server will make available /resolve endpoint for HTTP GET requests
