@@ -23,7 +23,7 @@ path = "src/mediator_administration/main.rs"
 ## SDK for connecting to and communicating with a running mediator
 affinidi-messaging-sdk = { path = "../affinidi-messaging-sdk", version = "0.18" }
 ## TDK for DID resolution and crypto utilities
-affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.7" }
+affinidi-tdk = { path = "../../tdk/affinidi-tdk", version = "0.8" }
 ## DIDComm message types — used by example binaries
 affinidi-crypto = { version = "0.2", features = ["jose"] }
 affinidi-messaging-didcomm = { path = "../affinidi-messaging-didcomm", version = "0.15", features = ["messaging-core"] }

@@ -36,7 +36,7 @@ affinidi-did-common = "0.3"
 # regression test. Sister-crate path deps carry an explicit `version =` so the
 # package stays publishable while using the in-tree path for dev-builds.
 affinidi-messaging-test-mediator = { version = "0.2", path = "../affinidi-messaging-test-mediator" }
-affinidi-tdk = { version = "0.7", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-tdk = { version = "0.8", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 
 
 [[example]]

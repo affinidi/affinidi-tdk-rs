@@ -6,6 +6,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 For the full code history see `git log` on `crates/tdk/affinidi-tdk`.
 
+## [0.8.0] - 2026-06-13
+
+### Added
+
+- **Facade feature completion (W12).** Every published capability crate is now
+  reachable through a facade feature and re-exported under a module:
+  - `credentials` group → `vc`, `sd-jwt`, `sd-jwt-vc`, `mdoc`, `status-list`
+    (+ `data-integrity`).
+  - `protocols` group → `oid4vc-core`, `siopv2`, `openid4vci`, `openid4vp`.
+  - `did-methods` group → `did-web`, `did-ebsi`, `did-scid`.
+  - `trust` (`affinidi-trust-lists`), `tsp` (`affinidi-tsp`).
+  - All optional and `dep:`-gated; individual + group features both available.
+- Facade feature-matrix CI job (`checks-features.yaml`) building default,
+  no-default, each group, and all-features.
+
+### Changed
+
+- Foundation deps (`affinidi-crypto`, `affinidi-tdk-common`) kept at
+  `major.minor` (caret), **not** exact-pinned: these crates ship frequent patch
+  releases (see ADR 0003), so an exact pin would break the facade on every
+  patch. Use the facade **or** direct sub-crate deps, not both.
+- `did-peer` documented as a code-gate feature (no extra dependency; gates the
+  did:peer helpers in `dids`).
+
 ## [0.7.4] - 2026-06-06
 
 ### Changed
