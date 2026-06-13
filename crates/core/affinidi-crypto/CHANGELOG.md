@@ -1,5 +1,12 @@
 # Affinidi Crypto Changelog
 
+## 13th June 2026 (0.2.1)
+
+RNG hygiene (W4): the PQC key generators (ML-DSA, SLH-DSA) now seed a CSPRNG
+directly from the OS (`StdRng::try_from_rng(&mut SysRng)`) instead of the
+thread-local RNG. The `thread_rng` feature is dropped from the `rand` (0.10)
+dependency in favour of `sys_rng` + `std_rng`. No public API change.
+
 ## 6th June 2026 (0.2.0)
 
 **Breaking release.** Adds P-384/P-521 key agreement and makes the

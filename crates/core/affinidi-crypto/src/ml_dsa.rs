@@ -6,7 +6,7 @@
 
 use ml_dsa::signature::{Keypair, Signer, Verifier};
 use ml_dsa::{B32, MlDsa44, MlDsa65, MlDsa87, Signature, SigningKey};
-use rand_10::RngExt;
+use rand_10::{RngExt, SeedableRng};
 
 use crate::{CryptoError, KeyType, error::Result};
 
@@ -19,7 +19,10 @@ pub struct KeyPair {
 }
 
 fn random_seed() -> [u8; 32] {
-    let mut rng = rand_10::rng();
+    // Seed a CSPRNG directly from the OS (no thread-local RNG) — key seeds must
+    // come from a cryptographically secure source.
+    let mut rng = rand_10::rngs::StdRng::try_from_rng(&mut rand_10::rngs::SysRng)
+        .expect("OS entropy unavailable while seeding key RNG");
     let mut s = [0u8; 32];
     rng.fill(&mut s);
     s

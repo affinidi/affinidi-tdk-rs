@@ -17,7 +17,7 @@ use bls12_381_plus::{
 };
 use ff::Field;
 use group::Group;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 
 use crate::ciphersuite::Ciphersuite;
 use crate::error::{BbsError, Result};
@@ -155,7 +155,12 @@ impl ProofRandomScalars {
     }
 
     fn random(u: usize) -> Self {
-        let mut rng = rand::rng();
+        // CSPRNG contract: the per-proof blinding scalars MUST come from a
+        // cryptographically secure RNG — predictable randomness here would leak
+        // the undisclosed messages. Seed a CSPRNG directly from the OS rather
+        // than relying on the thread-local RNG.
+        let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::OsRng)
+            .expect("OS entropy unavailable while seeding proof RNG");
         ProofRandomScalars {
             r1: random_nonzero_scalar(&mut rng),
             r2: random_nonzero_scalar(&mut rng),
@@ -729,6 +734,22 @@ mod tests {
         let sk = SecretKey(sk_scalar);
         let pk = PublicKey(G2Projective::generator() * sk_scalar);
         (sk, pk)
+    }
+
+    #[test]
+    fn oversized_proof_rejected_without_unbounded_work() {
+        // A multi-megabyte bogus proof implies a huge undisclosed-message count.
+        // Without the generator cap, verification would build that many
+        // generators (O(n) hash-to-curve) — a cheap DoS. It must be rejected
+        // cheaply (the cap fires before the generator loop), never processed.
+        let (_sk, pk) = test_keypair();
+        let cs = Ciphersuite::Bls12381Sha256;
+        let proof = Proof::from_bytes(&vec![0u8; 4 * 1024 * 1024]); // ~4 MB
+        let result = core_proof_verify(&pk, &proof, b"header", b"ph", &[], &[], cs);
+        assert!(
+            matches!(result, Err(BbsError::InvalidProof(_))),
+            "oversized proof must be rejected with InvalidProof, got {result:?}"
+        );
     }
 
     // --- exact proof reproduction against the IETF/DIF vectors ---------------

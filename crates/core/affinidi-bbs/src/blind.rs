@@ -36,7 +36,7 @@
 
 use bls12_381_plus::{G1Projective, Scalar};
 use ff::Field;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 use zeroize::Zeroize;
 
 use crate::ciphersuite::Ciphersuite;
@@ -501,8 +501,12 @@ pub(crate) fn blind_message_count(cwp_len: usize, cs: Ciphersuite) -> Result<usi
 }
 
 /// Sample `count` non-zero random scalars (production path for [`commit`]).
+///
+/// CSPRNG contract: these scalars blind the commitment, so they MUST come from
+/// a cryptographically secure RNG. Seed a CSPRNG directly from the OS.
 pub(crate) fn random_scalars(count: usize) -> Vec<Scalar> {
-    let mut rng = rand::rng();
+    let mut rng = rand::rngs::StdRng::try_from_rng(&mut rand::rngs::OsRng)
+        .expect("OS entropy unavailable while seeding commitment RNG");
     (0..count)
         .map(|_| {
             loop {
