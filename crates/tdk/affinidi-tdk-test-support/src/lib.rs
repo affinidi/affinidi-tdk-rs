@@ -25,5 +25,6 @@
  * - **TI7** — `vectors`: shared `tests/vectors/` layout and loader.
  */
 
+pub mod credential_scenario;
 pub mod did_web;
 pub mod resolver;
