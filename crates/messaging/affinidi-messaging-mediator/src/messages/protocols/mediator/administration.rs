@@ -149,6 +149,33 @@ pub(crate) async fn process(
                     }
                 }
             }
+            MediatorAdminRequest::AuditLogList { cursor, limit } => {
+                // Admin-gated already (the whole protocol checks
+                // `check_admin_account` above). Read-only page over the audit log.
+                match state.database.audit_log_list(cursor, limit).await {
+                    Ok(response) => _generate_response_message(
+                        &msg.id,
+                        &session.did,
+                        &state.config.mediator_did,
+                        &json!(response),
+                    ),
+                    Err(e) => {
+                        warn!("Error listing audit log. Reason: {}", e);
+                        Err(MediatorError::problem_with_log(
+                            14,
+                            &session.session_id,
+                            Some(msg.id.to_string()),
+                            ProblemReportSorter::Error,
+                            ProblemReportScope::Protocol,
+                            "me.res.storage.error",
+                            "Database transaction error: {1}",
+                            vec![e.to_string()],
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            format!("Database transaction error: {e}"),
+                        ))
+                    }
+                }
+            }
             MediatorAdminRequest::AdminAdd(attr) => {
                 let targets = attr.clone();
                 match state

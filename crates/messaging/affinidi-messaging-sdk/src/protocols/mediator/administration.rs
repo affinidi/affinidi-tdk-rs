@@ -18,6 +18,9 @@ use uuid::Uuid;
 pub use affinidi_messaging_mediator_common::types::administration::{
     AdminAccount, MediatorAdminList, MediatorAdminRequest,
 };
+pub use affinidi_messaging_mediator_common::types::audit::{
+    AuditAction, AuditLogEntry, MediatorAuditLogList,
+};
 
 #[derive(Default)]
 pub struct Mediator {}
@@ -318,6 +321,82 @@ impl Mediator {
         .instrument(_span)
         .await
     }
+
+    /// Parses the response from the mediator for a page of the audit log
+    fn _parse_audit_log_response(
+        &self,
+        message: &Message,
+    ) -> Result<MediatorAuditLogList, ATMError> {
+        serde_json::from_value(message.body.clone()).map_err(|err| {
+            ATMError::MsgReceiveError(format!(
+                "Mediator Audit Log response could not be parsed. Reason: {err}"
+            ))
+        })
+    }
+
+    /// Pages through the mediator's privileged-change audit log (newest-first).
+    /// Admin-only.
+    /// - `atm` - The ATM client to use
+    /// - `cursor` - The cursor to start from (Defaults to 0 if not provided)
+    /// - `limit` - The maximum number of entries to return (Defaults to 100)
+    /// # Returns
+    /// A page of audit-log entries plus the cursor for the next page.
+    pub async fn list_audit_log(
+        &self,
+        atm: &ATM,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<MediatorAuditLogList, ATMError> {
+        let _span = span!(Level::DEBUG, "list_audit_log");
+
+        async move {
+            debug!(
+                "Requesting audit log from mediator. Cursor: {} Limit: {}",
+                cursor.unwrap_or(0),
+                limit.unwrap_or(100)
+            );
+
+            let (profile_did, mediator_did) = profile.dids()?;
+
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
+            let msg = Message::build(
+                Uuid::new_v4().to_string(),
+                "https://didcomm.org/mediator/1.0/admin-management".to_owned(),
+                json!({"audit_log_list": {"cursor": cursor.unwrap_or(0), "limit": limit.unwrap_or(100)}}),
+            )
+            .to(mediator_did.into())
+            .from(profile_did.into())
+            .created_time(now)
+            .expires_time(now + 10)
+            .finalize();
+
+            let msg_id = msg.id.clone();
+
+            // Pack the message
+            let (msg, _) = atm
+                .inner
+                .pack_encrypted(&msg, mediator_did, Some(profile_did))
+                .await
+                .map_err(|e| ATMError::MsgSendError(format!("Error packing message: {e}")))?;
+
+                match atm
+                .send_message(profile, &msg, &msg_id, true, true)
+                .await? { SendMessageResponse::Message(message) => {
+                self._parse_audit_log_response(&message)
+                } _ => {
+                    Err(ATMError::MsgReceiveError(
+                        "No response from mediator".to_owned(),
+                    ))
+                }}
+        }
+        .instrument(_span)
+        .await
+    }
 }
 
 /// Wrapper struct that holds a reference to ATM, enabling the `atm.mediator().method()` pattern
@@ -366,6 +445,19 @@ impl<'a> MediatorOps<'a> {
     ) -> Result<MediatorAdminList, ATMError> {
         Mediator::default()
             .list_admins(self.atm, profile, cursor, limit)
+            .await
+    }
+
+    /// Pages through the mediator's privileged-change audit log
+    /// See [`Mediator::list_audit_log`] for full documentation
+    pub async fn list_audit_log(
+        &self,
+        profile: &Arc<ATMProfile>,
+        cursor: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<MediatorAuditLogList, ATMError> {
+        Mediator::default()
+            .list_audit_log(self.atm, profile, cursor, limit)
             .await
     }
 }

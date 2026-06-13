@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.8] - 2026-06-13
+
+### Added
+
+- **`Mediator::list_audit_log` (and `MediatorOps::list_audit_log`)** — admin
+  client method to page the mediator's privileged-change audit log (newest-first,
+  cursor-paginated), sending the new `audit_log_list` administration request.
+  Re-exports `AuditLogEntry`, `AuditAction`, and `MediatorAuditLogList` from
+  `affinidi-messaging-mediator-common`. Pairs with mediator 0.15.44 / simplification T25b.
+
 ## [0.18.7] - 2026-06-06
 
 ### Changed
