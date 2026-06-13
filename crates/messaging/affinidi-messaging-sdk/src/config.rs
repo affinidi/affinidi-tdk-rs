@@ -4,7 +4,7 @@ use crate::{
 };
 use affinidi_crypto::jose::key_agreement::Curve;
 use rustls::pki_types::CertificateDer;
-use std::{fs::File, io::BufReader, sync::Arc};
+use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};
 use tracing::error;
 
@@ -37,6 +37,11 @@ pub struct ATMConfig {
     /// (`X25519 > P-256 > P-384 > P-521 > secp256k1`). Set a custom order to
     /// force a specific policy, e.g. P-256 first for a FIPS deployment.
     pub(crate) curve_preference: Option<Vec<Curve>>,
+
+    /// Per-request timeout for mediator REST calls (delete/list/get). Bounded
+    /// so an unreachable mediator surfaces a `TransportError` in seconds
+    /// rather than blocking on the OS-level TCP RTO. Default: 15s.
+    pub(crate) request_timeout: Duration,
 }
 
 impl ATMConfig {
@@ -44,6 +49,11 @@ impl ATMConfig {
     /// the negotiator's built-in default order is used.
     pub fn get_curve_preference(&self) -> Option<&[Curve]> {
         self.curve_preference.as_deref()
+    }
+
+    /// The per-request timeout applied to mediator REST calls.
+    pub fn get_request_timeout(&self) -> Duration {
+        self.request_timeout
     }
 
     /// Returns a builder for `ATMConfig`
@@ -78,6 +88,7 @@ pub struct ATMConfigBuilder {
     unpack_forwards: bool,
     discover_features: DiscoverFeatures,
     curve_preference: Option<Vec<Curve>>,
+    request_timeout: Duration,
 }
 
 impl Default for ATMConfigBuilder {
@@ -90,6 +101,7 @@ impl Default for ATMConfigBuilder {
             unpack_forwards: true,
             discover_features: DiscoverFeatures::default(),
             curve_preference: None,
+            request_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -167,6 +179,23 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Override the per-request timeout for mediator REST calls
+    /// (delete/list/get). Lower it for snappier failure on flaky links;
+    /// raise it for high-latency mediators. Default: 15s.
+    ///
+    /// ```
+    /// use affinidi_messaging_sdk::config::ATMConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = ATMConfig::builder()
+    ///     .with_request_timeout(Duration::from_secs(30))
+    ///     .build();
+    /// ```
+    pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -203,6 +232,7 @@ impl ATMConfigBuilder {
             unpack_forwards: self.unpack_forwards,
             discover_features: Arc::new(RwLock::new(self.discover_features)),
             curve_preference: self.curve_preference,
+            request_timeout: self.request_timeout,
         })
     }
 }

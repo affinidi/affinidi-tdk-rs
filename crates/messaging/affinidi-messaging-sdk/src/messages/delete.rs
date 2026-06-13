@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use tracing::{Instrument, Level, debug, span};
 
@@ -11,10 +10,6 @@ use crate::{
 use super::{DeleteMessageRequest, DeleteMessageResponse};
 
 const MAX_DELETED_MESSAGES: usize = 100;
-/// Per-request HTTP timeout for mediator REST calls. Bounded so that an
-/// unreachable mediator surfaces a TransportError in seconds rather than
-/// blocking the caller for the OS-level TCP RTO (~30–60s on macOS).
-const MEDIATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl ATM {
     /// Deletes a message from ATM in the background
@@ -45,7 +40,8 @@ impl ATM {
     /// NOTE: Use `delete_message_background` as a more efficient way to delete messages
     /// - messages: List of message_ids to delete
     ///
-    /// Each request is bounded by a 15-second timeout; an unreachable
+    /// Each request is bounded by the configured request timeout
+    /// (`ATMConfig::with_request_timeout`, default 15s); an unreachable
     /// mediator returns `ATMError::TransportError` rather than hanging.
     pub async fn delete_messages_direct(
         &self,
@@ -90,7 +86,7 @@ impl ATM {
             .header("Content-Type", "application/json")
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .body(msg)
-            .timeout(MEDIATOR_REQUEST_TIMEOUT)
+            .timeout(self.inner.config.request_timeout)
             .send()
             .await
             .map_err(|e| {
@@ -112,8 +108,11 @@ impl ATM {
         }
 
         let body = serde_json::from_str::<SuccessResponse<DeleteMessageResponse>>(&body)
-            .ok()
-            .unwrap();
+            .map_err(|e| {
+                ATMError::TransportError(format!(
+                    "Could not parse delete_messages response: {e:?}"
+                ))
+            })?;
 
         let list = if let Some(list) = body.data {
             list
