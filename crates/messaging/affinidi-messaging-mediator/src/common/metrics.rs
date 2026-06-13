@@ -6,7 +6,7 @@
 
 use axum::{extract::State, response::IntoResponse};
 use http::{StatusCode, header};
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use tracing::{Level, event};
 
 /// Metric names used across the mediator.
@@ -106,12 +106,78 @@ pub mod names {
     pub const ACTIVE_SESSIONS: &str = "active_sessions";
     /// counter: Requests denied by ACL checks (label: action)
     pub const ACL_DENIALS_TOTAL: &str = "acl_denials_total";
+
+    // ── VTA secrets refresh ───────────────────────────────────────────────────
+
+    /// counter: VTA secrets-refresh attempts (label: result = vta|cache|error).
+    /// `vta` = fresh material fetched, `cache` = VTA unreachable so the cache was
+    /// reused, `error` = the refresh call itself failed.
+    pub const VTA_REFRESH_TOTAL: &str = "vta_refresh_total";
+    /// histogram: VTA refresh round-trip duration in seconds
+    pub const VTA_REFRESH_DURATION_SECONDS: &str = "vta_refresh_duration_seconds";
+    /// gauge: Unix timestamp (seconds) of the last successful refresh *from the
+    /// VTA*. Alert on `time() - <this>` exceeding the expected cadence to catch a
+    /// VTA that has been unreachable across several refresh windows.
+    pub const VTA_LAST_SUCCESS_TIMESTAMP_SECONDS: &str = "vta_last_success_timestamp_seconds";
+
+    // ── Global store totals ───────────────────────────────────────────────────
+    //
+    // Sampled once per cycle by the statistics task from the store's own
+    // cumulative metadata (`get_global_stats`) and published with `.absolute()`.
+    // These are authoritative server-side totals — distinct from the per-request
+    // counters above (e.g. `messages_inbound_total` counts inbound HTTP requests,
+    // while `messages_stored_total` — defined in the Messaging section above and
+    // activated here — is the store's persisted total).
+
+    /// counter: Message bytes received/stored (cumulative store total)
+    pub const STORE_RECEIVED_BYTES_TOTAL: &str = "store_received_bytes_total";
+    /// counter: Message bytes sent/delivered (cumulative store total)
+    pub const STORE_SENT_BYTES_TOTAL: &str = "store_sent_bytes_total";
+    /// counter: Message bytes deleted (cumulative store total)
+    pub const STORE_DELETED_BYTES_TOTAL: &str = "store_deleted_bytes_total";
+    /// counter: WebSocket connections opened (cumulative store total)
+    pub const WEBSOCKET_CONNECTIONS_OPENED_TOTAL: &str = "websocket_connections_opened_total";
+    /// counter: WebSocket connections closed (cumulative store total)
+    pub const WEBSOCKET_CONNECTIONS_CLOSED_TOTAL: &str = "websocket_connections_closed_total";
+    /// counter: Sessions created (cumulative store total)
+    pub const SESSIONS_CREATED_TOTAL: &str = "sessions_created_total";
+    /// counter: Sessions that completed authentication (cumulative store total)
+    pub const SESSIONS_AUTHENTICATED_TOTAL: &str = "sessions_authenticated_total";
+    /// counter: OOB invitations created (cumulative store total)
+    pub const OOB_INVITES_CREATED_TOTAL: &str = "oob_invites_created_total";
+    /// counter: OOB invitations claimed (cumulative store total)
+    pub const OOB_INVITES_CLAIMED_TOTAL: &str = "oob_invites_claimed_total";
 }
+
+/// Histogram bucket boundaries (seconds) applied to every `*_duration_seconds`
+/// metric. Without this, the Prometheus exporter falls back to its default
+/// summary/quantile rendering, which loses the cross-instance aggregatability
+/// that fixed buckets give. The range spans sub-millisecond local work up to the
+/// ~10s tail of a slow VTA round-trip or contended store operation.
+const DURATION_BUCKETS_SECONDS: &[f64] = &[
+    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
 
 /// Initialize the Prometheus metrics recorder and return a handle
 /// that can be used to render the metrics output.
 pub fn init_metrics() -> Option<PrometheusHandle> {
-    match PrometheusBuilder::new().install_recorder() {
+    let builder = match PrometheusBuilder::new().set_buckets_for_metric(
+        Matcher::Suffix("_duration_seconds".into()),
+        DURATION_BUCKETS_SECONDS,
+    ) {
+        Ok(builder) => builder,
+        Err(e) => {
+            // A bad bucket set is a programming error, not a runtime one — fall
+            // back to the default exporter rather than dropping metrics entirely.
+            event!(
+                Level::WARN,
+                "Failed to configure metrics histogram buckets: {}. Using exporter defaults.",
+                e
+            );
+            PrometheusBuilder::new()
+        }
+    };
+    match builder.install_recorder() {
         Ok(handle) => {
             event!(Level::INFO, "Prometheus metrics recorder installed");
             Some(handle)
@@ -138,4 +204,30 @@ pub async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl Int
         )],
         body,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The histogram buckets must be strictly ascending and accepted by the
+    /// exporter — otherwise `init_metrics` silently falls back to the default
+    /// (bucket-less) renderer, and the duration histograms lose their fixed
+    /// boundaries without any compile- or boot-time signal.
+    #[test]
+    fn duration_buckets_are_sorted_and_accepted() {
+        assert!(
+            DURATION_BUCKETS_SECONDS.windows(2).all(|w| w[0] < w[1]),
+            "duration buckets must be strictly ascending"
+        );
+        assert!(
+            PrometheusBuilder::new()
+                .set_buckets_for_metric(
+                    Matcher::Suffix("_duration_seconds".into()),
+                    DURATION_BUCKETS_SECONDS,
+                )
+                .is_ok(),
+            "exporter rejected the duration bucket set"
+        );
+    }
 }

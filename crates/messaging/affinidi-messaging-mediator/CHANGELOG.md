@@ -2,6 +2,33 @@
 
 ## Changelog history
 
+## 13th June 2026
+
+### 0.15.42 — Activate dead metrics + add VTA health metrics (simplification T24)
+
+- Observability depth. The metrics registry defined many metric names that were
+  never emitted; this wires up the ones with a natural, non-invasive home and
+  adds the previously-missing VTA health metrics.
+- **Histogram buckets:** `init_metrics` now configures fixed second-scale buckets
+  for every `*_duration_seconds` histogram (was relying on exporter defaults).
+- **Forwarding queue depth:** the statistics task now publishes
+  `forward_queue_length` (a gauge) by sampling `forward_queue_len()` each cycle —
+  works on every backend (Redis/Fjall/Memory).
+- **Store totals → Prometheus:** the statistics task already polled the store's
+  cumulative metadata every 60s but only *logged* it. It now also publishes those
+  totals as counters via `.absolute()` — `messages_stored/delivered/deleted_total`,
+  `store_{received,sent,deleted}_bytes_total`,
+  `websocket_connections_{opened,closed}_total`,
+  `sessions_{created,authenticated}_total`, and `oob_invites_{created,claimed}_total`.
+- **VTA health:** the refresh task now emits `vta_refresh_total{result=vta|cache|error}`,
+  the `vta_refresh_duration_seconds` histogram, and the
+  `vta_last_success_timestamp_seconds` gauge (alert on staleness when the VTA has
+  been unreachable across refresh windows).
+- Hot request/WS paths are untouched — all new emission is in the existing 60s
+  statistics poll and the VTA refresh loop. HTTP request metrics, per-store-op
+  latency histograms, and circuit-breaker metrics remain for later increments.
+  No version change to any other crate.
+
 ## 12th June 2026
 
 ### 0.15.41 — Move config loading + validation into the mediator-config crate (simplification T18, part b)
