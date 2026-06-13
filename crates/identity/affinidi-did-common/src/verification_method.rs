@@ -8,8 +8,11 @@ use url::Url;
 
 use crate::DocumentError;
 
+/// `#[non_exhaustive]`: build via [`VerificationMethodBuilder`] (or
+/// deserialization) rather than a struct literal. Fields stay public for reads.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct VerificationMethod {
     pub id: Url,
 
@@ -132,8 +135,12 @@ impl VerificationMethod {
 }
 
 /// https://www.w3.org/TR/cid-1.0/#verification-relationships
+///
+/// `#[non_exhaustive]`: match with a wildcard arm so new relationship shapes are
+/// not a breaking change.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum VerificationRelationship {
     /// Reference to a Verification Method (may be an absolute DID URL or a
     /// relative fragment like `"#0"`, so we keep it as a plain `String`).

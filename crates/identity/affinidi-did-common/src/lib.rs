@@ -57,8 +57,11 @@ pub enum DocumentError {
 /// A [DID Document]
 ///
 /// [DID Document]: https://www.w3.org/TR/did-1.1/
+/// `#[non_exhaustive]`: build via [`DocumentBuilder`] / [`Document::new`] (or
+/// deserialization) rather than a struct literal. Fields stay public for reads.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Document {
     /// DID Subject Identifier
     /// <https://www.w3.org/TR/cid-1.0/#subjects>

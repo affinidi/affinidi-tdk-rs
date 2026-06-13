@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Serializes/deserializes into/from either a value, or an array of values.
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum OneOrMany<T> {
     /// A single value.
     One(T),
