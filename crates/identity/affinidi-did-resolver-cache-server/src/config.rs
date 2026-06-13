@@ -37,7 +37,15 @@ struct ConfigRaw {
     pub enable_http_endpoint: String,
     pub enable_websocket_endpoint: String,
     pub statistics_interval: String,
+    #[serde(default = "default_resolve_timeout")]
+    pub resolve_timeout: String,
     pub cache: CacheConfig,
+}
+
+/// Default upstream-resolution timeout (seconds), used when the config file
+/// predates the `resolve_timeout` key.
+fn default_resolve_timeout() -> String {
+    "30".into()
 }
 
 pub struct Config {
@@ -46,6 +54,9 @@ pub struct Config {
     pub enable_http_endpoint: bool,
     pub enable_websocket_endpoint: bool,
     pub statistics_interval: Duration,
+    /// Maximum time a single upstream DID resolution may take before the
+    /// request path gives up and returns an error instead of blocking.
+    pub resolve_timeout: Duration,
     pub cache_capacity_count: u32,
     pub cache_expire: u32,
 }
@@ -61,6 +72,10 @@ impl fmt::Debug for Config {
                 "statistics_interval",
                 &format!("{} seconds", self.statistics_interval.as_secs()),
             )
+            .field(
+                "resolve_timeout",
+                &format!("{} seconds", self.resolve_timeout.as_secs()),
+            )
             .field("cache_capacity_count", &self.cache_capacity_count)
             .field("cache_expire", &format!("{} seconds", self.cache_expire))
             .finish()
@@ -75,6 +90,7 @@ impl Default for Config {
             enable_http_endpoint: true,
             enable_websocket_endpoint: true,
             statistics_interval: Duration::from_secs(60),
+            resolve_timeout: Duration::from_secs(30),
             cache_capacity_count: CacheConfig::default()
                 .capacity_count
                 .parse()
@@ -101,6 +117,7 @@ impl TryFrom<ConfigRaw> for Config {
             enable_http_endpoint: raw.enable_http_endpoint.parse().unwrap_or(true),
             enable_websocket_endpoint: raw.enable_websocket_endpoint.parse().unwrap_or(true),
             statistics_interval: Duration::from_secs(raw.statistics_interval.parse().unwrap_or(60)),
+            resolve_timeout: Duration::from_secs(raw.resolve_timeout.parse().unwrap_or(30)),
             cache_capacity_count: raw.cache.capacity_count.parse().unwrap_or(1000),
             cache_expire: raw.cache.expire.parse().unwrap_or(300),
         })

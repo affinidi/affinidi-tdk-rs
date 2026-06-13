@@ -1,5 +1,8 @@
 use crate::{SharedData, config::Config};
+use affinidi_did_resolver_cache_sdk::{DIDCacheClient, ResolveResponse, errors::DIDCacheError};
 use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
+use std::future::Future;
+use std::time::Duration;
 use tracing::{info, warn};
 
 pub(crate) mod http;
@@ -7,6 +10,47 @@ pub(crate) mod http;
 pub(crate) mod websocket;
 
 const MAX_WEBVH_LOG_BYTES: usize = 1024 * 1024;
+
+/// Outcome of a timeout-bounded upstream resolution.
+#[derive(Debug)]
+pub(crate) enum ResolveError {
+    /// The resolver itself returned an error.
+    Resolver(DIDCacheError),
+    /// Resolution did not complete within the configured timeout (seconds).
+    Timeout(u64),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::Resolver(e) => write!(f, "{e}"),
+            ResolveError::Timeout(secs) => write!(f, "resolution timed out after {secs}s"),
+        }
+    }
+}
+
+/// Bound a resolution future by `timeout`, turning a hung upstream into a
+/// distinct [`ResolveError::Timeout`] so the request path returns an error to
+/// the client instead of blocking the connection indefinitely.
+async fn apply_timeout<T>(
+    timeout: Duration,
+    fut: impl Future<Output = Result<T, DIDCacheError>>,
+) -> Result<T, ResolveError> {
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(ResolveError::Resolver(e)),
+        Err(_elapsed) => Err(ResolveError::Timeout(timeout.as_secs())),
+    }
+}
+
+/// Resolve `did` through `resolver`, bounded by `timeout`.
+pub(crate) async fn resolve_with_timeout(
+    resolver: &DIDCacheClient,
+    timeout: Duration,
+    did: &str,
+) -> Result<ResolveResponse, ResolveError> {
+    apply_timeout(timeout, resolver.resolve(did)).await
+}
 
 /// Read a response body as UTF-8 text, refusing anything larger than `limit` bytes.
 async fn read_text_limited(mut resp: reqwest::Response, limit: usize) -> Option<String> {
@@ -134,4 +178,34 @@ pub async fn health_checker_handler(State(state): State<SharedData>) -> impl Int
         "message": message,
     });
     Json(response_json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn apply_timeout_trips_on_hung_resolution() {
+        // A never-resolving future must surface as a timeout, not a hang.
+        let fut = std::future::pending::<Result<(), DIDCacheError>>();
+        let res = apply_timeout(Duration::from_millis(50), fut).await;
+        assert!(matches!(res, Err(ResolveError::Timeout(_))));
+    }
+
+    #[tokio::test]
+    async fn apply_timeout_passes_fast_success() {
+        let res = apply_timeout(
+            Duration::from_secs(5),
+            std::future::ready(Ok::<_, DIDCacheError>(42)),
+        )
+        .await;
+        assert_eq!(res.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn apply_timeout_passes_resolver_error() {
+        let fut = std::future::ready(Err::<(), _>(DIDCacheError::DIDError("bad".into())));
+        let res = apply_timeout(Duration::from_secs(5), fut).await;
+        assert!(matches!(res, Err(ResolveError::Resolver(_))));
+    }
 }

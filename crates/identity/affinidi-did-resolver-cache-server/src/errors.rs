@@ -98,7 +98,7 @@ impl IntoResponse for AppError {
             }
         };
         (
-            StatusCode::from_u16(response.httpCode).ok().unwrap(),
+            StatusCode::from_u16(response.httpCode).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Json(response),
         )
             .into_response()
