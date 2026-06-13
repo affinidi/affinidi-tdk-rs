@@ -2,6 +2,27 @@
 
 ## Changelog history
 
+## 13th June 2026
+
+### 0.8.8 — client resilience: no-panic init, local fallback, stampede dedup (W3)
+
+- **Construction never panics or hangs.** The startup wait for the network task
+  to connect replaces `rx.recv().await.unwrap()` with a bounded wait
+  (`network_timeout`): on `Connected` it's ready; on timeout (server
+  unreachable) it continues in **degraded mode** while the task keeps
+  reconnecting with backoff; if the task dies before signalling, `new()` returns
+  an `Err` instead of panicking the caller.
+- **Local fallback in network mode.** When the cache server is unreachable, a
+  network resolution failure for the deterministic methods **did:key / did:peer**
+  falls back to local resolution instead of failing — the client can compute
+  those documents itself. Other (mutable) methods still surface the error.
+- **Single-flight resolution.** Concurrent cache misses for the same DID now
+  share one underlying resolution (in-flight `watch`-based dedup map); N
+  simultaneous callers produce exactly one upstream request, then all read the
+  cached result. Prevents cache-stampede load on the resolver/server.
+- Note: full restart-supervision of the background network task is deferred to
+  W15 (shared supervision utility); this is the interim hardening.
+
 ## 6th June 2026
 
 ### 0.8.7 — affinidi-crypto 0.2

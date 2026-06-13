@@ -15,7 +15,7 @@ As this crate can be used either natively or in a WASM environment, the followin
 #[cfg(all(feature = "network", target_arch = "wasm32"))]
 compile_error!("The 'network' feature is not supported on wasm32 targets");
 
-use affinidi_did_common::Document;
+use affinidi_did_common::{DID, Document};
 use config::DIDCacheConfig;
 use errors::DIDCacheError;
 use highway::{HighwayHash, HighwayHasher};
@@ -26,11 +26,14 @@ use networking::{
     network::{NetworkTask, WSCommands},
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::{fmt, time::Duration};
+use tokio::sync::watch;
 #[cfg(feature = "network")]
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
+#[cfg(feature = "network")]
+use tracing::warn;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::*;
 
@@ -192,6 +195,11 @@ pub struct DIDCacheClient {
     #[cfg(feature = "did_example")]
     did_example_cache: did_example::DiDExampleCache,
     resolvers: Arc<HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>>>,
+    /// Single-flight map: concurrent cache misses for the same DID hash share
+    /// one underlying resolution. The leader holds the `watch::Sender`; the
+    /// stored `Receiver` is cloned by followers, who wake when the leader drops
+    /// it and then read the freshly-cached document.
+    inflight: Arc<StdMutex<HashMap<[u64; 2], watch::Receiver<()>>>>,
 }
 
 impl Clone for DIDCacheClient {
@@ -206,8 +214,16 @@ impl Clone for DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: self.did_example_cache.clone(),
             resolvers: self.resolvers.clone(),
+            inflight: self.inflight.clone(),
         }
     }
+}
+
+/// Deterministic DID methods the client can resolve locally with no network
+/// access — the fallback set used when the cache server is unreachable.
+#[cfg(feature = "network")]
+fn is_locally_resolvable(method: &DIDMethod) -> bool {
+    matches!(method, DIDMethod::KEY | DIDMethod::PEER)
 }
 
 impl DIDCacheClient {
@@ -310,8 +326,6 @@ impl DIDCacheClient {
     /// NOTE: The DID Document id may be different to the requested DID due to the DID having been updated.
     ///       The original DID should be in the `also_known_as` field of the DID Document.
     pub async fn resolve(&self, did: &str) -> Result<ResolveResponse, DIDCacheError> {
-        use affinidi_did_common::DID;
-
         // Size guard before any parsing
         if did.len() > self.config.max_did_size_in_bytes {
             return Err(DIDCacheError::DIDError(format!(
@@ -367,28 +381,133 @@ impl DIDCacheClient {
             })
         } else {
             debug!("DID cache miss: {}", did);
-            // If the DID is not in the cache, resolve it (local or via network)
-            #[cfg(feature = "network")]
-            let doc = {
-                if self.config.service_address.is_some() {
-                    self.network_resolve(did, hash).await?
+            self.resolve_uncached(did, &parsed_did, &method, hash).await
+        }
+    }
+
+    /// Resolve a DID that wasn't in the cache, with single-flight dedup: when
+    /// several callers miss on the same DID at once, exactly one performs the
+    /// underlying resolution and the rest wait and read the cached result. On
+    /// success the document is inserted into the cache.
+    async fn resolve_uncached(
+        &self,
+        did: &str,
+        parsed_did: &DID,
+        method: &DIDMethod,
+        hash: [u64; 2],
+    ) -> Result<ResolveResponse, DIDCacheError> {
+        loop {
+            // Decide our role under the lock. No `.await` is held across it.
+            enum Role {
+                Leader(watch::Sender<()>),
+                Follower(watch::Receiver<()>),
+            }
+            let role = {
+                let mut map = self.inflight.lock().expect("inflight mutex not poisoned");
+                if let Some(rx) = map.get(&hash) {
+                    Role::Follower(rx.clone())
                 } else {
-                    self.local_resolve(&parsed_did).await?
+                    let (tx, rx) = watch::channel(());
+                    map.insert(hash, rx);
+                    Role::Leader(tx)
                 }
             };
 
-            #[cfg(not(feature = "network"))]
-            let doc = self.local_resolve(&parsed_did).await?;
+            match role {
+                Role::Follower(mut rx) => {
+                    // Wait for the leader to finish (it drops the sender, which
+                    // closes the channel and resolves `changed()` with an Err).
+                    let _ = rx.changed().await;
+                    if let Some(doc) = self.cache.get(&hash).await {
+                        return Ok(ResolveResponse {
+                            did: did.to_string(),
+                            method: method.clone(),
+                            did_hash: hash,
+                            doc,
+                            cache_hit: true,
+                        });
+                    }
+                    // Leader didn't populate the cache (it errored). Loop and
+                    // try to become the leader ourselves.
+                    continue;
+                }
+                Role::Leader(tx) => {
+                    // A prior leader may have populated the cache between our
+                    // miss check and acquiring leadership.
+                    if let Some(doc) = self.cache.get(&hash).await {
+                        self.inflight
+                            .lock()
+                            .expect("inflight mutex not poisoned")
+                            .remove(&hash);
+                        drop(tx);
+                        return Ok(ResolveResponse {
+                            did: did.to_string(),
+                            method: method.clone(),
+                            did_hash: hash,
+                            doc,
+                            cache_hit: true,
+                        });
+                    }
 
-            debug!("DID cached: {}", did);
-            self.cache.insert(hash, doc.clone()).await;
-            Ok(ResolveResponse {
-                did: did.to_string(),
-                method,
-                did_hash: hash,
-                doc,
-                cache_hit: false,
-            })
+                    let result = self.resolve_once(did, parsed_did, method, hash).await;
+                    if let Ok(ref doc) = result {
+                        debug!("DID cached: {}", did);
+                        self.cache.insert(hash, doc.clone()).await;
+                    }
+                    // Release leadership and wake followers regardless of outcome.
+                    self.inflight
+                        .lock()
+                        .expect("inflight mutex not poisoned")
+                        .remove(&hash);
+                    drop(tx);
+
+                    return result.map(|doc| ResolveResponse {
+                        did: did.to_string(),
+                        method: method.clone(),
+                        did_hash: hash,
+                        doc,
+                        cache_hit: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Perform a single (un-deduplicated) resolution. In network mode, a
+    /// network failure falls back to local resolution for deterministic methods
+    /// (did:key / did:peer) so a down cache server doesn't break resolutions the
+    /// client can compute itself.
+    async fn resolve_once(
+        &self,
+        did: &str,
+        parsed_did: &DID,
+        method: &DIDMethod,
+        hash: [u64; 2],
+    ) -> Result<Document, DIDCacheError> {
+        let _ = (did, hash, method); // some are unused without the `network` feature
+
+        #[cfg(feature = "network")]
+        {
+            if self.config.service_address.is_some() {
+                match self.network_resolve(did, hash).await {
+                    Ok(doc) => Ok(doc),
+                    Err(e) if is_locally_resolvable(method) => {
+                        warn!(
+                            "Network resolution failed for {did} ({e}); falling back to local \
+                             resolution"
+                        );
+                        self.local_resolve(parsed_did).await
+                    }
+                    Err(e) => Err(e),
+                }
+            } else {
+                self.local_resolve(parsed_did).await
+            }
+        }
+
+        #[cfg(not(feature = "network"))]
+        {
+            self.local_resolve(parsed_did).await
         }
     }
 
@@ -510,6 +629,7 @@ impl DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
             resolvers: resolvers.clone(),
+            inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
         #[cfg(not(feature = "network"))]
         let client = Self {
@@ -518,6 +638,7 @@ impl DIDCacheClient {
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
             resolvers,
+            inflight: Arc::new(StdMutex::new(HashMap::new())),
         };
 
         #[cfg(feature = "network")]
@@ -540,9 +661,38 @@ impl DIDCacheClient {
                 });
 
                 if let Some(arc_rx) = client.network_task_rx.as_ref() {
-                    // Wait for the network task to be ready
+                    // Wait for the network task to signal it's connected — but
+                    // bounded, and never via `unwrap()`:
+                    // - Connected: ready.
+                    // - timeout (server unreachable): proceed in degraded mode;
+                    //   the task keeps reconnecting with backoff, and resolution
+                    //   falls back to local for deterministic methods.
+                    // - channel closed (task died/panicked before signalling):
+                    //   return an error rather than panicking the caller.
                     let mut rx = arc_rx.lock().await;
-                    rx.recv().await.unwrap();
+                    match tokio::time::timeout(client.config.network_timeout, rx.recv()).await {
+                        Ok(Some(WSCommands::Connected)) => {
+                            debug!("Network task connected");
+                        }
+                        Ok(Some(other)) => {
+                            warn!(
+                                "Unexpected first message from network task ({other:?}); \
+                                 continuing — will reconnect in the background"
+                            );
+                        }
+                        Ok(None) => {
+                            return Err(DIDCacheError::TransportError(
+                                "Network task terminated before signalling readiness".to_string(),
+                            ));
+                        }
+                        Err(_elapsed) => {
+                            warn!(
+                                "Cache server not reachable at startup; continuing in degraded \
+                                 mode (local resolution for did:key/did:peer). The network task \
+                                 will keep retrying with backoff."
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -823,5 +973,94 @@ mod tests {
             result.cache_hit,
             "immutable did:key should survive beyond TTL"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // W3 resilience: single-flight dedup + degraded-mode local fallback
+    // -----------------------------------------------------------------------
+
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Test resolver that counts how many times it is actually invoked and
+    /// sleeps before returning, so concurrent callers overlap on the miss.
+    struct CountingResolver {
+        calls: Arc<AtomicUsize>,
+        delay: Duration,
+        doc: Document,
+    }
+
+    impl AsyncResolver for CountingResolver {
+        fn name(&self) -> &str {
+            "counting-test-resolver"
+        }
+        fn resolve<'a>(
+            &'a self,
+            _did: &'a DID,
+        ) -> Pin<Box<dyn Future<Output = Resolution> + Send + 'a>> {
+            let calls = self.calls.clone();
+            let delay = self.delay;
+            let doc = self.doc.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(delay).await;
+                Some(Ok(doc))
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_resolve_exactly_once() {
+        let did = "did:web:example.com";
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut client = basic_local_client().await;
+        client.set_resolver(
+            MethodName::Web,
+            Box::new(CountingResolver {
+                calls: calls.clone(),
+                delay: Duration::from_millis(100),
+                doc: Document::new(did).unwrap(),
+            }),
+        );
+
+        // Fire many concurrent resolutions of the same uncached DID.
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let c = client.clone();
+            let d = did.to_string();
+            handles.push(tokio::spawn(async move { c.resolve(&d).await }));
+        }
+        for h in handles {
+            let res = h.await.unwrap().expect("resolve succeeds");
+            assert_eq!(res.doc.id.as_str(), did);
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "10 concurrent misses for one DID must trigger exactly one resolution"
+        );
+    }
+
+    #[cfg(feature = "network")]
+    #[tokio::test]
+    async fn network_mode_degrades_then_falls_back_to_local() {
+        // Point at a port with nothing listening: construction must neither
+        // panic nor hang, and did:key must still resolve via local fallback
+        // while the cache server is unreachable.
+        let config = config::DIDCacheConfigBuilder::default()
+            .with_network_mode("ws://127.0.0.1:9")
+            .with_network_timeout(500)
+            .build();
+        let client = DIDCacheClient::new(config)
+            .await
+            .expect("client constructs in degraded mode when the server is down");
+
+        let res = client
+            .resolve(DID_KEY)
+            .await
+            .expect("did:key resolves locally while the cache server is down");
+        assert_eq!(res.doc.id.as_str(), DID_KEY);
     }
 }
