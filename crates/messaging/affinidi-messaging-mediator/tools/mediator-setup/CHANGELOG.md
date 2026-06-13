@@ -4,6 +4,18 @@
 
 ## 12th June 2026
 
+### 0.1.12 — Unify the non-interactive setup paths (simplification T22)
+
+- The interactive, `--non-interactive`, and `--from <recipe>` flows each inlined
+  the same re-run safety guard (`inspect_existing` + `refuse_overwrite`); the two
+  non-interactive flows also duplicated the config-summary banner. Extracted
+  `guard_existing_setup` (now shared by all three) and `print_config_summary`
+  (shared by both non-interactive flows). The `--non-interactive` config build is
+  now a testable `build_config_from_args` helper.
+- New **config-equivalence test**: the CLI-args path and the recipe path render a
+  byte-identical `mediator.toml` for the same logical setup, so the two
+  non-interactive entry points can't drift apart. Behaviour-identical refactor.
+
 ### 0.1.11 — Centralise secret-backend opening (simplification T21)
 
 - The online (`provision_secret_backend`) and sealed/headless

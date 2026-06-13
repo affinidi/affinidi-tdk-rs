@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 
-#[derive(Parser)]
+// `Default` lets tests construct an `Args` with `..Default::default()` (all
+// flags off / `None`) and set only the fields under test — clap always fully
+// populates it at runtime, so the derive is test-only ergonomics.
+#[derive(Parser, Default)]
 #[command(
     name = "mediator-setup",
     about = "Interactive setup wizard for Affinidi Messaging Mediator"
