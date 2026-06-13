@@ -6,7 +6,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use session::SessionError;
 use statistics::Statistics;
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, MutexGuard};
 
 pub(crate) mod common;
@@ -22,6 +22,9 @@ pub struct SharedData {
     pub service_start_timestamp: DateTime<Utc>,
     pub stats: Arc<Mutex<Statistics>>,
     pub resolver: DIDCacheClient,
+    /// Upper bound on a single upstream resolution before the request path
+    /// returns an error rather than blocking the connection.
+    pub resolve_timeout: Duration,
 }
 
 impl<S> FromRequestParts<S> for SharedData

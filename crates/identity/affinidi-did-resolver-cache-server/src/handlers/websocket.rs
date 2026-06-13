@@ -12,7 +12,10 @@ use axum::{
 use tokio::select;
 use tracing::{Instrument, debug, info, span, warn};
 
-use crate::{SharedData, handlers::fetch_webvh_log};
+use crate::{
+    SharedData,
+    handlers::{fetch_webvh_log, resolve_with_timeout},
+};
 
 /// Build a WSResponse, fetching the raw DID log for WebVH DIDs.
 async fn build_response(response: ResolveResponse) -> WSResponseType {
@@ -29,6 +32,66 @@ async fn build_response(response: ResolveResponse) -> WSResponseType {
         did_log,
         did_witness_log,
     }))
+}
+
+/// Serialize and send a WS response. Returns `false` if the connection should
+/// be closed (serialization failure or send error). Never panics — a
+/// serialization failure that previously `unwrap()`ed and killed the task now
+/// logs and closes the connection gracefully.
+async fn send_response(socket: &mut WebSocket, message: &WSResponseType) -> bool {
+    let text = match serde_json::to_string(message) {
+        Ok(text) => text,
+        Err(e) => {
+            warn!("ws: failed to serialize response, closing connection: {e:?}");
+            return false;
+        }
+    };
+    match socket.send(Message::Text(text.into())).await {
+        Ok(()) => {
+            debug!("Sent response: {message:?}");
+            true
+        }
+        Err(e) => {
+            warn!("ws: Error sending response: {e:?}");
+            false
+        }
+    }
+}
+
+/// Resolve `did` (bounded by the configured timeout) and send the response, or
+/// an error response if resolution fails or times out. Returns `false` if the
+/// connection should be closed.
+async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: String) -> bool {
+    match resolve_with_timeout(&state.resolver, state.resolve_timeout, &did).await {
+        Ok(response) => {
+            {
+                let mut stats = state.stats().await;
+                stats.increment_resolver_success();
+                if response.cache_hit {
+                    stats.increment_cache_hit();
+                }
+                stats.increment_did_method_success(response.method.clone());
+            }
+            debug!(
+                "resolved DID: ({}) cache_hit?({})",
+                response.did, response.cache_hit
+            );
+            let message = build_response(response).await;
+            send_response(socket, &message).await
+        }
+        Err(e) => {
+            // Couldn't resolve the DID (or timed out), send an error back.
+            let hash = DIDCacheClient::hash_did(&did);
+            warn!("Couldn't resolve DID: ({did}) Reason: {e}");
+            state.stats().await.increment_resolver_error();
+            let message = WSResponseType::Error(WSResponseError {
+                did,
+                hash,
+                error: e.to_string(),
+            });
+            send_response(socket, &message).await
+        }
+    }
 }
 
 // Handles the switching of the protocol to a websocket connection
@@ -80,32 +143,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
                                             }
                                         };
 
-                                        match state.resolver.resolve(&request.did).await {
-                                            Ok(response) => {
-                                                let mut stats = state.stats().await;
-                                                stats.increment_resolver_success();
-                                                if response.cache_hit { stats.increment_cache_hit();}
-                                                stats.increment_did_method_success(response.method.clone());
-                                                drop(stats);
-                                                debug!("resolved DID: ({}) cache_hit?({})", response.did, response.cache_hit);
-                                                let message = build_response(response).await;
-                                                if let Err(e) = socket.send(Message::Text(serde_json::to_string(&message).unwrap().into())).await {
-                                                    warn!("ws: Error sending response: {:?}", e);
-                                                    break;
-                                                } else {
-                                                    debug!("Sent response: {:?}", message);
-                                                }
-                                            }
-                                            Err(e) => {
-                                                // Couldn't resolve the DID, send an error back
-                                                let hash = DIDCacheClient::hash_did(&request.did);
-                                                warn!("Couldn't resolve DID: ({}) Reason: {}", &request.did, e);
-                                                state.stats().await.increment_resolver_error();
-                                                if let Err(e) = socket.send(Message::Text(serde_json::to_string(&WSResponseType::Error(WSResponseError {did: request.did, hash, error: e.to_string()})).unwrap().into())).await {
-                                                    warn!("ws: Error sending error response: {:?}", e);
-                                                    break;
-                                                }
-                                            }
+                                        if !resolve_and_respond(&mut socket, &state, request.did).await {
+                                            break;
                                         }
                                     }
                                     Message::Binary(msg) => {
@@ -118,32 +157,8 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData) {
                                             }
                                         };
 
-                                        match state.resolver.resolve(&request.did).await {
-                                            Ok(response) => {
-                                                let mut stats = state.stats().await;
-                                                stats.increment_resolver_success();
-                                                if response.cache_hit { stats.increment_cache_hit();}
-                                                stats.increment_did_method_success(response.method.clone());
-                                                drop(stats);
-                                                debug!("resolved DID: ({}) cache_hit?({})", response.did, response.cache_hit);
-                                                let message = build_response(response).await;
-                                                if let Err(e) = socket.send(Message::Text(serde_json::to_string(&message).unwrap().into())).await {
-                                                    warn!("ws: Error sending response: {:?}", e);
-                                                    break;
-                                                } else {
-                                                    debug!("Sent response: {:?}", message);
-                                                }
-                                            }
-                                            Err(e) => {
-                                                // Couldn't resolve the DID, send an error back
-                                                let hash = DIDCacheClient::hash_did(&request.did);
-                                                warn!("Couldn't resolve DID: ({}) Reason: {}", &request.did, e);
-                                                state.stats().await.increment_resolver_error();
-                                                if let Err(e) = socket.send(Message::Text(serde_json::to_string(&WSResponseType::Error(WSResponseError {did: request.did, hash, error: e.to_string()})).unwrap().into())).await {
-                                                    warn!("ws: Error sending error response: {:?}", e);
-                                                    break;
-                                                }
-                                            }
+                                        if !resolve_and_respond(&mut socket, &state, request.did).await {
+                                            break;
                                         }
                                     }
                                     Message::Ping(_) => {

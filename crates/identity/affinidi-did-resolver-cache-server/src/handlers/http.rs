@@ -1,4 +1,7 @@
-use crate::{SharedData, handlers::fetch_webvh_log};
+use crate::{
+    SharedData,
+    handlers::{fetch_webvh_log, resolve_with_timeout},
+};
 use affinidi_did_resolver_cache_sdk::DIDMethod;
 use axum::{
     Json,
@@ -12,7 +15,7 @@ pub async fn resolver_handler(
     State(state): State<SharedData>,
     Path(did): Path<String>,
 ) -> (StatusCode, Json<Value>) {
-    match state.resolver.resolve(&did).await {
+    match resolve_with_timeout(&state.resolver, state.resolve_timeout, &did).await {
         Ok(doc) => {
             let mut stats = state.stats.lock().await;
             stats.increment_resolver_success();

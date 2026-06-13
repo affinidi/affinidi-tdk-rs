@@ -10,6 +10,12 @@ listen_address = "${LISTEN_ADDRESS:0.0.0.0:8080}"
 ### Default: 60 second
 statistics_interval = "${STATISTICS_INTERVAL:10}"
 
+### resolve_timeout: max seconds a single upstream DID resolution may take
+### before the request path gives up and returns an error (rather than
+### blocking the HTTP request / WebSocket connection on a hung upstream).
+### Default: 30 seconds
+resolve_timeout = "${RESOLVE_TIMEOUT:30}"
+
 ### enable_http_endpoint: true/false
 ### Default: true
 ### If true, the server will make available /resolve endpoint for HTTP GET requests

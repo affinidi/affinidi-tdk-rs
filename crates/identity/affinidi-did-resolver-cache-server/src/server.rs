@@ -77,7 +77,8 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
 
     event!(Level::INFO, "[Loading Affinidi DID Cache configuration]");
 
-    let config = init(config_path, Some(reload_handle)).expect("Couldn't initialize DID Cache!");
+    let config = init(config_path, Some(reload_handle))
+        .map_err(|e| DIDCacheError::ConfigError(format!("Couldn't initialize DID Cache: {e}")))?;
 
     // Use the affinidi-did-resolver-cache-sdk in local mode
     let cache_config = DIDCacheConfigBuilder::default()
@@ -92,15 +93,17 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         service_start_timestamp: chrono::Utc::now(),
         stats: Arc::new(Mutex::new(Statistics::default())),
         resolver,
+        resolve_timeout: config.resolve_timeout,
     };
 
-    // Start the statistics thread
+    // Start the statistics thread. A panic here previously killed the task
+    // silently; log the error instead (full supervision lands in W2).
     let _stats = shared_state.stats.clone();
     let _cache = shared_state.resolver.get_cache();
     tokio::spawn(async move {
-        statistics(config.statistics_interval, &_stats, _cache)
-            .await
-            .expect("Error starting statistics thread");
+        if let Err(e) = statistics(config.statistics_interval, &_stats, _cache).await {
+            event!(Level::ERROR, "Statistics task exited with error: {e}");
+        }
     });
 
     // build our application routes
@@ -132,15 +135,20 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
             get(health_checker_handler).with_state(shared_state),
         );
 
-    axum_server::bind(
-        config
-            .listen_address
-            .parse::<std::net::SocketAddr>()
-            .unwrap(),
-    )
-    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-    .await
-    .unwrap();
+    let listen_address = config
+        .listen_address
+        .parse::<std::net::SocketAddr>()
+        .map_err(|e| {
+            DIDCacheError::ConfigError(format!(
+                "Invalid listen_address ({}): {e}",
+                config.listen_address
+            ))
+        })?;
+
+    axum_server::bind(listen_address)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .map_err(|e| DIDCacheError::TransportError(format!("server error: {e}")))?;
 
     Ok(())
 }
