@@ -16,6 +16,7 @@ on:
       - synchronize
     paths:
       - "crates/messaging/affinidi-messaging-mediator/**"
+      - "crates/tdk/affinidi-tdk/**"
       - ".github/workflows/checks-features.yaml"
 
 jobs:
@@ -81,3 +82,47 @@ jobs:
             -p ${{ matrix.crate.package }} \
             --no-default-features \
             --features "${{ steps.features.outputs.list }}"
+
+  # Build the affinidi-tdk facade across its feature surface so a new feature
+  # (or a broken re-export) can't silently fail to compile in some combination.
+  facade-features:
+    name: facade / ${{ matrix.combo.short }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        combo:
+          - short: default
+            flags: ""
+          - short: no-default
+            flags: "--no-default-features"
+          - short: credentials
+            flags: "--no-default-features --features credentials"
+          - short: protocols
+            flags: "--no-default-features --features protocols"
+          - short: did-methods
+            flags: "--no-default-features --features did-methods"
+          - short: trust+tsp
+            flags: "--no-default-features --features trust,tsp"
+          - short: all-features
+            flags: "--all-features"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps for aws_lc_rs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: facade-${{ matrix.combo.short }}
+
+      - name: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}
+        run: cargo check -p affinidi-tdk ${{ matrix.combo.flags }}

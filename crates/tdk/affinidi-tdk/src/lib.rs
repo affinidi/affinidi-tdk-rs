@@ -40,6 +40,42 @@ pub use affinidi_messaging_sdk as messaging;
 #[cfg(feature = "data-integrity")]
 pub use affinidi_data_integrity as data_integrity;
 
+// ── Credentials ──────────────────────────────────────────────────────────
+#[cfg(feature = "mdoc")]
+pub use affinidi_mdoc as mdoc;
+#[cfg(feature = "sd-jwt")]
+pub use affinidi_sd_jwt as sd_jwt;
+#[cfg(feature = "sd-jwt-vc")]
+pub use affinidi_sd_jwt_vc as sd_jwt_vc;
+#[cfg(feature = "status-list")]
+pub use affinidi_status_list as status_list;
+#[cfg(feature = "vc")]
+pub use affinidi_vc as vc;
+
+// ── Protocols ────────────────────────────────────────────────────────────
+#[cfg(feature = "oid4vc-core")]
+pub use affinidi_oid4vc_core as oid4vc_core;
+#[cfg(feature = "openid4vci")]
+pub use affinidi_openid4vci as openid4vci;
+#[cfg(feature = "openid4vp")]
+pub use affinidi_openid4vp as openid4vp;
+#[cfg(feature = "siopv2")]
+pub use affinidi_siopv2 as siopv2;
+
+// ── DID methods ──────────────────────────────────────────────────────────
+#[cfg(feature = "did-web")]
+pub use affinidi_did_web as did_web;
+#[cfg(feature = "did-ebsi")]
+pub use did_ebsi;
+#[cfg(feature = "did-scid")]
+pub use did_scid;
+
+// ── Trust + TSP ──────────────────────────────────────────────────────────
+#[cfg(feature = "trust")]
+pub use affinidi_trust_lists as trust_lists;
+#[cfg(feature = "tsp")]
+pub use affinidi_tsp as tsp;
+
 pub use affinidi_crypto;
 pub use affinidi_did_authentication as did_authentication;
 pub use affinidi_did_common as did_common;

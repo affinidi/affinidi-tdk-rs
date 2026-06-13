@@ -37,7 +37,7 @@ tempfile = { version = "3", optional = true }
 
 # ── DID + key generation ────────────────────────────────────────────────
 ## Used for `DID::generate_did_peer` (Ed25519 + X25519, with service URI).
-affinidi-tdk = { version = "0.7", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
+affinidi-tdk = { version = "0.8", path = "../../tdk/affinidi-tdk", default-features = false, features = ["did-peer"] }
 affinidi-secrets-resolver = { version = "0.5", path = "../../core/affinidi-secrets-resolver" }
 affinidi-did-resolver-cache-sdk = { version = "0.8", path = "../../identity/affinidi-did-resolver-cache-sdk" }
 

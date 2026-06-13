@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk"
-version = "0.7.4"
+version = "0.8.0"
 description.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,10 +14,41 @@ rust-version.workspace = true
 
 [features]
 default = ["messaging", "meeting-place", "did-peer", "data-integrity"]
+
+# ── Messaging / application clients ──────────────────────────────────────
 messaging = ["dep:affinidi-messaging-sdk"]
 meeting-place = ["dep:affinidi-meeting-place"]
+
+# did:peer helper API in `dids` — a pure code-gate backed by the always-present
+# `affinidi-did-common` (no extra dependency).
 did-peer = []
+
+# ── Credentials: formats, status, and proofs ─────────────────────────────
+credentials = ["vc", "sd-jwt", "sd-jwt-vc", "mdoc", "status-list", "data-integrity"]
+vc = ["dep:affinidi-vc"]
+sd-jwt = ["dep:affinidi-sd-jwt"]
+sd-jwt-vc = ["dep:affinidi-sd-jwt-vc"]
+mdoc = ["dep:affinidi-mdoc"]
+status-list = ["dep:affinidi-status-list"]
 data-integrity = ["dep:affinidi-data-integrity", "dep:serde"]
+
+# ── Protocols: OID4VC family ─────────────────────────────────────────────
+protocols = ["oid4vc-core", "siopv2", "openid4vci", "openid4vp"]
+oid4vc-core = ["dep:affinidi-oid4vc-core"]
+siopv2 = ["dep:affinidi-siopv2"]
+openid4vci = ["dep:affinidi-openid4vci"]
+openid4vp = ["dep:affinidi-openid4vp"]
+
+# ── DID methods (key/peer are always available; web also lives in the
+#    resolver). These add the standalone method crates. ───────────────────
+did-methods = ["did-web", "did-ebsi", "did-scid"]
+did-web = ["dep:affinidi-did-web"]
+did-ebsi = ["dep:did-ebsi"]
+did-scid = ["dep:did-scid"]
+
+# ── Trust + TSP ──────────────────────────────────────────────────────────
+trust = ["dep:affinidi-trust-lists"]
+tsp = ["dep:affinidi-tsp"]
 
 [dependencies]
 affinidi-did-resolver-cache-sdk = "0.8"
@@ -25,11 +56,38 @@ affinidi-did-common = "0.3"
 affinidi-messaging-sdk = { version = "0.18", optional = true }
 affinidi-messaging-didcomm = { path = "../../messaging/affinidi-messaging-didcomm", version = "0.15" }
 affinidi-did-authentication = "0.3"
+# Foundations are re-exported by the facade. Kept at major.minor (caret), NOT
+# exact-pinned: these crates ship frequent patch releases (see ADR 0003 / the
+# June-2026 semver wave), so an exact pin would break the facade build on every
+# patch. Caret already prevents incompatible within-minor skew; consumers should
+# use the facade OR direct sub-crate deps, not both.
 affinidi-tdk-common = "0.6"
 affinidi-secrets-resolver = "0.5"
 affinidi-crypto = "0.2"
 affinidi-meeting-place = { version = "0.4", optional = true }
-affinidi-data-integrity = { version = "0.7",  optional = true }
+affinidi-data-integrity = { version = "0.7", optional = true }
+
+# Credentials
+affinidi-vc = { version = "0.1", path = "../../credentials/affinidi-vc", optional = true }
+affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt", optional = true }
+affinidi-sd-jwt-vc = { version = "0.1", path = "../../credentials/affinidi-sd-jwt-vc", optional = true }
+affinidi-mdoc = { version = "0.2", path = "../../credentials/affinidi-mdoc", optional = true }
+affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list", optional = true }
+
+# Protocols
+affinidi-oid4vc-core = { version = "0.1", path = "../../protocols/affinidi-oid4vc-core", optional = true }
+affinidi-siopv2 = { version = "0.1", path = "../../protocols/affinidi-siopv2", optional = true }
+affinidi-openid4vci = { version = "0.1", path = "../../protocols/affinidi-openid4vci", optional = true }
+affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4vp", optional = true }
+
+# DID methods
+affinidi-did-web = { version = "0.1", path = "../../identity/did-methods/did-web", optional = true }
+did-ebsi = { version = "0.1", path = "../../identity/did-methods/did-ebsi", optional = true }
+did-scid = { version = "0.1", path = "../../identity/did-methods/did-scid", optional = true }
+
+# Trust + TSP
+affinidi-trust-lists = { version = "0.1", path = "../../trust/affinidi-trust-lists", optional = true }
+affinidi-tsp = { version = "0.1", path = "../../messaging/affinidi-tsp", optional = true }
 
 # External Crates
 clap = { version = "4", features = ["derive"] }
