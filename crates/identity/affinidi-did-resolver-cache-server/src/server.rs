@@ -7,6 +7,7 @@ use crate::{
 use affinidi_did_resolver_cache_sdk::{
     DIDCacheClient, config::DIDCacheConfigBuilder, errors::DIDCacheError,
 };
+use affinidi_task_utils::TaskSupervisor;
 use axum::{Router, routing::get};
 use http::Method;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
@@ -110,19 +111,26 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         webvh_client,
     };
 
-    // Supervise the statistics task: it now exits cleanly when `shutdown` is
-    // cancelled, and we join it after the server stops so a panic is logged.
+    // Supervise the statistics task through the shared TaskSupervisor: a
+    // panic or error restarts it with capped exponential backoff and is
+    // logged with its restart history, and its lifecycle is tracked in the
+    // supervisor's health registry. It is non-load-bearing — a wedged stats
+    // loop must never take the resolver down. The supervisor owns
+    // cancellation, so it aborts the task when `shutdown` fires.
     let shutdown = CancellationToken::new();
-    let _stats = shared_state.stats.clone();
-    let _cache = shared_state.resolver.get_cache();
-    let stats_shutdown = shutdown.clone();
-    let stats_handle = tokio::spawn(async move {
-        if let Err(e) =
-            statistics(config.statistics_interval, &_stats, _cache, stats_shutdown).await
-        {
-            event!(Level::ERROR, "Statistics task exited with error: {e}");
-        }
-    });
+    {
+        let stats = shared_state.stats.clone();
+        let cache = shared_state.resolver.get_cache();
+        let interval = config.statistics_interval;
+        let stats_shutdown = shutdown.clone();
+        TaskSupervisor::new(shutdown.clone()).spawn("statistics", false, move || {
+            // Re-clone per (re)start so each attempt gets fresh handles.
+            let stats = stats.clone();
+            let cache = cache.clone();
+            let stats_shutdown = stats_shutdown.clone();
+            async move { statistics(interval, &stats, cache, stats_shutdown).await }
+        });
+    }
 
     // build our application routes
     let app: Router = application_routes(&shared_state, &config);
@@ -186,12 +194,10 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
         .await
         .map_err(|e| DIDCacheError::TransportError(format!("server error: {e}")))?;
 
-    // Server has stopped — make sure the stats task is cancelled and observe
-    // its outcome so a panic surfaces in the logs rather than being swallowed.
+    // Server has stopped — cancel the supervised statistics task. The
+    // supervisor aborts it and marks it Stopped; any panic or error during
+    // its life was already logged and restarted by the supervisor.
     shutdown.cancel();
-    if let Err(e) = stats_handle.await {
-        event!(Level::ERROR, "Statistics task terminated abnormally: {e}");
-    }
 
     Ok(())
 }

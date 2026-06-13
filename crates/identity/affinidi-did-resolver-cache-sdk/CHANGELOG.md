@@ -4,6 +4,25 @@
 
 ## 13th June 2026
 
+### 0.8.9 — supervise the network task (W15)
+
+- **Network task supervised.** In network mode the background task is now
+  spawned through the shared `affinidi-task-utils` `TaskSupervisor` (the same
+  "restart-and-degrade, never fail-fast" policy as the mediator). A panic or
+  fatal error in the task — which would previously leave the SDK silently
+  unable to resolve over the network — is caught and restarted with capped
+  exponential backoff, and its lifecycle is recorded in a health registry.
+  This completes the restart-supervision deferred from W3.
+- **Observable health.** New `DIDCacheClient::network_health()` returns the
+  supervised task's current state (running / restarting / stopped, restart
+  count, last error), or `None` in local mode.
+- **`stop()` is now async-safe.** It cancels the supervisor's shutdown token
+  (the supervisor aborts the task) instead of `blocking_send`, which could
+  panic when called from within a tokio runtime. The internal `WSCommands::Exit`
+  message — now redundant — was removed.
+- No public API removed; the network feature additionally pulls in
+  `affinidi-task-utils`. Local (default) builds are unaffected.
+
 ### 0.8.8 — client resilience: no-panic init, local fallback, stampede dedup (W3)
 
 - **Construction never panics or hangs.** The startup wait for the network task

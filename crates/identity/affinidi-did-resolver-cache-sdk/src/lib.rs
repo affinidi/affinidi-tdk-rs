@@ -16,6 +16,8 @@ As this crate can be used either natively or in a WASM environment, the followin
 compile_error!("The 'network' feature is not supported on wasm32 targets");
 
 use affinidi_did_common::{DID, Document};
+#[cfg(feature = "network")]
+use affinidi_task_utils::{CancellationToken, HealthRegistry, TaskSupervisor};
 use config::DIDCacheConfig;
 use errors::DIDCacheError;
 use highway::{HighwayHash, HighwayHasher};
@@ -25,6 +27,9 @@ use networking::{
     WSRequest,
     network::{NetworkTask, WSCommands},
 };
+
+#[cfg(feature = "network")]
+pub use affinidi_task_utils::{ComponentHealth, ComponentState};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::{fmt, time::Duration};
@@ -192,6 +197,14 @@ pub struct DIDCacheClient {
     network_task_tx: Option<mpsc::Sender<WSCommands>>,
     #[cfg(feature = "network")]
     network_task_rx: Option<Arc<Mutex<mpsc::Receiver<WSCommands>>>>,
+    /// Shutdown token for the supervised network task; cancelling it stops
+    /// the task (see [`DIDCacheClient::stop`]).
+    #[cfg(feature = "network")]
+    network_shutdown: Option<CancellationToken>,
+    /// Health registry of the supervised network task, for observing its
+    /// lifecycle (see [`DIDCacheClient::network_health`]).
+    #[cfg(feature = "network")]
+    network_health: Option<HealthRegistry>,
     #[cfg(feature = "did_example")]
     did_example_cache: did_example::DiDExampleCache,
     resolvers: Arc<HashMap<MethodName, VecDeque<Box<dyn AsyncResolver>>>>,
@@ -211,6 +224,10 @@ impl Clone for DIDCacheClient {
             network_task_tx: self.network_task_tx.clone(),
             #[cfg(feature = "network")]
             network_task_rx: self.network_task_rx.clone(),
+            #[cfg(feature = "network")]
+            network_shutdown: self.network_shutdown.clone(),
+            #[cfg(feature = "network")]
+            network_health: self.network_health.clone(),
             #[cfg(feature = "did_example")]
             did_example_cache: self.did_example_cache.clone(),
             resolvers: self.resolvers.clone(),
@@ -518,12 +535,28 @@ impl DIDCacheClient {
         self.cache.clone()
     }
 
-    /// Stops the network task if it is running and removes any resources
+    /// Stops the network task if it is running and removes any resources.
+    ///
+    /// Cancels the supervisor's shutdown token, which aborts the network task
+    /// and marks it `Stopped` (no restart). This is safe to call from either
+    /// a sync or async context — unlike the previous `blocking_send`, which
+    /// could panic when called from within a tokio runtime.
     #[cfg(feature = "network")]
     pub fn stop(&self) {
-        if let Some(tx) = self.network_task_tx.as_ref() {
-            let _ = tx.blocking_send(WSCommands::Exit);
+        if let Some(shutdown) = self.network_shutdown.as_ref() {
+            shutdown.cancel();
         }
+    }
+
+    /// Current health of the supervised network task, or `None` when the SDK
+    /// is running in local mode (no network task). Lets callers observe a
+    /// network task that is restarting/degraded vs. running normally.
+    #[cfg(feature = "network")]
+    pub fn network_health(&self) -> Option<ComponentHealth> {
+        self.network_health
+            .as_ref()?
+            .get("did_cache_network")
+            .map(|h| h.clone())
     }
 
     /// Removes the specified DID from the cache
@@ -626,6 +659,8 @@ impl DIDCacheClient {
             cache,
             network_task_tx: None,
             network_task_rx: None,
+            network_shutdown: None,
+            network_health: None,
             #[cfg(feature = "did_example")]
             did_example_cache: did_example::DiDExampleCache::new(),
             resolvers: resolvers.clone(),
@@ -647,18 +682,41 @@ impl DIDCacheClient {
                 // Running in network mode
 
                 // Channel to communicate from SDK to network task
-                let (sdk_tx, mut task_rx) = mpsc::channel(32);
+                let (sdk_tx, task_rx) = mpsc::channel(32);
                 // Channel to communicate from network task to SDK
                 let (task_tx, sdk_rx) = mpsc::channel(32);
 
                 client.network_task_tx = Some(sdk_tx);
                 client.network_task_rx = Some(Arc::new(Mutex::new(sdk_rx)));
 
-                // Start the network task
-                let _config = client.config.clone();
-                tokio::spawn(async move {
-                    let _ = NetworkTask::run(_config, &mut task_rx, &task_tx).await;
+                // Start the network task under the shared TaskSupervisor. The
+                // task reconnects internally on transient drops; the
+                // supervisor catches the task itself *dying* (a panic or a
+                // propagated fatal error) and restarts it with capped backoff
+                // — a silent task death would otherwise leave the SDK
+                // permanently unable to resolve over the network. The
+                // supervisor owns cancellation: `stop()` cancels the token and
+                // the supervisor aborts the task with no restart. The SDK→task
+                // receiver is shared behind a `Mutex` so each (re)start
+                // re-locks the same channel rather than rebuilding it.
+                let network_shutdown = CancellationToken::new();
+                let supervisor = TaskSupervisor::new(network_shutdown.clone());
+                client.network_health = Some(supervisor.registry());
+
+                let task_rx = Arc::new(Mutex::new(task_rx));
+                let task_config = client.config.clone();
+                let task_shutdown = network_shutdown.clone();
+                supervisor.spawn("did_cache_network", false, move || {
+                    let task_rx = task_rx.clone();
+                    let task_tx = task_tx.clone();
+                    let task_config = task_config.clone();
+                    let shutdown = task_shutdown.clone();
+                    async move {
+                        let mut rx = task_rx.lock().await;
+                        NetworkTask::run(task_config, &mut rx, &task_tx, shutdown).await
+                    }
                 });
+                client.network_shutdown = Some(network_shutdown);
 
                 if let Some(arc_rx) = client.network_task_rx.as_ref() {
                     // Wait for the network task to signal it's connected — but
@@ -1062,5 +1120,89 @@ mod tests {
             .await
             .expect("did:key resolves locally while the cache server is down");
         assert_eq!(res.doc.id.as_str(), DID_KEY);
+
+        // The network task is supervised, so its health is observable even
+        // while it is busy reconnecting in the background.
+        assert!(
+            client.network_health().is_some(),
+            "a network-mode client must expose supervised network-task health"
+        );
+    }
+
+    /// A panic in the network task must be caught by the supervisor and the
+    /// task restarted (it would otherwise die silently, leaving the SDK
+    /// permanently unable to resolve over the network), with the fault
+    /// recorded. Mirrors the SDK's wiring — the SDK→task receiver shared
+    /// behind a `Mutex` and re-locked per (re)start — with an injected panic,
+    /// and confirms a clean shutdown stops it without further restarts.
+    #[cfg(feature = "network")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn supervised_network_task_restarts_after_panic() {
+        let (_sdk_tx, task_rx) = mpsc::channel::<WSCommands>(4);
+        let task_rx = Arc::new(Mutex::new(task_rx));
+        let token = CancellationToken::new();
+        let supervisor = TaskSupervisor::new(token.clone());
+        let registry = supervisor.registry();
+        let attempts = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        {
+            let task_rx = task_rx.clone();
+            let attempts = attempts.clone();
+            supervisor.spawn("did_cache_network", false, move || {
+                let task_rx = task_rx.clone();
+                let attempts = attempts.clone();
+                async move {
+                    // Prove the shared receiver re-locks cleanly across restarts.
+                    let _rx = task_rx.lock().await;
+                    if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        panic!("injected network task panic");
+                    }
+                    std::future::pending::<()>().await; // stay Running until cancel
+                    Ok::<(), crate::errors::DIDCacheError>(())
+                }
+            });
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let restarted = attempts.load(std::sync::atomic::Ordering::SeqCst) >= 2;
+            let running = registry
+                .get("did_cache_network")
+                .map(|h| h.state == ComponentState::Running && h.restarts >= 1)
+                .unwrap_or(false);
+            if restarted && running {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "supervisor did not restart the network task after a panic"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            registry
+                .get("did_cache_network")
+                .and_then(|h| h.last_error.clone())
+                .is_some_and(|e| e.contains("panicked")),
+            "the panic must be recorded as the last error"
+        );
+
+        // Cancelling the token must stop the task without restarting it.
+        token.cancel();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if registry
+                .get("did_cache_network")
+                .map(|h| h.state == ComponentState::Stopped)
+                .unwrap_or(false)
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "network task did not stop on cancellation"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 }
