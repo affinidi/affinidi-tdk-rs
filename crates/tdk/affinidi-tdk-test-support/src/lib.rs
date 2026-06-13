@@ -21,11 +21,14 @@
  * - **TI2** — [`did_web`] / [`resolver`]: in-process did:web / did:webvh mock
  *   server with fault injection, plus an injectable `StaticResolver`. ✅
  * - **TI4** — `determinism`: seeded did:peer generation and an injectable clock.
- * - **TI5** — `credentials`: issuer/holder/verifier `CredentialScenario`.
- * - **TI7** — `vectors`: shared `tests/vectors/` layout and loader.
+ * - **TI5** — [`credential_scenario`]: issuer/holder/verifier `CredentialScenario`
+ *   for SD-JWT VC (TI5a) plus the [`mdoc_scenario`] and [`oid4vp`] flows (TI5b). ✅
+ * - **TI7** — [`vectors`]: shared `tests/vectors/` layout and loader. ✅
  */
 
 pub mod credential_scenario;
 pub mod did_web;
+pub mod mdoc_scenario;
+pub mod oid4vp;
 pub mod resolver;
 pub mod vectors;

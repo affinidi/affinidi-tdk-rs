@@ -20,14 +20,15 @@ you don't want to stand up external services.
 
 ## Status
 
-Scaffold. Fixtures land per task in the TI-series (see `tasks/testing-todo.md`):
+Fixtures land per task in the TI-series (see `tasks/testing-todo.md`):
 
-| Task | Module        | Fixture                                                       |
-|------|---------------|---------------------------------------------------------------|
-| TI1  | `topology`    | Multi-mediator `TestTopology` (in-process, no Redis)          |
-| TI2  | `did_web`     | did:web / did:webvh mock server + injectable `StaticResolver` |
-| TI4  | `determinism` | Seeded did:peer generation + injectable clock                 |
-| TI5  | `credentials` | `CredentialScenario` (issuer / holder / verifier)             |
-| TI7  | `vectors`     | Shared `tests/vectors/` layout + loader                       |
+| Task  | Module                | Fixture                                                       | Status |
+|-------|-----------------------|---------------------------------------------------------------|:------:|
+| TI1   | `topology`            | Multi-mediator `TestTopology` (in-process, no Redis)          |  ⏳   |
+| TI2   | `did_web` / `resolver`| did:web / did:webvh mock server + injectable `StaticResolver` |  ✅   |
+| TI4   | `determinism`         | Seeded did:peer generation + injectable clock                 |  ⏳   |
+| TI5a  | `credential_scenario` | `CredentialScenario` SD-JWT VC issue / present / verify        |  ✅   |
+| TI5b  | `mdoc_scenario` / `oid4vp` | mdoc (COSE) flows + OID4VP present / verify (both eIDAS formats) |  ✅   |
+| TI7   | `vectors`             | Shared `tests/vectors/` layout + loader                       |  ✅   |
 
 [`affinidi-messaging-test-mediator`]: ../../messaging/affinidi-messaging-test-mediator

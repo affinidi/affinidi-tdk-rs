@@ -47,6 +47,12 @@ use serde_json::{Value, json};
 
 use affinidi_crypto::did_key::ed25519_pub_to_did_key;
 use affinidi_did_common::DID;
+use affinidi_mdoc::{
+    cose::CoseSigner,
+    cose_key::CoseKey,
+    eddsa_cose::{EdDsaCoseSigner, EdDsaCoseVerifier},
+    error::Result as MdocResult,
+};
 use affinidi_sd_jwt::{
     SdJwt, SdJwtError,
     hasher::Sha256Hasher,
@@ -56,6 +62,7 @@ use affinidi_sd_jwt::{
 };
 use affinidi_status_list::bitstring::{BitstringStatusList, StatusPurpose};
 use affinidi_vc::sd_jwt_vc::{self, SdJwtVc};
+use coset::iana::Algorithm as CoseAlgorithm;
 
 use crate::resolver::StaticResolver;
 
@@ -73,6 +80,14 @@ pub enum ScenarioError {
     /// A status-list operation failed.
     #[error("status list: {0}")]
     Status(String),
+
+    /// An mdoc issue/present/verify call failed.
+    #[error("mdoc: {0}")]
+    Mdoc(String),
+
+    /// An OID4VP envelope (request/response) operation failed.
+    #[error("oid4vp: {0}")]
+    Oid4vp(String),
 
     /// A `did:key` failed to parse or resolve while building the resolver.
     #[error("did: {0}")]
@@ -203,6 +218,26 @@ impl JwtVerifier for Ed25519Verifier {
     }
 }
 
+/// A COSE signer that signs with an Ed25519 key but declares a caller-chosen
+/// algorithm in the protected header. The mdoc analogue of
+/// [`Ed25519Signer::with_alg`]: it lets a test forge an `issuerAuth` whose
+/// declared `alg` an allowlisting verifier should reject before checking the
+/// (otherwise valid) signature.
+pub struct ForgedAlgCoseSigner {
+    key: SigningKey,
+    alg: CoseAlgorithm,
+}
+
+impl CoseSigner for ForgedAlgCoseSigner {
+    fn algorithm(&self) -> CoseAlgorithm {
+        self.alg
+    }
+
+    fn sign(&self, data: &[u8]) -> MdocResult<Vec<u8>> {
+        Ok(self.key.sign(data).to_bytes().to_vec())
+    }
+}
+
 /// One party in a [`CredentialScenario`] — a deterministic Ed25519 `did:key`.
 pub struct Party {
     did: String,
@@ -239,6 +274,37 @@ impl Party {
     /// A verifier for this party's key, accepting only `allowed_algs`.
     pub fn verifier(&self, allowed_algs: &[&str]) -> Ed25519Verifier {
         Ed25519Verifier::new(self.key.verifying_key(), allowed_algs)
+    }
+
+    /// An `EdDSA` COSE signer for this party (the mdoc issuer / device signer),
+    /// with `kid` = its DID.
+    pub fn cose_signer(&self) -> EdDsaCoseSigner {
+        EdDsaCoseSigner::from_bytes(&self.key.to_bytes())
+            .expect("32-byte Ed25519 key is valid")
+            .with_kid(self.did.clone().into_bytes())
+    }
+
+    /// An `EdDSA` COSE verifier for this party's key.
+    pub fn cose_verifier(&self) -> EdDsaCoseVerifier {
+        EdDsaCoseVerifier::from_bytes(&self.key.verifying_key().to_bytes())
+            .expect("32-byte Ed25519 public key is valid")
+    }
+
+    /// A COSE signer that signs with this party's key but declares `alg` in the
+    /// protected header — for the disallowed-`alg` mdoc negative.
+    pub fn cose_signer_with_alg(&self, alg: CoseAlgorithm) -> ForgedAlgCoseSigner {
+        ForgedAlgCoseSigner {
+            key: self.key.clone(),
+            alg,
+        }
+    }
+
+    /// This party's public key as an mdoc device `COSE_Key` (OKP/Ed25519), for
+    /// the MSO `deviceKeyInfo` holder-binding slot.
+    pub fn device_cose_key(&self) -> ciborium::Value {
+        CoseKey::new_ed25519(self.key.verifying_key().to_bytes().to_vec())
+            .expect("32-byte Ed25519 public key is a valid COSE_Key")
+            .to_cbor_value()
     }
 }
 
