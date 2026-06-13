@@ -8,8 +8,12 @@ use axum::{
     extract::ConnectInfo,
     response::{IntoResponse, Response},
 };
-use governor::{Quota, RateLimiter, clock::DefaultClock, state::keyed::DashMapStateStore};
-use http::{Request, StatusCode};
+use governor::{
+    Quota, RateLimiter,
+    clock::{Clock, DefaultClock},
+    state::keyed::DashMapStateStore,
+};
+use http::{HeaderValue, Request, StatusCode, header};
 use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
 use tower::{Layer, Service};
 use tracing::warn;
@@ -109,15 +113,25 @@ where
             });
         };
 
-        if limiter.check_key(&ip).is_err() {
+        if let Err(not_until) = limiter.check_key(&ip) {
             warn!("Rate limit exceeded for IP: {}", ip);
             metrics::counter!(super::metrics::names::RATE_LIMITED_TOTAL).increment(1);
+            // Accurate Retry-After: governor reports the instant the next token
+            // is available; round up to whole seconds (min 1), per RFC 7231.
+            let retry_after = not_until
+                .wait_time_from(DefaultClock::default().now())
+                .as_secs()
+                .max(1);
             return Box::pin(async move {
-                Ok((
+                let mut response = (
                     StatusCode::TOO_MANY_REQUESTS,
                     "Rate limit exceeded. Please try again later.",
                 )
-                    .into_response())
+                    .into_response();
+                if let Ok(value) = HeaderValue::from_str(&retry_after.to_string()) {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+                Ok(response)
             });
         }
 

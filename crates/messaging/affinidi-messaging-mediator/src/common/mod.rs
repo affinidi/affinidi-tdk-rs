@@ -7,6 +7,7 @@ pub mod jwt_auth;
 pub mod metrics;
 pub mod rate_limiter;
 pub mod request_id;
+pub mod request_metrics;
 pub mod session;
 pub mod storage_timeout;
 pub mod time;
