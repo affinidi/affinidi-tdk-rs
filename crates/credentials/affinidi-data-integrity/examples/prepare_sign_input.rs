@@ -48,15 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- 2. Build the proof configuration (everything except the signature)
     let suite = CryptoSuite::EddsaJcs2022;
     let created = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let proof_config = DataIntegrityProof {
-        type_: "DataIntegrityProof".into(),
-        cryptosuite: suite,
-        created: Some(created),
-        verification_method: vm.clone(),
-        proof_purpose: "assertionMethod".into(),
-        proof_value: None,
-        context: None,
-    };
+    let proof_config = DataIntegrityProof::new(
+        suite,
+        vm.clone(),
+        "assertionMethod".into(),
+        None,
+        Some(created),
+        None,
+    );
 
     // ---- 3. Compute the exact bytes a remote signer would receive ---
     //
@@ -73,10 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signature = simulate_remote_sign(&backend_key, &sign_input).await?;
 
     // ---- 5. Assemble the final proof --------------------------------
-    let proof = DataIntegrityProof {
-        proof_value: Some(multibase::encode(Base::Base58Btc, &signature)),
-        ..proof_config
-    };
+    // Fields stay public for reads/writes; only literal construction is sealed.
+    let mut proof = proof_config.clone();
+    proof.proof_value = Some(multibase::encode(Base::Base58Btc, &signature));
 
     // ---- 6. Sanity-check: verify against the same public key --------
     proof.verify_with_public_key(&credential, &public_key, VerifyOptions::new())?;

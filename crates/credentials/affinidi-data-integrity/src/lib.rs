@@ -107,8 +107,13 @@ pub use error::{DataIntegrityError, SignatureFailure};
 pub use options::{SignOptions, VerifyOptions};
 
 /// Serialized Data Integrity proof.
+///
+/// `#[non_exhaustive]`: produce via [`DataIntegrityProof::sign`] or
+/// [`DataIntegrityProof::new`] rather than a struct literal. Fields stay public
+/// for reads.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct DataIntegrityProof {
     /// Must be 'DataIntegrityProof'
     #[serde(rename = "type")]
@@ -131,6 +136,30 @@ pub struct DataIntegrityProof {
 }
 
 impl DataIntegrityProof {
+    /// Assemble a Data Integrity proof from its parts. `type_` is fixed to
+    /// `"DataIntegrityProof"`. Most callers should use [`DataIntegrityProof::sign`];
+    /// this is for reconstructing a proof from known components (e.g. tests or
+    /// custom flows).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        cryptosuite: CryptoSuite,
+        verification_method: String,
+        proof_purpose: String,
+        proof_value: Option<String>,
+        created: Option<String>,
+        context: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            type_: "DataIntegrityProof".to_string(),
+            cryptosuite,
+            created,
+            verification_method,
+            proof_purpose,
+            proof_value,
+            context,
+        }
+    }
+
     /// Produces a Data Integrity proof over `data_doc`.
     ///
     /// The cryptosuite is picked from [`SignOptions::cryptosuite`] if

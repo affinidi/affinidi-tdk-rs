@@ -208,18 +208,17 @@ mod tests {
         }
 
         fn proof_with_vm(verification_method: &str) -> DataIntegrityProof {
-            DataIntegrityProof {
-                type_: "DataIntegrityProof".to_string(),
-                cryptosuite: CryptoSuite::EddsaJcs2022,
-                created: Some("2025-01-01T00:00:00Z".to_string()),
-                verification_method: verification_method.to_string(),
-                proof_purpose: "assertionMethod".to_string(),
-                proof_value: Some(
+            DataIntegrityProof::new(
+                CryptoSuite::EddsaJcs2022,
+                verification_method.to_string(),
+                "assertionMethod".to_string(),
+                Some(
                     "z2RPk8MWLoULfcbtpULoEsgfDsaAvyfD1PvQC2v3BjqqNtzGu8YJ4Nxq8CmJCZpPqA49uJhkxmxSztUQhBxqnVrYj"
                         .to_string(),
                 ),
-                context: None,
-            }
+                Some("2025-01-01T00:00:00Z".to_string()),
+                None,
+            )
         }
 
         #[tokio::test]
