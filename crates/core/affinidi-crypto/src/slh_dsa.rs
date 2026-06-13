@@ -3,6 +3,7 @@
 //! Private and public keys are stored as their FIPS 205 raw encodings
 //! (64 and 32 bytes respectively for SHA2-128s).
 
+use rand_10::SeedableRng;
 use slh_dsa::signature::{Signer, Verifier};
 use slh_dsa::{Sha2_128s, Signature, SigningKey, VerifyingKey};
 
@@ -18,7 +19,9 @@ pub struct KeyPair {
 
 /// Generates an SLH-DSA-SHA2-128s key pair.
 pub fn generate_slh_dsa_sha2_128s() -> KeyPair {
-    let mut rng = rand_10::rng();
+    // Seed a CSPRNG directly from the OS (no thread-local RNG) for key generation.
+    let mut rng = rand_10::rngs::StdRng::try_from_rng(&mut rand_10::rngs::SysRng)
+        .expect("OS entropy unavailable while seeding key RNG");
     let sk = SigningKey::<Sha2_128s>::new(&mut rng);
     let vk = sk.as_ref();
     KeyPair {

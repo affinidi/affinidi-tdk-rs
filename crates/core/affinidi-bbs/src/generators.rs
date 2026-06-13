@@ -17,9 +17,17 @@ use elliptic_curve::hash2curve::ExpandMsgXmd;
 use sha2::Sha256;
 
 use crate::ciphersuite::Ciphersuite;
-use crate::error::Result;
+use crate::error::{BbsError, Result};
 use crate::hash::hash_to_scalar;
 use crate::types::PublicKey;
+
+/// Hard upper bound on the number of generators (≈ message count) any operation
+/// will build. Generator creation is `O(count)` hash-to-curve work, and on the
+/// verify path `count` is derived from the *untrusted* proof length — without a
+/// cap, a multi-megabyte bogus proof forces unbounded work (a cheap DoS). No
+/// legitimate credential signs anywhere near this many messages, so the bound
+/// is generous for real use while rejecting abuse cheaply, before the loop.
+pub const MAX_GENERATORS: usize = 1024;
 
 /// The BBS ciphersuite constant `P1` for **BLS12-381-SHA-256**, as fixed by
 /// `draft-irtf-cfrg-bbs-signatures`.
@@ -75,6 +83,16 @@ pub fn create_generators_with_api_id(
     // Reject not-yet-implemented ciphersuites (SHAKE-256) at the generator
     // chokepoint: the hash-to-curve below is hard-wired to ExpandMsgXmd<Sha256>.
     cs.ensure_supported()?;
+
+    // Cap the count BEFORE the O(count) hash-to-curve loop. On the verify path
+    // `count` comes from the untrusted proof length, so an oversized bogus proof
+    // would otherwise force unbounded generator work.
+    if count > MAX_GENERATORS {
+        return Err(BbsError::InvalidProof(format!(
+            "generator/message count {count} exceeds maximum {MAX_GENERATORS}"
+        )));
+    }
+
     let seed_dst = [api_id, b"SIG_GENERATOR_SEED_"].concat();
     let generator_dst = [api_id, b"SIG_GENERATOR_DST_"].concat();
     let generator_seed = [api_id, b"MESSAGE_GENERATOR_SEED"].concat();
@@ -195,6 +213,15 @@ mod tests {
     fn create_generators_correct_count() {
         let gens = create_generators(5, Ciphersuite::Bls12381Sha256).unwrap();
         assert_eq!(gens.len(), 5);
+    }
+
+    #[test]
+    fn create_generators_caps_at_max() {
+        // At the limit: allowed.
+        assert!(create_generators(MAX_GENERATORS, Ciphersuite::Bls12381Sha256).is_ok());
+        // One over: rejected cheaply, before building any generators.
+        let err = create_generators(MAX_GENERATORS + 1, Ciphersuite::Bls12381Sha256).unwrap_err();
+        assert!(matches!(err, BbsError::InvalidProof(_)), "got {err:?}");
     }
 
     #[test]
