@@ -2,6 +2,21 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.6.0 — seeded did:peer generation (TI4a)
+
+- `determinism`: deterministic `did:peer` identities. `did_peer_from_seed(seed,
+  keys, service)` and the `didcomm_identity_from_seed(seed, service)` convenience
+  (Ed25519 verification + X25519 encryption) derive their keys from a caller seed
+  so **same seed → same DID, keys, and key ids** across runs — reproducible CI
+  failures and golden-file assertions. The assembled DID and default `dm` service
+  match `DID::generate_did_peer` byte-for-byte. `seeded_secret(key_type, &seed)`
+  exposes the underlying primitive (Ed25519 / X25519 / P256 / Secp256k1).
+  TEST-ONLY (seeded keys are predictable; never a production key path).
+- TI4's injectable clock follows separately as TI4b (a `Clock` trait threaded
+  through the mediator + SDK).
+
 ## 13th June 2026
 
 ### 0.5.0 — mdoc (COSE) + OID4VP present/verify flows (TI5b)
