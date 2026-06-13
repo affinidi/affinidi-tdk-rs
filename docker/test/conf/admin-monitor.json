@@ -1,0 +1,17 @@
+{
+  "alias": "admin",
+  "did": "did:key:z6MkhnJYiMpUGjvedv1eXZziYsFoi6WYRiidWx6EEwvxy3Ed",
+  "mediator": "did:peer:2.Vz6Mksfa1ijceFf8yFmTSdRha6Ha2Lzzfuc68UyRAdpsC5pr6.Ez6LShyV6x81XmxvpyDpgwaXo27783iBBJPTeUtDgcvyKLDXP.SeyJ0IjoiZG0iLCJzIjpbeyJ1cmkiOiJodHRwOi8vbG9jYWxob3N0OjcwMzcvbWVkaWF0b3IvdjEiLCJhY2NlcHQiOlsiZGlkY29tbS92MiJdfSx7InVyaSI6IndzOi8vbG9jYWxob3N0OjcwMzcvbWVkaWF0b3IvdjEvd3MiLCJhY2NlcHQiOlsiZGlkY29tbS92MiJdfV19.SeyJ0IjoiQXV0aGVudGljYXRpb24iLCJzIjoiaHR0cDovL2xvY2FsaG9zdDo3MDM3L21lZGlhdG9yL3YxL2F1dGhlbnRpY2F0ZSIsImlkIjoiI2F1dGgifQ",
+  "secrets": [
+    {
+      "id": "did:key:z6MkhnJYiMpUGjvedv1eXZziYsFoi6WYRiidWx6EEwvxy3Ed#z6MkhnJYiMpUGjvedv1eXZziYsFoi6WYRiidWx6EEwvxy3Ed",
+      "type": "JsonWebKey2020",
+      "privateKeyJwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "MXPs4I1qVz8bZCWeA4EALnaKOtzQirxYSeREC9v1S64",
+        "d": "0HmWmLRvZrgJNuT_DVlAqaLIJMn8HUtIPfSWyHhsxFQ"
+      }
+    }
+  ]
+}

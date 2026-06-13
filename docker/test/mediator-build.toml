@@ -1,0 +1,50 @@
+# ============================================================================
+# TEST-ONLY mediator build recipe for the docker-compose.test.yml stack (TI3).
+#
+# Drives `affinidi-messaging-mediator-setup --from this-file --non-interactive`
+# to generate a fixed, reproducible mediator identity + config under
+# `docker/test/conf/`. The generated `secrets.json` is committed and is
+# **TEST-ONLY** — never reuse these keys anywhere real.
+#
+# This recipe itself contains no secrets (safe to commit); the wizard generates
+# the keypairs.
+# ============================================================================
+
+[deployment]
+type = "container"
+protocols = ["didcomm"]
+use_vta = false
+
+[identity]
+# did:peer is self-resolving (endpoint embedded), so the composed stack needs no
+# external DID resolution for the mediator itself.
+did_method = "peer"
+# Host-reachable URL the mediator publishes in its DID service endpoint, so an
+# SDK client on the host (or another container) can reach it via the mapped port.
+public_url = "http://localhost:7037"
+
+[secrets]
+# Local file backend (conf/secrets.json) — the only container-friendly option
+# here; keyring/cloud backends don't fit a self-contained test image.
+storage = "file://"
+
+[security]
+ssl = "none"
+admin = "generate"
+network_mode = "open"
+cors = "none"
+
+[database]
+# The mediator's view of Redis on the compose network (service name `redis`).
+# Override at runtime with DATABASE_URL if needed.
+url = "redis://redis:6379/"
+
+[storage]
+backend = "redis"
+
+[output]
+config_path = "conf/mediator.toml"
+listen_address = "0.0.0.0:7037"
+
+[install]
+enabled = false

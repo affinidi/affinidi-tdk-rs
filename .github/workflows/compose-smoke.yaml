@@ -1,0 +1,40 @@
+name: compose-smoke
+# Composed-stack smoke test (TI3): builds the mediator image, brings up
+# docker-compose.test.yml (mediator + Redis + static did:web), and runs a full
+# DIDComm round-trip against it.
+#
+# NOT run per-PR — the mediator image is a full release build, too heavy for
+# every push. Runs on demand (workflow_dispatch) and nightly.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:00 UTC nightly.
+    - cron: "0 4 * * *"
+
+jobs:
+  smoke:
+    name: composed-stack smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native deps (libdbus for keyring, libssl)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdbus-1-dev libssl-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache cargo registry + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: compose-smoke
+
+      - name: Smoke the composed stack
+        # smoke.sh builds the image, brings the stack up, waits for health,
+        # checks did:web, runs the SDK round-trip, then tears the stack down.
+        run: bash docker/smoke/smoke.sh

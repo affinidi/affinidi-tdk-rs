@@ -12,11 +12,16 @@ docs/*
 !docs/security/
 # Consumer migration guides are tracked.
 !docs/migration/
+# Testing guide + composed-stack docs are tracked.
+!docs/testing/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json
 **/conf/secrets-admin.json
 **/conf/keys/
+# Exception: the docker-compose.test.yml stack's fixed TEST-ONLY identity is
+# committed on purpose (see docs/testing/docker-compose.md). NEVER reuse it.
+!docker/test/conf/secrets.json
 **/bootstrap-request.json
 **/bootstrap-request-vp.json
 **/*.armor
