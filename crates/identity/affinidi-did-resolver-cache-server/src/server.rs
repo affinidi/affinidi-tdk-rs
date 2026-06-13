@@ -9,8 +9,9 @@ use affinidi_did_resolver_cache_sdk::{
 };
 use axum::{Router, routing::get};
 use http::Method;
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::CorsLayer,
     trace::{self, TraceLayer},
@@ -88,20 +89,37 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
 
     let resolver = DIDCacheClient::new(cache_config).await?;
 
+    // One shared HTTP client for did:webvh log fetches, built once so
+    // connections are pooled (was previously rebuilt per request). Refuses
+    // redirects to avoid SSRF pivots, matching the previous per-call config.
+    let webvh_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| {
+            DIDCacheError::ConfigError(format!("Failed to build WebVH HTTP client: {e}"))
+        })?;
+
     // Create the shared application State
     let shared_state = SharedData {
         service_start_timestamp: chrono::Utc::now(),
         stats: Arc::new(Mutex::new(Statistics::default())),
         resolver,
         resolve_timeout: config.resolve_timeout,
+        max_did_size: config.max_did_size,
+        webvh_client,
     };
 
-    // Start the statistics thread. A panic here previously killed the task
-    // silently; log the error instead (full supervision lands in W2).
+    // Supervise the statistics task: it now exits cleanly when `shutdown` is
+    // cancelled, and we join it after the server stops so a panic is logged.
+    let shutdown = CancellationToken::new();
     let _stats = shared_state.stats.clone();
     let _cache = shared_state.resolver.get_cache();
-    tokio::spawn(async move {
-        if let Err(e) = statistics(config.statistics_interval, &_stats, _cache).await {
+    let stats_shutdown = shutdown.clone();
+    let stats_handle = tokio::spawn(async move {
+        if let Err(e) =
+            statistics(config.statistics_interval, &_stats, _cache, stats_shutdown).await
+        {
             event!(Level::ERROR, "Statistics task exited with error: {e}");
         }
     });
@@ -113,16 +131,12 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
     let app = Router::new()
         .merge(app)
         .layer(
+            // DID documents are public, so any origin is fine, but the server
+            // only exposes GET endpoints — don't advertise write methods.
             CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
                 .allow_headers([http::header::CONTENT_TYPE])
-                .allow_methods([
-                    Method::GET,
-                    Method::POST,
-                    Method::PUT,
-                    Method::DELETE,
-                    Method::PATCH,
-                ]),
+                .allow_methods([Method::GET]),
         )
         .layer(
             TraceLayer::new_for_http()
@@ -145,10 +159,39 @@ pub async fn start_with_config(config_path: &str) -> Result<(), DIDCacheError> {
             ))
         })?;
 
+    // On Ctrl-C, cancel background tasks and let in-flight requests drain.
+    let server_handle = axum_server::Handle::new();
+    {
+        let server_handle = server_handle.clone();
+        let shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => event!(
+                    Level::INFO,
+                    "Shutdown signal received; draining connections"
+                ),
+                Err(e) => {
+                    event!(Level::ERROR, "Failed to listen for shutdown signal: {e}");
+                    return;
+                }
+            }
+            shutdown.cancel();
+            server_handle.graceful_shutdown(Some(Duration::from_secs(10)));
+        });
+    }
+
     axum_server::bind(listen_address)
+        .handle(server_handle)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .map_err(|e| DIDCacheError::TransportError(format!("server error: {e}")))?;
+
+    // Server has stopped — make sure the stats task is cancelled and observe
+    // its outcome so a panic surfaces in the logs rather than being swallowed.
+    shutdown.cancel();
+    if let Err(e) = stats_handle.await {
+        event!(Level::ERROR, "Statistics task terminated abnormally: {e}");
+    }
 
     Ok(())
 }

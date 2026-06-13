@@ -4,6 +4,26 @@
 
 ## 13th June 2026
 
+### 0.9.0 — request limits, CORS tightening, task supervision, client reuse (W2)
+
+- **DID size limit.** New `max_did_size` setting (default 1024 bytes,
+  `MAX_DID_SIZE`). Oversized DIDs are rejected before resolution — HTTP `400`
+  on `/resolve/{did}`, a WebSocket error response on `/ws` — and the WebSocket
+  upgrade caps frame/message size to the DID limit plus envelope overhead.
+- **CORS tightened to GET.** The server only exposes GET endpoints, so the CORS
+  layer no longer advertises POST/PUT/DELETE/PATCH (origin stays `Any` — DID
+  documents are public).
+- **Statistics task supervised.** The stats loop is now cancellation-aware and
+  exits cleanly on shutdown; the server installs a Ctrl-C handler that cancels
+  background tasks and gracefully drains in-flight requests
+  (`axum_server` graceful shutdown), then joins the stats task so a panic is
+  logged rather than swallowed.
+- **Shared WebVH HTTP client.** `fetch_webvh_log` now takes a single
+  `reqwest::Client` built once at startup (pooled connections) instead of
+  constructing a fresh client per request.
+- New `pub` fields `SharedData.max_did_size` / `SharedData.webvh_client`
+  (minor-version bump).
+
 ### 0.8.0 — remove request/startup panics, bound upstream resolution (W1)
 
 - **No more panics on the request path.** The four

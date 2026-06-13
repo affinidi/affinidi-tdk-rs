@@ -1,6 +1,6 @@
 use crate::{
     SharedData,
-    handlers::{fetch_webvh_log, resolve_with_timeout},
+    handlers::{did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
 };
 use affinidi_did_resolver_cache_sdk::DIDMethod;
 use axum::{
@@ -15,6 +15,19 @@ pub async fn resolver_handler(
     State(state): State<SharedData>,
     Path(did): Path<String>,
 ) -> (StatusCode, Json<Value>) {
+    if !did_within_size_limit(&did, state.max_did_size) {
+        state.stats.lock().await.increment_resolver_error();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "DID exceeds maximum length of {} bytes",
+                    state.max_did_size
+                )
+            })),
+        );
+    }
+
     match resolve_with_timeout(&state.resolver, state.resolve_timeout, &did).await {
         Ok(doc) => {
             let mut stats = state.stats.lock().await;
@@ -27,7 +40,7 @@ pub async fn resolver_handler(
 
             // For WebVH DIDs, include the raw log so clients can verify
             let (did_log, did_witness_log) = if doc.method == DIDMethod::WEBVH {
-                fetch_webvh_log(&did).await
+                fetch_webvh_log(&state.webvh_client, &did).await
             } else {
                 (None, None)
             };

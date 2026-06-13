@@ -14,13 +14,13 @@ use tracing::{Instrument, debug, info, span, warn};
 
 use crate::{
     SharedData,
-    handlers::{fetch_webvh_log, resolve_with_timeout},
+    handlers::{did_within_size_limit, fetch_webvh_log, resolve_with_timeout},
 };
 
 /// Build a WSResponse, fetching the raw DID log for WebVH DIDs.
-async fn build_response(response: ResolveResponse) -> WSResponseType {
+async fn build_response(client: &reqwest::Client, response: ResolveResponse) -> WSResponseType {
     let (did_log, did_witness_log) = if response.method == DIDMethod::WEBVH {
-        fetch_webvh_log(&response.did).await
+        fetch_webvh_log(client, &response.did).await
     } else {
         (None, None)
     };
@@ -62,6 +62,18 @@ async fn send_response(socket: &mut WebSocket, message: &WSResponseType) -> bool
 /// an error response if resolution fails or times out. Returns `false` if the
 /// connection should be closed.
 async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: String) -> bool {
+    if !did_within_size_limit(&did, state.max_did_size) {
+        let hash = DIDCacheClient::hash_did(&did);
+        warn!("ws: rejecting oversized DID ({} bytes)", did.len());
+        state.stats().await.increment_resolver_error();
+        let message = WSResponseType::Error(WSResponseError {
+            did,
+            hash,
+            error: format!("DID exceeds maximum length of {} bytes", state.max_did_size),
+        });
+        return send_response(socket, &message).await;
+    }
+
     match resolve_with_timeout(&state.resolver, state.resolve_timeout, &did).await {
         Ok(response) => {
             {
@@ -76,7 +88,7 @@ async fn resolve_and_respond(socket: &mut WebSocket, state: &SharedData, did: St
                 "resolved DID: ({}) cache_hit?({})",
                 response.did, response.cache_hit
             );
-            let message = build_response(response).await;
+            let message = build_response(&state.webvh_client, response).await;
             send_response(socket, &message).await
         }
         Err(e) => {
@@ -109,6 +121,13 @@ pub async fn websocket_handler(
     .instrument(_span)
     .await*/
 
+    // Bound incoming frames so a crafted client can't buffer huge messages
+    // before we even parse them. A DID request is tiny; size it to the DID
+    // limit plus envelope overhead.
+    let max_message_size = state.max_did_size.saturating_add(1024);
+    let ws = ws
+        .max_message_size(max_message_size)
+        .max_frame_size(max_message_size);
     async move { ws.on_upgrade(move |socket| handle_socket(socket, state)) }
         .instrument(_span)
         .await

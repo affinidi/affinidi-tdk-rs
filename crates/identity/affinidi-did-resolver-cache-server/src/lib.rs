@@ -25,6 +25,12 @@ pub struct SharedData {
     /// Upper bound on a single upstream resolution before the request path
     /// returns an error rather than blocking the connection.
     pub resolve_timeout: Duration,
+    /// Maximum accepted DID length in bytes; longer DIDs are rejected before
+    /// resolution.
+    pub max_did_size: usize,
+    /// Shared HTTP client for did:webvh log fetches, built once at startup so
+    /// connections are pooled instead of a fresh client per request.
+    pub webvh_client: reqwest::Client,
 }
 
 impl<S> FromRequestParts<S> for SharedData
