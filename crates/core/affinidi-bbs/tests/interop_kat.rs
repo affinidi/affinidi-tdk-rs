@@ -10,7 +10,7 @@
 //!   implementation must `proof_verify(...)` here (and invalid fixtures must
 //!   fail), proving our verifier interoperates with conforming provers.
 //!
-//! Fixtures live in `tests/fixtures/bls12-381-sha-256/`.
+//! Vectors live in `tests/vectors/bls12-381-sha-256/`.
 
 use affinidi_bbs::{Proof, PublicKey, SecretKey, proof_verify, sign, verify};
 use serde_json::Value;
@@ -20,13 +20,12 @@ fn hexd(s: &str) -> Vec<u8> {
 }
 
 fn load(name: &str) -> Value {
-    let path = format!(
-        "{}/tests/fixtures/bls12-381-sha-256/{}",
+    // TI7: vectors load through the shared `tests/vectors/` loader.
+    affinidi_tdk_test_support::vectors::load_json(
         env!("CARGO_MANIFEST_DIR"),
-        name
-    );
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    serde_json::from_str(&text).expect("fixture json")
+        format!("bls12-381-sha-256/{name}"),
+    )
+    .expect("load bbs signature/proof vector")
 }
 
 fn messages(v: &Value) -> Vec<Vec<u8>> {
