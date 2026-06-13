@@ -797,6 +797,45 @@ mod tests {
         }
     }
 
+    /// Config-equivalence guard (mediator T22): the two non-interactive setup
+    /// paths — `--non-interactive` (CLI args → `build_config_from_args`) and
+    /// `--from <recipe>` (`recipe::to_wizard_config`) — must produce the SAME
+    /// `mediator.toml` for the same logical setup, so they can't drift apart.
+    /// Both build on `WizardConfig::default()`, so an equivalent recipe yields a
+    /// byte-identical render.
+    #[test]
+    fn cli_and_recipe_paths_produce_identical_config() {
+        // The non-interactive defaults: local / VTA-online / didcomm / did:vta /
+        // keyring / redis / generate-admin (a bare `Args` applies exactly these).
+        let cli_config =
+            crate::build_config_from_args(&crate::cli::Args::default()).expect("build from args");
+
+        // The same setup expressed as a recipe.
+        let recipe_toml = r#"
+[deployment]
+type = "local"
+protocols = ["didcomm"]
+use_vta = true
+vta_mode = "online"
+
+[identity]
+did_method = "vta"
+
+[secrets]
+storage = "keyring://affinidi-mediator"
+"#;
+        let recipe: crate::recipe::BuildRecipe = toml::from_str(recipe_toml).expect("parse recipe");
+        let recipe_config = crate::recipe::to_wizard_config(&recipe).expect("recipe -> config");
+
+        let generated = test_generated();
+        assert_eq!(
+            generate_toml(&cli_config, &generated).expect("cli generate_toml"),
+            generate_toml(&recipe_config, &generated).expect("recipe generate_toml"),
+            "the --non-interactive and --from <recipe> paths must render identical \
+             mediator.toml for the same setup",
+        );
+    }
+
     #[test]
     fn test_generate_toml_vta() {
         let config = WizardConfig {

@@ -140,12 +140,7 @@ async fn main() -> anyhow::Result<()> {
     // file-level backup below still runs from `mediator.toml` alone.
     let config_path = args.config.clone();
     let config_path_obj = std::path::Path::new(&config_path);
-    if !args.force_reprovision
-        && let Some(setup) = reprovision::inspect_existing(config_path_obj).await?
-        && setup.is_provisioned()
-    {
-        reprovision::refuse_overwrite(config_path_obj, &setup);
-    }
+    guard_existing_setup(config_path_obj, args.force_reprovision).await?;
     if config_path_obj.exists() {
         // Operator opted in (or there were no provisioned keys —
         // e.g. backend was wiped manually). Back up the existing
@@ -255,20 +250,30 @@ fn apply_cli_args(args: &Args, config: &mut WizardConfig) {
     }
 }
 
-/// Non-interactive mode: build config from CLI args + deployment defaults, then generate.
-async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
-    // Same re-run safety story as the interactive flow — refuse to
-    // overwrite an existing setup unless `--force-reprovision` is
-    // set. Skip the keyring scan when the operator has already opted
-    // in (see the matching note in `main()` above).
-    let existing_path = std::path::Path::new(&args.config);
-    if !args.force_reprovision
-        && let Some(setup) = reprovision::inspect_existing(existing_path).await?
+/// Refuse to overwrite an existing *provisioned* setup unless
+/// `--force-reprovision` is set — shared by the interactive, non-interactive,
+/// and recipe flows so none can silently rotate live keys (the unified backend
+/// holds the JWT key, admin credential, and operating keys). When the operator
+/// has opted in, the keyring scan is skipped (it can trigger one macOS Keychain
+/// prompt per well-known key). Diverges (process exit) when it refuses.
+async fn guard_existing_setup(
+    config_path: &std::path::Path,
+    force_reprovision: bool,
+) -> anyhow::Result<()> {
+    if !force_reprovision
+        && let Some(setup) = reprovision::inspect_existing(config_path).await?
         && setup.is_provisioned()
     {
-        reprovision::refuse_overwrite(existing_path, &setup);
+        reprovision::refuse_overwrite(config_path, &setup);
     }
+    Ok(())
+}
 
+/// Build a [`WizardConfig`] from CLI args layered over deployment defaults — the
+/// non-interactive (`--non-interactive`) path's config source. Extracted so the
+/// CLI-args path is unit-testable and can be checked for equivalence against the
+/// recipe path's [`recipe::to_wizard_config`].
+pub(crate) fn build_config_from_args(args: &Args) -> anyhow::Result<WizardConfig> {
     let deployment = args.deployment.unwrap_or(cli::DeploymentType::Local);
 
     let mut config = WizardConfig::default();
@@ -286,14 +291,20 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     config.admin_did_mode = ADMIN_GENERATE.into();
 
     // Override with any explicit CLI args
-    apply_cli_args(&args, &mut config);
+    apply_cli_args(args, &mut config);
 
     // Validate required fields for did:webvh
     if config.did_method == DID_WEBVH && config.public_url.is_empty() {
         anyhow::bail!("--public-url is required when using did:webvh in non-interactive mode");
     }
 
-    println!("Mediator Setup (non-interactive)");
+    Ok(config)
+}
+
+/// Print the shared "what we're about to generate" summary used by both
+/// non-interactive entry points (`--non-interactive` and `--from <recipe>`),
+/// so the two stay consistent.
+fn print_config_summary(config: &WizardConfig) {
     println!("  Deployment:   {}", config.deployment_type);
     println!(
         "  VTA:          {}",
@@ -309,6 +320,20 @@ async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
     println!("  SSL/TLS:      {}", config.ssl_mode);
     println!("  Database:     {}", config.database_url);
     println!("  Admin:        {}", config.admin_did_mode);
+    println!("  Config file:  {}", config.config_path);
+    println!("  Listen:       {}", config.listen_address);
+}
+
+/// Non-interactive mode: build config from CLI args + deployment defaults, then generate.
+async fn run_non_interactive(args: Args) -> anyhow::Result<()> {
+    // Same re-run safety story as the interactive flow — refuse to
+    // overwrite an existing setup unless `--force-reprovision` is set.
+    guard_existing_setup(std::path::Path::new(&args.config), args.force_reprovision).await?;
+
+    let config = build_config_from_args(&args)?;
+
+    println!("Mediator Setup (non-interactive)");
+    print_config_summary(&config);
     println!();
     println!("Generating cryptographic material...");
 
@@ -334,13 +359,7 @@ async fn run_from_recipe(
     // Re-run safety: refuse to overwrite an existing provisioned setup
     // unless the operator opts in. This matches the interactive flow so
     // recipe-driven CI can't silently rotate live keys.
-    let target = std::path::Path::new(&config.config_path);
-    if let Some(setup) = reprovision::inspect_existing(target).await?
-        && setup.is_provisioned()
-        && !force_reprovision
-    {
-        reprovision::refuse_overwrite(target, &setup);
-    }
+    guard_existing_setup(std::path::Path::new(&config.config_path), force_reprovision).await?;
 
     // Check if database URL needs credentials — allow env var override
     if let Ok(env_url) = std::env::var("DATABASE_URL") {
@@ -353,23 +372,7 @@ async fn run_from_recipe(
 
     print_banner();
     println!("  \x1b[2mFrom recipe: {recipe_path}\x1b[0m\n");
-    println!("  Deployment:   {}", config.deployment_type);
-    println!(
-        "  VTA:          {}",
-        if config.use_vta {
-            format!("Enabled ({})", config.vta_mode)
-        } else {
-            "Disabled".into()
-        }
-    );
-    println!("  Protocol:     {}", config.protocol_display());
-    println!("  DID method:   {}", config.did_method);
-    println!("  Key storage:  {}", config.secret_storage);
-    println!("  SSL/TLS:      {}", config.ssl_mode);
-    println!("  Database:     {}", config.database_url);
-    println!("  Admin:        {}", config.admin_did_mode);
-    println!("  Config file:  {}", config.config_path);
-    println!("  Listen:       {}", config.listen_address);
+    print_config_summary(&config);
     println!();
 
     // Sealed-handoff dispatch:
