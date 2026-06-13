@@ -14,12 +14,12 @@
 //!   --test store_conformance
 //! ```
 //!
-//! Coverage (against **Memory** and **Fjall**) — ten semantic areas:
+//! Coverage (against **Memory** and **Fjall**) — eleven semantic areas:
 //! account lifecycle; ACL set/get; message store + inbox counters;
 //! forward-queue consumer-group claim/ack, delete, and autoclaim (crashed-
 //! consumer recovery); session put/get/delete lifecycle; session-expiry sweep;
 //! access-list add/count/remove/clear; access-list *mode* (allow-list vs
-//! deny-list) evaluation.
+//! deny-list) evaluation; audit-log record + newest-first cursor pagination.
 //!
 //! Memory and Fjall agree on all of these, with **one documented divergence**
 //! the suite surfaced: `sweep_expired_sessions`'s `now_secs` argument is
@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use affinidi_messaging_mediator_common::store::MediatorStore;
 use affinidi_messaging_mediator_common::store::types::{ForwardQueueEntry, Session, SessionState};
+use affinidi_messaging_mediator_common::types::audit::{AuditAction, AuditLogEntry};
 use affinidi_messaging_sdk::protocols::mediator::{
     accounts::{Account, AccountType},
     acls::{AccessListModeType, MediatorACLSet},
@@ -649,6 +650,73 @@ async fn redis_backend(db_index: u8) -> Option<Backend> {
     })
 }
 
+/// Audit log: recording, newest-first ordering, cursor pagination, and
+/// round-trip fidelity of a record. (The bounded-ring trim at
+/// `AUDIT_LOG_MAX_ENTRIES` is not exercised here — filling it would cost tens of
+/// thousands of writes; the trim is small and reviewed at each backend.)
+async fn check_audit_log_lifecycle(store: Arc<dyn MediatorStore>) {
+    // Fresh store: empty, terminal cursor.
+    let page = store.audit_log_list(0, 100).await.expect("list empty");
+    assert!(page.entries.is_empty(), "fresh store has no audit entries");
+    assert_eq!(page.cursor, 0);
+
+    // Record five entries in order 0..5.
+    for i in 0..5u64 {
+        let entry = AuditLogEntry {
+            timestamp: 1000 + i,
+            actor_did_hash: format!("admin{i}"),
+            target_did_hash: format!("target{i}"),
+            action: AuditAction::SetAcl,
+            detail: format!("entry {i}"),
+        };
+        store.audit_log_record(&entry).await.expect("record");
+    }
+
+    // Single page: newest-first (entry 4 first, entry 0 last), cursor exhausted.
+    let page = store.audit_log_list(0, 100).await.expect("list all");
+    assert_eq!(page.entries.len(), 5);
+    assert_eq!(page.entries[0].detail, "entry 4");
+    assert_eq!(page.entries[4].detail, "entry 0");
+    assert_eq!(page.cursor, 0, "single page exhausts the log");
+
+    // Round-trip fidelity of the newest record.
+    assert_eq!(page.entries[0].actor_did_hash, "admin4");
+    assert_eq!(page.entries[0].target_did_hash, "target4");
+    assert_eq!(page.entries[0].action, AuditAction::SetAcl);
+    assert_eq!(page.entries[0].timestamp, 1004);
+
+    // Pagination, 2 per page, newest-first across page boundaries.
+    let p0 = store.audit_log_list(0, 2).await.expect("page 0");
+    assert_eq!(
+        p0.entries
+            .iter()
+            .map(|e| e.detail.as_str())
+            .collect::<Vec<_>>(),
+        ["entry 4", "entry 3"]
+    );
+    assert_ne!(p0.cursor, 0, "more pages remain");
+
+    let p1 = store.audit_log_list(p0.cursor, 2).await.expect("page 1");
+    assert_eq!(
+        p1.entries
+            .iter()
+            .map(|e| e.detail.as_str())
+            .collect::<Vec<_>>(),
+        ["entry 2", "entry 1"]
+    );
+    assert_ne!(p1.cursor, 0);
+
+    let p2 = store.audit_log_list(p1.cursor, 2).await.expect("page 2");
+    assert_eq!(
+        p2.entries
+            .iter()
+            .map(|e| e.detail.as_str())
+            .collect::<Vec<_>>(),
+        ["entry 0"]
+    );
+    assert_eq!(p2.cursor, 0, "last page is terminal");
+}
+
 /// Generate one `#[tokio::test]` per check for a backend `$ctor`.
 /// Gated to the in-process backends that use it — a Redis-only build drives the
 /// async `conformance_for_redis!` instead, so an ungated def would warn (unused)
@@ -699,6 +767,10 @@ macro_rules! conformance_for {
             async fn access_list_mode_semantics() {
                 check_access_list_mode_semantics(ready($ctor).await).await;
             }
+            #[tokio::test]
+            async fn audit_log_lifecycle() {
+                check_audit_log_lifecycle(ready($ctor).await).await;
+            }
         }
     };
 }
@@ -742,4 +814,5 @@ conformance_for_redis!(redis,
     forward_queue_autoclaim  => check_forward_queue_autoclaim  @ 8,
     session_expiry_sweep     => check_session_expiry_sweep     @ 9,
     access_list_mode_semantics => check_access_list_mode_semantics @ 10,
+    audit_log_lifecycle      => check_audit_log_lifecycle      @ 11,
 );

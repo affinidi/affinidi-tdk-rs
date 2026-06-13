@@ -31,6 +31,7 @@ use affinidi_messaging_mediator_common::{
         MessageMetaData, MetadataStats, PubSubRecord, Session, SessionSweepReport, StatCounter,
         StoreHealth, StreamingClientState, ops,
     },
+    types::audit::{AUDIT_LOG_MAX_ENTRIES, AuditLogEntry, MediatorAuditLogList},
 };
 use affinidi_messaging_sdk::{
     messages::{
@@ -50,7 +51,7 @@ use affinidi_messaging_sdk::{
 use async_trait::async_trait;
 use sha256::digest;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -202,6 +203,12 @@ struct MemoryState {
     known_dids: Vec<String>, // ordered for cursor pagination
     access_lists: HashMap<String, Vec<String>>, // ordered for cursor pagination
     admins: HashSet<String>,
+
+    // ─── Audit log ──────────────────────────────────────────────────
+    /// Privileged-change records, newest-first. Bounded ring capped at
+    /// `AUDIT_LOG_MAX_ENTRIES` — the oldest (back) entry is dropped once
+    /// full.
+    audit_log: VecDeque<AuditLogEntry>,
 
     // ─── OOB invitations ────────────────────────────────────────────
     oob_invites: HashMap<String, OobInvite>,
@@ -1205,6 +1212,42 @@ impl MediatorStore for MemoryStore {
         Ok(MediatorAdminList {
             accounts,
             cursor: next,
+        })
+    }
+
+    async fn audit_log_record(&self, entry: &AuditLogEntry) -> Result<(), MediatorError> {
+        let mut state = self.state.lock().await;
+        // Newest-first: push to the front, drop the oldest (back) past the cap.
+        state.audit_log.push_front(entry.clone());
+        while state.audit_log.len() > AUDIT_LOG_MAX_ENTRIES {
+            state.audit_log.pop_back();
+        }
+        Ok(())
+    }
+
+    async fn audit_log_list(
+        &self,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<MediatorAuditLogList, MediatorError> {
+        let limit = limit.min(100) as usize;
+        let state = self.state.lock().await;
+        // Already newest-first; page by offset.
+        let entries: Vec<AuditLogEntry> = state
+            .audit_log
+            .iter()
+            .skip(cursor as usize)
+            .take(limit)
+            .cloned()
+            .collect();
+        let next_cursor = if cursor as usize + entries.len() >= state.audit_log.len() {
+            0
+        } else {
+            cursor + entries.len() as u32
+        };
+        Ok(MediatorAuditLogList {
+            entries,
+            cursor: next_cursor,
         })
     }
 
