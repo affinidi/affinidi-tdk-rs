@@ -188,4 +188,73 @@ mod tests {
         assert!(res.is_ok(), "stats task must exit promptly after cancel");
         assert!(res.unwrap().is_ok());
     }
+
+    /// A panic in the statistics task must be caught and restarted by the
+    /// supervisor (it is non-load-bearing), with the fault recorded — not
+    /// silently kill cache statistics for the life of the process. This
+    /// exercises the exact wiring `server.rs` uses, with an injected panic.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn supervised_statistics_restarts_after_panic() {
+        use affinidi_task_utils::{ComponentState, TaskSupervisor};
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let token = CancellationToken::new();
+        let supervisor = TaskSupervisor::new(token.clone());
+        let registry = supervisor.registry();
+        let attempts = Arc::new(AtomicU32::new(0));
+
+        let stats = Arc::new(Mutex::new(Statistics::default()));
+        let cache: Cache<[u64; 2], Document> = Cache::new(10);
+        {
+            let attempts = attempts.clone();
+            let stats = stats.clone();
+            let cache = cache.clone();
+            let token = token.clone();
+            supervisor.spawn("statistics", false, move || {
+                let attempts = attempts.clone();
+                let stats = stats.clone();
+                let cache = cache.clone();
+                let token = token.clone();
+                async move {
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                        panic!("injected statistics panic");
+                    }
+                    // Long interval so the restarted attempt stays Running
+                    // until we cancel.
+                    statistics(Duration::from_secs(3600), &stats, cache, token).await
+                }
+            });
+        }
+
+        // Poll until the supervisor has restarted the task (≥2 attempts) and
+        // it is Running again, with the panic recorded as last_error.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let restarted = attempts.load(Ordering::SeqCst) >= 2;
+            let running = registry
+                .get("statistics")
+                .map(|h| h.state == ComponentState::Running && h.restarts >= 1)
+                .unwrap_or(false);
+            if restarted && running {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "supervisor did not restart the statistics task after a panic"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        let health = registry.get("statistics").unwrap();
+        assert!(!health.load_bearing, "stats task must be non-load-bearing");
+        assert!(
+            health
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("panicked")),
+            "the panic must be recorded as the last error"
+        );
+
+        token.cancel();
+    }
 }

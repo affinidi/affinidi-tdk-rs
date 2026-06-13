@@ -4,6 +4,15 @@
 
 ## 13th June 2026
 
+### 0.9.1 — statistics task on the shared supervisor (W15)
+
+- The statistics task is now supervised by the shared `affinidi-task-utils`
+  `TaskSupervisor` instead of a bare `tokio::spawn`. A panic or error restarts
+  it with capped exponential backoff and is logged with its restart history;
+  its lifecycle is tracked in the supervisor's health registry. The task is
+  non-load-bearing — a wedged stats loop never takes the resolver down. The W2
+  manual cancel/join wiring is replaced; behaviour on shutdown is unchanged.
+
 ### 0.9.0 — request limits, CORS tightening, task supervision, client reuse (W2)
 
 - **DID size limit.** New `max_did_size` setting (default 1024 bytes,

@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.8"
+version = "0.8.9"
 description = "Affinidi DID Resolver SDK"
 edition.workspace = true
 authors.workspace = true
@@ -19,6 +19,7 @@ crate-type = ["rlib", "cdylib"]
 default = ["local", "did-methods"]
 local = []
 network = [
+  "dep:affinidi-task-utils",
   "dep:web-socket",
   "dep:url",
   "dep:sha1",
@@ -41,6 +42,8 @@ did-ebsi = ["dep:did-ebsi"]
 # Affinidi Crates
 affinidi-did-common = "0.3"
 affinidi-did-resolver-traits = { version = "0.1", path = "../affinidi-did-resolver-traits" }
+# Shared background-task supervision (network mode only)
+affinidi-task-utils = { version = "0.1", optional = true }
 did-example = { version = "0.5", optional = true }
 did-scid = { version = "0.1", optional = true }
 did-ebsi = { version = "0.1", path = "../did-methods/did-ebsi", optional = true }

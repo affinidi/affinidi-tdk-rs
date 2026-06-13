@@ -4,6 +4,14 @@
 
 ## 13th June 2026
 
+### 0.15.46 — adopt the shared task-supervision crate (W15)
+
+- The in-tree `TaskSupervisor` was extracted into the workspace-shared
+  `affinidi-task-utils` crate so the mediator, the DID-resolver cache server,
+  and the cache SDK all share one "restart-and-degrade, never fail-fast"
+  policy. `crate::tasks::supervisor` now re-exports it — no behaviour change
+  and all existing call sites are unchanged.
+
 ### 0.15.45 — Request/response hygiene: access logs, Retry-After, WS close reasons (simplification T26)
 
 - Closes Phase 6. Three day-2 improvements to HTTP/WebSocket request handling:

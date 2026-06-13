@@ -6,6 +6,8 @@
 //! The remote server communicates via a websocket connection.
 //!
 
+use affinidi_task_utils::CancellationToken;
+
 use super::{WSResponseType, request_queue::RequestList};
 use crate::{
     DIDCacheClient, WSRequest, config::DIDCacheConfig, errors::DIDCacheError,
@@ -39,7 +41,6 @@ use web_socket::{CloseCode, DataType, Event, MessageType, WebSocket};
 #[derive(Debug)]
 pub(crate) enum WSCommands {
     Connected,
-    Exit,
     Send(Responder, String, WSRequest),
     ResponseReceived(Box<Document>, Option<String>, Option<String>),
     ErrorReceived(String),
@@ -71,6 +72,7 @@ impl NetworkTask {
         config: DIDCacheConfig,
         sdk_rx: &mut Receiver<WSCommands>,
         sdk_tx: &Sender<WSCommands>,
+        shutdown: CancellationToken,
     ) -> Result<(), DIDCacheError> {
         let _span = span!(Level::INFO, "network_task");
         async move {
@@ -99,6 +101,11 @@ impl NetworkTask {
 
             loop {
                 select! {
+                    _ = shutdown.cancelled() => {
+                        debug!("Shutdown signalled; closing network task");
+                        let _ = web_socket.close(CloseCode::Normal).await;
+                        return Ok(());
+                    }
                     _ = watchdog.tick() => {
                         let _ = web_socket.send_ping(vec![]).await;
                         if missed_pings > 2 {
@@ -167,20 +174,18 @@ impl NetworkTask {
                                 WSCommands::TimeOut(uid, did_hash) => {
                                     let _ = network_task.cache.remove(&did_hash, Some(uid));
                                 }
-                                WSCommands::Exit => {
-                                    debug!("Exiting...");
-                                    return Ok(());
-                                }
                                 _ => {
                                     debug!("Invalid command received: {:?}", cmd);
                                 }
                             }
                         } else {
-                            // MPSC Channel has closed, no real recovery can be done here
-                            // exit the task
+                            // MPSC channel closed: every SDK handle has been
+                            // dropped, so there is nothing left to serve.
+                            // Cancel so the supervisor records `Stopped`
+                            // rather than restarting a task with no clients.
                             info!("SDK channel closed");
+                            shutdown.cancel();
                             return Ok(());
-
                         }
                     }
                 }
