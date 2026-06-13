@@ -11,6 +11,13 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Added
 
+- **Composed test stack `docker-compose.test.yml` (TI3).** `docker compose -f
+  docker-compose.test.yml up` brings up the mediator + Redis + a static
+  `did:web` host with fixed, committed **TEST-ONLY** identities, so any client
+  (any language) can point at a known-good environment. Includes a Dockerfile,
+  a smoke test (`docker/smoke/smoke.sh` + the `docker_smoke` SDK example:
+  authenticate + trust-ping round-trip), an on-demand/nightly `compose-smoke` CI
+  workflow, and docs (`docs/testing/docker-compose.md`). Validated end to end.
 - **Shared test-vector loader (TI7).** `affinidi-tdk-test-support` adds a
   `vectors` module + a documented `tests/vectors/<source>/…` layout, replacing
   the bespoke `format!("{}/tests/fixtures/...", env!("CARGO_MANIFEST_DIR"))`

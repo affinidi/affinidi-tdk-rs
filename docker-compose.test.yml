@@ -1,0 +1,57 @@
+# TEST-ONLY composed stack (TI3): mediator + Redis + a static did:web host.
+#
+#   docker compose -f docker-compose.test.yml up --build
+#
+# Yields a reachable mediator at http://localhost:7037/mediator/v1/ with the
+# fixed TEST-ONLY identity in docker/test/conf, a bundled Redis (not exposed),
+# and a did:web resolution target at http://localhost:8080/.well-known/did.json
+# (did:web:localhost%3A8080). The fixed identities are documented in
+# docs/testing/docker-compose.md. NEVER reuse these keys anywhere real.
+#
+# Smoke test: docker/smoke/smoke.sh (also driven by the compose-smoke CI job).
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  mediator:
+    build:
+      # Repo root — the image build needs the whole workspace.
+      context: .
+      dockerfile: docker/test/Dockerfile
+    image: affinidi-mediator-test
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      # Mediator's view of Redis on the compose network (overrides the config).
+      DATABASE_URL: redis://redis:6379/
+    ports:
+      - "7037:7037"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7037/mediator/v1/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  did-web:
+    image: nginx:alpine
+    volumes:
+      - ./docker/did-web/.well-known:/usr/share/nginx/html/.well-known:ro
+      - ./docker/did-web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/.well-known/did.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped

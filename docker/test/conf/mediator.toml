@@ -1,0 +1,539 @@
+### Mediator Configuration
+###
+### Every setting can be overridden by an environment variable.
+### The env var name is shown in the "Env:" line above each field.
+### Environment variables take priority over values in this file.
+
+### log_level: trace debug info warn error
+### NOTE: RUST_LOG environment variable can also override this setting
+log_level = "info"
+
+### Env: LOG_JSON
+### If true, log output will be in JSON format
+log_json = "false"
+
+### Env: MEDIATOR_DID
+### DID of the mediator (REQUIRED in self-hosted mode; optional otherwise).
+### When VTA integration is enabled (admin credential present in the secret
+### backend), the mediator uses the DID recorded on the VTA context and
+### this field is ignored.
+### Supported formats:
+###   did://<did_string>
+###   aws_parameter_store://<parameter_name>
+mediator_did = "did://did:peer:2.Vz6Mksfa1ijceFf8yFmTSdRha6Ha2Lzzfuc68UyRAdpsC5pr6.Ez6LShyV6x81XmxvpyDpgwaXo27783iBBJPTeUtDgcvyKLDXP.SeyJ0IjoiZG0iLCJzIjpbeyJ1cmkiOiJodHRwOi8vbG9jYWxob3N0OjcwMzcvbWVkaWF0b3IvdjEiLCJhY2NlcHQiOlsiZGlkY29tbS92MiJdfSx7InVyaSI6IndzOi8vbG9jYWxob3N0OjcwMzcvbWVkaWF0b3IvdjEvd3MiLCJhY2NlcHQiOlsiZGlkY29tbS92MiJdfV19.SeyJ0IjoiQXV0aGVudGljYXRpb24iLCJzIjoiaHR0cDovL2xvY2FsaG9zdDo3MDM3L21lZGlhdG9yL3YxL2F1dGhlbnRpY2F0ZSIsImlkIjoiI2F1dGgifQ"
+
+### ****************************************************************************************************************************
+### Unified secret storage
+###
+### Every sensitive value the mediator reads — admin credential, JWT
+### signing key, operating keys, VTA cache — lives under one backend.
+### Pick the `backend` URL and everything is automatic from there.
+###
+### Supported backends:
+###   keyring://<service>                   OS keyring (macOS Keychain,
+###                                         Linux Secret Service, Windows
+###                                         Credential Manager).
+###   file:///<absolute-path>[?encrypt=1]   Local JSON file (plaintext by
+###                                         default — DEV/TEST ONLY).
+###   aws_secrets://<region>/<prefix>       AWS Secrets Manager.
+###   gcp_secrets://<project>/<prefix>      GCP Secret Manager (coming soon).
+###   azure_keyvault://<vault>              Azure Key Vault (coming soon).
+###   vault://<host[:port]>/<kv-path>       HashiCorp Vault (coming soon).
+###
+### Env: MEDIATOR_SECRETS_BACKEND
+### ****************************************************************************************************************************
+[secrets]
+# TEST-ONLY file backend. Absolute container path — the Dockerfile copies
+# docker/test/conf to /etc/mediator/conf and runs with WORKDIR /etc/mediator.
+backend = "file:///etc/mediator/conf/secrets.json"
+
+### Env: MEDIATOR_SECRETS_CACHE_TTL
+### Maximum age for the cached VTA bundle (humantime format). `0` means
+### no expiry — keep the cache until manually invalidated or a fresh
+### fetch overwrites it. Default: 30 days.
+# cache_ttl = "30d"
+### ****************************************************************************************************************************
+### Server configuration
+### ****************************************************************************************************************************
+[server]
+### Env: LISTEN_ADDRESS
+### <ip_address>:<tcp_port> that this service will listen on
+listen_address = "0.0.0.0:7037"
+
+### Env: API_PREFIX
+### API prefix the mediator's HTTP routes mount under. Leading/trailing slashes
+### are normalised, so all of the following are accepted and equivalent:
+###   "/mediator/v1/"  "/mediator/v1"  "mediator/v1"
+### Use ""  or "/"  to mount routes at the host root (no prefix).
+api_prefix = "/mediator/v1/"
+
+### Env: ADMIN_DID
+### DID of the admin (REQUIRED)
+### NOTE: It is strongly recommended to NOT use the same DID as the mediator!
+###       This causes more use cases where the secrets of the mediator itself can be exposed in administration tasks.
+### NOTE: You can add additional admin DIDs after startup via the DIDComm admin protocol
+admin_did = "did://did:key:z6MkhnJYiMpUGjvedv1eXZziYsFoi6WYRiidWx6EEwvxy3Ed"
+
+### Env: DID_WEB_SELF_HOSTED
+### Path to the self-hosted DID Document
+### Supported formats:
+###   file://<path>
+###   aws_parameter_store://<parameter_name>
+### When enabled, adds a did:web route at /.well-known/did.json.
+### Inactive by default — uncomment only when this mediator should
+### serve its own DID document/log (e.g. did:webvh self-hosted at
+### the same domain as the public URL). The setup wizard activates
+### this line automatically when the public URL host and the DID's
+### host match; otherwise it leaves it commented out.
+# did_web_self_hosted = "file://./conf/did.jsonl"
+
+### Public service URL(s) at which this mediator is reachable. The
+### Routing 2.0 forward handler uses these (plus `listen_address`) to
+### detect when an outbound forward's next hop is itself, and short-
+### circuits to local delivery instead of opening a remote socket.
+###
+### When `listen_address` is bound to a wildcard (`0.0.0.0` / `::`)
+### — which is the default — DID-Doc service URIs will never literally
+### match the bind address, so set this to the public URL(s) you publish
+### in the mediator's DID Doc. Each entry must be a parseable URL with
+### scheme + host (port optional; falls back to the scheme default).
+###
+### Hostnames are compared case-insensitively; IPv6 literals are
+### normalized so a bracketed URL form (`http://[::1]:7037`) matches a
+### bind address recorded as `::1`.
+# local_endpoints = ["https://mediator.example.com", "https://mediator.example.com:7037"]
+
+### ****************************************************************************************************************************
+### Database configuration
+### ****************************************************************************************************************************
+[database]
+### Env: DATABASE_FUNCTIONS_FILE
+### Path to the database functions file
+functions_file = "./conf/atm-functions.lua"
+
+### Env: DATABASE_URL
+### URL of the Redis compatible database
+### Supported schemes:
+###   redis://127.0.0.1/                    — local, no auth (dev only)
+###   redis://:password@host:6379/          — with password authentication
+###   redis://user:password@host:6379/      — with ACL user + password
+###   rediss://:password@host:6379/         — TLS encrypted connection
+###   redis://127.0.0.1/1                   — use database partition 1
+### SECURITY: Always use authentication (requirepass or ACLs) in production.
+### For remote Redis, use rediss:// (TLS) to encrypt data in transit.
+database_url = "redis://redis:6379/"
+
+### Env: DATABASE_TIMEOUT
+### Timeout for database operations in seconds
+database_timeout = "2"
+
+### ****************************************************************************************************************************
+### Security configuration
+### ****************************************************************************************************************************
+[security]
+### Env: MEDIATOR_ACL_MODE
+### ACL logic mode: explicit_deny | explicit_allow
+mediator_acl_mode = "explicit_deny"
+
+### Env: GLOBAL_DEFAULT_ACL
+### Default ACL applied to new/unknown DIDs
+### NOTE: ALLOW_ALL or DENY_ALL must always be first, followed by comma-separated flags
+### Flags: LOCAL, SEND_MESSAGES, RECEIVE_MESSAGES, SEND_FORWARDED, RECEIVE_FORWARDED,
+###        CREATE_INVITES, ANON_RECEIVE, SELF_MANAGE_LIST, SELF_MANAGE_SEND_QUEUE_LIMIT,
+###        SELF_MANAGE_RECEIVE_QUEUE_LIMIT (and _CHANGE variants)
+global_acl_default = "ALLOW_ALL"
+
+### Env: LOCAL_DIRECT_DELIVERY_ALLOWED
+### If true, messages addressed directly to a local DID will be delivered
+local_direct_delivery_allowed = "true"
+
+### Env: LOCAL_DIRECT_DELIVERY_ALLOW_ANON
+### If true, anonymous messages can be delivered directly to a local DID
+local_direct_delivery_allow_anon = "false"
+
+### NOTE: `mediator_secrets` was removed. Operating keys now live in the
+### unified `[secrets]` backend at well-known keys
+### (`mediator/operating/signing`, `mediator/operating/key_agreement`) —
+### or are fetched from the VTA at startup when VTA integration is enabled
+### (indicated by the presence of `mediator/admin/credential`).
+
+### Env: USE_SSL
+### If true, SSL is enabled. Set to false only if TLS is terminated externally
+use_ssl = "false"
+
+### Env: SSL_CERTIFICATE_FILE
+### Path to the SSL certificate file
+ssl_certificate_file = "conf/keys/end.cert"
+
+### Env: SSL_KEY_FILE
+### Path to the SSL certificate key file
+ssl_key_file = "conf/keys/end.key"
+
+### JWT signing key is no longer a config field — it lives in the unified
+### `[secrets]` backend under the well-known key `mediator/jwt/secret` and
+### is provisioned by the setup wizard or `mediator rotate-jwt`.
+
+### Env: JWT_ACCESS_EXPIRY
+### Expiry time in seconds for JWT access tokens (minimum: 10)
+jwt_access_expiry = "900"
+
+### Env: JWT_REFRESH_EXPIRY
+### Expiry time in seconds for JWT refresh tokens
+jwt_refresh_expiry = "86400"
+
+### Env: CORS_ALLOW_ORIGIN
+### Controls cross-origin browser access on the REST endpoints. Leave
+### unset (the default) to disable cross-origin access entirely.
+###
+### Accepts either:
+###   - a comma-separated allowlist whose entries are each one of:
+###       * an exact, scheme-qualified origin, echoed back in
+###         `Access-Control-Allow-Origin` only for a matching request
+###         Origin, e.g. "https://affinidi.com,https://example2.com"; or
+###       * a leftmost-label sub-domain wildcard, e.g.
+###         "https://*.affinidi.com". This matches any sub-domain of
+###         affinidi.com at any depth (app.affinidi.com, a.b.affinidi.com)
+###         and echoes back the exact request Origin that matched. The
+###         scheme and port must match exactly (pin a port with
+###         "https://*.affinidi.com:8443"); the '*' is only valid as the
+###         entire leftmost host label. NOTE: a wildcard does NOT cover
+###         its own apex — "https://*.affinidi.com" does not match
+###         "https://affinidi.com"; add the apex explicitly if needed.
+###     (The CORS spec's Access-Control-Allow-Origin header has no
+###     wildcard-subdomain form; the mediator implements "*.suffix" by
+###     matching the request Origin and echoing the exact match.)
+###   - a single "*" to allow ANY origin. A wildcard is safe here only
+###     because these endpoints authenticate with a bearer token in the
+###     `Authorization` header (not an ambient cookie): a cross-origin
+###     page still needs a valid token, so "*" does not create CSRF
+###     exposure. `allow_credentials` is never set.
+###
+### The mediator also applies this allowlist as a defence-in-depth
+### `Origin` check on the WebSocket upgrade (/ws): browser upgrades
+### from non-allowlisted origins are refused (header-less native
+### clients are unaffected — for them the JWT is the gate).
+###
+### Operational note: with the browser WebSocket auth path the JWT
+### travels in the `Sec-WebSocket-Protocol` request header. Over wss://
+### it is TLS-encrypted in transit and the mediator never logs it, but
+### configure any fronting proxy/load-balancer NOT to log
+### `Sec-WebSocket-Protocol` request headers (as you would already
+### redact `Authorization`). Short access-token TTLs (jwt_access_expiry)
+### further limit exposure.
+# cors_allow_origin = "https://affinidi.com"
+
+### Env: BLOCK_ANONYMOUS_OUTER_ENVELOPE
+### If true, all messages sent to the mediator must be signed
+block_anonymous_outer_envelope = "true"
+
+### Env: FORCE_SESSION_DID_MATCH
+### If true, the signing DID in the outer envelope MUST match the session DID
+### Must be false if block_anonymous_outer_envelope is false
+force_session_did_match = "true"
+
+### Env: BLOCK_REMOTE_ADMIN_MSGS
+### If true, admin messages must be delivered directly (not via another mediator)
+block_remote_admin_msgs = "true"
+
+### Env: ADMIN_MESSAGES_EXPIRY
+### TTL in seconds for admin messages (minimizes replay attack risk)
+admin_messages_expiry = "3"
+
+### Env: ENABLE_INTER_MEDIATOR_RELAY
+### Explicitly act as an inter-mediator relay (accept anonymous /inbound
+### forwards from other mediators). Defaults to "false".
+### NOTE: today relay is also permitted when global_acl_default grants
+### SEND_FORWARDED even without this flag (you'll see a deprecation warning at
+### boot). A future release will require this flag to be "true" for relay.
+enable_inter_mediator_relay = "false"
+
+### ****************************************************************************************************************************
+### Live streaming setup
+### ****************************************************************************************************************************
+[streaming]
+### Env: STREAMING_ENABLED
+### If true, enables live message streaming via WebSockets
+enabled = "true"
+
+### Env: STREAMING_UUID
+### Unique identifier for this subscriber instance
+### Formats: hostname:// | string://<uuid>
+uuid = "hostname://"
+
+### ****************************************************************************************************************************
+### DID Resolver configuration
+### ****************************************************************************************************************************
+[did_resolver]
+### Env: DID_RESOLVER_ADDRESS
+### Address of the DID resolver service (omit to use local resolver)
+# address = "ws://127.0.0.1:8080/did/v1/ws"
+
+### Env: DID_RESOLVER_CACHE_CAPACITY
+### Number of DIDs to cache in memory
+cache_capacity = "1000"
+
+### Env: DID_RESOLVER_CACHE_TTL
+### TTL in seconds for cached DIDs
+cache_ttl = "300"
+
+### Env: DID_RESOLVER_NETWORK_TIMEOUT
+### Timeout in milliseconds for DID resolution (account for blockchain latency)
+network_timeout = "5000"
+
+### Env: DID_RESOLVER_NETWORK_LIMIT
+### Maximum concurrent DID resolution requests
+network_limit = "100"
+
+### ****************************************************************************************************************************
+### Resource limits
+### ****************************************************************************************************************************
+[limits]
+### These are OPERATIONAL limits — tune them to your deployment; the defaults are
+### NOT protocol constants. They suit a small-to-medium single-node mediator.
+### Every value is overridable at runtime via the listed `Env:` variable (env
+### wins over this file). Each entry notes what it protects and a `Scale:` hint
+### for when to raise or lower it.
+
+### Env: LIMIT_ATTACHMENTS_MAX_COUNT
+### Maximum attachments accepted on a single message.
+### Scale: raise for clients that batch many attachments per message; each one
+### adds unpack + crypto work, so weigh against crypto_operations_per_message.
+attachments_max_count = "20"
+
+### Env: LIMIT_CRYPTO_OPERATIONS_PER_MESSAGE
+### Protects against DoS attacks via excessive crypto operations.
+### Scale: the main per-message CPU guard (caps recipients x keys). Raise only if
+### legitimate traffic is fan-out heavy; higher = more CPU per message under load.
+crypto_operations_per_message = "1000"
+
+### Env: LIMIT_DELETED_MESSAGES
+### Maximum messages that can be deleted at once.
+### Scale: raise to cut round-trips for clients clearing large inboxes; higher =
+### a larger single storage transaction per delete call.
+deleted_messages = "100"
+
+### Env: LIMIT_FORWARD_TASK_QUEUE
+### Maximum queued forward tasks.
+### Scale: raise for relay/hub mediators with bursty forward volume; the queue
+### lives in the storage backend, so this is bounded by backend memory/disk.
+forward_task_queue = "50000"
+
+### Env: LIMIT_HTTP_SIZE
+### Maximum HTTP request payload in bytes (10MB).
+### Scale: raise for large-attachment use cases; keep >= message_size; higher =
+### more memory buffered per in-flight request.
+http_size = "10485760"
+
+### Env: LIMIT_LISTED_MESSAGES
+### Maximum messages listed at a time.
+### Scale: raise to reduce pagination round-trips for busy inboxes; higher =
+### larger list responses (memory + bandwidth per call).
+listed_messages = "100"
+
+### Env: LIMIT_LOCAL_MAX_ACL
+### Maximum ACL entries per DID.
+### Scale: raise for DIDs that maintain large allow/deny lists; each entry is one
+### stored set member (cheap individually; this caps unbounded growth).
+local_max_acl = "1000"
+
+### Env: LIMIT_MESSAGE_EXPIRY_SECONDS
+### TTL in seconds for stored messages (7 days).
+### Scale: lower to cap storage growth on high-volume mediators; raise for
+### recipients that poll infrequently and must not miss messages.
+message_expiry_seconds = "604800"
+
+### Env: LIMIT_MESSAGE_SIZE
+### Maximum message size in bytes (1MB).
+### Scale: raise for large-payload workloads; keep <= http_size and ws_size;
+### higher = more memory per message and per queued copy.
+message_size = "1048576"
+
+### Env: LIMIT_QUEUED_SEND_MESSAGES_SOFT
+### Default outbound queue limit per DID (-1 = no limit).
+### Scale: the default ceiling a DID gets; raise for senders that burst while a
+### recipient is offline. `soft` is the default, `hard` (below) is the max.
+queued_send_messages_soft = "200"
+
+### Env: LIMIT_QUEUED_SEND_MESSAGES_HARD
+### Maximum outbound queue limit settable by non-admin (-1 = no limit).
+### Scale: per-DID outbound ceiling; raise for high-throughput senders. Bounds
+### worst-case backend storage per DID (this x message_size).
+queued_send_messages_hard = "1000"
+
+### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_SOFT
+### Default inbound queue limit per DID (-1 = no limit).
+### Scale: raise for DIDs that receive bursts while offline (store-and-forward).
+queued_receive_messages_soft = "200"
+
+### Env: LIMIT_QUEUED_RECEIVE_MESSAGES_HARD
+### Maximum inbound queue limit settable by non-admin (-1 = no limit).
+### Scale: per-DID inbox cap; raise for offline-heavy clients. Bounds worst-case
+### backend storage per DID (this x message_size).
+queued_receive_messages_hard = "1000"
+
+### Env: LIMIT_TO_KEYS_PER_DID
+### Maximum keys per recipient DID (DoS protection).
+### Scale: rarely needs changing; only raise for recipients that legitimately
+### publish many key-agreement keys.
+to_keys_per_recipient = "100"
+
+### Env: LIMIT_TO_RECIPIENTS
+### Maximum recipients per message (DoS protection).
+### Scale: raise for group/broadcast messaging; each recipient multiplies fan-out
+### work and stored copies, so this interacts with crypto_operations_per_message.
+to_recipients = "100"
+
+### Env: LIMIT_WS_SIZE
+### Maximum WebSocket payload in bytes (10MB).
+### Scale: mirror http_size; raise for large streamed payloads. Higher = more
+### memory buffered per WebSocket frame.
+ws_size = "10485760"
+
+### Env: ACCESS_LIST_LIMIT
+### Maximum access list entries per DID.
+### Scale: raise for DIDs with large allow/deny lists (companion to
+### local_max_acl); each entry is one stored set member.
+access_list_limit = "1000"
+
+### Env: OOB_INVITE_TTL
+### TTL in seconds for OOB invites (24h).
+### Scale: lower for tighter, short-lived invite windows; raise if invites are
+### distributed out-of-band slowly (e.g. printed/QR onboarding).
+oob_invite_ttl = "86400"
+
+### Env: LIMIT_RATE_LIMIT_PER_IP
+### Requests per second per IP (0 = disabled).
+### Scale: lower to harden against per-IP abuse; RAISE (or disable) when behind a
+### trusted load balancer / NAT where many clients share one source IP, or it
+### will throttle legitimate traffic. Commented out = built-in default (100).
+# rate_limit_per_ip = "100"
+
+### Env: LIMIT_RATE_LIMIT_BURST
+### Burst size for IP-based rate limiting.
+### Scale: raise to tolerate bursty-but-legitimate traffic without 429s — this is
+### the token-bucket depth above the steady per-IP rate.
+# rate_limit_burst = "50"
+
+### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS
+### Maximum concurrent WebSocket connections (0 = unlimited).
+### Scale: size to expected concurrent clients plus headroom; ultimately bounded
+### by the process file-descriptor limit and memory. Commented out = default
+### (10000).
+# max_websocket_connections = "10000"
+
+### Env: LIMIT_MAX_WEBSOCKET_CONNECTIONS_PER_DID
+### Maximum concurrent WebSocket connections for a single DID, so one DID
+### can't exhaust the global max_websocket_connections budget (0 = unlimited).
+### Scale: raise for DIDs running many devices/clients, but keep well below the
+### global cap so one DID can't starve others. Commented out = default (100).
+# max_websocket_connections_per_did = "100"
+
+### Env: LIMIT_DID_RATE_LIMIT_PER_SECOND
+### Requests per second per authenticated DID (0 = disabled).
+### Scale: enable (set > 0) to throttle an abusive *authenticated* client a
+### per-IP limit can't catch (e.g. one DID behind many IPs); leave 0 if per-IP
+### limits suffice. Commented out = default (0/disabled).
+# did_rate_limit_per_second = "0"
+
+### Env: LIMIT_DID_RATE_LIMIT_BURST
+### Burst size for per-DID rate limiting.
+### Scale: token-bucket depth above the steady per-DID rate; raise to tolerate
+### bursty authenticated clients once did_rate_limit_per_second is enabled.
+# did_rate_limit_burst = "10"
+
+### ****************************************************************************************************************************
+### Forwarding processor configuration
+###
+### Runs on every storage backend. Durability of queued forwards follows
+### the backend: Redis and Fjall queues survive a restart (in-flight
+### entries are recovered automatically); the in-memory backend loses
+### queued forwards when the process exits. Scaling forwarding across
+### multiple processes (the standalone forwarding_processor binary in
+### mediator-processors) requires the Redis backend.
+### ****************************************************************************************************************************
+[processors.forwarding]
+### Env: PROCESSOR_FORWARDING_ENABLED
+### Enable the local forwarding processor
+enabled = "true"
+
+### Env: PROCESSOR_FORWARDING_FUTURE_TIME_LIMIT
+### Maximum seconds a message can be scheduled in the future
+future_time_limit = "86400"
+
+### Env: PROCESSOR_FORWARDING_EXTERNAL
+### If true, forward messages to external mediators/endpoints
+external_forwarding = "true"
+
+### Env: PROCESSOR_FORWARDING_REPORT_ERRORS
+### If true, generate problem reports for failed forwarding
+report_errors = "true"
+
+### Env: PROCESSOR_FORWARDING_BLOCKED_DIDS
+### Additional DIDs to block forwarding to (JSON array)
+### Always includes the mediator's own DID
+blocked_forwarding_dids = "[]"
+
+### Env: PROCESSOR_FORWARDING_RATE_WINDOW
+### Sliding window in seconds for endpoint message rate tracking
+rate_window_seconds = "300"
+
+### Env: PROCESSOR_FORWARDING_WS_THRESHOLD
+### Messages per 10s threshold to prefer WebSocket over REST
+ws_threshold_msgs_per_10s = "1"
+
+### Env: PROCESSOR_FORWARDING_WS_IDLE_TIMEOUT
+### Seconds of idle time before disconnecting a remote WebSocket
+ws_idle_timeout_seconds = "60"
+
+### Env: PROCESSOR_FORWARDING_BATCH_SIZE
+### Messages per batch from the forwarding queue
+batch_size = "50"
+
+### Env: PROCESSOR_FORWARDING_MAX_RETRIES
+### Maximum retry attempts for failed forwarding
+max_retries = "5"
+
+### Env: PROCESSOR_FORWARDING_INITIAL_BACKOFF_MS
+### Initial backoff delay in milliseconds
+initial_backoff_ms = "1000"
+
+### Env: PROCESSOR_FORWARDING_MAX_BACKOFF_MS
+### Maximum backoff delay in milliseconds
+max_backoff_ms = "60000"
+
+### Env: PROCESSOR_FORWARDING_CONSUMER_GROUP
+### Consumer group name for the forwarding queue. On Redis this is the
+### stream consumer group shared across processor instances; on Fjall and
+### in-memory backends it names the single in-process group.
+consumer_group = "forwarding"
+
+### Env: PROCESSOR_FORWARDING_RELAY_MODE
+### How to relay a forward whose next hop is a *remote* mediator:
+###   "blind"  (default) — relay the inner envelope unchanged. The inner
+###            envelope (incl. the original sender's key id) is visible on the
+###            wire and the receiving mediator cannot identify the relaying peer.
+###   "rewrap" — re-encrypt the inner envelope for the next mediator, authcrypted
+###            from THIS mediator. Hides the sender/inner envelope from the wire
+###            and lets the receiving mediator authenticate & allowlist the peer
+###            mediator. BOTH mediators in the pair must use "rewrap".
+relay_mode = "blind"
+
+### Env: PROCESSOR_FORWARDING_RELAY_TRUSTED_MEDIATORS
+### Comma-separated allowlist of peer-mediator DIDs whose re-wrapped relays this
+### mediator will accept (rewrap mode only). Empty = accept any peer (still ACL
+### gated). Ignored in blind mode.
+relay_trusted_mediators = ""
+
+[processors.message_expiry_cleanup]
+### Env: PROCESSOR_MESSAGE_EXPIRY_CLEANUP_ENABLED
+### Enable the message expiry cleanup processor
+enabled = "true"
+
+[processors.session_expiry_cleanup]
+### Env: PROCESSOR_SESSION_EXPIRY_CLEANUP_ENABLED
+### Reclaim expired session records on backends without native TTL
+### (Fjall, in-memory). No-op on Redis, which expires sessions itself.
+enabled = "true"
+
+[storage]
+backend = "redis"
