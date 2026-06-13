@@ -11,8 +11,11 @@ use url::Url;
 
 use crate::Document;
 
+/// `#[non_exhaustive]`: build via [`ServiceBuilder`] (or deserialization) rather
+/// than a struct literal. Fields stay public for reads.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub struct Service {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<Url>,
@@ -80,9 +83,13 @@ impl Document {
 }
 
 /// Service Endpoint definitions
+///
+/// `#[non_exhaustive]`: match with a wildcard arm so new endpoint shapes are
+/// not a breaking change.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum Endpoint {
     /// Single String (URL)
     Url(Url),

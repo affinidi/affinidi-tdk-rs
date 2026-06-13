@@ -469,6 +469,8 @@ pub(crate) async fn load_forwarding_protection_blocks(
                         );
                     }
                 }
+                // `Endpoint` is `#[non_exhaustive]`; ignore unknown shapes.
+                _ => {}
             }
         }
     }

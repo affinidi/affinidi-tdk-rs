@@ -164,6 +164,8 @@ pub(crate) fn find_mediator_service_endpoints(doc: &Document) -> Vec<String> {
                 extract_uri(map).into_iter().collect()
             }
         }
+        // `Endpoint` is `#[non_exhaustive]`; unknown shapes yield no URIs.
+        _ => Vec::new(),
     }
 }
 
