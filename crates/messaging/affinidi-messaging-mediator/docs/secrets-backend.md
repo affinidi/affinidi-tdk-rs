@@ -41,6 +41,38 @@ keys can be fetched live from the VTA at startup — but the mediator's
 admin credential, JWT signing key, and (optionally) cached operating
 keys all live in whichever real backend the operator picks.
 
+## Which backends are compiled in
+
+**Every backend listed above is fully supported and maintained — none is
+deprecated.** What differs is whether a backend is compiled into a given
+binary, which keeps the default build (and its dependency/attack surface)
+small while leaving every backend one feature flag away.
+
+| Backend | Cargo feature | In the default build? |
+|---------|---------------|-----------------------|
+| `file://` / `file://…?encrypt=1` | *(always compiled)* | ✅ yes |
+| `keyring://` | `secrets-keyring` | opt-in |
+| `aws_secrets://` | `secrets-aws` | opt-in |
+| `gcp_secrets://` | `secrets-gcp` | opt-in |
+| `azure_keyvault://` | `secrets-azure` | opt-in |
+| `vault://` | `secrets-vault` | opt-in |
+
+The default build compiles only the dependency-free `file://` backend (plain
+and AEAD-encrypted) — the cloud/OS backends each pull a sizeable SDK, so they
+are gated behind opt-in `secrets-*` features rather than shipped in every
+binary. Enable the ones a deployment needs, e.g.:
+
+```bash
+cargo build --release --features secrets-aws,secrets-vault
+```
+
+Configuring a backend whose feature wasn't compiled in fails fast at startup
+with an actionable message naming the flag — e.g. *"compiled without the
+'secrets-aws' feature; rebuild with `cargo build --features secrets-aws` to
+enable"* — never a silent fallback. CI (`checks-features.yaml`) builds the
+mediator and the setup wizard against **each** `secrets-*` feature on every
+run, so no backend bit-rots even though it isn't in the default build.
+
 ---
 
 ## Well-known key schemas
