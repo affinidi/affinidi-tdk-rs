@@ -137,8 +137,12 @@ pub mod test_utils {
                 .decode(parts[2])
                 .map_err(|e| SdJwtError::Verification(format!("sig decode: {e}")))?;
 
-            // WARNING: Not constant-time. For testing only.
-            if expected_sig != actual_sig {
+            // Constant-time comparison via `subtle` — removes the timing side
+            // channel and the copy-paste hazard if this verifier is ever lifted
+            // out of the test-only module. (`ct_eq` on slices first checks the
+            // non-secret length, then compares the bytes in constant time.)
+            use subtle::ConstantTimeEq;
+            if !bool::from(expected_sig.ct_eq(&actual_sig)) {
                 return Err(SdJwtError::Verification("signature mismatch".into()));
             }
 

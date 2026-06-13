@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-did-authentication"
 description = "Using proof of DID ownership to authenticate to services"
-version = "0.3.6"
+version = "0.3.7"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -29,3 +29,7 @@ thiserror = "2"
 tokio = { workspace = true, features = ["time"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+[dev-dependencies]
+## Captures tracing output to assert sensitive values never log at DEBUG.
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
