@@ -78,6 +78,19 @@ This crate re-exports the following libraries:
 - [`affinidi-secrets-resolver`](../common/affinidi-secrets-resolver/) — Secret management
 - [`affinidi-crypto`](../common/affinidi-crypto/) — Cryptographic primitives
 
+## Examples
+
+Runnable examples live in [`examples/`](examples/) and import **only** through
+`affinidi_tdk::*` — they are the canonical onboarding pattern (never depend on a
+sub-crate directly):
+
+- `did_auth` — authenticate a DID against a service endpoint.
+- `resolve_did` — resolve a DID and print its document.
+
+```sh
+cargo run -p affinidi-tdk --example resolve_did -- did:key:z6Mk…
+```
+
 ## Contributing: new capability crate ⇒ new facade feature
 
 When a new published capability crate is added to the workspace, it **must** be
