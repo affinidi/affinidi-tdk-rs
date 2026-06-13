@@ -391,12 +391,12 @@ mod tests {
     }
 
     fn fixture() -> Value {
-        let path = format!(
-            "{}/tests/fixtures/pseudonym/bls12-381-sha-256.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-        serde_json::from_str(&text).expect("fixture json")
+        // TI7: vectors load through the shared `tests/vectors/` loader.
+        affinidi_tdk_test_support::vectors::load_json(
+            env!("CARGO_MANIFEST_DIR"),
+            "pseudonym/bls12-381-sha-256.json",
+        )
+        .expect("load pseudonym bbs vector")
     }
 
     fn list_all(fx: &Value, key: &str) -> Vec<Vec<u8>> {

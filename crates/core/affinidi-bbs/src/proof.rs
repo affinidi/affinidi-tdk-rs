@@ -766,13 +766,12 @@ mod tests {
     }
 
     fn reproduce_proof_fixture(name: &str) {
-        let path = format!(
-            "{}/tests/fixtures/bls12-381-sha-256/{}",
+        // TI7: vectors load through the shared `tests/vectors/` loader.
+        let v: serde_json::Value = affinidi_tdk_test_support::vectors::load_json(
             env!("CARGO_MANIFEST_DIR"),
-            name
-        );
-        let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            format!("bls12-381-sha-256/{name}"),
+        )
+        .expect("load bbs proof vector");
 
         let pk_bytes: [u8; 96] = hex::decode(v["signerPublicKey"].as_str().unwrap())
             .unwrap()

@@ -11,6 +11,12 @@ Per-crate version history is summarised here; for the full code history see
 
 ### Added
 
+- **Shared test-vector loader (TI7).** `affinidi-tdk-test-support` adds a
+  `vectors` module + a documented `tests/vectors/<source>/…` layout, replacing
+  the bespoke `format!("{}/tests/fixtures/...", env!("CARGO_MANIFEST_DIR"))`
+  loaders. `affinidi-bbs` is migrated onto it as the reference (its DIF/IETF KAT
+  vectors now load via `vectors::load_json`; tests unchanged, 82+5 green). Other
+  crates can adopt it incrementally.
 - **`TestTopology` multi-mediator fixture (TI1).** `affinidi-messaging-test-mediator`
   0.2.10 adds `TestTopology` — spawns N in-process relay-enabled mediators (Blind
   or Rewrap), each wired to its own SDK environment, and a `forward(..)` helper

@@ -28,3 +28,4 @@
 pub mod credential_scenario;
 pub mod did_web;
 pub mod resolver;
+pub mod vectors;
