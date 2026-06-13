@@ -11,12 +11,29 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use crate::{CryptoError, JWK, KeyType, OctectParams, Params, error::Result};
 
 /// Generated key pair with raw bytes and JWK representation
+///
+/// `#[non_exhaustive]`: construct via [`KeyPair::new`] rather than a struct
+/// literal. Fields stay public for reads.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KeyPair {
     pub key_type: KeyType,
     pub private_bytes: Vec<u8>,
     pub public_bytes: Vec<u8>,
     pub jwk: JWK,
+}
+
+impl KeyPair {
+    /// Construct a key pair from its key type, raw private/public bytes, and
+    /// JWK representation.
+    pub fn new(key_type: KeyType, private_bytes: Vec<u8>, public_bytes: Vec<u8>, jwk: JWK) -> Self {
+        Self {
+            key_type,
+            private_bytes,
+            public_bytes,
+            jwk,
+        }
+    }
 }
 
 /// Generates a random Ed25519 signing key pair

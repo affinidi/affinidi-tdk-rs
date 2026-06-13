@@ -172,6 +172,10 @@ impl Secret {
                 public_bytes: Secret::convert_to_raw(&params.x)?,
                 key_type: KeyType::try_from(params.curve.as_str())?,
             }),
+            // `Params` is `#[non_exhaustive]`; reject unknown future kinds.
+            _ => Err(SecretsResolverError::KeyError(
+                "unsupported JWK parameter kind".to_string(),
+            )),
         }
     }
 

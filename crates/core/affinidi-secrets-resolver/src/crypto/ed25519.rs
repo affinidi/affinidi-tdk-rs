@@ -52,14 +52,14 @@ impl Secret {
         Ok(Secret {
             id: kid.unwrap_or("x25519").to_string(),
             type_: SecretType::JsonWebKey2020,
-            secret_material: SecretMaterial::JWK(JWK {
-                key_id: None,
-                params: Params::OKP(OctectParams {
-                    curve: "X25519".to_string(),
-                    x: BASE64_URL_SAFE_NO_PAD.encode(x25519_public.as_bytes()),
-                    d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519.as_bytes())),
-                }),
-            }),
+            secret_material: SecretMaterial::JWK(JWK::new(
+                None,
+                Params::OKP(OctectParams::new(
+                    "X25519".to_string(),
+                    BASE64_URL_SAFE_NO_PAD.encode(x25519_public.as_bytes()),
+                    Some(BASE64_URL_SAFE_NO_PAD.encode(x25519.as_bytes())),
+                )),
+            )),
             private_bytes: x25519.to_bytes().to_vec(),
             public_bytes: x25519_public.to_bytes().to_vec(),
             key_type: KeyType::X25519,

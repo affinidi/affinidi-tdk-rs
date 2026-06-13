@@ -245,6 +245,8 @@ impl KeyMaterial {
                 public_bytes: Self::decode_base64url(&params.x)?,
                 key_type: KeyType::try_from(params.curve.as_str())?,
             }),
+            // `Params` is `#[non_exhaustive]`; reject unknown future kinds.
+            _ => Err(KeyError::Key("unsupported JWK parameter kind".into())),
         }
     }
 
@@ -363,14 +365,14 @@ impl KeyMaterial {
         let x25519_sk = x25519_dalek::StaticSecret::from(x25519_private);
         let x25519_pk = x25519_dalek::PublicKey::from(&x25519_sk);
 
-        let jwk = JWK {
-            key_id: None,
-            params: Params::OKP(affinidi_crypto::OctectParams {
-                curve: "X25519".to_string(),
-                x: BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes()),
-                d: Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes())),
-            }),
-        };
+        let jwk = JWK::new(
+            None,
+            Params::OKP(affinidi_crypto::OctectParams::new(
+                "X25519".to_string(),
+                BASE64_URL_SAFE_NO_PAD.encode(x25519_pk.as_bytes()),
+                Some(BASE64_URL_SAFE_NO_PAD.encode(x25519_sk.as_bytes())),
+            )),
+        );
 
         let mut key = Self::from_jwk(&jwk)?;
         key.id = self.id.clone();

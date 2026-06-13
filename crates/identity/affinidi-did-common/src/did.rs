@@ -459,6 +459,13 @@ impl DID {
                             params.x.clone(),
                             Some(params.y.clone()),
                         ),
+                        // `Params` is `#[non_exhaustive]`; a future kind carries
+                        // no multibase key material to record here.
+                        _ => {
+                            return Err(DIDError::ResolutionError(
+                                "unsupported JWK parameter kind for did:peer key".to_string(),
+                            ));
+                        }
                     };
 
                     created_keys.push(PeerCreatedKey {
