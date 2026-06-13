@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-sdk"
-version = "0.18.8"
+version = "0.18.9"
 description = "Affinidi Messaging SDK"
 edition.workspace = true
 authors.workspace = true
@@ -30,6 +30,8 @@ affinidi-secrets-resolver = "0.5"
 ahash = { version = "0.8", features = ["serde"] }
 base64 = "0.22"
 futures-util = "0.3"
+# Non-cryptographic jitter for WebSocket reconnect backoff (anti-thundering-herd)
+rand = "0.10"
 regex = "1"
 rustls = { version = "0.23", default-features = false, features = [
   "aws_lc_rs",
@@ -49,7 +51,6 @@ uuid = { version = "1", features = ["v4", "fast-rng"] }
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dialoguer = "0.12"
-rand = "0.10"
 rcgen = { version = "0.14", default-features = false, features = [
   "aws_lc_rs",
   "pem",

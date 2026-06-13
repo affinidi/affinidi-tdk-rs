@@ -6,6 +6,7 @@ use super::{WebSocketResponses, ws_cache::MessageCache};
 use crate::{ATM, SharedState, errors::ATMError, profiles::ATMProfile};
 use ahash::{HashMap, HashMapExt};
 use futures_util::{SinkExt, StreamExt};
+use rand::RngExt;
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
@@ -188,9 +189,13 @@ impl WebSocketTransport {
                         // Tick immediately
                         self.connect_delay_timer = Some(tokio::time::interval(Duration::from_secs(1)));
                     } else {
-                        self.connect_delay_timer = Some(tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(self.connect_delay as u64),Duration::from_secs(
-                            self.connect_delay as u64,
-                        )));
+                        // Apply ±15% jitter so many clients disconnected at
+                        // once don't reconnect in lock-step (thundering herd).
+                        let delay = jittered_backoff(self.connect_delay);
+                        self.connect_delay_timer = Some(tokio::time::interval_at(
+                            tokio::time::Instant::now() + delay,
+                            delay,
+                        ));
                     }
                 }
 
@@ -479,7 +484,9 @@ impl WebSocketTransport {
         }
     }
 
-    /// Calculate exponential backoff delay: 0→1→2→4→8→16→32→60s (capped)
+    /// Calculate exponential backoff delay: 0→1→2→4→8→16→32→60s (capped).
+    /// Jitter is applied separately at timer-creation time
+    /// ([`jittered_backoff`]) so this base sequence stays deterministic.
     fn backoff_delay(&mut self) {
         self.connect_delay = match self.connect_delay {
             0 => 1,
@@ -614,5 +621,35 @@ impl std::fmt::Debug for WebSocketTransport {
             .field("skip_toggle_live_delivery", &self.skip_toggle_live_delivery)
             .field("skip_unpack_messages", &self.skip_unpack_messages)
             .finish()
+    }
+}
+
+/// Apply ±15% random jitter to a base backoff delay (in seconds). When the
+/// mediator recovers, clients that all disconnected together would otherwise
+/// reconnect in lock-step and stampede it; jitter spreads the reconnections
+/// out. Non-cryptographic randomness is fine here.
+fn jittered_backoff(base_secs: u8) -> Duration {
+    let factor = rand::rng().random_range(0.85..1.15);
+    Duration::from_secs_f64(base_secs as f64 * factor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jittered_backoff_stays_within_15_percent() {
+        // Sample repeatedly: every jittered delay must land within ±15% of
+        // the base and never be zero/negative.
+        for base in [1u8, 2, 4, 8, 16, 32, 60] {
+            for _ in 0..1000 {
+                let d = jittered_backoff(base).as_secs_f64();
+                assert!(
+                    d >= base as f64 * 0.85 && d < base as f64 * 1.15,
+                    "jittered {base}s -> {d}s out of ±15% band"
+                );
+                assert!(d > 0.0);
+            }
+        }
     }
 }

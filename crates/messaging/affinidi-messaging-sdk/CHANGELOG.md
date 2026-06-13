@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.18.9] - 2026-06-13
+
+SDK request-path hardening (W16, part 1 of 2).
+
+### Added
+
+- **Configurable request timeout.** `ATMConfig::with_request_timeout(Duration)`
+  (default 15s) overrides the per-request timeout for mediator REST calls. The
+  previously hardcoded `MEDIATOR_REQUEST_TIMEOUT` constants (duplicated in
+  `delete.rs`/`list.rs`) are removed in favour of the config value.
+
+### Fixed
+
+- **No panic on a malformed mediator response.** `delete_messages_direct`,
+  `list_messages`, and `get_messages` parsed the response body with
+  `.ok().unwrap()`, panicking the caller (or the deletion-handler task) on any
+  non-JSON 2xx body. They now return `ATMError::TransportError` instead.
+- **`get_messages` had no request timeout** and could hang indefinitely on a
+  network stall; it is now bounded by the configured request timeout like the
+  other REST calls.
+
+### Changed
+
+- **WebSocket reconnect backoff is now jittered (±15%).** The exponential
+  backoff (1→2→4…→60s) previously reconnected in lock-step across clients;
+  jitter spreads reconnections so a recovering mediator isn't stampeded.
+  (`rand` promoted from dev- to normal dependency for non-cryptographic jitter.)
+
 ## [0.18.8] - 2026-06-13
 
 ### Added

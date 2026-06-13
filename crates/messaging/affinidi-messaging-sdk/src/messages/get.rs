@@ -11,6 +11,10 @@ use tracing::{Instrument, Level, debug, span};
 impl ATM {
     /// Returns a list of messages that are stored in the ATM
     /// - messages : List of message IDs to retrieve
+    ///
+    /// Each request is bounded by the configured request timeout
+    /// (`ATMConfig::with_request_timeout`, default 15s); an unreachable
+    /// mediator returns `ATMError::TransportError` rather than hanging.
     pub async fn get_messages(
         &self,
         profile: &Arc<ATMProfile>,
@@ -47,6 +51,7 @@ impl ATM {
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {}", tokens.access_token))
                 .body(body)
+                .timeout(self.inner.config.request_timeout)
                 .send()
                 .await
                 .map_err(|e| {
@@ -68,8 +73,11 @@ impl ATM {
             }
 
             let body = serde_json::from_str::<SuccessResponse<GetMessagesResponse>>(&body)
-                .ok()
-                .unwrap();
+                .map_err(|e| {
+                    ATMError::TransportError(format!(
+                        "Could not parse get_messages response: {e:?}"
+                    ))
+                })?;
 
             let list = if let Some(list) = body.data {
                 list
