@@ -89,62 +89,99 @@ graph TD
 
 ## Crate Index
 
-### [`affinidi-tdk`](./crates/affinidi-tdk/affinidi-tdk/) — Unified Entry Point
+The workspace is organised into dependency layers under `crates/`: `core` →
+`identity` → `credentials` / `protocols` / `messaging` → `trust` →
+`applications`, with the `tdk` facade on top.
 
-A single crate that re-exports the core TDK libraries with feature flags so you
-can depend on one crate and enable only what you need.
+### [`affinidi-tdk`](./crates/tdk/affinidi-tdk/) — Unified Entry Point
 
-### [Affinidi Messaging](./crates/affinidi-messaging/)
+A single crate that re-exports the TDK libraries behind feature flags so you can
+depend on one crate and enable only what you need.
+
+| Crate | Description |
+|---|---|
+| [`affinidi-tdk`](./crates/tdk/affinidi-tdk/) | Facade re-exporting the TDK behind capability features |
+| [`affinidi-tdk-common`](./crates/tdk/affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
+
+### [Core](./crates/core/)
+
+Foundational primitives with no domain dependencies.
+
+| Crate | Description |
+|---|---|
+| [`affinidi-crypto`](./crates/core/affinidi-crypto/) | Cryptographic primitives and JWK types — Ed25519, P-256, secp256k1 |
+| [`affinidi-encoding`](./crates/core/affinidi-encoding/) | Multibase and multicodec encoding utilities |
+| [`affinidi-cesr`](./crates/core/affinidi-cesr/) | CESR (Composable Event Streaming Representation) codec |
+| [`affinidi-secrets-resolver`](./crates/core/affinidi-secrets-resolver/) | DID secret management and key resolution |
+| [`affinidi-bbs`](./crates/core/affinidi-bbs/) | BBS Signatures (IETF draft) over BLS12-381 |
+| [`affinidi-task-utils`](./crates/core/affinidi-task-utils/) | Background-task supervision with restart-on-failure and an observable health registry |
+
+### [Identity & DID Resolution](./crates/identity/)
+
+DID Document types and high-performance resolution with local and network caching (250k+ resolutions/sec cached).
+
+| Crate | Description |
+|---|---|
+| [`affinidi-did-common`](./crates/identity/affinidi-did-common/) | DID Document types, builders, and common utilities |
+| [`affinidi-did-resolver-cache-sdk`](./crates/identity/affinidi-did-resolver-cache-sdk/) | SDK for local and network DID resolution with caching |
+| [`affinidi-did-resolver-cache-server`](./crates/identity/affinidi-did-resolver-cache-server/) | Standalone network DID resolution server |
+| [`affinidi-did-resolver-traits`](./crates/identity/affinidi-did-resolver-traits/) | Pluggable resolver traits for custom DID methods |
+| [`affinidi-did-authentication`](./crates/identity/affinidi-did-authentication/) | Authentication via proof of DID ownership |
+| [`affinidi-did-web`](./crates/identity/did-methods/did-web/) | `did:web` DID method resolver |
+| [`did-scid`](./crates/identity/did-methods/did-scid/) | `did:scid` Self-Certifying Identifier method |
+| [`did-ebsi`](./crates/identity/did-methods/did-ebsi/) | `did:ebsi` method for legal entities |
+| [`did-example`](./crates/identity/did-methods/did-example/) | `did:example` method for testing |
+
+### [Credentials](./crates/credentials/)
+
+W3C Verifiable Credentials and selective-disclosure formats.
+
+| Crate | Description |
+|---|---|
+| [`affinidi-vc`](./crates/credentials/affinidi-vc/) | W3C Verifiable Credentials Data Model 1.1 and 2.0 |
+| [`affinidi-sd-jwt`](./crates/credentials/affinidi-sd-jwt/) | SD-JWT (Selective Disclosure JWT) per IETF spec |
+| [`affinidi-sd-jwt-vc`](./crates/credentials/affinidi-sd-jwt-vc/) | SD-JWT-based Verifiable Credentials (SD-JWT VC) |
+| [`affinidi-data-integrity`](./crates/credentials/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
+| [`affinidi-rdf-encoding`](./crates/credentials/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
+| [`affinidi-status-list`](./crates/credentials/affinidi-status-list/) | Credential status and revocation lists (Bitstring Status List, eIDAS ASL/ARL) |
+| [`affinidi-mdoc`](./crates/credentials/affinidi-mdoc/) | ISO/IEC 18013-5 mdoc (mobile driving licences, eIDAS attestations) |
+
+### [Protocols](./crates/protocols/)
+
+OpenID for Verifiable Credentials (OID4VC) protocol family.
+
+| Crate | Description |
+|---|---|
+| [`affinidi-oid4vc-core`](./crates/protocols/affinidi-oid4vc-core/) | Shared types for the OID4VC protocol family |
+| [`affinidi-siopv2`](./crates/protocols/affinidi-siopv2/) | Self-Issued OpenID Provider v2 (SIOPv2) |
+| [`affinidi-openid4vci`](./crates/protocols/affinidi-openid4vci/) | OpenID for Verifiable Credential Issuance (OpenID4VCI) |
+| [`affinidi-openid4vp`](./crates/protocols/affinidi-openid4vp/) | OpenID for Verifiable Presentations (OpenID4VP) |
+
+### [Messaging](./crates/messaging/)
 
 Secure, private messaging built on [DIDComm v2](https://identity.foundation/didcomm-messaging/spec/) and [TSP](https://trustoverip.github.io/tswg-tsp-specification/).
 
 | Crate | Description |
 |---|---|
-| [`affinidi-messaging-sdk`](./crates/affinidi-messaging/affinidi-messaging-sdk/) | SDK for integrating Affinidi Messaging into your application |
-| [`affinidi-messaging-didcomm`](./crates/affinidi-messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation for Rust |
-| [`affinidi-messaging-core`](./crates/affinidi-messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits |
-| [`affinidi-messaging-mediator`](./crates/affinidi-messaging/affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP via feature flags) |
-| [`affinidi-messaging-test-mediator`](./crates/affinidi-messaging/affinidi-messaging-test-mediator/) | Embedded mediator fixture for integration tests |
-| [`affinidi-messaging-helpers`](./crates/affinidi-messaging/affinidi-messaging-helpers/) | Setup tools, environment config, and examples |
-| [`affinidi-messaging-text-client`](./crates/affinidi-messaging/affinidi-messaging-text-client/) | Terminal-based DIDComm chat client |
+| [`affinidi-messaging-sdk`](./crates/messaging/affinidi-messaging-sdk/) | SDK for integrating Affinidi Messaging into your application |
+| [`affinidi-messaging-didcomm`](./crates/messaging/affinidi-messaging-didcomm/) | DIDComm v2.1 protocol implementation |
+| [`affinidi-messaging-didcomm-service`](./crates/messaging/affinidi-messaging-didcomm-service/) | Always-online DIDComm client framework (connection, lifecycle, handler dispatch) |
+| [`affinidi-messaging-core`](./crates/messaging/affinidi-messaging-core/) | Protocol-agnostic messaging traits |
+| [`affinidi-messaging-mediator`](./crates/messaging/affinidi-messaging-mediator/) | Mediator & relay service (DIDComm and TSP via feature flags) |
+| [`affinidi-messaging-test-mediator`](./crates/messaging/affinidi-messaging-test-mediator/) | Embedded mediator fixture for integration tests |
+| [`affinidi-tsp`](./crates/messaging/affinidi-tsp/) | Trust Spanning Protocol (TSP) with HPKE-Auth encryption |
 
-### [Trust Spanning Protocol](./crates/affinidi-messaging/affinidi-tsp/)
-
-| Crate | Description |
-|---|---|
-| [`affinidi-tsp`](./crates/affinidi-messaging/affinidi-tsp/) | TSP implementation with HPKE-Auth encryption and CESR encoding |
-| [`affinidi-cesr`](./crates/affinidi-tdk/common/affinidi-cesr/) | CESR codec for binary message encoding |
-
-### [Affinidi DID Resolver](./crates/affinidi-did-resolver/)
-
-High-performance DID resolution with local and network caching (250k+ resolutions/sec cached).
+### [Trust](./crates/trust/)
 
 | Crate | Description |
 |---|---|
-| [`affinidi-did-resolver-cache-sdk`](./crates/affinidi-did-resolver/affinidi-did-resolver-cache-sdk/) | SDK for local and network DID resolution with caching |
-| [`affinidi-did-resolver-cache-server`](./crates/affinidi-did-resolver/affinidi-did-resolver-cache-server/) | Standalone network DID resolution server |
-| [`affinidi-did-common`](./crates/affinidi-did-resolver/affinidi-did-common/) | DID Document types, builders, and common utilities |
-| [`affinidi-did-resolver-traits`](./crates/affinidi-did-resolver/affinidi-did-resolver-traits/) | Pluggable resolver traits for custom DID methods |
-| [`did-scid`](./crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-scid/) | Self-Certifying Identifier DID method |
-| [`did-example`](./crates/affinidi-did-resolver/affinidi-did-resolver-methods/did-example/) | Example DID method for testing |
+| [`affinidi-trust-lists`](./crates/trust/affinidi-trust-lists/) | EU Trusted Lists (ETSI TS 119 612) for eIDAS 2.0 trust infrastructure |
 
-### [TDK Common Libraries](./crates/affinidi-tdk/common/)
-
-Shared building blocks used across the workspace.
+### [Applications](./crates/applications/)
 
 | Crate | Description |
 |---|---|
-| [`affinidi-crypto`](./crates/affinidi-tdk/common/affinidi-crypto/) | Cryptographic primitives — key generation, JWK, Ed25519, P-256, secp256k1 |
-| [`affinidi-encoding`](./crates/affinidi-tdk/common/affinidi-encoding/) | Multibase and multicodec encoding utilities |
-| [`affinidi-secrets-resolver`](./crates/affinidi-tdk/common/affinidi-secrets-resolver/) | DID secret management and key resolution |
-| [`affinidi-did-authentication`](./crates/affinidi-tdk/common/affinidi-did-authentication/) | Authentication via DID ownership proofs |
-| [`affinidi-tdk-common`](./crates/affinidi-tdk/common/affinidi-tdk-common/) | Shared structs, TLS config, and cross-crate utilities |
-| [`affinidi-data-integrity`](./crates/affinidi-tdk/common/affinidi-data-integrity/) | W3C Data Integrity proofs (eddsa-jcs-2022, eddsa-rdfc-2022) |
-| [`affinidi-rdf-encoding`](./crates/affinidi-tdk/common/affinidi-rdf-encoding/) | RDFC-1.0 canonicalization and JSON-LD expansion |
-
-### [Affinidi Meeting Place](./crates/affinidi-meeting-place/)
-
-Discover and connect with others using DIDs and DIDComm in a secure and private way.
+| [`affinidi-meeting-place`](./crates/applications/affinidi-meeting-place/) | Discover and connect with others using DIDs and DIDComm, securely and privately |
 
 ## Requirements
 
