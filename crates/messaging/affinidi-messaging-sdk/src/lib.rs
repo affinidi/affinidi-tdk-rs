@@ -184,6 +184,7 @@ use crate::protocols::{
     message_pickup::MessagePickupOps, oob_discovery::OOBDiscoveryOps, routing::RoutingOps,
     trust_ping::TrustPingOps,
 };
+use affinidi_task_utils::CancellationToken;
 use affinidi_tdk_common::TDKSharedState;
 use config::ATMConfig;
 use delete_handler::DeletionHandlerCommands;
@@ -220,6 +221,9 @@ pub(crate) struct SharedState {
     pub(crate) deletion_handler_send_stream: Sender<delete_handler::DeletionHandlerCommands>, // Sends MPSC messages to the Deletion Handler
     pub(crate) deletion_handler_recv_stream:
         Mutex<Receiver<delete_handler::DeletionHandlerCommands>>, // Receives MPSC messages from the Deletion Handler
+    /// Shutdown token for the supervised deletion-handler task. Cancelling it
+    /// stops the handler (and tells its supervisor not to restart it).
+    pub(crate) deletion_shutdown: CancellationToken,
 }
 
 /// Affinidi Trusted Messaging SDK
@@ -249,6 +253,7 @@ impl ATM {
             profiles: Arc::new(RwLock::new(Profiles::default())),
             deletion_handler_send_stream: sdk_deletion_tx,
             deletion_handler_recv_stream: Mutex::new(sdk_deletion_rx),
+            deletion_shutdown: CancellationToken::new(),
         };
 
         let atm = ATM {

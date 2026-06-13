@@ -49,6 +49,12 @@ pub(crate) struct WebSocketTransport {
     /// Used to help with detecting when a websocket connection is lost
     awaiting_pong: bool,
 
+    /// Unix-seconds expiry of the access token the current socket was opened
+    /// with. The mediator force-closes the socket at this time, so we use it
+    /// to proactively refresh the token and reconnect *before* expiry rather
+    /// than waiting to be kicked. `None` until the first successful connect.
+    access_expires_at: Option<u64>,
+
     /// Cache of inbound messages awaiting to be sent to the SDK
     /// If a MPSC delivery channel is enabled, then this cache isn't used
     inbound_cache: MessageCache,
@@ -116,6 +122,7 @@ impl WebSocketTransport {
                 connect_delay_timer: None,
                 connect_delay: 0,
                 awaiting_pong: false,
+                access_expires_at: None,
                 inbound_cache: MessageCache {
                     fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
                     fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
@@ -148,6 +155,7 @@ impl WebSocketTransport {
                 connect_delay_timer: None,
                 connect_delay: 0,
                 awaiting_pong: false,
+                access_expires_at: None,
                 inbound_cache: MessageCache {
                     fetch_cache_limit_count: shared.config.fetch_cache_limit_count,
                     fetch_cache_limit_bytes: shared.config.fetch_cache_limit_bytes,
@@ -182,6 +190,11 @@ impl WebSocketTransport {
 
             let mut notify_connection: Option<oneshot::Sender<bool>> = None;
 
+            // Armed on each successful connect; drives a proactive token
+            // refresh + reconnect before the mediator closes the socket at
+            // access-token expiry.
+            let mut refresh_deadline: Option<tokio::time::Instant> = None;
+
             loop {
                 if self.web_socket.is_none() && self.connect_delay_timer.is_none() {
                     debug!("WebSocket not connected, starting connection attempt in {} seconds", self.connect_delay);
@@ -203,10 +216,42 @@ impl WebSocketTransport {
                     Some(_) = WebSocketTransport::conditional_reconnect_delay(&mut self.connect_delay_timer), if self.web_socket.is_none() => {
                         debug!("Attempt to reconnect");
                         self.web_socket = self._handle_connection(&atm).await;
-                        if self.web_socket.is_some() && notify_connection.is_some() {
-                            let _ = notify_connection.unwrap().send(true);
-                            notify_connection = None;
+                        if self.web_socket.is_some() {
+                            // Arm the proactive-refresh timer for this socket.
+                            refresh_deadline = self.refresh_deadline();
+                            if notify_connection.is_some() {
+                                let _ = notify_connection.unwrap().send(true);
+                                notify_connection = None;
+                            }
                         }
+                    },
+                    Some(_) = Self::conditional_refresh(refresh_deadline), if self.web_socket.is_some() => {
+                        debug!("Access token nearing expiry; refreshing and reconnecting");
+                        refresh_deadline = None; // re-armed on the next connect
+                        if let Ok((profile_did, mediator_did)) = self.profile.dids() {
+                            // Mint a fresh access token via the refresh-token
+                            // flow (mediator re-checks the DID is still allowed
+                            // to connect) so the reconnect below carries a token
+                            // good for another full lifetime.
+                            if let Err(e) = self
+                                .shared
+                                .tdk_common
+                                .authentication()
+                                .refresh(profile_did.to_string(), mediator_did.to_string())
+                                .await
+                            {
+                                warn!("Proactive token refresh failed ({e}); reconnecting to re-authenticate");
+                            }
+                        }
+                        // Reconnect immediately (no backoff) so the new socket
+                        // uses the fresh token before the old one expires.
+                        if let Some(web_socket) = self.web_socket.as_mut() {
+                            let _ = web_socket.close(None).await;
+                        }
+                        self.web_socket = None;
+                        self.fail_pending_requests();
+                        self.connect_delay = 0;
+                        self.connect_delay_timer = None;
                     },
                     _ = watchdog.tick(), if self.web_socket.is_some() => {
                         if self.awaiting_pong {
@@ -317,6 +362,32 @@ impl WebSocketTransport {
     async fn conditional_reconnect_delay(delay: &mut Option<Interval>) -> Option<()> {
         if let Some(delay) = delay.as_mut() {
             delay.tick().await;
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Proactive token-refresh deadline for the freshly-connected socket:
+    /// fire at ~80% of the access token's remaining lifetime, leaving the
+    /// last ~20% as budget to refresh the token and reconnect *before* the
+    /// mediator force-closes the socket at expiry. `None` if expiry is unknown.
+    fn refresh_deadline(&self) -> Option<tokio::time::Instant> {
+        let expires_at = self.access_expires_at?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let ttl = expires_at.saturating_sub(now);
+        Some(tokio::time::Instant::now() + Duration::from_secs(refresh_after_secs(ttl)))
+    }
+
+    // Sleeps until the proactive-refresh deadline, if one is armed. Mirrors the
+    // other `conditional_*` helpers so the `select!` branch simply never fires
+    // when no deadline is set.
+    async fn conditional_refresh(deadline: Option<tokio::time::Instant>) -> Option<()> {
+        if let Some(deadline) = deadline {
+            tokio::time::sleep_until(deadline).await;
             Some(())
         } else {
             None
@@ -551,6 +622,9 @@ impl WebSocketTransport {
             .authentication()
             .authenticate(profile_did.to_string(), mediator_did.to_string(), 3, None)
             .await?;
+        // Remember when this token expires so we can refresh+reconnect before
+        // the mediator force-closes the socket at expiry.
+        self.access_expires_at = Some(tokens.access_expires_at);
 
         debug!("Creating websocket connection");
         // Create a custom websocket request, turn this into a client_request
@@ -633,9 +707,37 @@ fn jittered_backoff(base_secs: u8) -> Duration {
     Duration::from_secs_f64(base_secs as f64 * factor)
 }
 
+/// How long after connecting to proactively refresh the access token and
+/// reconnect: 80% of the token's remaining lifetime, leaving the final ~20%
+/// as budget to refresh + reconnect before the mediator force-closes the
+/// socket at expiry.
+fn refresh_after_secs(ttl_secs: u64) -> u64 {
+    // `*4` first for accuracy on short TTLs; token lifetimes can't overflow u64.
+    (ttl_secs * 4) / 5
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_fires_before_expiry_with_budget_to_spare() {
+        // Always strictly before expiry (so we beat the mediator's forced
+        // close) and never zero for a non-trivial TTL (so we don't hot-loop).
+        for ttl in [10u64, 60, 300, 900, 86_400] {
+            let after = refresh_after_secs(ttl);
+            assert!(
+                after < ttl,
+                "ttl {ttl}: refresh at {after} not before expiry"
+            );
+            assert!(after > 0, "ttl {ttl}: refresh delay must be positive");
+            // ~80% of the lifetime.
+            assert_eq!(after, (ttl * 4) / 5);
+        }
+        // Degenerate inputs don't panic.
+        assert_eq!(refresh_after_secs(0), 0);
+        assert_eq!(refresh_after_secs(1), 0);
+    }
 
     #[test]
     fn jittered_backoff_stays_within_15_percent() {
