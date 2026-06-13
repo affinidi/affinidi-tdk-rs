@@ -7,7 +7,11 @@ use affinidi_encoding::EncodingError;
 use thiserror::Error;
 
 /// Affinidi Secrets Resolver Errors
+///
+/// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
+/// matching, so future additions do not constitute breaking changes.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum SecretsResolverError {
     #[error("Encoding error: {0}")]
     EncodingError(#[from] EncodingError),

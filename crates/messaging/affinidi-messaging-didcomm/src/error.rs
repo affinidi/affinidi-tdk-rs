@@ -2,7 +2,10 @@
 
 use thiserror::Error;
 
+/// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
+/// matching, so future additions do not constitute breaking changes.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DIDCommError {
     #[error("key agreement failed: {0}")]
     KeyAgreement(String),
@@ -53,6 +56,9 @@ impl From<affinidi_crypto::CryptoError> for DIDCommError {
             C::UnsupportedKeyType(m) => DIDCommError::UnsupportedAlgorithm(m),
             C::KeyError(m) | C::Decoding(m) => DIDCommError::KeyAgreement(m),
             C::Encoding(err) => DIDCommError::KeyAgreement(err.to_string()),
+            // `CryptoError` is `#[non_exhaustive]`; map any future variant to a
+            // generic key-agreement failure rather than failing to compile.
+            other => DIDCommError::KeyAgreement(other.to_string()),
         }
     }
 }
