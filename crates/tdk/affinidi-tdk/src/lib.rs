@@ -45,12 +45,14 @@ pub use affinidi_data_integrity as data_integrity;
 pub use affinidi_mdoc as mdoc;
 #[cfg(feature = "sd-jwt")]
 pub use affinidi_sd_jwt as sd_jwt;
-#[cfg(feature = "sd-jwt-vc")]
-pub use affinidi_sd_jwt_vc as sd_jwt_vc;
+// SD-JWT VC merged into affinidi-vc; re-export the module from its new home so
+// the `affinidi_tdk::sd_jwt_vc` path is unchanged for facade users.
 #[cfg(feature = "status-list")]
 pub use affinidi_status_list as status_list;
 #[cfg(feature = "vc")]
 pub use affinidi_vc as vc;
+#[cfg(feature = "sd-jwt-vc")]
+pub use affinidi_vc::sd_jwt_vc;
 
 // ── Protocols ────────────────────────────────────────────────────────────
 #[cfg(feature = "oid4vc-core")]

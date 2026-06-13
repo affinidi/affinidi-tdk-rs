@@ -33,6 +33,7 @@ pub mod context;
 pub mod credential;
 pub mod error;
 pub mod presentation;
+pub mod sd_jwt_vc;
 
 pub use context::{CREDENTIALS_V1_CONTEXT, CREDENTIALS_V2_CONTEXT};
 pub use credential::{
