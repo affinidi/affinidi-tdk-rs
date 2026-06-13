@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.4.0"
+version = "0.5.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -47,6 +47,21 @@ affinidi-crypto = { version = "0.2", path = "../../core/affinidi-crypto" }
 ## sd-jwt crate ships only an HMAC test signer).
 ed25519-dalek = { version = "2" }
 base64 = "0.22"
+
+# ── TI5b: mdoc (COSE sign_mso/verify_issuer_auth) + OID4VP present/verify ──
+## mdoc issue/present/verify on the EdDSA COSE path; default-features off drops
+## the ES256/P-256 path the scenario's Ed25519 identities don't use.
+affinidi-mdoc = { version = "0.2", path = "../../credentials/affinidi-mdoc", default-features = false, features = [
+  "eddsa",
+] }
+## OID4VP authorization request/response + presentation-submission envelope.
+affinidi-openid4vp = { version = "0.1", path = "../../protocols/affinidi-openid4vp" }
+## CBOR for mdoc attribute values + the fixture's DeviceResponse transport;
+## coset for the COSE_Sign1 (de)serialisation that transport round-trips.
+ciborium = "0.2"
+coset = "0.3"
+## `derive` backs the DeviceResponseTransport (de)serialisation.
+serde = { version = "1", features = ["derive"] }
 
 # Later tasks add their own deps as each harness lands:
 #   TI4  seeded did:peer + clock      → affinidi-tdk, secrets-resolver
