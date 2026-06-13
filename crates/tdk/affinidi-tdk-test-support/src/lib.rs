@@ -17,14 +17,13 @@
  * crate, its workspace wiring, and CI coverage so each fixture lands as a thin,
  * self-contained PR.
  *
- * - **TI1** — `topology`: multi-mediator [`TestTopology`] (in-process, no Redis).
- * - **TI2** — `did_web`: in-process did:web / did:webvh mock server with fault
- *   injection, plus an injectable `StaticResolver`.
+ * - **TI1** — `topology`: multi-mediator `TestTopology` (in-process, no Redis).
+ * - **TI2** — [`did_web`] / [`resolver`]: in-process did:web / did:webvh mock
+ *   server with fault injection, plus an injectable `StaticResolver`. ✅
  * - **TI4** — `determinism`: seeded did:peer generation and an injectable clock.
  * - **TI5** — `credentials`: issuer/holder/verifier `CredentialScenario`.
  * - **TI7** — `vectors`: shared `tests/vectors/` layout and loader.
  */
 
-// Fixtures land here per TI-series task. The crate is intentionally empty until
-// TI2 adds the first harness — this keeps the scaffold a no-op while reserving
-// the name, location, and CI slot.
+pub mod did_web;
+pub mod resolver;

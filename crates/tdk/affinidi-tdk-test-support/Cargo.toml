@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -16,12 +16,39 @@ readme = "README.md"
 publish = false
 
 [dependencies]
-# Fixture dependencies are added per task as each harness lands:
-#   TI2  did:web/webvh mock server + StaticResolver  → did-common, resolver-traits, did-web, axum
-#   TI1  multi-mediator TestTopology                  → test-mediator, mediator
-#   TI4  seeded did:peer + injectable clock           → affinidi-tdk, secrets-resolver
-#   TI5  CredentialScenario                           → vc, sd-jwt, status-list
-#   TI7  shared vectors/ loader                        → serde, serde_json
+# ── TI2: did:web/webvh mock server + StaticResolver ──────────────────────
+## `DID`/`Document` types and the resolver traits the StaticResolver implements.
+## Path + explicit version so the crate stays publishable once the API settles.
+affinidi-did-common = { version = "0.3", path = "../../identity/affinidi-did-common" }
+affinidi-did-resolver-traits = { version = "0.1", path = "../../identity/affinidi-did-resolver-traits" }
+## In-process HTTP server backing MockDidWebServer.
+axum = "0.8"
+tokio = { workspace = true, features = [
+  "rt",
+  "rt-multi-thread",
+  "net",
+  "time",
+  "sync",
+  "macros",
+] }
+serde_json = "1"
+tracing = "0.1"
+
+# Later tasks add their own deps as each harness lands:
+#   TI1  multi-mediator TestTopology  → test-mediator, mediator
+#   TI4  seeded did:peer + clock      → affinidi-tdk, secrets-resolver
+#   TI5  CredentialScenario           → vc, sd-jwt, status-list
+#   TI7  shared vectors/ loader       → serde
+
+[dev-dependencies]
+## Drives the mock server over HTTP in the crate's own tests.
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
+  "json",
+] }
+## `test-util` enables `#[tokio::test(start_paused = true)]` for the
+## virtual-clock delay/hang tests.
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true
