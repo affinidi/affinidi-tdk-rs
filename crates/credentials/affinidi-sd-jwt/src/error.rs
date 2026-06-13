@@ -5,7 +5,11 @@
 use thiserror::Error;
 
 /// Errors that can occur during SD-JWT operations.
+///
+/// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
+/// matching, so future additions do not constitute breaking changes.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum SdJwtError {
     /// The SD-JWT string could not be parsed (malformed JWS, missing parts, etc.).
     #[error("Invalid SD-JWT format: {0}")]

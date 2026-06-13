@@ -5,7 +5,11 @@
 use thiserror::Error;
 
 /// Errors that can occur during Verifiable Credential operations.
+///
+/// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
+/// matching, so future additions do not constitute breaking changes.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum VcError {
     /// The credential is missing required fields or has invalid structure.
     #[error("Invalid credential: {0}")]

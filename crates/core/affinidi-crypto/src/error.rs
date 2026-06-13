@@ -2,7 +2,10 @@
 
 use thiserror::Error;
 
+/// This type is `#[non_exhaustive]`: callers must include a wildcard arm when
+/// matching, so future additions do not constitute breaking changes.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum CryptoError {
     #[error("Key error: {0}")]
     KeyError(String),
