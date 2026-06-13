@@ -1,5 +1,13 @@
 # Affinidi Data Integrity Changelog
 
+## 13th June 2026 Release 0.7.6
+
+Semver wave (W10 — release W11). `DataIntegrityProof` is now `#[non_exhaustive]`
+with a `DataIntegrityProof::new(..)` constructor for assembling a proof from
+parts (`sign()` remains the primary path; fields stay public for reads). Patch
+bump preserves the `didwebvh-rs` `[patch.crates-io]` coupling — see ADR 0003 and
+the migration guide.
+
 ## 8th June 2026 Release 0.7.5
 
 ### Fixed

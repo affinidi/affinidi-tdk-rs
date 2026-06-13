@@ -1,5 +1,11 @@
 # Affinidi Secrets Manager
 
+## 13th June 2026 (0.5.8)
+
+Semver wave (W7 — release W11). `SecretsResolverError` is now `#[non_exhaustive]`
+(match with a wildcard arm). Patch bump preserves the `didwebvh-rs`
+`[patch.crates-io]` coupling — see ADR 0003 and the migration guide.
+
 ## 6th June 2026 (0.5.7)
 
 - **Full P-521 secret support (#357).** Added `Secret::generate_p521`

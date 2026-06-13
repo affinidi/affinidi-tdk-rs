@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-did-common"
-version = "0.3.5"
+version = "0.3.6"
 description = "Affinidi DID Library"
 edition.workspace = true
 authors.workspace = true

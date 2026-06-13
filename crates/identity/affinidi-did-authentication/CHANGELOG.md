@@ -1,5 +1,10 @@
 # Affinidi DID Authentication
 
+## 13th June 2026 (0.3.8)
+
+Semver wave (W7 — release W11). `DIDAuthError` is now `#[non_exhaustive]` (match
+with a wildcard arm). Patch bump — see ADR 0003 and the migration guide.
+
 ## 13th June 2026 (0.3.7)
 
 Auth hygiene (W6):

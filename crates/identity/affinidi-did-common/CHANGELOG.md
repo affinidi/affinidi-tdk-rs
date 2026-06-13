@@ -4,6 +4,18 @@ All notable changes to `affinidi-did-common` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-06-13
+
+### Changed
+
+- Sealed the public API for future-proofing (semver wave W9, released W11):
+  `DocumentError`, `Endpoint`, `VerificationRelationship`, and `OneOrMany` are
+  now `#[non_exhaustive]` (match with a wildcard arm); `Document`, `Service`, and
+  `VerificationMethod` are `#[non_exhaustive]` (construct via the existing
+  builders / `Document::new`; fields stay public for reads). Patch bump preserves
+  the `didwebvh-rs` `[patch.crates-io]` coupling — see ADR 0003 and
+  `docs/migration/2026-06-semver-wave.md`.
+
 ## [0.3.5] - 2026-06-06
 
 ### Added

@@ -10,6 +10,8 @@ docs/*
 !docs/adr/
 # Security audit-readiness / threat-model docs are tracked.
 !docs/security/
+# Consumer migration guides are tracked.
+!docs/migration/
 
 # mediator-setup wizard generated artifacts (may land in any directory)
 **/conf/secrets.json
