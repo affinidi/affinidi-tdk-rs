@@ -26,9 +26,13 @@
 //! [`vta_bootstrap`]: crate::common::config::vta_bootstrap
 
 use crate::common::config::vta_cache::MediatorSecretCache;
+use crate::common::metrics::names;
 use affinidi_messaging_mediator_common::MediatorSecrets;
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use vta_sdk::integration::{self, SecretSource, VtaServiceConfig};
@@ -108,9 +112,19 @@ impl VtaRefresher {
                 _ = tokio::time::sleep(self.interval) => {}
             }
 
-            match integration::startup(&self.service_config, &cache).await {
+            let started = Instant::now();
+            let outcome = integration::startup(&self.service_config, &cache).await;
+            metrics::histogram!(names::VTA_REFRESH_DURATION_SECONDS)
+                .record(started.elapsed().as_secs_f64());
+
+            match outcome {
                 Ok(result) => match result.source {
                     SecretSource::Vta => {
+                        metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "vta").increment(1);
+                        if let Ok(since_epoch) = SystemTime::now().duration_since(UNIX_EPOCH) {
+                            metrics::gauge!(names::VTA_LAST_SUCCESS_TIMESTAMP_SECONDS)
+                                .set(since_epoch.as_secs_f64());
+                        }
                         debug!(
                             secrets = result.bundle.secrets.len(),
                             "VTA refresh OK — refreshed cache and runtime secrets"
@@ -122,6 +136,8 @@ impl VtaRefresher {
                         }
                     }
                     SecretSource::Cache => {
+                        metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "cache")
+                            .increment(1);
                         // Refresh fell back to cache — VTA is unreachable
                         // right now. The cache write didn't actually
                         // re-fetch fresh material; the runtime secrets
@@ -133,6 +149,7 @@ impl VtaRefresher {
                     }
                 },
                 Err(err) => {
+                    metrics::counter!(names::VTA_REFRESH_TOTAL, "result" => "error").increment(1);
                     warn!(
                         context = %self.service_config.context.id,
                         error = %err,
