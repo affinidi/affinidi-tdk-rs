@@ -1,0 +1,27 @@
+[package]
+name = "affinidi-tdk-test-support"
+version = "0.1.0"
+description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+# Scaffold only — flipped to `true` once the fixture API stabilises (TI-series)
+# so external consumers can pull it in as a dev-dependency. Empty crates should
+# not hit crates.io.
+publish = false
+
+[dependencies]
+# Fixture dependencies are added per task as each harness lands:
+#   TI2  did:web/webvh mock server + StaticResolver  → did-common, resolver-traits, did-web, axum
+#   TI1  multi-mediator TestTopology                  → test-mediator, mediator
+#   TI4  seeded did:peer + injectable clock           → affinidi-tdk, secrets-resolver
+#   TI5  CredentialScenario                           → vc, sd-jwt, status-list
+#   TI7  shared vectors/ loader                        → serde, serde_json
+
+[lints]
+workspace = true

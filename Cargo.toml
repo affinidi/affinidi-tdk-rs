@@ -55,6 +55,7 @@ members = [
   # TDK: unified entry point
   "crates/tdk/affinidi-tdk-common",
   "crates/tdk/affinidi-tdk",
+  "crates/tdk/affinidi-tdk-test-support",
 
   # Applications
   "crates/applications/affinidi-meeting-place",
