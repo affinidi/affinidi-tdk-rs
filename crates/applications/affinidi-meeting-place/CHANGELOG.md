@@ -1,5 +1,16 @@
 # Meeting Place Changelog
 
+## 13th June 2026 (0.4.3)
+
+- **Publish fix.** The W9 semver wave (#448) added a wildcard match arm here
+  for `affinidi-did-common`'s now-`#[non_exhaustive]` `Endpoint` enum, but the
+  crate version was not bumped, so the fix never reached crates.io. The
+  published `0.4.2` therefore fails to compile against `affinidi-did-common`
+  `0.3.6` (`error[E0004]: non-exhaustive patterns`), which broke the release
+  pipeline's publish-verify for downstream crates that pull Meeting Place
+  transitively. This bump publishes the already-fixed source. No API or
+  behaviour change beyond the W9 match arm.
+
 ## 1st June 2026 (0.4.2)
 
 - Release on `affinidi-messaging-didcomm` 0.15 (#327). Dependency-only;
