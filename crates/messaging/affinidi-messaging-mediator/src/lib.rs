@@ -72,6 +72,12 @@ pub struct SharedData {
     /// handler reads this to fail `/readyz` when a load-bearing component is
     /// down and to report `degraded` for non-load-bearing ones.
     pub component_health: HealthRegistry,
+    /// Source of the current time for all expiry / TTL / session-cleanup
+    /// decisions on the request path. Production wires a
+    /// [`SystemClock`](affinidi_messaging_mediator_common::types::clock::SystemClock);
+    /// tests can inject a `TestClock` (via `TestMediatorBuilder::clock`) and
+    /// advance it to exercise expiry instantly.
+    pub clock: Arc<dyn affinidi_messaging_mediator_common::types::clock::Clock>,
 }
 
 impl SharedData {

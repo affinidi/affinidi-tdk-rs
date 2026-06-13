@@ -10,6 +10,10 @@ name: release-guards
 #      edited-but-unbumped crate left stale source on crates.io that broke the
 #      registry-resolved publish verify build downstream.
 #
+#   3. test-clock      — the mediator-common `test-clock` feature (the
+#      advanceable TestClock, TI4b) must never be enabled for the mediator
+#      binary. Keeps the test-only clock out of production builds.
+#
 # Deliberately standalone and outside the shared affinidi/pipeline-rust workflow
 # (those are org-owned). Pure bash + git + jq + `cargo metadata`; no Rust build.
 # It carries NO hardcoded `toolchain:` pin of its own — the toolchain is taken
@@ -38,3 +42,6 @@ jobs:
 
       - name: Version-bump guard for changed publishable crates
         run: bash scripts/check-version-bumps.sh "${{ github.event.pull_request.base.sha }}"
+
+      - name: Test-clock isolation guard (mediator binary)
+        run: bash scripts/check-test-clock-isolation.sh

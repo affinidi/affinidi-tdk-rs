@@ -1,7 +1,6 @@
 use super::super::message_inbound::InboundMessage;
 use super::AuthenticationChallenge;
 use super::helpers::{_create_access_token, _create_refresh_token, create_random_string};
-use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
@@ -215,7 +214,7 @@ pub async fn authentication_response(
         }
 
         // Ensure the message hasn't expired
-        let now = unix_timestamp_secs();
+        let now = state.clock.unix_secs();
         if let Some(expires) = msg.expires_time {
             if expires <= now {
                 return Err(MediatorError::problem_with_log(
@@ -336,6 +335,7 @@ pub async fn authentication_response(
             &session.did,
             &session.session_id,
             state.config.security.jwt_access_expiry,
+            now,
             &state.config.security.jwt_encoding_key,
         )?;
 
@@ -345,6 +345,7 @@ pub async fn authentication_response(
             &session.did,
             &session.session_id,
             refresh_expiry,
+            now,
             &state.config.security.jwt_encoding_key,
         )?;
 

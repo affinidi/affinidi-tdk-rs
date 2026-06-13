@@ -2,7 +2,6 @@
 //! Mainly useful for WebSocket transport where an inbound message causes an error
 //! and we want to communicate that back to the sender
 
-use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::ProblemReport;
@@ -28,7 +27,7 @@ pub(crate) fn generate_error_response(
     problem: ProblemReport,
     store_message: bool,
 ) -> Result<ProcessMessageResponse, MediatorError> {
-    let now = unix_timestamp_secs();
+    let now = state.clock.unix_secs();
 
     // Build the message
     let mut error_msg = Message::build(

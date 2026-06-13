@@ -1,5 +1,8 @@
 use crate::SharedData;
 use crate::common::session::SessionClaims;
+// Production token creation now takes `now` from the injected clock; the only
+// remaining caller of this helper is the test module below.
+#[cfg(test)]
 use crate::common::time::unix_timestamp_secs;
 use crate::didcomm_compat::MetaEnvelope;
 use affinidi_messaging_didcomm::Message;
@@ -89,6 +92,7 @@ pub(super) fn _create_access_token(
     did: &str,
     session_id: &str,
     expiry: u64,
+    now: u64,
     encoding_key: &EncodingKey,
 ) -> Result<(String, u64), MediatorError> {
     // Passed all the checks, now create the JWT tokens
@@ -96,7 +100,7 @@ pub(super) fn _create_access_token(
         aud: "ATM".to_string(),
         sub: did.to_owned(),
         session_id: session_id.to_owned(),
-        exp: (unix_timestamp_secs() + expiry),
+        exp: (now + expiry),
     };
 
     let access_token = encode(
@@ -128,13 +132,14 @@ pub(super) fn _create_refresh_token(
     did: &str,
     session_id: &str,
     expiry: u64,
+    now: u64,
     encoding_key: &EncodingKey,
 ) -> Result<(String, u64, String), MediatorError> {
     let refresh_claims = SessionClaims {
         aud: "ATM".to_string(),
         sub: did.to_owned(),
         session_id: session_id.to_owned(),
-        exp: (unix_timestamp_secs() + expiry),
+        exp: (now + expiry),
     };
 
     let refresh_token = encode(
@@ -203,9 +208,14 @@ mod tests {
     fn create_access_token_produces_valid_jwt() {
         let (encoding_key, decoding_key) = test_ed25519_keys();
 
-        let (token, _exp) =
-            _create_access_token("did:example:123", "session-1", 3600, &encoding_key)
-                .expect("should create access token");
+        let (token, _exp) = _create_access_token(
+            "did:example:123",
+            "session-1",
+            3600,
+            unix_timestamp_secs(),
+            &encoding_key,
+        )
+        .expect("should create access token");
 
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.set_audience(&["ATM"]);
@@ -224,15 +234,18 @@ mod tests {
         let (encoding_key, decoding_key) = test_ed25519_keys();
         let expiry_delta = 7200_u64;
 
-        let before = unix_timestamp_secs();
-        let (_token, exp) =
-            _create_access_token("did:example:456", "session-2", expiry_delta, &encoding_key)
-                .expect("should create access token");
-        let after = unix_timestamp_secs();
+        let now = unix_timestamp_secs();
+        let (_token, exp) = _create_access_token(
+            "did:example:456",
+            "session-2",
+            expiry_delta,
+            now,
+            &encoding_key,
+        )
+        .expect("should create access token");
 
-        // The expiry should be roughly now + expiry_delta (within the before/after window).
-        assert!(exp >= before + expiry_delta);
-        assert!(exp <= after + expiry_delta);
+        // The expiry is exactly the supplied `now` plus the delta.
+        assert_eq!(exp, now + expiry_delta);
 
         // Also verify through the JWT claims
         let mut validation = Validation::new(Algorithm::EdDSA);
@@ -248,9 +261,14 @@ mod tests {
     fn create_refresh_token_returns_token_expiry_and_hash() {
         let (encoding_key, _decoding_key) = test_ed25519_keys();
 
-        let (token, exp, hash) =
-            _create_refresh_token("did:example:789", "session-3", 3600, &encoding_key)
-                .expect("should create refresh token");
+        let (token, exp, hash) = _create_refresh_token(
+            "did:example:789",
+            "session-3",
+            3600,
+            unix_timestamp_secs(),
+            &encoding_key,
+        )
+        .expect("should create refresh token");
 
         assert!(!token.is_empty(), "token should not be empty");
         assert!(exp > 0, "expiry should be positive");
@@ -261,9 +279,14 @@ mod tests {
     fn create_refresh_token_hash_matches_sha256_of_token() {
         let (encoding_key, _decoding_key) = test_ed25519_keys();
 
-        let (token, _exp, hash) =
-            _create_refresh_token("did:example:abc", "session-4", 3600, &encoding_key)
-                .expect("should create refresh token");
+        let (token, _exp, hash) = _create_refresh_token(
+            "did:example:abc",
+            "session-4",
+            3600,
+            unix_timestamp_secs(),
+            &encoding_key,
+        )
+        .expect("should create refresh token");
 
         let expected_hash = digest(&token);
         assert_eq!(hash, expected_hash, "hash should be SHA-256 of the token");

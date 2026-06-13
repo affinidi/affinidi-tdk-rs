@@ -178,7 +178,14 @@ pub async fn start(config_path: &str) -> Result<(), MediatorError> {
         };
 
     let shutdown_token = CancellationToken::new();
-    let handle = serve_internal(config, opts, shutdown_token, pre_built_store).await?;
+    let handle = serve_internal(
+        config,
+        opts,
+        shutdown_token,
+        pre_built_store,
+        Arc::new(affinidi_messaging_mediator_common::types::clock::SystemClock),
+    )
+    .await?;
     info!("Mediator listening on {}", handle.bound_addr);
     handle.join().await
 }
@@ -200,6 +207,7 @@ pub async fn serve_internal(
     opts: StartOpts,
     shutdown_token: CancellationToken,
     pre_built_store: Option<Arc<dyn affinidi_messaging_mediator_common::store::MediatorStore>>,
+    clock: Arc<dyn affinidi_messaging_mediator_common::types::clock::Clock>,
 ) -> Result<MediatorHandle, MediatorError> {
     if let TracingMode::InstallProduction {
         log_json,
@@ -579,6 +587,7 @@ pub async fn serve_internal(
         shutdown_token: shutdown_token.clone(),
         self_authorities: Arc::new(self_authorities),
         component_health: supervisor.registry(),
+        clock,
     };
 
     let app: Router = application_routes(&api_prefix, &shared_state);

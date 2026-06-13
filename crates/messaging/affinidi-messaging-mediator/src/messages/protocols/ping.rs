@@ -1,4 +1,3 @@
-use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use affinidi_messaging_sdk::messages::problem_report::{ProblemReportScope, ProblemReportSorter};
@@ -31,6 +30,7 @@ impl Default for Ping {
 pub(crate) fn process(
     msg: &Message,
     session: &Session,
+    now: u64,
 ) -> Result<ProcessMessageResponse, MediatorError> {
     let _span = span!(
         tracing::Level::DEBUG,
@@ -38,7 +38,6 @@ pub(crate) fn process(
         session_id = session.session_id.as_str()
     )
     .entered();
-    let now = unix_timestamp_secs();
 
     if let Some(expires) = msg.expires_time
         && expires <= now

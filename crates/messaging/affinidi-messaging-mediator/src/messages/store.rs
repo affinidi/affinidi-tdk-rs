@@ -1,6 +1,5 @@
 use crate::SharedData;
 use crate::common::session::Session;
-use crate::common::time::unix_timestamp_secs;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
 #[cfg(feature = "didcomm")]
@@ -125,7 +124,7 @@ pub(crate) async fn store_message(
                     }
 
                     let expires_at = if let Some(expires_at) = message.expires_time {
-                        let now = unix_timestamp_secs();
+                        let now = state.clock.unix_secs();
 
                         if expires_at > now + state.config.limits.message_expiry_seconds {
                             now + state.config.limits.message_expiry_seconds
@@ -133,7 +132,7 @@ pub(crate) async fn store_message(
                             expires_at
                         }
                     } else {
-                        unix_timestamp_secs() + state.config.limits.message_expiry_seconds
+                        state.clock.unix_secs() + state.config.limits.message_expiry_seconds
                     };
 
                     for recipient in to_dids {
@@ -336,7 +335,7 @@ pub(crate) async fn store_forwarded_message(
         }
 
         let expires_at = if let Some(expires_at) = expires_at {
-            let now = unix_timestamp_secs();
+            let now = state.clock.unix_secs();
 
             if expires_at > now + state.config.limits.message_expiry_seconds {
                 now + state.config.limits.message_expiry_seconds
@@ -344,7 +343,7 @@ pub(crate) async fn store_forwarded_message(
                 expires_at
             }
         } else {
-            unix_timestamp_secs() + state.config.limits.message_expiry_seconds
+            state.clock.unix_secs() + state.config.limits.message_expiry_seconds
         };
 
         match state

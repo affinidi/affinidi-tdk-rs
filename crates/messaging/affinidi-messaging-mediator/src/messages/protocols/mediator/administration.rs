@@ -34,7 +34,7 @@ pub(crate) async fn process(
         // Check if message is valid from an expiry perspective. Always enforced
         // (independent of `block_remote_admin_msgs`) to bound replay of captured
         // admin messages.
-        let now = unix_timestamp_secs();
+        let now = state.clock.unix_secs();
         match authz::admin_message_ttl_status(
             msg.created_time,
             state.config.security.admin_messages_expiry,

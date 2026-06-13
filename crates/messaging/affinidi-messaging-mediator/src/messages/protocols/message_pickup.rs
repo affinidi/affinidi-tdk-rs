@@ -4,7 +4,6 @@
  * NOTE: All messages generated from this protocol are ephemeral and are not stored in the database
  * They are fire and forget messages
  */
-use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::{Attachment, Message};
 use affinidi_messaging_mediator_common::{errors::MediatorError, store::DeletionAuthority};
 use affinidi_messaging_sdk::{
@@ -154,7 +153,7 @@ async fn generate_status_reply(
             status.live_delivery = live_delivery;
         }
 
-        let now = _get_time_now();
+        let now = state.clock.unix_secs();
 
         if let Some(t) = status.oldest_received_time {
             // Using wrapping sub because result could overflow u64
@@ -366,7 +365,7 @@ pub(crate) async fn delivery_request(
                     attachments.push(attachment.finalize())
                 }
             }
-            let now = _get_time_now();
+            let now = state.clock.unix_secs();
 
             let response_msg = response_msg
                 .attachments(attachments)
@@ -532,16 +531,12 @@ fn _parse_and_validate_delivery_request_body(
     Ok((recipient_did, limit))
 }
 
-fn _get_time_now() -> u64 {
-    unix_timestamp_secs()
-}
-
 fn _validate_msg(
     msg: &Message,
     state: &SharedData,
     session: &Session,
 ) -> Result<(), MediatorError> {
-    let now = _get_time_now();
+    let now = state.clock.unix_secs();
 
     if let Some(expires) = msg.expires_time
         && expires <= now

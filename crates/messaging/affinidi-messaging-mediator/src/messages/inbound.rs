@@ -1,6 +1,4 @@
 #[cfg(feature = "didcomm")]
-use crate::common::time::unix_timestamp_secs;
-#[cfg(feature = "didcomm")]
 use crate::didcomm_compat::MetaEnvelope;
 #[cfg(feature = "didcomm")]
 use crate::messages::MessageHandler;
@@ -290,7 +288,7 @@ async fn handle_inbound_didcomm(
                         data: WrapperType::Envelope(
                             to_did.into(),
                             message.into(),
-                            unix_timestamp_secs()
+                            state.clock.unix_secs()
                                 + state.config.limits.message_expiry_seconds,
                         ),
                     };

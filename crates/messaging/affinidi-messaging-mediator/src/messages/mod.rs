@@ -1,8 +1,6 @@
 #[cfg(feature = "didcomm")]
 use self::protocols::ping;
 #[cfg(feature = "didcomm")]
-use crate::common::time::unix_timestamp_secs;
-#[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
 #[cfg(feature = "didcomm")]
 use crate::messages::protocols::discover_features;
@@ -65,7 +63,7 @@ impl MessageType {
             SDKMessageType::MediatorACLManagement => {
                 acls::process(message, state, session, metadata).await
             }
-            SDKMessageType::TrustPing => ping::process(message, session),
+            SDKMessageType::TrustPing => ping::process(message, session, state.clock.unix_secs()),
             SDKMessageType::MessagePickupStatusRequest => {
                 message_pickup::status_request(message, state, session).await
             }
@@ -249,7 +247,7 @@ impl MessageHandler for Message {
         })?);
 
         // Check if message expired
-        let now = unix_timestamp_secs();
+        let now = state.clock.unix_secs();
         if let Some(expires) = self.expires_time
             && expires <= now
         {

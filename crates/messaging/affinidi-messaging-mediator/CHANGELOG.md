@@ -2,6 +2,28 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.16.0 — injectable clock on the request path (TI4b)
+
+- `SharedData` now carries an `Arc<dyn Clock>`; all request-path expiry / TTL /
+  session decisions read it instead of the wall clock directly — so tests can
+  inject a `TestClock` and exercise expiry in milliseconds. Production wires a
+  `SystemClock`; `MediatorBuilder::clock(..)` injects an alternative.
+- **Token validation is now clock-aware.** `jsonwebtoken`'s `exp` check (which
+  reads the real wall clock) is disabled and replaced with a manual check
+  against the injected clock, preserving the previous 60s leeway and boundary
+  exactly (`common::jwt_auth::{clock_aware_validation, jwt_exp_is_expired}`).
+  Both the access-token and refresh-token decode sites are covered; an expired
+  refresh token is still rejected.
+- Converted the auth, message-store TTL, session/audit, protocol expiry-check,
+  routing, and websocket request-path sites to the injected clock. Background
+  components (the standalone message-expiry processor, circuit breaker, store
+  lazy-expiry internals) remain on the wall clock — a documented follow-up.
+- **Breaking:** `SharedData` gained a field and `server::serve_internal` gained
+  a `clock` parameter (hence the minor bump). The embedding API
+  (`MediatorBuilder`) is unchanged except for the additive `clock(..)` setter.
+
 ## 13th June 2026
 
 ### 0.15.46 — adopt the shared task-supervision crate (W15)

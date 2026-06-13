@@ -220,6 +220,10 @@ pub struct MediatorBuilder {
     /// websocket streaming). The store is wired into `SharedData`
     /// directly. Memory and Fjall backends use this path.
     store: Option<Arc<dyn MediatorStore>>,
+    /// Optional injected clock. When `None`, the server wires a
+    /// [`SystemClock`](affinidi_messaging_mediator_common::types::clock::SystemClock).
+    /// Tests pass a `TestClock` here to drive expiry/TTL deterministically.
+    clock: Option<Arc<dyn affinidi_messaging_mediator_common::types::clock::Clock>>,
 }
 
 impl MediatorBuilder {
@@ -252,7 +256,23 @@ impl MediatorBuilder {
             streaming_uuid_set: false,
             opts: StartOpts::default(),
             store: None,
+            clock: None,
         }
+    }
+
+    /// Inject a clock for all expiry / TTL / session-cleanup decisions.
+    ///
+    /// Defaults to the real
+    /// [`SystemClock`](affinidi_messaging_mediator_common::types::clock::SystemClock)
+    /// when unset. Tests pass a `TestClock` to advance time by hand and
+    /// exercise token-expiry / message-TTL paths without waiting on the wall
+    /// clock.
+    pub fn clock(
+        mut self,
+        clock: Arc<dyn affinidi_messaging_mediator_common::types::clock::Clock>,
+    ) -> Self {
+        self.clock = Some(clock);
+        self
     }
 
     /// Supply a pre-built [`MediatorStore`]. When set, the server uses
@@ -541,7 +561,11 @@ impl MediatorBuilder {
             self.config.tags.insert("hostname".to_string(), host);
         }
 
-        crate::server::serve_internal(self.config, self.opts, shutdown_token, self.store).await
+        let clock = self.clock.unwrap_or_else(|| {
+            Arc::new(affinidi_messaging_mediator_common::types::clock::SystemClock)
+        });
+        crate::server::serve_internal(self.config, self.opts, shutdown_token, self.store, clock)
+            .await
     }
 }
 

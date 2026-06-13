@@ -1,6 +1,5 @@
 use crate::common::authz::{self, Capability};
 use crate::common::storage_timeout::with_storage_timeout;
-use crate::common::time::{unix_timestamp_millis, unix_timestamp_secs};
 
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
@@ -521,7 +520,7 @@ async fn deliver_forward(
                 ));
             }
 
-            let now_ms = unix_timestamp_millis();
+            let now_ms = state.clock.unix_millis();
 
             // Get the sender's full DID for problem reports
             let from_did = msg.from.as_deref().unwrap_or("").to_string();
@@ -969,7 +968,7 @@ pub(crate) async fn process(
         let data = decode_first_attachment(msg, session, &attachments)?;
 
         let expires_at = if let Some(expires_at) = msg.expires_time {
-            let now = unix_timestamp_secs();
+            let now = state.clock.unix_secs();
 
             if expires_at > now + state.config.limits.message_expiry_seconds {
                 now + state.config.limits.message_expiry_seconds
@@ -977,8 +976,7 @@ pub(crate) async fn process(
                 expires_at
             }
         } else {
-            unix_timestamp_secs()
-                + state.config.limits.message_expiry_seconds
+            state.clock.unix_secs() + state.config.limits.message_expiry_seconds
         };
 
         deliver_forward(

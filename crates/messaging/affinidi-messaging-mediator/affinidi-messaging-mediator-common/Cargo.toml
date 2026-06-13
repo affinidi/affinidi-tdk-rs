@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-common"
-version = "0.15.12"
+version = "0.15.13"
 description = "Shared types for the Affinidi Messaging Mediator (errors, database handler, config)"
 edition.workspace = true
 authors.workspace = true
@@ -85,6 +85,13 @@ secrets-azure = [
   "dep:azure_core",
 ]
 secrets-vault = ["server", "dep:vaultrs"]
+
+# ── Test-only injectable clock ──────────────────────────────────────
+## Compiles `types::clock::TestClock`, a manually-advanced clock for fast
+## expiry/TTL/session tests. NON-DEFAULT and never enabled by the mediator
+## binary, so the advanceable clock can't reach a production build. Test
+## harnesses (e.g. affinidi-messaging-test-mediator) opt in.
+test-clock = []
 
 [dependencies]
 # ── Always-on: lean types module deps ───────────────────────────────

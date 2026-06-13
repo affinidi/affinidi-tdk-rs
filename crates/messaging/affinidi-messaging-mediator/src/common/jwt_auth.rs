@@ -88,6 +88,33 @@ impl IntoResponse for AuthError {
     }
 }
 
+/// `jsonwebtoken`'s default expiry leeway (seconds). We move the `exp` time
+/// comparison off `jsonwebtoken` — which reads the real wall clock and so
+/// ignores an injected [`Clock`](affinidi_messaging_mediator_common::types::clock::Clock)
+/// — and onto the mediator's clock, but preserve this exact leeway so the
+/// accept/reject boundary is unchanged from the previous behaviour.
+pub(crate) const JWT_EXP_LEEWAY_SECS: u64 = 60;
+
+/// A [`Validation`] with `exp` *required* but its time check disabled, so expiry
+/// is judged against the injected clock (via [`jwt_exp_is_expired`]) rather than
+/// `jsonwebtoken`'s internal `SystemTime::now()`. Signature, audience, and the
+/// required-claims set are validated exactly as before.
+pub(crate) fn clock_aware_validation() -> Validation {
+    let mut validation = Validation::new(jsonwebtoken::Algorithm::EdDSA);
+    validation.set_audience(&["ATM"]);
+    validation.set_required_spec_claims(&["exp", "sub", "aud", "session_id"]);
+    // Defer the expiry check to the injected clock; `exp` stays a required claim.
+    validation.validate_exp = false;
+    validation
+}
+
+/// Whether a token with the given `exp` is expired at `now`, using the same
+/// leeway `jsonwebtoken` applied by default (`exp < now - leeway`). Written as
+/// `exp + leeway < now` to avoid underflow.
+pub(crate) fn jwt_exp_is_expired(exp: u64, now: u64) -> bool {
+    exp + JWT_EXP_LEEWAY_SECS < now
+}
+
 /// Validate a raw JWT bearer token and resolve it to an authenticated
 /// [`Session`].
 ///
@@ -107,14 +134,10 @@ pub(crate) async fn authenticate_token(
     state: &SharedData,
     token: &str,
 ) -> Result<Session, AuthError> {
-    let mut validation = Validation::new(jsonwebtoken::Algorithm::EdDSA);
-    validation.set_audience(&["ATM"]);
-    validation.set_required_spec_claims(&["exp", "sub", "aud", "session_id"]);
-
     let token_data: TokenData<SessionClaims> = match jsonwebtoken::decode::<SessionClaims>(
         token,
         &state.config.security.jwt_decoding_key,
-        &validation,
+        &clock_aware_validation(),
     ) {
         Ok(token_data) => token_data,
         Err(err) => {
@@ -122,6 +145,13 @@ pub(crate) async fn authenticate_token(
             return Err(AuthError::InvalidToken);
         }
     };
+
+    // Expiry is checked here (not by jsonwebtoken) so it honours the injected
+    // clock. Same leeway/boundary as before — see `clock_aware_validation`.
+    if jwt_exp_is_expired(token_data.claims.exp, state.clock.unix_secs()) {
+        event!(Level::WARN, "JWT access token expired");
+        return Err(AuthError::ExpiredToken);
+    }
 
     let session_id = token_data.claims.session_id.clone();
     let did = token_data.claims.sub.clone();
@@ -325,6 +355,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jwt_exp_uses_the_same_leeway_as_jsonwebtoken() {
+        // Boundary equivalent to jsonwebtoken's default (`exp < now - leeway`,
+        // i.e. expired iff `exp + leeway < now`), with leeway = 60.
+        let exp = 1_000_u64;
+        // Well within validity.
+        assert!(!jwt_exp_is_expired(exp, exp));
+        // Exactly at the leeway edge — still accepted.
+        assert!(!jwt_exp_is_expired(exp, exp + JWT_EXP_LEEWAY_SECS));
+        // One second past the leeway — now expired.
+        assert!(jwt_exp_is_expired(exp, exp + JWT_EXP_LEEWAY_SECS + 1));
+        // A token issued "in the future" is certainly not expired (no underflow).
+        assert!(!jwt_exp_is_expired(exp, 0));
+    }
+
+    #[test]
+    fn clock_aware_validation_defers_expiry_but_keeps_exp_required() {
+        let validation = clock_aware_validation();
+        // jsonwebtoken must NOT check expiry (the injected clock does).
+        assert!(!validation.validate_exp);
+        // ...but `exp` is still a required claim, so a token without it is
+        // rejected at decode time exactly as before.
+        assert!(validation.required_spec_claims.contains("exp"));
+    }
 
     #[test]
     fn anon_inbound_allowed_when_global_default_grants_send_forwarded() {
