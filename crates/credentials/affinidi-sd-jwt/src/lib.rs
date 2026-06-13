@@ -44,7 +44,11 @@ pub use signer::{JwtSigner, JwtVerifier};
 pub use verifier::{VerificationOptions, VerificationResult};
 
 /// An SD-JWT: a signed JWT with selective disclosures and optional key binding.
+///
+/// `#[non_exhaustive]`: construct via [`SdJwt::new`] rather than a struct
+/// literal. Fields stay public for reads.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SdJwt {
     /// The issuer-signed compact JWS (header.payload.signature)
     pub jws: String,
@@ -55,6 +59,16 @@ pub struct SdJwt {
 }
 
 impl SdJwt {
+    /// Construct an SD-JWT from its issuer-signed JWS, disclosures, and optional
+    /// key-binding JWT.
+    pub fn new(jws: String, disclosures: Vec<Disclosure>, kb_jwt: Option<String>) -> Self {
+        Self {
+            jws,
+            disclosures,
+            kb_jwt,
+        }
+    }
+
     /// Serialize the SD-JWT to the compact format:
     /// `<jws>~<disclosure1>~<disclosure2>~...~[<kb_jwt>]`
     pub fn serialize(&self) -> String {

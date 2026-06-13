@@ -29,7 +29,11 @@ use crate::error::{Result, VcError};
 ///
 /// This is the core credential type. The proof is external to the data model —
 /// it can be a Data Integrity proof, JWT envelope, SD-JWT-VC, or COSE signature.
+/// `#[non_exhaustive]`: obtain via deserialization/issuance rather than a struct
+/// literal, so new VCDM properties are not a breaking change. Fields stay public
+/// for reads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct VerifiableCredential {
     /// JSON-LD context(s). First MUST be the W3C base context.
     #[serde(rename = "@context")]
@@ -152,7 +156,10 @@ pub enum SubjectValue {
 }
 
 /// Credential status information for revocation/suspension checking.
+/// `#[non_exhaustive]`: obtain via deserialization rather than a struct literal.
+/// Fields stay public for reads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CredentialStatus {
     /// Status entry identifier.
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -366,11 +366,11 @@ fn error_disclosure_digest_not_in_payload() {
     let fake_disclosure =
         affinidi_sd_jwt::Disclosure::new_claim("fake_claim", json!("fake"), &hasher).unwrap();
 
-    let tampered = SdJwt {
-        jws: sd_jwt.jws.clone(),
-        disclosures: vec![sd_jwt.disclosures[0].clone(), fake_disclosure],
-        kb_jwt: None,
-    };
+    let tampered = SdJwt::new(
+        sd_jwt.jws.clone(),
+        vec![sd_jwt.disclosures[0].clone(), fake_disclosure],
+        None,
+    );
 
     let result = verifier::verify(&tampered, &jwt_verifier, &hasher, &Default::default(), None);
     assert!(result.is_err());
