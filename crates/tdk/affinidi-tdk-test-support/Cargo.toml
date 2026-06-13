@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -33,11 +33,23 @@ tokio = { workspace = true, features = [
 ] }
 serde_json = "1"
 tracing = "0.1"
+thiserror = "2"
+
+# ── TI5: CredentialScenario (sd-jwt-vc issue/present/verify + status list) ─
+## sd-jwt-vc lives at `affinidi_vc::sd_jwt_vc`; sd-jwt provides the holder
+## present / verifier APIs + the SdHasher; status-list backs revocation.
+affinidi-vc = { version = "0.2", path = "../../credentials/affinidi-vc" }
+affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt" }
+affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
+## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs.
+affinidi-crypto = { version = "0.2", path = "../../core/affinidi-crypto" }
+## EdDSA signer/verifier backing the scenario's JWS signing (the workspace
+## sd-jwt crate ships only an HMAC test signer).
+ed25519-dalek = { version = "2" }
+base64 = "0.22"
 
 # Later tasks add their own deps as each harness lands:
-#   TI1  multi-mediator TestTopology  → test-mediator, mediator
 #   TI4  seeded did:peer + clock      → affinidi-tdk, secrets-resolver
-#   TI5  CredentialScenario           → vc, sd-jwt, status-list
 #   TI7  shared vectors/ loader       → serde
 
 [dev-dependencies]
