@@ -104,6 +104,8 @@ use affinidi_messaging_mediator_common::{
     MediatorSecrets, errors::MediatorError, secrets::backends::MemoryStore as SecretsMemoryStore,
     store::MediatorStore,
 };
+// Re-exported so tests can build/inject a clock from one import.
+pub use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock, TestClock};
 use affinidi_secrets_resolver::{SecretsResolver, ThreadedSecretsResolver, secrets::Secret};
 use affinidi_tdk::dids::{
     DID, KeyType, OneOrMany, PeerKeyRole, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
@@ -334,6 +336,10 @@ pub struct TestMediatorBuilder {
     /// up while the mediator is still using them.
     #[cfg(feature = "fjall-backend")]
     fjall_dir: Option<tempfile::TempDir>,
+    /// Optional injected clock. `None` uses the real `SystemClock`; tests pass a
+    /// [`TestClock`] to advance time and exercise token-expiry / message-TTL
+    /// instantly (see [`TestMediatorBuilder::clock`]).
+    clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for TestMediatorBuilder {
@@ -360,6 +366,7 @@ impl Default for TestMediatorBuilder {
             jwt_access_expiry_secs: None,
             jwt_refresh_expiry_secs: None,
             max_websocket_connections_per_did: None,
+            clock: None,
             admin_identity: None,
             #[cfg(feature = "fjall-backend")]
             fjall_dir: None,
@@ -571,6 +578,15 @@ impl TestMediatorBuilder {
         self
     }
 
+    /// Inject a clock for the spawned mediator's expiry / TTL / session
+    /// decisions. Defaults to the real [`SystemClock`]. Pair a [`TestClock`]
+    /// with [`jwt_expiry`](Self::jwt_expiry) to expire a token in milliseconds:
+    /// issue with a short access expiry, then `clock.advance_secs(..)` past it.
+    pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
     // ─── Routing / endpoint config ───────────────────────────────────
 
     /// Declare additional URLs at which the mediator is reachable.
@@ -728,7 +744,7 @@ impl TestMediatorBuilder {
         let store_for_local_accounts = store.clone();
 
         let token = CancellationToken::new();
-        let inner = MediatorBuilder::new(secrets_resolver.clone())
+        let mut builder = MediatorBuilder::new(secrets_resolver.clone())
             .mediator_did(&mediator_did)
             .admin_did(&admin_did)
             .secrets_backend(secrets_backend)
@@ -741,9 +757,11 @@ impl TestMediatorBuilder {
             .processors(processors)
             .streaming_enabled(self.enable_streaming)
             .local_endpoints(self.local_endpoints.clone())
-            .tls(TlsMode::Plain)
-            .start(token.clone())
-            .await?;
+            .tls(TlsMode::Plain);
+        if let Some(clock) = self.clock.clone() {
+            builder = builder.clock(clock);
+        }
+        let inner = builder.start(token.clone()).await?;
 
         // Register caller-supplied DIDs as LOCAL accounts so they can
         // complete the WebSocket upgrade after authenticating. The

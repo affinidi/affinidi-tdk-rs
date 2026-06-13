@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.2.11 — inject a clock for fast expiry tests (TI4b)
+
+- `TestMediatorBuilder::clock(Arc<dyn Clock>)` injects a clock into the spawned
+  mediator. Pair a `TestClock` with `jwt_expiry(..)` to expire a token in
+  milliseconds: issue with a short lifetime, then `clock.advance_secs(..)` past
+  it. Re-exports `Clock` / `SystemClock` / `TestClock` (enables the
+  `affinidi-messaging-mediator-common/test-clock` feature).
+- New `tests/clock_injection.rs`: authenticate, advance the clock past the token
+  lifetime (no real time passes), and confirm the mediator rejects the token.
+- Tracks the mediator's 0.16 bump.
+
 ## 11th June 2026
 
 ### 0.2.9 — builder support for the per-DID WebSocket cap (mediator T13)

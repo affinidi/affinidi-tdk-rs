@@ -1,7 +1,7 @@
 use super::super::message_inbound::InboundMessage;
 use super::AuthRefreshResponse;
 use super::helpers::{_create_access_token, _create_refresh_token};
-use crate::common::time::unix_timestamp_secs;
+use crate::common::jwt_auth::{clock_aware_validation, jwt_exp_is_expired};
 use crate::didcomm_compat::MetaEnvelope;
 use crate::{
     SharedData,
@@ -15,7 +15,6 @@ use affinidi_messaging_sdk::messages::{
 };
 use axum::{Json, extract::State};
 use http::StatusCode;
-use jsonwebtoken::Validation;
 use sha256::digest;
 use subtle::ConstantTimeEq;
 use tracing::{Instrument, Level, info, span};
@@ -98,7 +97,7 @@ pub async fn authentication_refresh(
         }
 
         // Ensure the message hasn't expired
-        let now = unix_timestamp_secs();
+        let now = state.clock.unix_secs();
         if let Some(expires) = msg.expires_time {
             if expires <= now {
                 return Err(MediatorError::problem_with_log(
@@ -165,14 +164,12 @@ pub async fn authentication_refresh(
             .into());
         };
 
-        // Decode the refresh token
-        let mut validation = Validation::new(jsonwebtoken::Algorithm::EdDSA);
-        validation.set_audience(&["ATM"]);
-        validation.set_required_spec_claims(&["exp", "sub", "aud", "session_id"]);
+        // Decode the refresh token. Expiry is checked against the injected
+        // clock below (not by jsonwebtoken) — see `clock_aware_validation`.
         let results = match jsonwebtoken::decode::<SessionClaims>(
             refresh_token,
             &state.config.security.jwt_decoding_key,
-            &validation,
+            &clock_aware_validation(),
         ) {
             Ok(token) => token,
             Err(err) => {
@@ -191,6 +188,25 @@ pub async fn authentication_refresh(
                 .into());
             }
         };
+
+        // Reject an expired refresh token. jsonwebtoken no longer does this
+        // (its `exp` check is disabled so the injected clock governs expiry),
+        // so we must — same leeway/boundary as before.
+        if jwt_exp_is_expired(results.claims.exp, now) {
+            return Err(MediatorError::problem_with_log(
+                38,
+                "",
+                None,
+                ProblemReportSorter::Error,
+                ProblemReportScope::Protocol,
+                "authentication.session.refresh_token.expired",
+                "Refresh token has expired",
+                vec![],
+                StatusCode::BAD_REQUEST,
+                "Refresh token has expired",
+            )
+            .into());
+        }
 
         // Refresh token is valid - check against database and ensure it still exists.
         // Convert from the trait-layer Session to the local Session shape so the rest
@@ -310,6 +326,7 @@ pub async fn authentication_refresh(
             &session_check.did,
             &session_check.session_id,
             state.config.security.jwt_access_expiry,
+            now,
             &state.config.security.jwt_encoding_key,
         )?;
 
@@ -320,6 +337,7 @@ pub async fn authentication_refresh(
             &session_check.did,
             &session_check.session_id,
             refresh_expiry,
+            now,
             &state.config.security.jwt_encoding_key,
         )?;
 

@@ -1,5 +1,4 @@
 use crate::common::metrics::names::ACTIVE_WEBSOCKET_CONNECTIONS;
-use crate::common::time::unix_timestamp_secs;
 #[cfg(feature = "didcomm")]
 use crate::didcomm_compat;
 use crate::{
@@ -367,7 +366,7 @@ async fn handle_socket(mut socket: WebSocket, state: SharedData, session: Sessio
         info!("Websocket connection established");
 
         // Set a timeout for the websocket connection for when the JWT Auth token expires
-        let epoch = unix_timestamp_secs();
+        let epoch = state.clock.unix_secs();
         if session.expires_at <= epoch {
             warn!("JWT access token has expired. Closing Session");
             let _ = socket
@@ -583,7 +582,7 @@ async fn _package_problem_report(
     )
     .from(state.config.mediator_did.clone())
     .to(session.did.to_string())
-    .created_time(unix_timestamp_secs());
+    .created_time(state.clock.unix_secs());
 
     if let Some(msg_id) = msg_id {
         pr_msg = pr_msg.pthid(msg_id);

@@ -35,7 +35,7 @@ pub(crate) async fn process(
         if session.account_type == AccountType::Admin
             || session.account_type == AccountType::RootAdmin
         {
-            let now = unix_timestamp_secs();
+            let now = state.clock.unix_secs();
             match authz::admin_message_ttl_status(
                 msg.created_time,
                 state.config.security.admin_messages_expiry,

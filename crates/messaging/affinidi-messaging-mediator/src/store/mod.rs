@@ -35,17 +35,16 @@ pub use memory_store::MemoryStore;
 // in `redis_store.rs`) so non-Redis builds can still call them from
 // the OOB discovery handler.
 
-use crate::common::time::unix_timestamp_secs;
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_messaging_mediator_common::errors::MediatorError;
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 
 /// Build the absolute `expires_at` for an OOB invitation given the
-/// invitation's optional `expires_time` and the configured
-/// `oob_invite_ttl`. Mirrors the legacy computation so handlers can
-/// produce the same value before calling the trait method.
-pub fn oob_expires_at(invite: &Message, oob_invite_ttl: u64) -> u64 {
-    let now = unix_timestamp_secs();
+/// invitation's optional `expires_time`, the configured `oob_invite_ttl`, and
+/// the current time `now` (from the caller's injected clock). Mirrors the legacy
+/// computation so handlers can produce the same value before calling the trait
+/// method.
+pub fn oob_expires_at(invite: &Message, oob_invite_ttl: u64, now: u64) -> u64 {
     match invite.expires_time {
         Some(expiry) if expiry > now + oob_invite_ttl => now + oob_invite_ttl,
         Some(expiry) => expiry,

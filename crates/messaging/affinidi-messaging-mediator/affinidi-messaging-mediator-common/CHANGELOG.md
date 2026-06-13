@@ -2,6 +2,19 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.15.13 — injectable `Clock` trait (TI4b)
+
+- New `types::clock` module: the `Clock` trait (`unix_secs` / `unix_millis`)
+  plus `SystemClock` (production; delegates to the existing
+  `time::unix_timestamp_*` helpers). Lives in always-built `types` so both the
+  mediator and the SDK can share it.
+- Adds a non-default `test-clock` feature compiling `TestClock`, a
+  manually-advanced clock for fast expiry/TTL/session tests. Never enabled for
+  the mediator binary (a release guard enforces this); test fixtures opt in.
+- Additive — no change to existing APIs.
+
 ## 13th June 2026
 
 ### 0.15.12 — Admin audit-log query request (simplification T25, part b)

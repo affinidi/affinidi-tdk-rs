@@ -1,4 +1,3 @@
-use crate::common::time::unix_timestamp_secs;
 use crate::{
     SharedData,
     common::session::Session,
@@ -22,7 +21,7 @@ pub(crate) fn process(
         session_id = session.session_id.as_str()
     )
     .entered();
-    let now = unix_timestamp_secs();
+    let now = state.clock.unix_secs();
 
     if let Some(expires) = msg.expires_time
         && expires <= now
