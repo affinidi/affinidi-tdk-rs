@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.7.0"
+version = "0.8.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -41,8 +41,14 @@ thiserror = "2"
 affinidi-vc = { version = "0.2", path = "../../credentials/affinidi-vc" }
 affinidi-sd-jwt = { version = "0.1", path = "../../credentials/affinidi-sd-jwt" }
 affinidi-status-list = { version = "0.1", path = "../../credentials/affinidi-status-list" }
-## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs.
+## `ed25519_pub_to_did_key` for deterministic issuer/holder/verifier DIDs;
+## `jose::key_agreement` backs the didcomm_fuzz deterministic keypairs.
 affinidi-crypto = { version = "0.2", path = "../../core/affinidi-crypto" }
+
+# ── #477: deterministic DIDComm envelope fixtures for fuzzing ──────────────
+## pack/unpack + Message types the didcomm_fuzz seed corpus packs against. A
+## dev-only edge — didcomm does not depend on test-support, so this is acyclic.
+affinidi-messaging-didcomm = { version = "0.15", path = "../../messaging/affinidi-messaging-didcomm" }
 
 # ── TI4a: seeded did:peer generation (determinism module) ─────────────────
 ## Seeded `Secret` constructors (generate_ed25519(.., Some(seed)) etc.) +

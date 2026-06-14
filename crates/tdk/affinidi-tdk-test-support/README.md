@@ -24,6 +24,7 @@ you don't want to stand up external services.
 |----------------------------|-----------------------------------------------------------------|
 | `did_web` / `resolver`     | did:web / did:webvh mock server (fault injection) + injectable `StaticResolver` |
 | `determinism`              | Seeded `did:peer` generation (same seed → same identity)        |
+| `didcomm_fuzz`             | Deterministic DIDComm envelope fixtures + seed corpus for fuzzing `unpack`/`decrypt` |
 | `credential_scenario`      | `CredentialScenario` — SD-JWT VC issue / present / verify + revocation |
 | `mdoc_scenario` / `oid4vp` | mdoc (COSE) flows + OID4VP present / verify (both eIDAS formats) |
 | `vectors`                  | Shared `tests/vectors/` layout + loader                         |
