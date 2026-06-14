@@ -26,6 +26,11 @@ pub mod store;
 #[cfg(feature = "messaging-core")]
 pub mod adapter;
 
+// `arbitrary::Arbitrary` impls for the wire types, for structure-aware fuzzing.
+// Off by default; see the `arbitrary` feature. No public items — impls only.
+#[cfg(feature = "arbitrary")]
+mod arbitrary_support;
+
 // Re-export core types at crate root for convenience and legacy API compat.
 pub use crate::error::DIDCommError;
 pub use crate::message::unpack::UnpackResult;
