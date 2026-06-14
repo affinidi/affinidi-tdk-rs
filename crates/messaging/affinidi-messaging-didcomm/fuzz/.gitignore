@@ -1,0 +1,7 @@
+/target
+/artifacts
+/coverage
+Cargo.lock
+# Live, mutable libFuzzer corpus — regenerated/accumulated locally, never
+# committed. Committed read-only seeds live in `seeds/` instead.
+/corpus

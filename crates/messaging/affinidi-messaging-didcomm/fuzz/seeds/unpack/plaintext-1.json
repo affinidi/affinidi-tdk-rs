@@ -1,0 +1,1 @@
+{"id":"690cae07-1eae-4151-8fbc-9dea7634a9b5","type":"https://didcomm.org/trust-ping/2.0/ping","from":"did:example:alice","body":{"nested":{"a":[1,2,3]},"response_requested":true}}
