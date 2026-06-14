@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during Trust List operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum TrustListError {
     /// The Trust List XML is malformed or cannot be parsed.
     #[error("Parse error: {0}")]
