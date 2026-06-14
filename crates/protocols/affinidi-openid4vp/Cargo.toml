@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-openid4vp"
 description = "OpenID for Verifiable Presentations (OpenID4VP) implementation."
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"

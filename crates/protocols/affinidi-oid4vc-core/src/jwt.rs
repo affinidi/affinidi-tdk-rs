@@ -44,6 +44,7 @@ impl Audience {
 
 /// Error type for JWT operations.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum JwtError {
     /// The JWT format is invalid (not 3 dot-separated parts).
     #[error("Invalid JWT format: {0}")]
