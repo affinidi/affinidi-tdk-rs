@@ -1,12 +1,13 @@
 name: fuzz
 
-# Coverage-guided fuzzing of the DIDComm envelope layer (issue #477).
+# Coverage-guided fuzzing of the parsing/verification layers (issue #477).
 # cargo-fuzz needs nightly, so this runs OUTSIDE the reusable stable pipeline:
-# a short smoke pass on PRs that touch the crate, and a longer pass nightly.
+# a short smoke pass on PRs that touch a fuzzed crate, and a longer pass nightly.
 on:
   pull_request:
     paths:
       - "crates/messaging/affinidi-messaging-didcomm/**"
+      - "crates/credentials/affinidi-sd-jwt/**"
       - ".github/workflows/fuzz.yaml"
   schedule:
     # 03:17 UTC daily — off the hour to avoid the scheduler rush.
@@ -22,13 +23,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [unpack, decrypt, message, message_structured]
+        include:
+          - dir: crates/messaging/affinidi-messaging-didcomm/fuzz
+            target: unpack
+          - dir: crates/messaging/affinidi-messaging-didcomm/fuzz
+            target: decrypt
+          - dir: crates/messaging/affinidi-messaging-didcomm/fuzz
+            target: message
+          - dir: crates/messaging/affinidi-messaging-didcomm/fuzz
+            target: message_structured
+          - dir: crates/credentials/affinidi-sd-jwt/fuzz
+            target: parse
+          - dir: crates/credentials/affinidi-sd-jwt/fuzz
+            target: verify
     env:
       # Override the repo's stable rust-toolchain.toml for this job.
       RUSTUP_TOOLCHAIN: nightly
-    defaults:
-      run:
-        working-directory: crates/messaging/affinidi-messaging-didcomm/fuzz
     steps:
       - uses: actions/checkout@v4
 
@@ -41,10 +51,10 @@ jobs:
           tool: cargo-fuzz
 
       - name: System dependencies
-        working-directory: ${{ github.workspace }}
         run: sudo apt-get update && sudo apt-get install -y libssl-dev
 
       - name: Fuzz ${{ matrix.target }}
+        working-directory: ${{ matrix.dir }}
         run: |
           # Longer pass on the nightly schedule, short smoke pass on PRs.
           if [ "${{ github.event_name }}" = "schedule" ]; then
@@ -62,5 +72,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-artifacts-${{ matrix.target }}
-          path: crates/messaging/affinidi-messaging-didcomm/fuzz/artifacts/
+          path: ${{ matrix.dir }}/artifacts/
           if-no-files-found: ignore
