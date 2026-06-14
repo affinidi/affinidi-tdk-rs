@@ -8,6 +8,7 @@ use crate::messages::{known::MessageType, problem_report::ProblemReport};
 
 /// ATMError
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ATMError {
     #[error("DID error: {0}")]
     DIDError(String),

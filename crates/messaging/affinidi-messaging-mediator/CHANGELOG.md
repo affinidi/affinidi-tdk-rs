@@ -4,6 +4,12 @@
 
 ## 14th June 2026
 
+### 0.16.1 — non_exhaustive AuthError (W7 sweep)
+
+- `AuthError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
+  additively. Patch bump keeps the `0.16` pin valid; consumers that `match` it
+  must add a `_` wildcard arm. No behaviour change.
+
 ### 0.16.0 — injectable clock on the request path (TI4b)
 
 - `SharedData` now carries an `Arc<dyn Clock>`; all request-path expiry / TTL /

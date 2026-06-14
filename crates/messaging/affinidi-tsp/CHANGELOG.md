@@ -2,6 +2,12 @@
 
 ## 14th June 2026
 
+### 0.1.3 — non_exhaustive TspError (W7 sweep)
+
+- `TspError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
+  additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
+  must add a `_` wildcard arm. No behaviour change.
+
 ### 0.1.2 — build fix: drop deprecated `GenericArray::from_slice`
 
 - The HPKE module (`crypto/hpke.rs`) no longer calls the now-deprecated

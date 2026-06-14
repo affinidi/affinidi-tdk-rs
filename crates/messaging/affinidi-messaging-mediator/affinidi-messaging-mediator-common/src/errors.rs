@@ -66,6 +66,7 @@ where
 /// Errors relating to the Mediator Processors. These are largely internal to the Mediator errors
 /// They should not be exposed to the user
 #[derive(Clone, Error, Debug)]
+#[non_exhaustive]
 pub enum ProcessorError {
     /// A general-purpose internal error in a background processor.
     #[error("CommonError: {0}")]

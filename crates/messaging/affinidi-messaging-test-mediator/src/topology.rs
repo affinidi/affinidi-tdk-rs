@@ -46,6 +46,7 @@ use crate::{
 
 /// Errors from constructing or driving a [`TestTopology`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TestTopologyError {
     /// `mediators(0)` — a topology needs at least one mediator.
     #[error("a topology needs at least one mediator")]
