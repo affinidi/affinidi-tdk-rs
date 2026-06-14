@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors specific to SIOPv2 operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum SiopError {
     /// The authorization request is invalid.
     #[error("Invalid request: {0}")]

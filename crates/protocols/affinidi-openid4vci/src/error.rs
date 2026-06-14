@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during OpenID4VCI operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Oid4vciError {
     /// The credential issuer metadata is invalid.
     #[error("Invalid metadata: {0}")]

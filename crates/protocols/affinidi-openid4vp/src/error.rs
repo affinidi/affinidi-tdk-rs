@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during OpenID4VP operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Oid4vpError {
     /// The authorization request is invalid.
     #[error("Invalid request: {0}")]

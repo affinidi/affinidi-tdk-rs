@@ -225,6 +225,7 @@ pub struct ClientMetadata {
 
 /// Standard OAuth 2.0 error codes used across OID4VC.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[non_exhaustive]
 pub enum OAuthError {
     #[error("invalid_request")]
     #[serde(rename = "invalid_request")]
