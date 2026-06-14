@@ -16,6 +16,8 @@
  * - [`did_web`] / [`resolver`] — in-process did:web / did:webvh mock server with
  *   fault injection, plus an injectable `StaticResolver`.
  * - [`determinism`] — seeded `did:peer` generation (same seed → same identity).
+ * - [`didcomm_fuzz`] — deterministic DIDComm envelope fixtures + seed corpus for
+ *   coverage-guided fuzzing of the `unpack`/`decrypt` entry points.
  * - [`credential_scenario`] — issuer/holder/verifier `CredentialScenario` for
  *   SD-JWT VC, with the [`mdoc_scenario`] and [`oid4vp`] flows layered on top.
  * - [`vectors`] — shared `tests/vectors/` layout and loader.
@@ -37,6 +39,7 @@
 pub mod credential_scenario;
 pub mod determinism;
 pub mod did_web;
+pub mod didcomm_fuzz;
 pub mod mdoc_scenario;
 pub mod oid4vp;
 pub mod resolver;
