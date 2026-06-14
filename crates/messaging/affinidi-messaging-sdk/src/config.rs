@@ -3,6 +3,7 @@ use crate::{
     transports::websockets::WebSocketResponses,
 };
 use affinidi_crypto::jose::key_agreement::Curve;
+use affinidi_messaging_mediator_common::types::clock::{Clock, SystemClock};
 use rustls::pki_types::CertificateDer;
 use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, broadcast::Sender};
@@ -42,6 +43,12 @@ pub struct ATMConfig {
     /// so an unreachable mediator surfaces a `TransportError` in seconds
     /// rather than blocking on the OS-level TCP RTO. Default: 15s.
     pub(crate) request_timeout: Duration,
+
+    /// Source of the current time for the SDK's expiry / TTL decisions
+    /// (forwarded-message expiry, the WebSocket token-refresh deadline).
+    /// Defaults to the real [`SystemClock`]; tests inject a `TestClock` via
+    /// [`ATMConfigBuilder::with_clock`] to drive those reads deterministically.
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl ATMConfig {
@@ -54,6 +61,11 @@ impl ATMConfig {
     /// The per-request timeout applied to mediator REST calls.
     pub fn get_request_timeout(&self) -> Duration {
         self.request_timeout
+    }
+
+    /// The clock backing the SDK's expiry / TTL decisions.
+    pub(crate) fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
     }
 
     /// Returns a builder for `ATMConfig`
@@ -89,6 +101,7 @@ pub struct ATMConfigBuilder {
     discover_features: DiscoverFeatures,
     curve_preference: Option<Vec<Curve>>,
     request_timeout: Duration,
+    clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for ATMConfigBuilder {
@@ -102,6 +115,7 @@ impl Default for ATMConfigBuilder {
             discover_features: DiscoverFeatures::default(),
             curve_preference: None,
             request_timeout: Duration::from_secs(15),
+            clock: None,
         }
     }
 }
@@ -196,6 +210,15 @@ impl ATMConfigBuilder {
         self
     }
 
+    /// Inject the clock the SDK uses for expiry / TTL decisions
+    /// (forwarded-message expiry, the WebSocket token-refresh deadline).
+    /// Defaults to the real [`SystemClock`]; pass a `TestClock` to drive those
+    /// reads deterministically in tests.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
     pub fn build(self) -> Result<ATMConfig, ATMError> {
         // Process any custom SSL certificates
         let mut certs = vec![];
@@ -233,6 +256,43 @@ impl ATMConfigBuilder {
             discover_features: Arc::new(RwLock::new(self.discover_features)),
             curve_preference: self.curve_preference,
             request_timeout: self.request_timeout,
+            clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock)),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A clock fixed at a chosen instant — proves an injected clock flows
+    /// through to the SDK's time reads without pulling the `test-clock` feature.
+    #[derive(Debug)]
+    struct FixedClock(u64);
+    impl Clock for FixedClock {
+        fn unix_secs(&self) -> u64 {
+            self.0
+        }
+        fn unix_millis(&self) -> u128 {
+            self.0 as u128 * 1_000
+        }
+    }
+
+    #[test]
+    fn defaults_to_a_live_system_clock() {
+        let config = ATMConfig::builder().build().unwrap();
+        assert!(
+            config.clock().unix_secs() > 0,
+            "default is the system clock"
+        );
+    }
+
+    #[test]
+    fn injected_clock_is_used() {
+        let config = ATMConfig::builder()
+            .with_clock(Arc::new(FixedClock(1_234)))
+            .build()
+            .unwrap();
+        assert_eq!(config.clock().unix_secs(), 1_234);
     }
 }

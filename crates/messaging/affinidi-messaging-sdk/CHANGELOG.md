@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.18.11] - 2026-06-14
+
+Injectable clock for the SDK's expiry/TTL reads (TI4b-2).
+
+### Added
+
+- `ATMConfigBuilder::with_clock(Arc<dyn Clock>)` injects the clock the SDK uses
+  for its time reads (defaults to the real `SystemClock`). The `Clock` trait
+  comes from `affinidi-messaging-mediator-common` (shared with the mediator,
+  TI4b-1), so a test can drive both with one `TestClock`.
+
+### Changed
+
+- The SDK's expiry/TTL **decisions** now read the injected clock instead of the
+  wall clock directly: forwarded-message expiry (`extract_forward_payload`) and
+  the WebSocket token-refresh TTL (`refresh_deadline`). Additive — existing
+  callers are unaffected. The refresh deadline is still *scheduled* on tokio's
+  monotonic timer; only the TTL computation moved to the injected clock.
+- Outbound protocol-message `created_time`/`expires_time` stamps still read the
+  wall clock (a documented follow-up); the mediator's own injected clock governs
+  enforcement, so this does not affect expiry tests.
+
 ## [0.18.10] - 2026-06-13
 
 WS resilience (W16, part 2 of 2).
