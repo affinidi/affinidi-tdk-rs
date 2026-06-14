@@ -1,5 +1,15 @@
 # Affinidi mdoc Changelog
 
+## 14th June 2026 Release 0.2.3
+
+- **Fix (build):** `session.rs` no longer calls the now-deprecated
+  `GenericArray::from_slice` for the AES-256-GCM key/nonce — the key is built via
+  `KeyInit::new_from_slice` and the nonce via `Nonce::from([u8; 12])`. This keeps
+  the crate compiling under `-D warnings` against `generic-array` 0.14.9+, which
+  deprecated `from_slice`. Behaviour-identical (round-trip tests unchanged).
+  Supersedes 0.2.2, which carried the same `MdocError` sealing below but failed
+  to publish on the deprecation.
+
 ## 14th June 2026 Release 0.2.2
 
 - `MdocError` is now `#[non_exhaustive]` (ADR-0003) so new variants land

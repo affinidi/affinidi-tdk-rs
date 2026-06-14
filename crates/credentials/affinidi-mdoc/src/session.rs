@@ -18,7 +18,7 @@
  * AES-256-GCM with 12-byte nonces (counter-based).
  */
 
-use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce, aead::Aead};
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -59,11 +59,12 @@ pub fn encrypt_aes256gcm(
     nonce_bytes: &[u8; 12],
     plaintext: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| MdocError::Cose(format!("AES-256-GCM invalid key: {e}")))?;
+    let nonce = Nonce::from(*nonce_bytes);
 
     cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(&nonce, plaintext)
         .map_err(|e| MdocError::Cose(format!("AES-256-GCM encryption failed: {e}")))
 }
 
@@ -83,11 +84,12 @@ pub fn decrypt_aes256gcm(
     nonce_bytes: &[u8; 12],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| MdocError::Cose(format!("AES-256-GCM invalid key: {e}")))?;
+    let nonce = Nonce::from(*nonce_bytes);
 
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| MdocError::Cose(format!("AES-256-GCM decryption failed: {e}")))
 }
 

@@ -64,10 +64,11 @@ pub fn seal(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut ciphertext = plaintext.to_vec();
-    let cipher = Aes128Gcm::new(GenericArray::from_slice(&key));
-    let nonce = GenericArray::from_slice(&base_nonce);
+    let cipher = Aes128Gcm::new_from_slice(&key)
+        .map_err(|e| TspError::Hpke(format!("AES-GCM invalid key: {e}")))?;
+    let nonce = GenericArray::from(base_nonce);
     cipher
-        .encrypt_in_place(nonce, aad, &mut ciphertext)
+        .encrypt_in_place(&nonce, aad, &mut ciphertext)
         .map_err(|e| TspError::Hpke(format!("AES-GCM seal failed: {e}")))?;
 
     Ok(SealResult { enc, ciphertext })
@@ -104,10 +105,11 @@ pub fn open(
     let (key, base_nonce) = key_schedule(&shared_secret, info)?;
 
     let mut plaintext = ciphertext.to_vec();
-    let cipher = Aes128Gcm::new(GenericArray::from_slice(&key));
-    let nonce = GenericArray::from_slice(&base_nonce);
+    let cipher = Aes128Gcm::new_from_slice(&key)
+        .map_err(|e| TspError::Hpke(format!("AES-GCM invalid key: {e}")))?;
+    let nonce = GenericArray::from(base_nonce);
     cipher
-        .decrypt_in_place(nonce, aad, &mut plaintext)
+        .decrypt_in_place(&nonce, aad, &mut plaintext)
         .map_err(|_| TspError::Hpke("AES-GCM open failed: authentication tag mismatch".into()))?;
 
     Ok(plaintext)
