@@ -4,6 +4,17 @@ All notable changes to `affinidi-messaging-didcomm` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2026-06-14
+
+### Added
+
+- **Off-by-default `arbitrary` feature (#477).** Adds hand-written, depth- and
+  width-bounded `arbitrary::Arbitrary` impls for the wire types (`Message`,
+  `Attachment`, `AttachmentData`) for structure-aware coverage-guided fuzzing.
+  No runtime/behaviour change and nothing is pulled in unless the feature is
+  enabled. Patch bump (additive) keeps the `vta-sdk` `[patch.crates-io]`
+  coupling valid — see ADR 0003.
+
 ## [0.15.2] - 2026-06-13
 
 ### Changed

@@ -1,7 +1,7 @@
 [package]
 name = "affinidi-messaging-didcomm"
 description = "DIDComm v2.1 messaging implementation for the Affinidi TDK"
-version = "0.15.2"
+version = "0.15.3"
 edition.workspace = true
 authors.workspace = true
 readme = "README.md"
@@ -15,6 +15,10 @@ rust-version.workspace = true
 [features]
 default = []
 messaging-core = ["dep:affinidi-messaging-core", "dep:async-trait"]
+# Off-by-default. Adds `arbitrary::Arbitrary` impls for the wire types (Message,
+# Attachment, AttachmentData) for structure-aware coverage-guided fuzzing. No
+# runtime/behaviour change; pull it in only from a fuzz harness or dev build.
+arbitrary = ["dep:arbitrary"]
 
 [dependencies]
 # JOSE crypto primitives (#327) — this crate owns only the DIDComm/JOSE
@@ -45,6 +49,9 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # Optional — messaging-core trait integration
 affinidi-messaging-core = { path = "../affinidi-messaging-core", version = "0.1", optional = true }
 async-trait = { version = "0.1", optional = true }
+
+# Optional — structure-aware fuzzing support (see the `arbitrary` feature).
+arbitrary = { version = "1", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
