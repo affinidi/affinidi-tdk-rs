@@ -8,6 +8,7 @@ use wasm_bindgen::JsValue;
 ///
 /// This error type is used for all errors that can occur in the DID Cache Client SDK.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum DIDCacheError {
     /// There was an error in resolving the DID.
     #[error("DID error: {0}")]

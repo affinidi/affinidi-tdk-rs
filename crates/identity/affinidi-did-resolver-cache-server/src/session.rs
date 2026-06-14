@@ -14,6 +14,7 @@ use std::{
 use tracing::{info, warn};
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SessionError {
     SessionError(String),
 }

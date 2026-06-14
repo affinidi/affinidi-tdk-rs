@@ -11,6 +11,7 @@ use ahash::AHashMap as HashMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum DidExampleError {
     #[error("Error parsing DID document: {0}")]
     DocumentParseError(String),

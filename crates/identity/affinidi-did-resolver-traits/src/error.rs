@@ -8,6 +8,7 @@ use affinidi_did_common::{DIDError, DocumentError};
 /// `ResolverError` covers failures during the resolution process itself:
 /// network errors, invalid documents, unsupported methods, etc.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ResolverError {
     /// The DID method is not supported by this resolver.
     #[error("Unsupported DID method: {0}")]

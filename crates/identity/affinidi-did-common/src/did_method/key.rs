@@ -16,6 +16,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Errors related to key material operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum KeyError {
     #[error("Key error: {0}")]
     Key(String),

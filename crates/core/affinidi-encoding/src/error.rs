@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EncodingError {
     #[error("Invalid multibase prefix: expected 'z' (base58btc), got '{0}'")]
     InvalidMultibasePrefix(char),

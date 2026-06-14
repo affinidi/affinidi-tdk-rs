@@ -4,6 +4,15 @@ All notable changes to `affinidi-did-common` are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this crate follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-06-14
+
+### Changed
+
+- `DIDError`, `KeyError`, `KeyNegotiationError`, and `PeerError` are now
+  `#[non_exhaustive]` (ADR-0003) so future variants are additive. Patch bump to
+  keep the `0.3` pin — including the `didwebvh-rs` `[patch.crates-io]` redirect —
+  valid; consumers that `match` these must add a `_` arm. No behaviour change.
+
 ## [0.3.6] - 2026-06-13
 
 ### Changed

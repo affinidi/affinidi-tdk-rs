@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### Affinidi DID Web (0.1.2)
+
+- `DidWebError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
+  additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
+  must add a `_` arm. No behaviour change.
+
 ## 28th May 2026
 
 ### Affinidi DID Web (0.1.1)

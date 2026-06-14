@@ -2,6 +2,7 @@ use didwebvh_rs::DIDWebVHError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum DIDSCIDError {
     #[error("Unsupported format")]
     UnsupportedFormat,

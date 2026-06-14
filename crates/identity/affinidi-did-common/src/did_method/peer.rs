@@ -98,6 +98,7 @@ impl PeerPurpose {
 
 /// Errors specific to did:peer operations
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum PeerError {
     #[error("Unsupported key type")]
     UnsupportedKeyType,
