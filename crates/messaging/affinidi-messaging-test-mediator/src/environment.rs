@@ -40,6 +40,7 @@ use crate::{AdminIdentity, TestMediator, TestMediatorHandle};
 /// Errors specific to the e2e test environment, as opposed to the
 /// mediator-only fixture in [`crate::TestMediatorError`].
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum TestEnvironmentError {
     /// The underlying mediator fixture failed to start.
     #[error(transparent)]

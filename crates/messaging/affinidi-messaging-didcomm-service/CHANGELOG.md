@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.6] - 2026-06-14
+
+### Changed
+
+- `TransportError`, `StartupError`, and `DIDCommServiceError` are now
+  `#[non_exhaustive]` (ADR-0003) so new variants land additively. Patch bump
+  keeps the `0.3` pin valid; match them with a `_` wildcard arm. No behaviour
+  change. (W7 sweep)
+
 ## [0.3.5] - 2026-06-10
 
 ### Fixed

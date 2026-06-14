@@ -6,6 +6,7 @@
 
 /// Failure while reading or parsing a `mediator.toml`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// The config file could not be opened/read.
     #[error("could not open config file ({path}): {source}")]

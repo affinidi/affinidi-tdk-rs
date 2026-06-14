@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-messaging-mediator-config"
-version = "0.1.1"
+version = "0.1.2"
 description = "Raw TOML configuration schema for the Affinidi Messaging Mediator (shared by the mediator and its setup tool)"
 edition.workspace = true
 authors.workspace = true

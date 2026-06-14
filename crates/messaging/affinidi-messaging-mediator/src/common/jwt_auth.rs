@@ -42,6 +42,7 @@ pub struct TokenPayload {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum AuthError {
     WrongCredentials,
     MissingCredentials,

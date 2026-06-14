@@ -19,6 +19,7 @@ pub enum PolicyViolation {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TransportError {
     #[error("Message has no sender DID")]
     MissingSenderDid,
@@ -28,6 +29,7 @@ pub enum TransportError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum StartupError {
     #[error("Failed to build ATM config")]
     Config(#[source] affinidi_messaging_sdk::errors::ATMError),
@@ -49,6 +51,7 @@ pub enum StartupError {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DIDCommServiceError {
     #[error("ATM error: {0}")]
     ATM(#[from] affinidi_messaging_sdk::errors::ATMError),

@@ -4,6 +4,12 @@
 
 ## 14th June 2026
 
+### 0.15.15 — non_exhaustive ProcessorError + SecretStoreError (W7 sweep)
+
+- `ProcessorError` and `SecretStoreError` are now `#[non_exhaustive]` (ADR-0003)
+  so new variants land additively. Patch bump keeps the `0.15` pin valid;
+  consumers that `match` them must add a `_` wildcard arm. No behaviour change.
+
 ### 0.15.14 — build fix: drop deprecated `GenericArray::from_slice`
 
 - The file-encrypted secrets backend (`secrets/backends/file_encrypted.rs`) no

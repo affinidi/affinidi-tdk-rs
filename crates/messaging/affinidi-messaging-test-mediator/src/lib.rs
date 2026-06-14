@@ -121,6 +121,7 @@ use url::Url;
 
 /// Errors returned by the test mediator fixture.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TestMediatorError {
     /// A DID generation step failed.
     #[error("did:peer generation failed: {0}")]

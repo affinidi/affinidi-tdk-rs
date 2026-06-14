@@ -6,6 +6,7 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, SecretStoreError>;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum SecretStoreError {
     #[error("invalid backend URL '{url}': {reason}")]
     InvalidUrl { url: String, reason: String },

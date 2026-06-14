@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Errors from the unified messaging layer.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum MessagingError {
     #[error("pack error: {0}")]
     Pack(String),

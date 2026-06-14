@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TspError {
     #[error("CESR encoding error: {0}")]
     Cesr(#[from] affinidi_cesr::CesrError),

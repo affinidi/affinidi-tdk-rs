@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.18.12] - 2026-06-14
+
+`ATMError` is now `#[non_exhaustive]` (ADR-0003) so new variants land additively.
+Patch bump keeps the `0.18` pin valid; match it with a `_` wildcard arm. No
+behaviour change. (W7 sweep)
+
 ## [0.18.11] - 2026-06-14
 
 Injectable clock for the SDK's expiry/TTL reads (TI4b-2).

@@ -4,6 +4,13 @@
 
 ## 14th June 2026
 
+### 0.2.12 — non_exhaustive error enums (W7 sweep)
+
+- `TestEnvironmentError`, `TestMediatorError`, and `TestTopologyError` are now
+  `#[non_exhaustive]` (ADR-0003) so new variants land additively. Patch bump
+  keeps the `0.2` pin valid; consumers that `match` them must add a `_` wildcard
+  arm. No behaviour change.
+
 ### 0.2.11 — inject a clock for fast expiry tests (TI4b)
 
 - `TestMediatorBuilder::clock(Arc<dyn Clock>)` injects a clock into the spawned
