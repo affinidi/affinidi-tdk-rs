@@ -18,6 +18,31 @@
 //! `localhost%3A<port>` for minting `did:webvh:…:localhost%3A<port>:…` DIDs.
 //! That path relies on `localhost` resolving to the loopback the server is
 //! bound on (the standard configuration).
+//!
+//! ```
+//! use affinidi_tdk_test_support::did_web::{Fault, MockDidWebServer};
+//!
+//! // The server is async; drive it from a runtime (your test would be
+//! // `#[tokio::test]`).
+//! tokio::runtime::Runtime::new().unwrap().block_on(async {
+//!     let server = MockDidWebServer::start().await;
+//!     server.register(
+//!         "/.well-known/did.json",
+//!         200,
+//!         "application/did+ld+json",
+//!         r#"{"id":"did:web:localhost"}"#,
+//!     );
+//!
+//!     // A resolver would now fetch `<base_url>/.well-known/did.json`.
+//!     assert!(server.base_url().starts_with("http://127.0.0.1:"));
+//!     assert_eq!(server.hits("/.well-known/did.json"), 0, "no fetch yet");
+//!
+//!     // Inject a fault to exercise the resolver's hardening (timeouts,
+//!     // status handling, …); every later response carries it until cleared.
+//!     server.set_fault(Fault::Status(503));
+//!     server.clear_fault();
+//! });
+//! ```
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -35,7 +60,11 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 /// A fault applied to every response until cleared.
+///
+/// `#[non_exhaustive]`: new fault kinds may be added in a minor release, so
+/// match arms over `Fault` must include a `_` wildcard.
 #[derive(Clone, Default)]
+#[non_exhaustive]
 pub enum Fault {
     /// Serve registered responses normally.
     #[default]

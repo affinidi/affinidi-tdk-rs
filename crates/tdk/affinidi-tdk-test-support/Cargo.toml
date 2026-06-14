@@ -1,6 +1,6 @@
 [package]
 name = "affinidi-tdk-test-support"
-version = "0.6.0"
+version = "0.7.0"
 description = "Shared in-process test fixtures and harnesses for the Affinidi TDK workspace"
 edition.workspace = true
 authors.workspace = true
@@ -10,10 +10,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 readme = "README.md"
-# Scaffold only — flipped to `true` once the fixture API stabilises (TI-series)
-# so external consumers can pull it in as a dev-dependency. Empty crates should
-# not hit crates.io.
-publish = false
+# Published so external consumers can pull it in as a `dev-dependency`. The
+# fixture API stabilised with the TI-series; it is a `0.x` testing crate (see
+# the crate docs' Stability note).
+publish = true
 
 [dependencies]
 # ── TI2: did:web/webvh mock server + StaticResolver ──────────────────────
