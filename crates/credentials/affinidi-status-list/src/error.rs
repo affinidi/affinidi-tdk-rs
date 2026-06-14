@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during status list operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum StatusListError {
     /// The status list index is out of bounds.
     #[error("Index out of bounds: {index} (list size: {size})")]

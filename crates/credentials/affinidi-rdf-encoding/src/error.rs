@@ -2,6 +2,7 @@ use std::fmt;
 
 /// Errors that can occur during RDF processing.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RdfError {
     #[error("N-Quads parse error: {0}")]
     NQuadsParseError(String),
