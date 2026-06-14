@@ -231,6 +231,25 @@ let mut atm = ATM::new(config, vec![]).await?;
 atm.send_ping("did:peer:2...", true, true).await?;
 ```
 
+## Testing
+
+You can write messaging / DID / credential integration tests with **no external
+infrastructure** — no Redis, no network, no standing services. Two paths:
+
+- **Rust fixtures** — pull a fixture crate in as a `dev-dependency`:
+  [`affinidi-messaging-test-mediator`](./crates/messaging/affinidi-messaging-test-mediator/)
+  for embedded mediators (`TestMediator` / `TestEnvironment` / `TestTopology`),
+  and [`affinidi-tdk-test-support`](./crates/tdk/affinidi-tdk-test-support/) for
+  did:web mocks, deterministic resolvers, seeded DIDs, and credential scenarios.
+  A mediator is three lines; an issue/present/verify round trip is a handful.
+- **Language-agnostic** — `docker compose -f docker-compose.test.yml up` a
+  known-good mediator + Redis + did:web host with fixed TEST-ONLY identities and
+  point any client at it.
+
+Copy-paste scenarios for both paths are in the
+[testing cookbook](./docs/testing/cookbook.md); the composed stack is documented
+in [`docs/testing/docker-compose.md`](./docs/testing/docker-compose.md).
+
 ## Using affinidi-* crates from outside this workspace
 
 This workspace's root `Cargo.toml` defines a non-trivial

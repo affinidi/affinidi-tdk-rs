@@ -40,6 +40,7 @@ pub use affinidi_secrets_resolver::secrets::{KeyType, Secret};
 
 /// Errors from seeded identity generation.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DeterminismError {
     /// Assembling the `did:peer` failed.
     #[error("did:peer: {0}")]

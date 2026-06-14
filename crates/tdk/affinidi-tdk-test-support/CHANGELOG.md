@@ -4,6 +4,23 @@
 
 ## 14th June 2026
 
+### 0.7.0 — documented testing API + cookbook (TI6)
+
+- **Published.** `publish` flipped to `true` — the fixture API stabilised with
+  the TI-series and external consumers can now pull this in as a
+  `dev-dependency` from crates.io. It remains a `0.x` testing crate (additive
+  where possible; breaking changes get a minor bump + a `CHANGELOG` entry).
+- **Stability.** The fixture config enums (`did_web::Fault`, `resolver::Outcome`)
+  and the error enums (`ScenarioError`, `DeterminismError`, `VectorError`) are
+  now `#[non_exhaustive]`, so new variants land additively. Match arms over them
+  must carry a `_` wildcard.
+- **Docs.** Each module now carries a runnable, CI-compiled (`cargo test --doc`)
+  doc example of its happy path (`did_web` was the last one without). A
+  copy-paste scenario cookbook spanning these fixtures, the embedded mediator
+  (`affinidi-messaging-test-mediator`), and the language-agnostic
+  `docker-compose.test.yml` path lives at `docs/testing/cookbook.md`.
+- No behaviour change to any fixture.
+
 ### 0.6.0 — seeded did:peer generation (TI4a)
 
 - `determinism`: deterministic `did:peer` identities. `did_peer_from_seed(seed,

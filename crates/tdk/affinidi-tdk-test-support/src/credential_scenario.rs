@@ -68,6 +68,7 @@ use crate::resolver::StaticResolver;
 
 /// Errors from the credential scenario fixture.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ScenarioError {
     /// An sd-jwt-vc issuance call failed.
     #[error("sd-jwt-vc: {0}")]

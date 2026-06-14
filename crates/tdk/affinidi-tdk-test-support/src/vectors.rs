@@ -41,6 +41,7 @@ use serde_json::Value;
 
 /// Errors from loading a test vector.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum VectorError {
     /// The vector file could not be read.
     #[error("reading vector `{path}`: {source}")]

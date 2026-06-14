@@ -31,7 +31,10 @@ use affinidi_did_resolver_traits::{AsyncResolver, Resolution, ResolverError};
 /// `Delays` wraps another outcome so a test can express "resolve after 2s" or
 /// "fail after 500ms"; `Hangs` never completes, which is the lever for
 /// request-path timeout tests.
+/// `#[non_exhaustive]`: new outcome kinds may be added in a minor release, so
+/// match arms over `Outcome` must include a `_` wildcard.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum Outcome {
     /// Resolve to this document — the happy path. Boxed because a `Document`
     /// dwarfs the other variants.
