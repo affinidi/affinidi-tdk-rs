@@ -2,6 +2,13 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.1.13 — bump vta-sdk to 0.13
+
+- Updated the `vta-sdk` dependency requirement from `0.11` to `0.13` (the
+  `provision-client` and `test-support` features). No behaviour change.
+
 ## 12th June 2026
 
 ### 0.1.12 — Unify the non-interactive setup paths (simplification T22)
