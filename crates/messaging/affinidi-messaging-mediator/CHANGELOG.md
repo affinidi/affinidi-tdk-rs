@@ -4,6 +4,12 @@
 
 ## 14th June 2026
 
+### 0.16.2 — bump vta-sdk to 0.13
+
+- Updated the `vta-sdk` dependency requirement from `0.11` to `0.13` (the
+  `integration` feature). No behaviour change; patch bump keeps the `0.16` pin
+  valid for consumers.
+
 ### 0.16.1 — non_exhaustive AuthError (W7 sweep)
 
 - `AuthError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
