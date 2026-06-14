@@ -1,0 +1,57 @@
+[package]
+name = "affinidi-messaging-didcomm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+ed25519-dalek = "2"
+affinidi-crypto = { version = "0.2", features = ["jose"] }
+# `arbitrary` feature provides Arbitrary for the wire types (the message_structured target).
+affinidi-messaging-didcomm = { path = "..", features = ["arbitrary"] }
+
+# This is a standalone workspace, so it does NOT inherit the parent's
+# [patch.crates-io]. didcomm pulls affinidi-crypto by version (=0.2); without
+# this redirect cargo would resolve a second copy from crates.io and the build
+# fails with duplicate-type errors. affinidi-crypto has no internal path deps,
+# so this single redirect is all that's needed.
+[patch.crates-io]
+affinidi-crypto = { path = "../../../core/affinidi-crypto" }
+
+[[bin]]
+name = "unpack"
+path = "fuzz_targets/unpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decrypt"
+path = "fuzz_targets/decrypt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message_structured"
+path = "fuzz_targets/message_structured.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the parent workspace: cargo-fuzz needs nightly, but the workspace
+# pins stable 1.95.0. Keeping this a standalone workspace means the parent's
+# `cargo build --workspace`, lints, and publish-verify never touch it.
+[workspace]

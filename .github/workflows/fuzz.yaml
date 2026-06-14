@@ -1,0 +1,66 @@
+name: fuzz
+
+# Coverage-guided fuzzing of the DIDComm envelope layer (issue #477).
+# cargo-fuzz needs nightly, so this runs OUTSIDE the reusable stable pipeline:
+# a short smoke pass on PRs that touch the crate, and a longer pass nightly.
+on:
+  pull_request:
+    paths:
+      - "crates/messaging/affinidi-messaging-didcomm/**"
+      - ".github/workflows/fuzz.yaml"
+  schedule:
+    # 03:17 UTC daily — off the hour to avoid the scheduler rush.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [unpack, decrypt, message, message_structured]
+    env:
+      # Override the repo's stable rust-toolchain.toml for this job.
+      RUSTUP_TOOLCHAIN: nightly
+    defaults:
+      run:
+        working-directory: crates/messaging/affinidi-messaging-didcomm/fuzz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: System dependencies
+        working-directory: ${{ github.workspace }}
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          # Longer pass on the nightly schedule, short smoke pass on PRs.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            DURATION=300
+          else
+            DURATION=60
+          fi
+          mkdir -p "corpus/${{ matrix.target }}"
+          cargo fuzz run "${{ matrix.target }}" \
+            "corpus/${{ matrix.target }}" "seeds/${{ matrix.target }}" \
+            -- -max_total_time=$DURATION -rss_limit_mb=4096
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: crates/messaging/affinidi-messaging-didcomm/fuzz/artifacts/
+          if-no-files-found: ignore
