@@ -36,6 +36,7 @@ use thiserror::Error;
 
 /// EBSI DID method errors.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EbsiError {
     /// The DID format is invalid.
     #[error("Invalid EBSI DID: {0}")]

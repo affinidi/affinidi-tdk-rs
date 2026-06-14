@@ -25,6 +25,7 @@ where
 
 /// CacheError the first String is always the session_id
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum CacheError {
     #[error("Error in handling errors! {1}")]
     ErrorHandlingError(SessId, String),

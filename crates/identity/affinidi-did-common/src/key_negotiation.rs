@@ -47,6 +47,7 @@ pub const DEFAULT_CURVE_PREFERENCE: [Curve; 5] = [
 /// Neutral by design: each call site maps these into its own error type so
 /// the message context (`DIDAuthError` / `ATMError`) stays at the boundary.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum KeyNegotiationError {
     /// No verification method matched the given key id.
     #[error("verification method not found: {0}")]

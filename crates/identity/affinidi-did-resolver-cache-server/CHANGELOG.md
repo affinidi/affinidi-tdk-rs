@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.9.2 — non_exhaustive error enums (W7 sweep)
+
+- `CacheError` and `SessionError` are now `#[non_exhaustive]` (ADR-0003) so new
+  variants land additively. Patch bump keeps the `0.9` pin valid; consumers that
+  `match` them must add a `_` arm. No behaviour change.
+
 ## 13th June 2026
 
 ### 0.9.1 — statistics task on the shared supervisor (W15)

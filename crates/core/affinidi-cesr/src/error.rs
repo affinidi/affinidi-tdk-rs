@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum CesrError {
     #[error("unknown code: {0}")]
     UnknownCode(String),

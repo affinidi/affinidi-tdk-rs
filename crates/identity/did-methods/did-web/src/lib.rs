@@ -56,6 +56,7 @@ use tracing::debug;
 
 /// did:web resolver errors.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum DidWebError {
     /// The supplied DID was not a syntactically valid `did:web`.
     #[error("invalid did:web DID: {0}")]

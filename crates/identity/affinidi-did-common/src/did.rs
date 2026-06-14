@@ -54,6 +54,7 @@ pub struct DID {
 
 /// Errors that can occur when parsing or constructing a DID
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DIDError {
     /// DID string does not start with "did:"
     MissingPrefix,

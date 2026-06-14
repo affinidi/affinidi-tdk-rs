@@ -2,6 +2,14 @@
 
 ## Changelog history
 
+## 14th June 2026
+
+### 0.8.10 — non_exhaustive DIDCacheError (W7 sweep)
+
+- `DIDCacheError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
+  additively. Patch bump keeps the `0.8` pin valid; consumers that `match` it
+  must add a `_` arm. No behaviour change.
+
 ## 13th June 2026
 
 ### 0.8.9 — supervise the network task (W15)
