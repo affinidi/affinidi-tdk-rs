@@ -4,6 +4,15 @@
 
 ## 14th June 2026
 
+### 0.15.14 — build fix: drop deprecated `GenericArray::from_slice`
+
+- The file-encrypted secrets backend (`secrets/backends/file_encrypted.rs`) no
+  longer calls the now-deprecated `GenericArray::from_slice` for the
+  AES-256-GCM key/nonce — the key is built via `KeyInit::new_from_slice` and the
+  nonce via `Nonce::from([u8; 12])`. Keeps the crate compiling under
+  `-D warnings` against `generic-array` 0.14.9+. Behaviour-identical (seal/open
+  round-trip tests unchanged).
+
 ### 0.15.13 — injectable `Clock` trait (TI4b)
 
 - New `types::clock` module: the `Clock` trait (`unix_secs` / `unix_millis`)

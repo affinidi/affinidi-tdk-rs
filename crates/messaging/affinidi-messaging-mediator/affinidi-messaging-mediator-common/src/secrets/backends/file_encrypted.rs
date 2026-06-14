@@ -50,7 +50,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use async_trait::async_trait;
 use base64::Engine;
@@ -258,12 +258,13 @@ fn seal(
     plaintext: &[u8],
     aad: &[u8],
 ) -> Result<(Vec<u8>, [u8; NONCE_BYTES])> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| SecretStoreError::other(format!("AES-GCM invalid key: {e}")))?;
     let nonce_bytes = random_nonce()?;
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::from(nonce_bytes);
     let ct = cipher
         .encrypt(
-            nonce,
+            &nonce,
             Payload {
                 msg: plaintext,
                 aad,
@@ -279,10 +280,11 @@ fn open_aead(
     ciphertext: &[u8],
     aad: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| SecretStoreError::other(format!("AES-GCM invalid key: {e}")))?;
     cipher
         .decrypt(
-            Nonce::from_slice(nonce),
+            &Nonce::from(*nonce),
             Payload {
                 msg: ciphertext,
                 aad,
