@@ -2,7 +2,6 @@ use crate::{ATM, SharedState, errors::ATMError, messages::compat::UnpackMetadata
 use affinidi_messaging_didcomm::message::Message;
 use affinidi_secrets_resolver::SecretsResolver;
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Instrument, Level, debug, span, warn};
 
 impl ATM {
@@ -89,7 +88,8 @@ impl SharedState {
                         )));
                     }
                     // Extract the inner message and loop to unpack it
-                    msg_string = Self::extract_forward_payload(&msg)?;
+                    msg_string =
+                        Self::extract_forward_payload(&msg, self.config.clock().unix_secs())?;
                 } else {
                     return Ok((msg, metadata));
                 }
@@ -419,7 +419,7 @@ impl SharedState {
 
         async move {
             debug!("Attempting to unpack a forwarded message");
-            let inner = Self::extract_forward_payload(message)?;
+            let inner = Self::extract_forward_payload(message, self.config.clock().unix_secs())?;
             self.unpack(&inner).await
         }
         .instrument(_span)
@@ -427,21 +427,18 @@ impl SharedState {
     }
 
     /// Extracts the inner message string from a forward message's attachment.
-    /// Checks expiry and supports JSON and Base64 attachment formats.
-    pub(crate) fn extract_forward_payload(message: &Message) -> Result<String, ATMError> {
+    /// Checks expiry (against the caller-supplied `now`, sourced from the SDK's
+    /// injected clock) and supports JSON and Base64 attachment formats.
+    pub(crate) fn extract_forward_payload(message: &Message, now: u64) -> Result<String, ATMError> {
         debug!("Extracting payload from forwarded message");
 
         // Check expiry time if it exists
-        if let Some(expires_time) = message.expires_time {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            if expires_time <= now {
-                return Err(ATMError::MsgReceiveError(String::from(
-                    "Forwarded Message has expired and cannot be processed",
-                )));
-            }
+        if let Some(expires_time) = message.expires_time
+            && expires_time <= now
+        {
+            return Err(ATMError::MsgReceiveError(String::from(
+                "Forwarded Message has expired and cannot be processed",
+            )));
         }
 
         if let Some(attachments) = &message.attachments
@@ -502,7 +499,10 @@ mod tests {
     use affinidi_tdk_common::TDKSharedState;
     use serde_json::json;
     use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Fixed "current time" for the `extract_forward_payload` expiry tests — the
+    /// `now` the SDK would source from its injected clock.
+    const NOW_SECS: u64 = 1_000_000_000;
 
     use affinidi_did_common::{DID, PeerCreateKey, PeerKeyPurpose, PeerKeyType};
     use affinidi_messaging_didcomm::message::Message as DcMessage;
@@ -1345,7 +1345,7 @@ mod tests {
         let inner_json = make_plaintext_json(&inner);
         let forward = wrap_in_forward_json(&inner_json, None);
 
-        let extracted = SharedState::extract_forward_payload(&forward).unwrap();
+        let extracted = SharedState::extract_forward_payload(&forward, NOW_SECS).unwrap();
 
         let extracted_value: serde_json::Value = serde_json::from_str(&extracted).unwrap();
         let inner_value: serde_json::Value = serde_json::from_str(&inner_json).unwrap();
@@ -1358,7 +1358,7 @@ mod tests {
         let inner_json = make_plaintext_json(&inner);
         let forward = wrap_in_forward_base64(&inner_json, None);
 
-        let extracted = SharedState::extract_forward_payload(&forward).unwrap();
+        let extracted = SharedState::extract_forward_payload(&forward, NOW_SECS).unwrap();
 
         assert_eq!(extracted, inner_json);
     }
@@ -1369,7 +1369,7 @@ mod tests {
         let inner_json = make_plaintext_json(&inner);
         let forward = wrap_in_forward_json(&inner_json, Some(1));
 
-        let result = SharedState::extract_forward_payload(&forward);
+        let result = SharedState::extract_forward_payload(&forward, NOW_SECS);
 
         assert!(result.is_err());
         assert!(
@@ -1382,14 +1382,10 @@ mod tests {
     fn extract_forward_payload_not_expired() {
         let inner = make_inner_message();
         let inner_json = make_plaintext_json(&inner);
-        let future = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 3600;
+        let future = NOW_SECS + 3600;
         let forward = wrap_in_forward_json(&inner_json, Some(future));
 
-        let result = SharedState::extract_forward_payload(&forward);
+        let result = SharedState::extract_forward_payload(&forward, NOW_SECS);
 
         assert!(result.is_ok());
     }
@@ -1403,7 +1399,7 @@ mod tests {
         )
         .finalize();
 
-        let result = SharedState::extract_forward_payload(&msg);
+        let result = SharedState::extract_forward_payload(&msg, NOW_SECS);
 
         assert!(result.is_err());
         assert!(
@@ -1422,7 +1418,7 @@ mod tests {
         .finalize();
         msg.attachments = Some(vec![]);
 
-        let result = SharedState::extract_forward_payload(&msg);
+        let result = SharedState::extract_forward_payload(&msg, NOW_SECS);
 
         assert!(result.is_err());
         assert!(
@@ -1447,7 +1443,7 @@ mod tests {
         .attachment(attachment)
         .finalize();
 
-        let result = SharedState::extract_forward_payload(&msg);
+        let result = SharedState::extract_forward_payload(&msg, NOW_SECS);
 
         assert!(result.is_err());
         assert!(
@@ -1469,7 +1465,7 @@ mod tests {
         .attachment(attachment)
         .finalize();
 
-        let result = SharedState::extract_forward_payload(&msg);
+        let result = SharedState::extract_forward_payload(&msg, NOW_SECS);
 
         assert!(result.is_err());
         assert!(
@@ -1514,7 +1510,7 @@ mod tests {
         .attachment(attachment)
         .finalize();
 
-        let result = SharedState::extract_forward_payload(&msg);
+        let result = SharedState::extract_forward_payload(&msg, NOW_SECS);
 
         assert!(result.is_err());
         assert!(

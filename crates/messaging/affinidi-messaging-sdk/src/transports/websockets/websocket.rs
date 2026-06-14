@@ -374,10 +374,9 @@ impl WebSocketTransport {
     /// mediator force-closes the socket at expiry. `None` if expiry is unknown.
     fn refresh_deadline(&self) -> Option<tokio::time::Instant> {
         let expires_at = self.access_expires_at?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        // Wall-clock TTL read goes through the injected clock; the deadline
+        // itself is still scheduled on the tokio monotonic timer below.
+        let now = self.shared.config.clock().unix_secs();
         let ttl = expires_at.saturating_sub(now);
         Some(tokio::time::Instant::now() + Duration::from_secs(refresh_after_secs(ttl)))
     }
