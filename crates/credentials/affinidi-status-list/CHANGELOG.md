@@ -1,5 +1,11 @@
 # Affinidi Status List Changelog
 
+## 14th June 2026 Release 0.1.4
+
+- `StatusListError` is now `#[non_exhaustive]` (ADR-0003) so new variants land
+  additively. Patch bump keeps the `0.1` pin valid; consumers that `match` it
+  must add a `_` wildcard arm. No behaviour change. (W7 sweep)
+
 ## 1st June 2026 Release 0.1.3
 
 ### Fixed

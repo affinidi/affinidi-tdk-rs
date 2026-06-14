@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors that can occur during mdoc operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum MdocError {
     /// CBOR encoding/decoding failed.
     #[error("CBOR error: {0}")]

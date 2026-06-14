@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Errors specific to SD-JWT VC operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum SdJwtVcError {
     /// The `vct` (Verifiable Credential Type) claim is missing or invalid.
     #[error("Invalid vct: {0}")]
